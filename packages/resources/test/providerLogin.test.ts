@@ -84,6 +84,75 @@ describe("provider login relay", () => {
     expect(manager.poll(id, 0)!.status).toBe("done");
   });
 
+  it("forwards the Pi 1.x copy-code login steps (Anthropic headless) to the sheet", async () => {
+    let pasted: string | undefined;
+    // Same calls as pi-ai 1.2 anthropicOAuth.login choosing "Copy code login (headless)".
+    const manager = new ProviderLoginManager(async (_path, _provider, _type, interaction) => {
+      const method = await interaction.prompt({
+        type: "select",
+        message: "Select Anthropic login method:",
+        options: [
+          { id: "browser", label: "Browser login (default)" },
+          { id: "copy-code", label: "Copy code login (headless)", description: "No callback" },
+        ],
+      });
+      if (method !== "copy-code") throw new Error(`unexpected ${method}`);
+      interaction.notify({
+        type: "auth_url",
+        url: "https://claude.test/oauth/authorize?code=true",
+        instructions: "Copy the code Anthropic shows and paste it here.",
+      });
+      interaction.notify({
+        type: "info",
+        message: "See the setup guide",
+        links: [{ url: "https://docs.test/setup", label: "Setup" }],
+      });
+      pasted = await interaction.prompt({
+        type: "manual_code",
+        message: "Paste the code Anthropic shows after you sign in:",
+        placeholder: "code#state",
+        signal: interaction.signal,
+      });
+    });
+
+    const id = manager.start(roots(), "anthropic", "oauth");
+    expect(manager.poll(id, 0)!.events).toEqual([
+      {
+        type: "select",
+        message: "Select Anthropic login method:",
+        options: [
+          { id: "browser", label: "Browser login (default)" },
+          { id: "copy-code", label: "Copy code login (headless)", description: "No callback" },
+        ],
+      },
+    ]);
+    expect(manager.respond(id, "copy-code")).toBe(true);
+    await tick();
+    expect(manager.poll(id, 1)!.events).toEqual([
+      {
+        type: "auth_url",
+        url: "https://claude.test/oauth/authorize?code=true",
+        instructions: "Copy the code Anthropic shows and paste it here.",
+      },
+      {
+        type: "progress",
+        message: "See the setup guide",
+        links: [{ url: "https://docs.test/setup", label: "Setup" }],
+      },
+      {
+        type: "prompt",
+        message: "Paste the code Anthropic shows after you sign in:",
+        placeholder: "code#state",
+        secret: false,
+        manualCode: true,
+      },
+    ]);
+    expect(manager.respond(id, "abc#state")).toBe(true);
+    await tick();
+    expect(pasted).toBe("abc#state");
+    expect(manager.poll(id, 0)!.status).toBe("done");
+  });
+
   it("ignores responses when nothing is pending", () => {
     const manager = new ProviderLoginManager(async () => {});
     expect(manager.poll("nope", 0)).toBeUndefined();

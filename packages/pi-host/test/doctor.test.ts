@@ -234,6 +234,19 @@ describe("runDoctor", () => {
     expect(report.checks.some((check) => check.id === "settings-project")).toBe(false);
   });
 
+  it("reads provider sign-ins from the effective agent directory, not ~/.pi/agent", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "doctor-home-"));
+    mkdirSync(path.join(home, ".pi", "agent"), { recursive: true });
+    writeFileSync(path.join(home, ".pi", "agent", "auth.json"), JSON.stringify({ shared: {} }));
+    const agentDir = path.join(home, "users", "abc", "agent");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(path.join(agentDir, "auth.json"), JSON.stringify({ azure: {}, anthropic: {} }));
+    const report = await runDoctor(home, undefined, agentDir);
+    expect(report.signedInProviders).toEqual(["anthropic", "azure"]);
+    expect(report.checks.find((check) => check.id === "auth")?.status).toBe("ok");
+    expect((await runDoctor(home)).signedInProviders).toEqual(["shared"]);
+  });
+
   it("includes a Node.js runtime check (this runner meets pi's minimum)", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "doctor-home-"));
     const report = await runDoctor(home);

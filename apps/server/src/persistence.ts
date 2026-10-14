@@ -1,5 +1,6 @@
 import type { ProjectMeta, SessionMeta, UserIdentity } from "@agent-deck/contracts";
 import { Effect, Option } from "effect";
+import { migrateProviderId } from "./azureProviderRename.ts";
 import { runSyncUnwrapped } from "./effectRun.ts";
 import {
   defaultDataDir,
@@ -140,7 +141,7 @@ export class SessionIndex extends JsonArrayStore<SessionMeta> {
         normalized.launchResourceConfig = {
           version: 1,
           ...(resources.providerOverride !== undefined
-            ? { providerOverride: resources.providerOverride }
+            ? { providerOverride: migrateProviderId(resources.providerOverride) }
             : {}),
           ...(resources.modelOverride !== undefined
             ? { modelOverride: resources.modelOverride }
@@ -152,6 +153,12 @@ export class SessionIndex extends JsonArrayStore<SessionMeta> {
             ? { skillsOverride: [...resources.skillsOverride] }
             : {}),
         };
+      }
+      // Pi 1.0.3 provider rename (azure-openai-responses -> azure), mapped on load.
+      const plan = normalized.launchPlan as { provider?: unknown } | null | undefined;
+      if (plan && typeof plan === "object" && typeof plan.provider === "string") {
+        const provider = migrateProviderId(plan.provider);
+        if (provider !== plan.provider) normalized.launchPlan = { ...plan, provider };
       }
       if (
         typeof normalized.launchResourceFingerprint !== "string" ||

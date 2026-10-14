@@ -7,9 +7,22 @@ import { piAgentHome, type ResourceRoots } from "./paths.ts";
 export type LoginEvent =
   | { type: "auth_url"; url: string; instructions?: string }
   | { type: "device_code"; userCode: string; verificationUri: string; expiresInSeconds?: number }
-  | { type: "prompt"; message: string; placeholder?: string; secret?: boolean }
-  | { type: "select"; message: string; options: Array<{ id: string; label: string }> }
-  | { type: "progress"; message: string }
+  /** `manualCode`: a pasted OAuth code or redirect URL (Pi `manual_code`), the only way to
+   * finish a browser sign-in when Pi's loopback callback is out of the browser's reach. */
+  | {
+      type: "prompt";
+      message: string;
+      placeholder?: string;
+      secret?: boolean;
+      manualCode?: boolean;
+    }
+  | {
+      type: "select";
+      message: string;
+      options: Array<{ id: string; label: string; description?: string }>;
+    }
+  /** `links`: Pi 1.x `info` events (e.g. Bedrock/Vertex setup docs). */
+  | { type: "progress"; message: string; links?: Array<{ url: string; label?: string }> }
   | { type: "done"; ok: boolean; error?: string };
 
 export type LoginStatus = "running" | "done" | "error";
@@ -61,8 +74,15 @@ export class ProviderLoginManager {
       notify: (event) => {
         if (event.type === "auth_url") state.events.push(event);
         else if (event.type === "device_code") state.events.push(event);
-        else if (event.type === "progress" || event.type === "info") {
+        else if (event.type === "progress") {
           state.events.push({ type: "progress", message: event.message });
+        } else if (event.type === "info") {
+          const links = event.links?.map((link) => ({ url: link.url, label: link.label }));
+          state.events.push({
+            type: "progress",
+            message: event.message,
+            ...(links?.length ? { links } : {}),
+          });
         }
       },
       prompt: (prompt) =>
@@ -76,7 +96,11 @@ export class ProviderLoginManager {
             state.events.push({
               type: "select",
               message: prompt.message,
-              options: prompt.options.map((option) => ({ id: option.id, label: option.label })),
+              options: prompt.options.map((option) => ({
+                id: option.id,
+                label: option.label,
+                ...(option.description ? { description: option.description } : {}),
+              })),
             });
           } else {
             state.events.push({
@@ -84,6 +108,7 @@ export class ProviderLoginManager {
               message: prompt.message,
               placeholder: prompt.placeholder,
               secret: prompt.type === "secret",
+              ...(prompt.type === "manual_code" ? { manualCode: true } : {}),
             });
           }
           const pending: PendingPrompt = { resolve, reject };

@@ -66,11 +66,21 @@ describe("builtin override edit safety", () => {
     mkdirSync(path.dirname(settingsFile), { recursive: true });
     writeFileSync(
       settingsFile,
-      JSON.stringify({ theme: "dark", subagents: { disableBuiltins: false } }, null, 2),
+      JSON.stringify(
+        {
+          $schema: "https://pi.dev/schemas/settings.schema.json",
+          theme: "dark",
+          subagents: { disableBuiltins: false },
+        },
+        null,
+        2,
+      ),
     );
 
     writeBuiltinAgentOverride({ home }, "coder", { description: "x" });
     let settings = JSON.parse(readFileSync(settingsFile, "utf8")) as Record<string, unknown>;
+    // Pi 1.2 published schemas: the editor-validation line survives our rewrite, first.
+    expect(Object.keys(settings)[0]).toBe("$schema");
     expect(settings.theme).toBe("dark");
     expect(settings.subagents).toMatchObject({
       disableBuiltins: false,

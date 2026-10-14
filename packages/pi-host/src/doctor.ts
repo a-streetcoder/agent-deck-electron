@@ -8,7 +8,9 @@ import { PiNotFoundError, resolvePiBinary, resolvePiSpawnPlan } from "./resolve.
 /**
  * Environment health probe (native Doctor screen): is pi installed, what
  * version, and which providers have credentials. Auth is read as
- * presence-only from ~/.pi/agent/auth.json — never the credential values.
+ * presence-only from <agentDir>/auth.json (default ~/.pi/agent) — never the
+ * credential values. `pi auth check` (Pi 1.x) takes one provider per spawn and
+ * refreshes OAuth tokens by default, so parsing the file stays the cheaper probe.
  */
 
 export type CheckStatus = "ok" | "warn" | "error";
@@ -319,8 +321,8 @@ function probeSuccess(cmd: string, args: string[]): Promise<boolean> {
   });
 }
 
-function readSignedInProviders(home: string): string[] {
-  const authFile = path.join(home, ".pi", "agent", "auth.json");
+function readSignedInProviders(agentDir: string): string[] {
+  const authFile = path.join(agentDir, "auth.json");
   try {
     const parsed: unknown = JSON.parse(readFileSync(authFile, "utf8"));
     if (typeof parsed === "object" && parsed !== null) {
@@ -461,8 +463,8 @@ export async function runDoctor(
     });
   }
 
-  const signedInProviders = readSignedInProviders(home);
-  const authFile = path.join(home, ".pi", "agent", "auth.json");
+  const signedInProviders = readSignedInProviders(agentDir);
+  const authFile = path.join(agentDir, "auth.json");
   checks.push({
     id: "auth",
     label: "AI model connection",

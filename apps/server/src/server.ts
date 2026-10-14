@@ -108,6 +108,7 @@ import { SessionPasteStore } from "./sessionPastes.ts";
 import { SessionAuthorStore } from "./sessionAuthors.ts";
 import { GitIdentityMap } from "./gitIdentity.ts";
 import { UserAgentDirs, userRoots } from "./userAgentDirs.ts";
+import { migrateAzureAuthFiles } from "./azureProviderRename.ts";
 import {
   authenticateProxiedRequest,
   CloudflareAccessVerifier,
@@ -910,6 +911,10 @@ async function initServer(
     home: resourceHome(),
     projectPath: projectId ? projects.find((p) => p.id === projectId)?.path : undefined,
   });
+  // PI-04: Pi 1.0.3 renamed the azure provider; rewrite the shared and per-user auth.json once.
+  migrateAzureAuthFiles(piAgentHome(rootsFor()), dataDir, (message, error) =>
+    console.warn(`[azure-provider-rename] ${message}`, error ?? ""),
+  );
   // SKL-09: Codex plugin skill REFERENCES resolve against the plugin cache's active version
   // on every scan (version-follow, never copied) and join as read-only collection roots.
   const pluginRootsFor = (): string[] =>
