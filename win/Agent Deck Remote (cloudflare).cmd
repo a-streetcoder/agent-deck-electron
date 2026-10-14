@@ -20,7 +20,7 @@ REM Lets main.js pin the login round-trip to this team's Access pages (optional)
 set AGENT_DECK_CF_ACCESS_TEAM_DOMAIN=streetcoding-collective.cloudflareaccess.com
 REM Proven 2026-10-14 (ade-1vjx): sign in through the system browser via cloudflared instead of
 REM the in-window Access login. Uncomment to use it (docs/remote-server-poc.md, Desktop login).
-REM set "AGENT_DECK_CLOUDFLARED=%ProgramFiles(x86)%\cloudflared\cloudflared.exe"
+set "AGENT_DECK_CLOUDFLARED=%ProgramFiles(x86)%\cloudflared\cloudflared.exe"
 REM Optional: the same value the VM service exports, so "Reveal" actions that need the
 REM desktop recovery token keep working against the remote server.
 REM set AGENT_DECK_DESKTOP_RECOVERY_TOKEN=
