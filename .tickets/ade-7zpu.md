@@ -1,6 +1,6 @@
 ---
 id: ade-7zpu
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-10-14T18:16:28Z
@@ -34,3 +34,7 @@ All package typechecks pass (packages/resources, packages/domain, packages/pi-ho
 **2026-10-14T18:21:11Z**
 
 2026-10-14 contrarian amendments (supersede the description where they differ): (1) pi-claude-bridge is an external npm package whose 0.7.0 reads context.systemPrompt and context.tools, removed in Pi 0.86, so on 1.2 Claude Code sessions would silently lose prompt and tools: bump to 0.9.3 (peer >=0.86.1) and verify once with Claude Code installed. The mcp proxy tool is NOT in that package; it is Agent Deck own generated bridge extension (packages/pi-host/src/bridge.ts). (2) Extension code generated as strings is not typechecked: guard the recall hook in bridge.ts ~188-201 with event.messageType === "user" (1.2 made before_agent_start a union on messageType and event.prompt is absent on custom-message runs); confirm injectedCommands.ts sendUserMessage needs no deliverAs. (3) --no-extensions (launchPlan.ts:86) since 0.99 also disables Pi built-in extensions including native MCP; keep it in PI-01 (no behaviour change), PI-03 decides. (4) Acceptance replaces the single real-Pi file with: injected-commands.pi.test.ts, packages/pi-host/test/bridge.pi.test.ts, mcp.pi.test.ts and one streaming or abort file, one at a time, on the VM in a separate rsync copy with its own pnpm install (never the served tree; check free -m first). (5) Deploy: stop the unit BEFORE the merge reaches the VM (Syncthing delivers package.json, lockfile and source out of order and pnpm install under a live server can hand a new Pi process a half-replaced store); after the sync completes run pnpm install --frozen-lockfile, pnpm build:web, start, /health, one session; the owner Windows checkout also needs pnpm install after the merge; rollback by re-pinning is valid only before any 1.2 session has written entries such as context_edit. (6) Open: whether 1.2 validation rejects the Agent Deck-only mcp.json fields (toolApproval, bearerTokenEnvVar); check and record.
+
+**2026-10-14T19:19:52Z**
+
+2026-10-14 owner approved PI-01..PI-04 (exact word). Dispatched in worktree E:\agent-deck-wt\ade-7zpu (branch wt/ade-7zpu).
