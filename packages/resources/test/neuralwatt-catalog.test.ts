@@ -89,6 +89,7 @@ describe("NeuralWatt catalog sync (SES-33)", () => {
   it("removes the block when no key is stored, and never touches other providers", async () => {
     const home = makeHome();
     writeModels(home, {
+      $schema: "https://pi.dev/schemas/models.schema.json",
       providers: {
         neuralwatt: { name: "NeuralWatt", models: [{ id: "stale" }] },
         someone_else: { name: "Other", models: [{ id: "keep" }] },
@@ -108,6 +109,8 @@ describe("NeuralWatt catalog sync (SES-33)", () => {
     expect(ids).toEqual([]);
     expect(providers(home).neuralwatt).toBeUndefined();
     expect(providers(home).someone_else?.models?.[0]?.id).toBe("keep");
+    // Pi 1.2 published schemas: the `$schema` line survives the rewrite.
+    expect(readModels(home).$schema).toBe("https://pi.dev/schemas/models.schema.json");
   });
 
   it("leaves what is on disk alone when the fetch fails, is unparseable, or is empty", async () => {

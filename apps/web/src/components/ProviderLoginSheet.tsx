@@ -14,9 +14,19 @@ import { useAppStore } from "../state/store.ts";
 type LoginEvent =
   | { type: "auth_url"; url: string; instructions?: string }
   | { type: "device_code"; userCode: string; verificationUri: string; expiresInSeconds?: number }
-  | { type: "prompt"; message: string; placeholder?: string; secret?: boolean }
-  | { type: "select"; message: string; options: Array<{ id: string; label: string }> }
-  | { type: "progress"; message: string }
+  | {
+      type: "prompt";
+      message: string;
+      placeholder?: string;
+      secret?: boolean;
+      manualCode?: boolean;
+    }
+  | {
+      type: "select";
+      message: string;
+      options: Array<{ id: string; label: string; description?: string }>;
+    }
+  | { type: "progress"; message: string; links?: Array<{ url: string; label?: string }> }
   | { type: "done"; ok: boolean; error?: string };
 
 type LoginStatus = "running" | "done" | "error";
@@ -36,6 +46,9 @@ export function ProviderLoginSheet({
   onDone: () => void;
 }) {
   const pushToast = useAppStore((state) => state.pushToast);
+  // Shared server (signed-in identity): Pi's OAuth callback listens on the server's
+  // loopback, out of this browser's reach, so a pasted code is the only way to finish.
+  const sharedServer = useAppStore((state) => state.me !== null);
   const [events, setEvents] = useState<LoginEvent[]>([]);
   const [status, setStatus] = useState<LoginStatus>("running");
   const [promptValue, setPromptValue] = useState("");
@@ -144,7 +157,10 @@ export function ProviderLoginSheet({
   const promptFormId = "provider-login-prompt-form";
   const promptInputId = "provider-login-prompt-input";
   const visiblePrompt =
-    awaitingPrompt && (!hasBrowserAuth || showManualEntry) ? awaitingPrompt : null;
+    awaitingPrompt &&
+    (!hasBrowserAuth || showManualEntry || (sharedServer && awaitingPrompt.manualCode))
+      ? awaitingPrompt
+      : null;
 
   return (
     <div
@@ -211,6 +227,7 @@ export function ProviderLoginSheet({
               <Button
                 key={option.id}
                 data-testid={`login-select-${option.id}`}
+                title={option.description}
                 size="sm"
                 variant="secondary"
                 onClick={() => void respond(option.id)}
@@ -225,7 +242,7 @@ export function ProviderLoginSheet({
           className="flex flex-wrap items-center justify-between gap-2 pt-1"
           data-testid="provider-login-actions"
         >
-          {awaitingPrompt && hasBrowserAuth && !showManualEntry ? (
+          {awaitingPrompt && !visiblePrompt ? (
             <Button
               type="button"
               size="sm"
@@ -307,7 +324,22 @@ function LoginStep({ event }: { event: LoginEvent }) {
         </div>
       );
     case "progress":
-      return <div className="text-detail text-text-muted">{event.message}</div>;
+      return (
+        <div className="text-detail text-text-muted">
+          {event.message}
+          {event.links?.map((link) => (
+            <a
+              key={link.url}
+              href={link.url}
+              target="_blank"
+              rel="noreferrer"
+              className="ml-2 text-accent"
+            >
+              {link.label ?? link.url}
+            </a>
+          ))}
+        </div>
+      );
     case "prompt":
       return null;
     case "select":

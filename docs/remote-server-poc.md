@@ -391,8 +391,9 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
   `ok: false`) with "No model provider connected. Connect one under Settings > Providers."
 - **Operator.** `AGENT_DECK_OPERATOR_EMAIL` maps the operator to the shared `~/.pi/agent`, so the
   existing sign-ins stay where they are with no file move. Sessions without an owner (created
-  before identities existed, or on a loopback server), Doctor (it reads
-  `~/.pi/agent/auth.json`) and the Pi CLI over ssh also use the shared dir, so they run on the
+  before identities existed, or on a loopback server), Doctor (its auth probe reads the agent
+  dir it is given, and the route still gives it the shared one) and the Pi CLI over ssh also use
+  the shared dir, so they run on the
   operator's credentials: accepted. Keep provider keys out of the shared `~/.pi/agent/.env` and
   the systemd unit, because Pi falls back to environment keys for a user with no stored
   credential (`PUT /runtime/env` already refuses them on a shared server).
@@ -446,9 +447,20 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
   controls disabled. Use the in-app terminal instead.
 - Provider sign-ins are per user (ade-n41e, see [Credentials](#credentials)), but the global
   `.env` is still one file for everyone (ade-4lga): `PUT` and `DELETE /runtime/env` (both scopes)
-  answer 409 for a provider credential env name (the pi-ai list, e.g. `ANTHROPIC_API_KEY`,
-  `OPENAI_API_KEY`); add keys under Providers instead. `EXA_API_KEY` stays writable because web
+  answer 409 for a provider credential env name (the pi-ai 1.2 list, e.g. `ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `AZURE_OPENAI_API_KEY` for `azure`, `GOOGLE_CLOUD_API_KEY` for
+  `google-vertex`); add keys under Providers instead. `EXA_API_KEY` stays writable because web
   search is shared by design. Ambient credential names outside the pi-ai list also stay
-  writable by design: `AWS_*` for Bedrock and `GOOGLE_APPLICATION_CREDENTIALS` for Vertex.
+  writable by design: `AWS_*` for `amazon-bedrock`, `GOOGLE_APPLICATION_CREDENTIALS` for
+  `google-vertex`, and the Anthropic workload-identity names (`ANTHROPIC_IDENTITY_TOKEN_FILE`,
+  `ANTHROPIC_FEDERATION_RULE_ID`, ...).
+- Pi 1.0.3 renamed the Azure provider `azure-openai-responses` to `azure` (PI-04). Agent Deck
+  maps the old id in its own state on load (app settings, session metadata) and renames the key
+  in the shared and every per-user `auth.json` at startup. Pi's own `settings.json`
+  (`defaultProvider`, `enabledModels`) and `models.json` are not rewritten: rename them by hand.
+- OAuth sign-ins from the browser finish by pasting a code: Pi's callback listens on the VM's
+  loopback, which the user's browser cannot reach. On a shared server the sign-in sheet shows
+  the paste field at once; for Anthropic choose "Copy code login (headless)" and paste the code
+  Anthropic shows (the browser login also works by pasting the final redirect URL).
 - Per-user credentials are storage, not isolation: every user's agent can read every
   `auth.json`. Sessions without an owner, Doctor and the Pi CLI use the operator's.

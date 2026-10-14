@@ -18,6 +18,7 @@ import {
 import { PI_THINKING_LEVELS, type ThinkingLevel } from "@agent-deck/domain";
 import type { CodexPluginSkillRef } from "@agent-deck/resources";
 import { Context, Effect, Layer, Option } from "effect";
+import { migrateModelKey } from "../azureProviderRename.ts";
 
 /**
  * App-data persistence as an Effect service (Slice 6 — the last Phase-2 leaf).
@@ -571,8 +572,9 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
           openAIFastModels: Array.isArray(record.openAIFastModels)
             ? record.openAIFastModels.map(String)
             : [],
+          // Pi 1.0.3 provider rename (azure-openai-responses -> azure), mapped on load.
           disabledModels: Array.isArray(record.disabledModels)
-            ? record.disabledModels.map(String)
+            ? record.disabledModels.map((key) => migrateModelKey(String(key)))
             : [],
           // Booleans default to the native defaults when absent/mistyped. The legacy
           // semantic env flag seeds only an absent field; malformed persisted values
@@ -623,7 +625,8 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
               ? record.keepWorktreeAfterMerge
               : true,
           gitAutomation: typeof record.gitAutomation === "boolean" ? record.gitAutomation : true,
-          defaultModel: typeof record.defaultModel === "string" ? record.defaultModel : null,
+          defaultModel:
+            typeof record.defaultModel === "string" ? migrateModelKey(record.defaultModel) : null,
           defaultThinking:
             typeof record.defaultThinking === "string" &&
             (PI_THINKING_LEVELS as readonly string[]).includes(record.defaultThinking)
