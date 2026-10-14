@@ -50,6 +50,7 @@ import { SessionCreationError } from "../SessionManager.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
 import { finalizeExtensions } from "./shared.ts";
 import { requestUser } from "../trustedProxy.ts";
+import { claudeLaunchModel } from "../claudeTransport.ts";
 
 export function canonicalCheckoutLockKey(
   candidate: string,
@@ -668,6 +669,22 @@ export function registerLoopRoutes(
         });
       }
     }
+    // PRV-01: the Loop parent runs on the requester's credentials; a refused
+    // anthropic/* (explicit or Pi default) moves to its claude-bridge twin, or
+    // the run is refused before any lock or worktree.
+    const loopRunner = requestUser(request.raw);
+    let parentModel: { provider?: string; model?: string } = {
+      provider: body.provider ?? defaults.provider,
+      model: body.model ?? defaults.model,
+    };
+    try {
+      parentModel =
+        (await claudeLaunchModel(ctx, loopRunner ? { id: loopRunner.id } : undefined, parentModel, {
+          cwd: project.path,
+        })) ?? parentModel;
+    } catch (error) {
+      return reply.status(409).send({ error: (error as Error).message });
+    }
     let checkoutLockKey: string | undefined;
     if (loop.writeTarget === "currentCheckout") {
       try {
@@ -783,8 +800,7 @@ export function registerLoopRoutes(
           : {}),
         plan: {
           kind: "parent",
-          provider: body.provider ?? defaults.provider,
-          model: body.model ?? defaults.model,
+          ...parentModel,
           extensions: finalizedBase.length > 0 ? finalizedBase : undefined,
         },
         // The transient parent becomes externally visible only after the engine

@@ -875,6 +875,31 @@ describe("createRpcConnection", () => {
     ]);
   });
 
+  it("set_model routes a live choice through the PRV-01 guard", async () => {
+    const { session, ops } = makeSession("s1");
+    ops.getAvailableModels.mockResolvedValue([
+      { provider: "anthropic", id: "sonnet" },
+      { provider: "claude-bridge", id: "sonnet" },
+    ]);
+    const manager = makeManager({ s1: session });
+    manager.modelChoice = async (_meta, provider, modelId) => {
+      if (modelId === "refused") throw new Error("needs an API key");
+      return { provider: provider === "anthropic" ? "claude-bridge" : provider, modelId };
+    };
+    const { conn, frames } = harness(manager);
+    await conn.handleMessage(
+      frame(1, { type: "set_model", sessionId: "s1", provider: "anthropic", modelId: "sonnet" }),
+    );
+    await conn.handleMessage(
+      frame(2, { type: "set_model", sessionId: "s1", provider: "anthropic", modelId: "refused" }),
+    );
+    expect(ops.setModel.mock.calls).toEqual([["claude-bridge", "sonnet"]]);
+    expect(frames).toEqual([
+      { kind: "reply", id: 1, ok: true },
+      { kind: "reply", id: 2, ok: false, error: "needs an API key" },
+    ]);
+  });
+
   it("an op that throws yields an error reply", async () => {
     const { session, ops } = makeSession("s1");
     ops.abort.mockRejectedValueOnce(new Error("boom"));

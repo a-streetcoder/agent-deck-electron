@@ -620,6 +620,14 @@ export class SessionManager {
     string,
     Record<string, string | undefined>
   >();
+  /** PRV-01: maps a live `set_model` choice onto the model to switch to (the
+   * claude-bridge twin of a refused anthropic model) or throws; routes wire it. */
+  modelChoice?: (
+    meta: SessionMeta,
+    provider: string,
+    modelId: string,
+    available: readonly { provider: string; id: string }[],
+  ) => Promise<{ provider: string; modelId: string }>;
   private resolveLaunchResources?: (meta: SessionMeta) => ResolvedLaunchResources;
   private resourceRefreshEnv: () => Record<string, string | undefined> | undefined = () =>
     undefined;

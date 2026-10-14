@@ -1,9 +1,25 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type * as PiHost from "@agent-deck/pi-host";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
+import { claudeChoice } from "../src/claudeTransport.ts";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
+
+// The extension-discovered catalog (claude-bridge), without spawning Pi.
+const discovered = vi.hoisted(() => ({ models: [] as Array<{ provider: string; id: string }> }));
+vi.mock("@agent-deck/pi-host", async (importOriginal) => ({
+  ...(await importOriginal<typeof PiHost>()),
+  discoverModelCatalog: async () =>
+    discovered.models.map((model) => ({
+      ...model,
+      contextWindow: 1000,
+      maxTokens: 100,
+      reasoning: false,
+      input: ["text"],
+    })),
+}));
 
 // PRV-01: Pi's Anthropic OAuth sign-in impersonates Claude Code, so `anthropic/*`
 // is offered and accepted only with an API key; Claude otherwise runs through
@@ -11,6 +27,7 @@ import { startServer, type AgentDeckServer } from "../src/index.ts";
 const dataDir = mkdtempSync(path.join(tmpdir(), "deck-claude-transport-"));
 const fakeHome = mkdtempSync(path.join(tmpdir(), "deck-claude-transport-home-"));
 const authFile = path.join(fakeHome, ".pi", "agent", "auth.json");
+const piSettingsFile = path.join(fakeHome, ".pi", "agent", "settings.json");
 const savedEnv = { ...process.env };
 const REFUSED =
   "Claude through the Anthropic sign-in is not used. Add an Anthropic API key under Settings > Providers, or pick the Claude model without the API badge.";
@@ -109,5 +126,75 @@ describe("PRV-01 anthropic needs an API key", () => {
       body: JSON.stringify({ authType: "oauth" }),
     });
     expect(login.status).toBe(400);
+  });
+});
+
+describe("PRV-01 launch and set_model choices", () => {
+  const discover = async (models: Array<{ provider: string; id: string }>) => {
+    discovered.models = models;
+    const response = await fetch(endpoint("/runtime/models/discover"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(response.status).toBe(200);
+  };
+  // Capture the plan a launch would spawn with, without spawning Pi.
+  const launchPlan = async () => {
+    const create = vi.spyOn(server.sessions, "create").mockImplementation(() => {
+      throw new Error("not spawned in this test");
+    });
+    try {
+      const response = await fetch(endpoint("/sessions"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd: dataDir, startImmediately: true }),
+      });
+      const plan = create.mock.calls[0]?.[0].plan as { provider?: string; model?: string };
+      return { status: response.status, body: (await response.json()) as unknown, plan };
+    } finally {
+      create.mockRestore();
+    }
+  };
+
+  it("launches a Pi-default anthropic model on its claude-bridge twin", async () => {
+    writeAuth(API_KEY);
+    const modelId = (await anthropicModels())[0]!.id;
+    writeFileSync(
+      piSettingsFile,
+      JSON.stringify({ defaultProvider: "anthropic", defaultModel: modelId }),
+    );
+    writeAuth(OAUTH);
+    await discover([{ provider: "claude-bridge", id: modelId }]);
+    const launched = await launchPlan();
+    expect(launched.plan).toMatchObject({ provider: "claude-bridge", model: modelId });
+  });
+
+  it("refuses the launch with the stable 409 when no bridge twin exists", async () => {
+    await discover([]);
+    const launched = await launchPlan();
+    expect(launched.status).toBe(409);
+    expect(launched.body).toEqual({ error: REFUSED });
+    expect(launched.plan).toBeUndefined();
+  });
+
+  it("leaves an API-key owner's anthropic default alone", async () => {
+    writeAuth(API_KEY);
+    const launched = await launchPlan();
+    expect(launched.plan.provider).not.toBe("claude-bridge");
+  });
+
+  it("maps a set_model choice onto the bridge twin or refuses it", () => {
+    const refused = new Set(["anthropic"]);
+    const bridge = [{ provider: "claude-bridge", id: "m" }];
+    expect(claudeChoice("anthropic", "m", refused, bridge)).toEqual({
+      provider: "claude-bridge",
+      modelId: "m",
+    });
+    expect(() => claudeChoice("anthropic", "other", refused, bridge)).toThrow(REFUSED);
+    expect(claudeChoice("anthropic", "m", new Set(), [])).toEqual({
+      provider: "anthropic",
+      modelId: "m",
+    });
   });
 });

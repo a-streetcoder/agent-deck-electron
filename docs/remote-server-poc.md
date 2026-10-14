@@ -396,7 +396,10 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
   Providers screen offers Anthropic with an API key only, `GET /runtime/providers` reports each
   provider's `credentialType` (`api_key` or `oauth`, the stored entry winning over env as in Pi),
   and `anthropic/*` models are listed and accepted only when the owner's Anthropic credential is
-  an API key (otherwise a 409 / RPC `ok: false` saying to add one). The picker shows one
+  an API key (otherwise a 409 / RPC `ok: false` saying to add one). A launch (start, draft
+  start, fork, Loop parent) or a live `set_model` whose model would be a refused `anthropic/<m>`,
+  including one coming from Pi's default settings or the forked history, runs on
+  `claude-bridge/<m>` instead when the owner has it, and is refused with the same message when not. The picker shows one
   "Claude" group: bridge models by plain name, API-key models as "<model> · API". An existing
   Anthropic sign-in stays in `auth.json`, with a note on the Providers screen that it is unused;
   sessions already on an `anthropic/*` OAuth model keep running. This applies on every server,
