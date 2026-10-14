@@ -2390,6 +2390,56 @@ describe("MCP project picker", () => {
     expect(logins).toEqual(["/mcp/oauth/login?projectId=beta"]);
   });
 
+  it("with native MCP, Sign in sends /mcp login through a live session of the project (PI-03d)", async () => {
+    const live = { id: "live", projectId: "beta", createdAt: "2026-10-14", title: "Work" };
+    useAppStore.setState({
+      session: null,
+      projects: [alpha, beta],
+      sessions: [
+        live,
+        { id: "old", projectId: "beta", createdAt: "2026-10-01", endedAt: "x" },
+      ] as never,
+      toasts: [],
+    });
+    const posts: Array<[string, unknown]> = [];
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/mcp") return Promise.resolve(jsonResponse({ servers: [] }));
+      if (url === "/mcp?projectId=beta")
+        return Promise.resolve(
+          jsonResponse({
+            nativeMcp: true,
+            assignedServerIds: ["oauth"],
+            servers: [http("oauth", { auth: { status: "unauthenticated" } })],
+          }),
+        );
+      if (url === "/mcp/oauth/native-login" && init?.method === "POST") {
+        posts.push([url, JSON.parse(String(init.body))]);
+        return Promise.resolve(jsonResponse({ ok: true }, 202));
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-empty");
+    pickProject("beta");
+    fireEvent.click(await screen.findByTestId("mcp-native-login-oauth"));
+    // The proxy's loopback flow and auth chip do not apply to native MCP.
+    expect(screen.queryByTestId("mcp-login-oauth")).toBeNull();
+    expect(screen.queryByTestId("mcp-auth-oauth")).toBeNull();
+    await waitFor(() =>
+      expect(posts).toEqual([["/mcp/oauth/native-login", { sessionId: "live" }]]),
+    );
+    await waitFor(() =>
+      expect(useAppStore.getState().toasts.at(-1)?.message).toContain('started in "Work"'),
+    );
+
+    // No live session in the project: say so instead of posting.
+    act(() => useAppStore.setState({ sessions: [] }));
+    fireEvent.click(screen.getByTestId("mcp-native-login-oauth"));
+    expect(useAppStore.getState().toasts.at(-1)?.message).toContain("runs inside a live session");
+    expect(posts).toHaveLength(1);
+  });
+
   it("drops a reconnect's catalog refresh that completes after switching projects", async () => {
     useAppStore.setState({ session: sessionFor(alpha.id), projects: [alpha, beta] });
     let resolveRefresh!: (response: Response) => void;

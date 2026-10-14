@@ -2,7 +2,7 @@ import type { CatalogModel } from "@agent-deck/pi-host";
 import type { ComposerDraftStore } from "./composerDrafts.ts";
 import type { SessionDraftGateway } from "./sessionDrafts.ts";
 import nodePath from "node:path";
-import type { ServerMessage } from "@agent-deck/contracts";
+import type { ServerMessage, SessionMeta } from "@agent-deck/contracts";
 import type { AgentWarningContext, SkillInfo, SubagentExpectedOutcome } from "@agent-deck/domain";
 import type {
   McpServerCatalog,
@@ -185,6 +185,10 @@ export interface ServerContext {
   globalMcpConfigs(): McpConfigSnapshot;
   isMcpEnvOverride(id: string): boolean;
   oauthKey(scope: string, id: string): string;
+  /** PI-03b/d: AGENT_DECK_NATIVE_MCP=1, sessions use Pi native MCP (and Pi's own OAuth). */
+  nativeMcp(): boolean;
+  /** PI-03d: the Pi server name a session uses for an Agent Deck server id, if it has it. */
+  nativeMcpNameFor(meta: SessionMeta, serverId: string): string | undefined;
   projectHasEffectiveMcpGrant(projectId: string, serverId: string): boolean;
   /** Hard server capability controlled by AGENT_DECK_MEMORY=0. */
   memoryEnabled: boolean;

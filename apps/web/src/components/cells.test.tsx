@@ -794,3 +794,26 @@ describe("context_edit marker", () => {
     expect(screen.getByTestId("assistant-cell")).toBeTruthy();
   });
 });
+
+describe("notice cell (extension notify, PI-03d)", () => {
+  it("renders the MCP sign-in URL as a link that opens externally", () => {
+    const openExternal = vi.fn().mockResolvedValue(true);
+    window.agentDeck = { isElectron: true, openExternal } as never;
+    const url = "https://auth.example/authorize?state=s1";
+    render(
+      <CellView
+        cell={{
+          kind: "notice",
+          id: "notice-1",
+          message: `Sign in to MCP server "docs" in your browser:\n${url}`,
+          level: "info",
+        }}
+      />,
+    );
+    const link = screen.getByRole("link", { name: url });
+    expect(link.getAttribute("href")).toBe(url);
+    fireEvent.click(link);
+    expect(openExternal).toHaveBeenCalledWith(url);
+    expect(screen.getByTestId("notice-cell").textContent).toContain('MCP server "docs"');
+  });
+});

@@ -140,6 +140,27 @@ describe("native MCP", () => {
     expect(JSON.stringify(mock.requests)).not.toContain(PLANTED);
   });
 
+  it("Sign in sends /mcp login <pi-name> to the session; Pi's reply shows as a notice (PI-03d)", async () => {
+    const response = await fetch(`http://127.0.0.1:${deck.port}/mcp/alpha.one/native-login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: parentId }),
+    });
+    expect(response.status).toBe(202);
+    // Pi resolved the mapped name `alpha_one` (an unknown name would read
+    // `No MCP server named`) and, as it is stdio, refused OAuth with a notify.
+    const notice = async () =>
+      deck.sessions
+        .get(parentId)!
+        .snapshot()
+        .state.cells.find((cell) => cell.kind === "notice");
+    await expect.poll(notice, { timeout: 15_000 }).toMatchObject({
+      kind: "notice",
+      level: "error",
+      message: expect.stringContaining("No enabled MCP server uses OAuth"),
+    });
+  });
+
   it("gives a named child only its granted subset under an authored tool list", async () => {
     plan = [
       { name: "mcp__alpha_one__echo", arguments: { message: "child-one" } },

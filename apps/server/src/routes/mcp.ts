@@ -13,6 +13,7 @@ import {
 import { z } from "zod";
 import { claudePluginMcpSources, McpImportDiscovery, mcpImportSources } from "../mcpImport.ts";
 import type { ServerContext } from "../context.ts";
+import { requestUser } from "../trustedProxy.ts";
 
 const MCP_ENV_SOURCE = "AGENT_DECK_MCP_SERVERS" as const;
 
@@ -347,6 +348,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     return {
       valid: snapshot.valid,
       mcpEnabled: mcpPolicy.enabled(),
+      nativeMcp: ctx.nativeMcp(),
       projectId: scope,
       defaultAssignedServerIds: defaults,
       missingDefaultAssignedServerIds: defaults.filter((id) => !configured.has(id)),
@@ -508,6 +510,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     return config && "url" in config ? config.url : undefined;
   };
 
+  // PI-03f: remove (flag-off proxy sign-in; native uses /mcp/:id/native-login).
   fastify.post("/mcp/:id/login", async (request, reply) => {
     const target = requireScopedHttp(request);
     if (!target) return reply.code(400).send({ error: "projectId is required" });
@@ -569,6 +572,32 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     await mcp.refresh(target.id, target.scope);
     broadcast({ type: "resources_changed" });
     return { ok: true };
+  });
+
+  // PI-03d: native MCP sign-in runs inside a live Pi. `/mcp login <name>` makes
+  // Pi send the authorization URL (notify card) and ask for the redirect URL
+  // (input card) in that session; tokens land in the session owner's
+  // <agentDir>/mcp-auth.json.
+  fastify.post("/mcp/:id/native-login", async (request, reply) => {
+    if (!ctx.nativeMcp()) return reply.code(409).send({ error: "native MCP is not enabled" });
+    const { id } = request.params as { id: string };
+    const parsed = z.object({ sessionId: z.string().min(1) }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.message });
+    const session = ctx.sessions.get(parsed.data.sessionId);
+    if (!session) return reply.code(404).send({ error: "unknown session" });
+    // The session's Pi writes to its OWNER's agent dir: signing in from someone
+    // else's session would put your account in their mcp-auth.json.
+    if (ctx.sharedServer && session.meta.createdBy?.id !== requestUser(request.raw)?.id)
+      return reply.code(403).send({ error: "sign in from one of your own sessions" });
+    const name = ctx.nativeMcpNameFor(session.meta, id);
+    if (!name) return reply.code(404).send({ error: "this session does not use that MCP server" });
+    // Not awaited: Pi answers an extension-command prompt only once the command
+    // ends, i.e. after the user pasted the redirect URL, far past the RPC
+    // timeout. A timeout is not recorded as a session failure.
+    session.prompt(`/mcp login ${name}`).catch((error: unknown) => {
+      request.log.warn({ err: error, serverId: id }, "MCP sign-in prompt did not complete");
+    });
+    return reply.code(202).send({ ok: true });
   });
 
   const importDiscovery = new McpImportDiscovery();

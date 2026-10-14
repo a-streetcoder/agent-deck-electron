@@ -134,6 +134,14 @@ export interface QuestionCell {
   answered: boolean;
 }
 
+/** A fire-and-forget extension `notify` (for example Pi's MCP sign-in link). */
+export interface NoticeCell {
+  kind: "notice";
+  id: string;
+  message: string;
+  level: "info" | "warning" | "error";
+}
+
 /**
  * A native subagent run streamed into the PARENT transcript. The parent's
  * ManagedSession opens this when it launches a child pi (managed_subagent /
@@ -230,6 +238,7 @@ export type TranscriptCell =
   | MemoryRecallCell
   | ProviderRetryCell
   | QuestionCell
+  | NoticeCell
   | SubagentCell
   | SupervisorQuestionCell
   | AskUserCell;

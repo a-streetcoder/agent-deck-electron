@@ -663,8 +663,23 @@ export function ingestPiEvent(state: IngestState, event: PiInboundEvent): Domain
       ];
 
     case "extension_ui_request": {
-      // Only requests that await an answer become cards; fire-and-forget
-      // methods (notify, widgets, …) are not questions.
+      // Only requests that await an answer become question cards. A notify is
+      // shown as a notice (Pi's /mcp login sends its sign-in URL and result this
+      // way); other fire-and-forget methods (setStatus, widgets, …) are dropped.
+      if (event.method === "notify") {
+        const notify = event as { id: string; message?: string; notifyType?: string };
+        if (!notify.message) return [];
+        const level =
+          notify.notifyType === "error" || notify.notifyType === "warning"
+            ? notify.notifyType
+            : "info";
+        return [
+          {
+            type: "cell_open",
+            cell: { kind: "notice", id: `notice-${notify.id}`, message: notify.message, level },
+          },
+        ];
+      }
       if (!isAnswerableUiRequest(event.method)) return [];
       // The union has many variants; extract the display fields structurally.
       const request = event as {

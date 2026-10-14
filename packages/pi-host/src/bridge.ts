@@ -264,6 +264,9 @@ ${
       autoEnableCodemode: false,
     }),
     updateConfig: () => {},
+    // /mcp login: never open a browser on the host (a shared server has none);
+    // the sign-in URL reaches the user through Pi's notify card instead.
+    openUrl: () => {},
     createTransport: ({ config }, cwd, authProvider) =>
       "url" in config
         ? new StreamableHttpTransport({ url: config.url, headers: config.headers, authProvider })

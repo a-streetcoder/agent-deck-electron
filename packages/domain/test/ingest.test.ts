@@ -11,6 +11,7 @@ import {
 import {
   emptyTranscript,
   isAnswerableUiRequest,
+  openQuestion,
   reduceTranscript,
   type TranscriptState,
 } from "../src/transcript.ts";
@@ -550,6 +551,45 @@ describe("answerable UI requests (the pending/attention chokepoint)", () => {
     for (const method of ["setStatus", "notify", "widget", ""]) {
       expect(isAnswerableUiRequest(method)).toBe(false);
     }
+  });
+
+  it("shows a notify as a notice cell, so Pi's MCP sign-in URL reaches the user", () => {
+    const ingest = createIngestState();
+    const message =
+      'Sign in to MCP server "docs" in your browser:\nhttps://auth.example/authorize?state=s1';
+    const events = ingestPiEvent(ingest, {
+      type: "extension_ui_request",
+      id: "n-1",
+      method: "notify",
+      message,
+      notifyType: "info",
+    } as unknown as PiInboundEvent);
+    expect(events).toEqual([
+      { type: "cell_open", cell: { kind: "notice", id: "notice-n-1", message, level: "info" } },
+    ]);
+    // Not a question: it never counts as pending input.
+    expect(openQuestion(events.reduce(reduceTranscript, emptyTranscript()))).toBeNull();
+  });
+
+  it("also shows a notify without a URL (sign-in result or failure), keeping its level", () => {
+    const events = ingestPiEvent(createIngestState(), {
+      type: "extension_ui_request",
+      id: "n-2",
+      method: "notify",
+      message: "The redirect URL belongs to a different sign-in",
+      notifyType: "error",
+    } as unknown as PiInboundEvent);
+    expect(events).toEqual([
+      {
+        type: "cell_open",
+        cell: {
+          kind: "notice",
+          id: "notice-n-2",
+          message: "The redirect URL belongs to a different sign-in",
+          level: "error",
+        },
+      },
+    ]);
   });
 
   it("keeps a passive setStatus out of the transcript entirely", () => {
