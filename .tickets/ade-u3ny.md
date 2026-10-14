@@ -1,6 +1,6 @@
 ---
 id: ade-u3ny
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-14T23:39:28Z
@@ -20,3 +20,9 @@ GUARDRAILS (every ticket): work in a worktree E:/agent-deck-wt/<ticket> on wt/<t
 ## Acceptance Criteria
 
 Web test toggles wrapping and persists it; eslint, prettier, web tsc clean.
+
+## Notes
+
+**2026-10-14T23:52:09Z**
+
+2026-10-15 merged (wt/ade-u3ny: 4e32bb5 + fdbb0d1). Contrarian: no blocker; GPT review13: one should-fix. Applied: preference in the Zustand store (shared across keep-alive tabs, write outside the updater), module-level Compartment with corrected comment, tests assert through editor state incl. two-tab sync and survival of a full reconfigure (5). Post-merge: web tsc clean, FilePreview + Sidebar tests green. Not verified in a browser; ships with the next VM deploy.
