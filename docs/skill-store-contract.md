@@ -1,6 +1,6 @@
 # Skill engine integration & the Syncr contract
 
-How agent-deck consumes the shared, Syncr-owned skill engine, the current state of the lift, and
+Being retired under [ADR 0005](adr/0005-retire-skill-engine-addon.md); this contract holds as written until D1 (ade-0v9e) lands. How agent-deck consumes the shared, Syncr-owned skill engine, the current state of the lift, and
 the contract between the two. Decision + rationale: [ADR-0002](adr/0002-consolidate-skill-engine.md).
 Historical extension request (now shipped): [skill-engine-git-import-request.md](archive/syncr-requests/skill-engine-git-import-request.md).
 
