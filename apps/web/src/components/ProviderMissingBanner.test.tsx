@@ -7,7 +7,7 @@ import { ProviderMissingBanner } from "./ProviderMissingBanner.tsx";
 const user = { id: "ale@example.com", email: "ale@example.com" };
 afterEach(() => {
   cleanup();
-  useAppStore.setState({ me: null, view: "chat" });
+  useAppStore.setState({ me: null, session: null, view: "chat" });
 });
 
 it("shows nothing on a loopback server or when a provider is connected", () => {
@@ -29,4 +29,13 @@ it("SRV-13: warns a user with no provider and opens Providers", () => {
   );
   fireEvent.click(screen.getByRole("button", { name: "Open Providers" }));
   expect(useAppStore.getState().view).toBe("providers");
+});
+
+it("SRV-14: stays quiet inside a session owned by someone else", () => {
+  useAppStore.setState({
+    me: { ...user, providersConnected: false },
+    session: { createdBy: { id: "andrea@example.com", name: "Andrea" } } as never,
+  });
+  render(<ProviderMissingBanner />);
+  expect(screen.queryByTestId("provider-missing-banner")).toBeNull();
 });

@@ -258,7 +258,7 @@ export function ModelChip({
           {state?.modelId ?? "model"}
         </span>
         {ownerLabel ? (
-          <span className="truncate text-text-muted" data-testid="model-chip-owner">
+          <span className="max-w-[24ch] truncate text-text-muted" data-testid="model-chip-owner">
             {ownerLabel}
           </span>
         ) : null}

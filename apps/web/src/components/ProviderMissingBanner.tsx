@@ -1,11 +1,17 @@
 import { Button } from "../design-system/components/Button.tsx";
+import { credentialsOwnerLabel } from "../lib/userIdentity.ts";
 import { useAppStore } from "../state/store.ts";
 
 /** SRV-13: on a shared server, warn before a start fails on missing credentials. */
 export function ProviderMissingBanner() {
   const missing = useAppStore((state) => state.me?.providersConnected === false);
   const setView = useAppStore((state) => state.setView);
-  if (!missing) return null;
+  // SRV-14: inside a session someone else owns the user is already working on
+  // shared credentials, so the advice would contradict itself.
+  const inSharedSession = useAppStore(
+    (state) => credentialsOwnerLabel(state.me, state.session?.createdBy) !== null,
+  );
+  if (!missing || inSharedSession) return null;
   return (
     <div
       role="status"

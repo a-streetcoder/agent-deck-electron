@@ -24,7 +24,7 @@ export function userInitials(user: UserIdentityLike): string {
 
 /**
  * SRV-14: a session always runs on its owner's Pi credentials, whoever prompts
- * it. Returns "runs on <owner> credentials" when the viewer is not the owner;
+ * it. Returns "runs on <owner>'s credentials" when the viewer is not the owner;
  * null on loopback (no `me`), legacy sessions (no createdBy) or own sessions.
  */
 export function credentialsOwnerLabel(
@@ -32,5 +32,5 @@ export function credentialsOwnerLabel(
   createdBy: UserIdentityLike | null | undefined,
 ): string | null {
   if (!me || !createdBy || me.id === createdBy.id) return null;
-  return `runs on ${userDisplayName(createdBy)} credentials`;
+  return `runs on ${userDisplayName(createdBy)}'s credentials`;
 }
