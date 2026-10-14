@@ -26,3 +26,7 @@ Unit tests for the delta over a recorded child log (first look = full summary; s
 **2026-10-14T23:43:20Z**
 
 2026-10-15 approved by the owner (lane A tree, reply: 'the rest is approved'); dispatch in dependency order.
+
+**2026-10-14T23:54:55Z**
+
+2026-10-15 design-pass amendment: the delta is computed over the child's EVENTS (turn.completed references, run status, verdicts) between two cursors; the full transcript comes from the Pi session file via the existing transcript route, not from the log; the parent's last-looked cursor is itself an event subagent.result.read {uptoSeq}; 'files touched' comes from git (child base commit to HEAD or checkpoint refs). Requires child-session turn.completed events (A1b1 verifies child idle reconcile).

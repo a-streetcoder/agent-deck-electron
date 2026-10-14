@@ -26,3 +26,7 @@ Decision 4 added 2026-10-15: D1 implementation: A) TypeScript port (~3k lines, 5
 **2026-10-14T23:49:13Z**
 
 Decision 5 added 2026-10-15: does the event log replace the loop-run and subagent-run stores as source of truth (ADR 0004 decision 3 literal) or hold facts and references with the detail stores staying authoritative? Architect default while the owner is away: facts and references (one-sentence ADR 0004 amendment); override if wanted.
+
+**2026-10-14T23:54:55Z**
+
+Decisions 6 and 7 added 2026-10-15 (architect defaults applied, override if wanted): 6) the event log is one file set per data dir with projectId as a filter, not one file per project as ADR 0004 says literally; 7) retention: the log keeps task text and summaries forever and every authenticated user of the shared server sees them; deleting a session writes a tombstone but removes nothing from the log.

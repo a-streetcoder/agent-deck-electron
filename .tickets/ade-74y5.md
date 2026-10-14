@@ -26,3 +26,7 @@ Reducer tests: a recorded log of one loop run and one subagent run yields the ex
 **2026-10-14T23:43:20Z**
 
 2026-10-15 approved by the owner (lane A tree, reply: 'the rest is approved'); dispatch in dependency order.
+
+**2026-10-14T23:54:55Z**
+
+2026-10-15 design-pass amendment: the node tree is a projection of the event log JOINED with the session transcript on cell/entry ids (sessionId/entryId, sessionId/toolCallId); message, reasoning and tool leaves come from the transcript, never from log content. Loop children are loopChild nodes under loopIteration until A9. Depends in practice on A1b2 (ade-ade-qy2d) and A1c (ade-ade-dwdc).
