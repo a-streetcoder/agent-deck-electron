@@ -33,6 +33,27 @@ const piToolName = (server: string, tool: string): string =>
 export const legacyMcpToolPrefix = (id: string): string =>
   `mcp__${id.replace(/[^A-Za-z0-9_]/g, "_")}__`;
 
+// Mirrors the proxy (mcpTools.ts legacy alias check): when two granted ids share
+// a legacy prefix (`a.b`, `a_b`), an old exact grant cannot say which server it
+// meant, so it grants neither.
+const uniqueLegacyPrefix = (id: string, ids: readonly string[]): boolean =>
+  ids.filter((other) => legacyMcpToolPrefix(other) === legacyMcpToolPrefix(id)).length === 1;
+
+/**
+ * Fold a spawn's Pi name -> id map into the stored one. A name that comes back
+ * with a different id becomes "" (unknown) for good, so cells from either launch
+ * fall back to the Pi name instead of being relabelled.
+ */
+export function mergeMcpServerNames(
+  stored: Readonly<Record<string, string>> | undefined,
+  idMap: ReadonlyMap<string, string>,
+): Record<string, string> {
+  const merged = { ...stored };
+  for (const [name, id] of idMap)
+    merged[name] = merged[name] === undefined || merged[name] === id ? id : "";
+  return merged;
+}
+
 /**
  * Pi server name per Agent Deck id. Ids are sorted first so the launch plan's
  * `--tools` patterns and the bridge's server list agree for the same set,
@@ -56,8 +77,8 @@ export function nativeMcpNames(ids: readonly string[]): Map<string, string> {
 /**
  * Migrate an authored `tools:` list from the proxy shape to native names: `mcp`
  * keeps the entry and adds one pattern per server; a legacy exact name
- * `mcp__<sanitised id>__<tool>` becomes Pi's `mcp__<pi name>__<tool>` (every
- * server whose legacy prefix matches, as the proxy authorised).
+ * `mcp__<sanitised id>__<tool>` becomes Pi's `mcp__<pi name>__<tool>`, and is
+ * dropped when its prefix is ambiguous.
  */
 export function migrateMcpToolGrants(
   tools: readonly string[],
@@ -71,10 +92,10 @@ export function migrateMcpToolGrants(
       for (const name of names.values()) out.add(nativeMcpToolPattern(name));
       continue;
     }
-    const matched = [...names].filter(([id]) => tool.startsWith(legacyMcpToolPrefix(id)));
-    if (!matched.length) out.add(tool);
-    for (const [id, name] of matched)
-      out.add(piToolName(name, tool.slice(legacyMcpToolPrefix(id).length)));
+    const match = [...names].find(([id]) => tool.startsWith(legacyMcpToolPrefix(id)));
+    if (!match) out.add(tool);
+    else if (uniqueLegacyPrefix(match[0], [...names.keys()]))
+      out.add(piToolName(match[1], tool.slice(legacyMcpToolPrefix(match[0]).length)));
   }
   return [...out];
 }
@@ -114,7 +135,12 @@ export function nativeMcpList(configs: McpServerConfig[], toolAllowlist?: string
       // ponytail: legacy names are sanitised, so an allowlisted tool whose real
       // name has `-` or `.` stays hidden (fails closed).
       const prefix = legacyMcpToolPrefix(config.id);
-      named = toolAllowlist.filter((t) => t.startsWith(prefix)).map((t) => t.slice(prefix.length));
+      named = uniqueLegacyPrefix(
+        config.id,
+        configs.map((c) => c.id),
+      )
+        ? toolAllowlist.filter((t) => t.startsWith(prefix)).map((t) => t.slice(prefix.length))
+        : [];
       exposure = "hidden";
     } else {
       named = [

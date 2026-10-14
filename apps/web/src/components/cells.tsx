@@ -74,9 +74,11 @@ const FILE_TOOLS = new Set(["read", "edit", "write"]);
 function ToolCellView({
   cell,
   editorController,
+  childTranscript,
 }: {
   cell: ToolCell;
   editorController?: OpenInEditorController;
+  childTranscript?: boolean;
 }) {
   const session = useAppStore((state) => state.session);
   const argsText =
@@ -96,7 +98,11 @@ function ToolCellView({
   const memoryLabel = memoryToolCardLabel(cell);
   // Every other tool gets a friendly name + a distinct icon (native toolVerb /
   // toolIcon) instead of the raw tool name under one generic terminal glyph.
-  const preso = memoryLabel ? null : toolPresentation(cell.toolName, session?.mcpServerNames);
+  // A child names its servers over its own subset, so the parent's map would
+  // mislabel them; child cells use the Pi name split.
+  const preso = memoryLabel
+    ? null
+    : toolPresentation(cell.toolName, childTranscript ? undefined : session?.mcpServerNames);
   const PresoIcon = preso?.Icon;
   const filePath = FILE_TOOLS.has(cell.toolName.toLowerCase())
     ? toolFilePath(cell.args)
@@ -296,7 +302,7 @@ function ReadOnlyChildCell({ cell }: { cell: TranscriptCell }) {
       </div>
     );
   }
-  return <CellView cell={cell} />;
+  return <CellView cell={cell} childTranscript />;
 }
 
 function SubagentCellView({ cell }: { cell: SubagentCell }) {
@@ -896,10 +902,13 @@ export function CellView({
   cell,
   editorController,
   transcriptVisibility = DEFAULT_TRANSCRIPT_VISIBILITY,
+  childTranscript,
 }: {
   cell: TranscriptCell;
   editorController?: OpenInEditorController;
   transcriptVisibility?: TranscriptVisibilitySettings;
+  /** Cells of a delegated child run, shown inside the parent's transcript. */
+  childTranscript?: boolean;
 }) {
   if ("hiddenFromModel" in cell && cell.hiddenFromModel) {
     return (
@@ -908,6 +917,7 @@ export function CellView({
           cell={{ ...cell, hiddenFromModel: undefined }}
           editorController={editorController}
           transcriptVisibility={transcriptVisibility}
+          childTranscript={childTranscript}
         />
         <p className="mt-1 text-micro text-text-muted">Not in model context</p>
       </div>
@@ -919,7 +929,13 @@ export function CellView({
     case "assistant":
       return <AssistantCellView cell={cell} transcriptVisibility={transcriptVisibility} />;
     case "tool":
-      return <ToolCellView cell={cell} editorController={editorController} />;
+      return (
+        <ToolCellView
+          cell={cell}
+          editorController={editorController}
+          childTranscript={childTranscript}
+        />
+      );
     case "memory_recall":
       return <MemoryRecallCellView cell={cell} />;
     case "provider_retry":

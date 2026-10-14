@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { migrateMcpToolGrants, nativeMcpList } from "../src/mcpNative.ts";
+import { mergeMcpServerNames, migrateMcpToolGrants, nativeMcpList } from "../src/mcpNative.ts";
 import { mcpEntryToConfig, type McpServerConfig } from "../src/mcpTools.ts";
 import { normalizeAgentMcpProxyTools } from "../src/launchResources.ts";
 
@@ -157,15 +157,37 @@ describe("migrateMcpToolGrants", () => {
     ).toEqual(["read", "mcp__my_srv__get_item", `mcp__${"s".repeat(24)}__q`, "mcp__other__x"]);
   });
 
-  it("maps an ambiguous legacy prefix to every server it named, suffix included", () => {
-    expect(migrateMcpToolGrants(["mcp__a_b__t"], ["a.b", "a_b"])).toEqual([
-      "mcp__a_b__t",
-      "mcp__a_b_2__t",
-    ]);
+  it("grants neither server for an ambiguous legacy prefix, as the proxy did", () => {
+    expect(migrateMcpToolGrants(["read", "mcp__a_b__t"], ["a.b", "a_b"])).toEqual(["read"]);
+    // The child path fails closed the same way: both servers stay hidden.
+    const list = nativeMcpList([stdio("a.b"), stdio("a_b")], ["mcp__a_b__t"]);
+    for (const { config } of list.servers) {
+      expect(config).toMatchObject({ exposure: "hidden" });
+      expect(config).not.toHaveProperty("toolExposure");
+    }
   });
 
   it("keeps lists without MCP entries as they are", () => {
+    expect(migrateMcpToolGrants(["mcp__a__x"], ["a", "a"])).toEqual(["mcp__a__x"]);
     expect(migrateMcpToolGrants(["read", "bash"], ["a"])).toEqual(["read", "bash"]);
     expect(migrateMcpToolGrants([], ["a"])).toEqual([]);
+  });
+});
+
+describe("mergeMcpServerNames", () => {
+  it("keeps names across launches but never relabels a name reused for another id", () => {
+    const first = mergeMcpServerNames(undefined, new Map([["acme", "acme-staging"]]));
+    expect(first).toEqual({ acme: "acme-staging" });
+    const second = mergeMcpServerNames(
+      first,
+      new Map([
+        ["acme", "acme-prod"],
+        ["docs", "docs"],
+      ]),
+    );
+    expect(second).toEqual({ acme: "", docs: "docs" });
+    // A later launch with the same reuse does not bring a label back.
+    expect(mergeMcpServerNames(second, new Map([["acme", "acme-prod"]]))).toEqual(second);
+    expect(mergeMcpServerNames(second, new Map([["docs", "docs"]]))).toEqual(second);
   });
 });

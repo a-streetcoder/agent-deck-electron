@@ -67,7 +67,8 @@ export function toolPresentation(
       .sort((a, b) => b.prefix.length - a.prefix.length)[0];
     const rest = toolName.slice("mcp__".length);
     const split = rest.indexOf("__");
-    const [server, tool] = known
+    // An empty id marks a name reused for another server: label unknown.
+    const [server, tool] = known?.id
       ? [known.id, toolName.slice(known.prefix.length)]
       : split > 0
         ? [rest.slice(0, split), rest.slice(split + 2)]

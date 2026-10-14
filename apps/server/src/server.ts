@@ -83,6 +83,7 @@ import {
 } from "./mcpTools.ts";
 import {
   legacyMcpToolPrefix,
+  mergeMcpServerNames,
   nativeMcpEnabled,
   nativeMcpList,
   nativeMcpToolPattern,
@@ -476,11 +477,11 @@ async function initServer(
         .filter((spec) => delegationAllowed || !DELEGATION_TOOL_NAMES.has(spec.name));
       const allow = mcpAllowlistForSession(meta);
       const native = scope && nativeMcpEnabled() ? nativeMcpFor(scope, allow) : undefined;
-      // The transcript maps Pi server names back to Agent Deck ids. Merged so
+      // The transcript maps Pi server names back to Agent Deck ids, merged so
       // cells from earlier launches keep their label; persisted with the meta
       // the spawn publishes.
       if (native?.idMap.size)
-        meta.mcpServerNames = { ...meta.mcpServerNames, ...Object.fromEntries(native.idMap) };
+        meta.mcpServerNames = mergeMcpServerNames(meta.mcpServerNames, native.idMap);
       const tools = scope && !native ? [...nonMcpTools, ...mcp.specs(scope, allow)] : nonMcpTools;
       return writeBridgeExtension({
         endpoint: bridgeAddress.endpoint,

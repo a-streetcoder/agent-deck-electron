@@ -14,6 +14,8 @@ describe("toolPresentation for native MCP tools", () => {
     expect(toolPresentation("mcp__docs__search_docs").name).toBe("docs › search_docs");
     expect(toolPresentation("mcp__docs__search", { other: "other" }).name).toBe("docs › search");
     expect(toolPresentation("mcp").name).toBe("MCP");
+    // A name reused for another server ("" in the map) is labelled from the Pi name.
+    expect(toolPresentation("mcp__acme__q", { acme: "" }).name).toBe("acme › q");
   });
 });
 
