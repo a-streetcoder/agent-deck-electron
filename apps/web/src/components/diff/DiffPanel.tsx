@@ -413,7 +413,9 @@ export function DiffPanel() {
   // ROAD-S20: a worktree session can compare against its source branch (merge
   // base) so committed branch work shows too. The store keeps the HEAD set
   // (diff_push); the branch set lives here and refetches whenever that set
-  // changes (every push is a turn boundary).
+  // changes (every push is a turn boundary) and when the agent status flips,
+  // since a turn that edits and commits leaves the HEAD set unchanged (no push).
+  const agentIdle = useAppStore((state) => state.transcript.agentStatus !== "running");
   const canCompareBranch =
     loopReviewRunId === null && worktreeBranch !== null && worktreeSourceBranch !== null;
   const [diffBase, setDiffBase] = useState<"head" | "branch">("head");
@@ -441,7 +443,7 @@ export function DiffPanel() {
     return () => {
       stale = true;
     };
-  }, [branchMode, sessionId, headFiles]);
+  }, [branchMode, sessionId, headFiles, agentIdle]);
   const activeBranchSet = branchMode && branchSet?.sessionId === sessionId ? branchSet : null;
   const files = branchMode ? (activeBranchSet?.files ?? EMPTY_FILES) : headFiles;
   const truncatedSet = branchMode ? (activeBranchSet?.truncated ?? false) : headTruncated;

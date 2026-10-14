@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { Schema } from "effect";
 import { RpcServerFrame } from "@agent-deck/contracts";
@@ -21,6 +24,8 @@ import type { TerminalEvent } from "../src/services/terminal.ts";
 import type { OpenedTerminal, TerminalGateway } from "../src/terminalGateway.ts";
 import type { SessionDraftGateway } from "../src/sessionDrafts.ts";
 import type { SessionPasteStore } from "../src/sessionPastes.ts";
+import { SessionAuthorIndex } from "../src/persistence.ts";
+import { SessionAuthorStore } from "../src/sessionAuthors.ts";
 
 /**
  * Unit tests for the Effect-RPC connection core (rpcHandler.ts) — the same
@@ -734,6 +739,36 @@ describe("createRpcConnection", () => {
 
     expect(rollbackPaste).toHaveBeenCalledOnce();
     expect(frames).toEqual([{ kind: "reply", id: 3, ok: false, error: "Error: prompt failed" }]);
+  });
+
+  it("a rejected prompt leaves no unclaimed author turn", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "deck-rpc-authors-"));
+    try {
+      const sessionAuthors = new SessionAuthorStore(new SessionAuthorIndex(dataDir));
+      const { session, ops } = makeSession("s1");
+      ops.prompt.mockRejectedValueOnce(new Error("prompt failed"));
+      const frames: Frame[] = [];
+      const conn = createRpcConnection({
+        sessions: makeManager({ s1: session }),
+        terminals: makeTerminalGateway().gateway,
+        diffs: makeDiffGateway().gateway,
+        editors: makeEditorLauncher().launcher,
+        files: makeFileService().service,
+        scripts: makeScriptGateway().gateway,
+        checkpoints: makeCheckpointService().service,
+        rollback: makeRollbackGateway().gateway,
+        sessionAuthors,
+        user: { id: "ale@example.com", email: "ale@example.com" },
+        send: (frame) => frames.push(frame),
+      });
+      await conn.handleMessage(frame(1, { type: "prompt", sessionId: "s1", message: "hi" }));
+
+      expect(frames).toEqual([{ kind: "reply", id: 1, ok: false, error: "Error: prompt failed" }]);
+      const cell = { kind: "user", id: "u1", text: "hi" } as const;
+      expect(sessionAuthors.attachToUserCell("s1", cell, undefined).author).toBeUndefined();
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 
   it("set_model rejects a model pi does not offer", async () => {
