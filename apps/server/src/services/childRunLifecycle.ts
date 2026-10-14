@@ -5,7 +5,7 @@ export interface ChildRunLifecycle {
   error?: string;
 }
 
-/** Pi 0.82.0 owns retries: agent_end (even willRetry:false) is only a
+/** Pi 1.2.0 owns retries: agent_end (even willRetry:false) is only a
  * low-level boundary. agent_settled follows retry/compaction/queued work.
  * Keep failed partial output visible, but never use it as proof of success.
  */

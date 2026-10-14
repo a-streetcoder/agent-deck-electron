@@ -192,6 +192,10 @@ ${
     ? `    // Never let an aborted/failed previous prompt leak evidence into a
     // later turn. A successful fetch below may install one fresh bounded value.
     pendingRecall = undefined;
+    // Pi 1.x: before_agent_start is a union on messageType; custom-message
+    // runs (sendMessage with triggerTurn) carry no prompt, so there is nothing
+    // to recall against.
+    if (event.messageType === "user") {
     // Recall is best-effort and bounded: a broken bridge must not stall or
     // otherwise alter the turn.
     const recallController = new AbortController();
@@ -232,6 +236,7 @@ ${
       // Best-effort: leave the prompt unchanged.
     } finally {
       clearTimeout(recallTimer);
+    }
     }
 `
     : ""

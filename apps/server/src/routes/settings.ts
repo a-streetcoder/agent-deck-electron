@@ -86,12 +86,13 @@ export function readPiRuntimeDefaultModel(home: string): string | null {
 }
 
 /**
- * SRV-10: provider credential env names, copied from pi-ai 0.82.0
+ * SRV-10: provider credential env names, copied from pi-ai 1.2.0
  * dist/env-api-keys.js (getApiKeyEnvVars, not exported). EXA_API_KEY is absent on
  * purpose: web search is shared by design.
  */
 const PROVIDER_CREDENTIAL_ENV_KEYS = new Set([
   "COPILOT_GITHUB_TOKEN",
+  "ANTHROPIC_AUTH_TOKEN",
   "ANTHROPIC_OAUTH_TOKEN",
   "ANTHROPIC_API_KEY",
   "ANT_LING_API_KEY",
@@ -106,6 +107,7 @@ const PROVIDER_CREDENTIAL_ENV_KEYS = new Set([
   "GROQ_API_KEY",
   "CEREBRAS_API_KEY",
   "XAI_API_KEY",
+  "TYPESAFE_API_KEY",
   "RADIUS_API_KEY",
   "OPENROUTER_API_KEY",
   "AI_GATEWAY_API_KEY",
@@ -118,8 +120,10 @@ const PROVIDER_CREDENTIAL_ENV_KEYS = new Set([
   "HF_TOKEN",
   "FIREWORKS_API_KEY",
   "TOGETHER_API_KEY",
+  "BASETEN_API_KEY",
   "OPENCODE_API_KEY",
   "KIMI_API_KEY",
+  "META_API_KEY",
   "CLOUDFLARE_API_KEY",
   "XIAOMI_API_KEY",
   "XIAOMI_TOKEN_PLAN_CN_API_KEY",

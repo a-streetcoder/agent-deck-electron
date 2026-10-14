@@ -128,7 +128,7 @@ interface HealthCheck {
 
 const EMPTY_SETUP_CHECKS: HealthCheck[] = [
   { id: "pi-binary", label: "Pi", status: "ok", detail: "Included with Agent Deck" },
-  { id: "pi-version", label: "Pi version", status: "ok", detail: "0.82.0" },
+  { id: "pi-version", label: "Pi version", status: "ok", detail: "1.2.0" },
   {
     id: "node",
     label: "Built-in runtime",

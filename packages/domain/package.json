@@ -15,6 +15,6 @@
   },
   "devDependencies": {
     "@agent-deck/contracts": "workspace:*",
-    "@earendil-works/pi-coding-agent": "0.82.0"
+    "@earendil-works/pi-coding-agent": "1.2.0"
   }
 }

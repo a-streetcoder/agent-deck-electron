@@ -184,7 +184,7 @@ const fixtures: Fixture[] = [
     expected: "accept",
   },
   {
-    name: "set_thinking level max (pinned Pi 0.82.0)",
+    name: "set_thinking level max (pinned Pi 1.2.0)",
     message: { type: "set_thinking", sessionId: "s1", level: "max" },
     expected: "accept",
   },

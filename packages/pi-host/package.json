@@ -13,9 +13,9 @@
   },
   "dependencies": {
     "@agent-deck/domain": "workspace:*",
-    "@earendil-works/pi-coding-agent": "0.82.0",
+    "@earendil-works/pi-coding-agent": "1.2.0",
     "cross-spawn": "7.0.6",
-    "pi-claude-bridge": "0.7.0"
+    "pi-claude-bridge": "0.9.3"
   },
   "devDependencies": {
     "@agent-deck/testkit": "workspace:*",
