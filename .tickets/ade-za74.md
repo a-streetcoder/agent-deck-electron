@@ -26,3 +26,7 @@ Get-AuthenticodeSignature on the installer, app exe and uninstaller reports Vali
 **2026-10-14T07:25:33Z**
 
 Owner decision 2026-10-14: certificateProfileName is codemeter-profile (the Basic tier allows one PublicTrust profile; agentdeck-profile was refused). Read docs/release-windows.md for the account details.
+
+**2026-10-14T08:06:15Z**
+
+2026-10-14 committed. Local signing proof done (installer, app exe, uninstaller Valid, STREETCODING LTD; OpenConsole.exe keeps Microsoft's signature). Ponytail: accepted; win.verifyUpdateCodeSignature is electron-builder's default and kept as documentation. Remaining, owner-only: (1) repository variables AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID + a service principal with a federated credential for this repo and the Certificate Profile Signer role on codemeter-signing; (2) push a v<version> tag after the branch is on main, confirm the draft release has the installer, blockmap and latest.yml; (3) install the previous version, publish the draft, run Help > Check for Updates and confirm the update installs. Close the ticket and flip DST-03/04 to Done with that evidence.
