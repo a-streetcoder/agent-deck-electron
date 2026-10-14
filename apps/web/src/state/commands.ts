@@ -236,9 +236,9 @@ const ACTION_COMMANDS: readonly CommandDefinition[] = [
   },
   {
     command: "panel.sessions.toggle",
-    label: "Toggle Sessions Panel",
+    label: "Toggle Orchestrate Panel",
     group: "actions",
-    keywords: ["sidebar", "list", "expand"],
+    keywords: ["sidebar", "nav", "expand", "orchestrate"],
     run: () => {
       const store = useAppStore.getState();
       store.setPanelExpanded(!store.panelExpanded);

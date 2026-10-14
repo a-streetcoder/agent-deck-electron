@@ -263,10 +263,9 @@ export interface AppState {
   sessionSubscriptionSettled: boolean;
   view: AppView;
   /**
-   * Whether the sessions pull-up panel covers the sidebar nav (native
-   * isCodingAgentPanelExpanded). One global boolean: it persists while you
-   * switch sessions and only auto-collapses when you leave the chat view for
-   * another nav section.
+   * Whether the Orchestrate pull-up (the nav) covers the sessions panel in
+   * the sidebar (UI-01 inverts native isCodingAgentPanelExpanded). One global
+   * boolean: it persists while you move between nav screens.
    */
   panelExpanded: boolean;
   /** Bumped by resources_changed pushes; resource screens refetch on change. */
@@ -569,21 +568,10 @@ export const useAppStore = create<AppState>((set) => ({
     set({ connection, ...(connection !== "open" ? { sessionSubscriptionSettled: false } : {}) }),
   setSessionSubscriptionSettled: (sessionSubscriptionSettled) =>
     set({ sessionSubscriptionSettled }),
-  // Leaving chat for another nav section auto-collapses the panel (revealing the
-  // nav it covers); staying in chat — e.g. selecting a session — leaves the
-  // expansion untouched so it persists across session switches.
-  setView: (view) =>
-    set(
-      view === "chat"
-        ? { view, memoryNavigationRequest: null }
-        : {
-            view,
-            panelExpanded: false,
-            ...(view !== "memory" ? { memoryNavigationRequest: null } : {}),
-          },
-    ),
+  // Never touches the Orchestrate pull-up: selecting a nav screen keeps it open
+  // (UI-01), and sessions are only reachable while it is collapsed.
+  setView: (view) => set(view === "memory" ? { view } : { view, memoryNavigationRequest: null }),
   // Explicit expand/collapse persists so the panel launches as you left it.
-  // (setView's auto-collapse is transient and deliberately does not persist.)
   setPanelExpanded: (panelExpanded) => {
     try {
       localStorage.setItem(PANEL_KEY, panelExpanded ? "1" : "0");
