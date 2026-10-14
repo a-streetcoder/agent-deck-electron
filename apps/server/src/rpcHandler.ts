@@ -117,6 +117,9 @@ export function createRpcConnection(deps: {
       });
     }
   };
+  const unstageAuthor = (sessionId: string, message: string): void => {
+    if (deps.user) sessionAuthors?.unstage(sessionId, message, { id: deps.user.id });
+  };
   const externalTerminal = deps.externalTerminal ?? createExternalTerminalLauncher();
   const bufferedAmount = deps.bufferedAmount ?? ((): number => 0);
   const push = (message: ServerMessage): void => send({ kind: "push", message });
@@ -861,17 +864,28 @@ export function createRpcConnection(deps: {
             } catch {
               // Preserve the prompt failure; idle/resume reconciliation cleans stale metadata.
             }
+            try {
+              unstageAuthor(session.meta.id, request.message);
+            } catch {
+              // Preserve the prompt failure.
+            }
             throw error;
           }
           break;
         }
         case "steer":
           stageAuthor(session.meta.id, request.message);
-          await session.steer(request.message);
+          await session.steer(request.message).catch((error: unknown) => {
+            unstageAuthor(session.meta.id, request.message);
+            throw error;
+          });
           break;
         case "follow_up":
           stageAuthor(session.meta.id, request.message);
-          await session.followUp(request.message);
+          await session.followUp(request.message).catch((error: unknown) => {
+            unstageAuthor(session.meta.id, request.message);
+            throw error;
+          });
           break;
         case "abort":
           await session.abort();

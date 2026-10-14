@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { fetchBranchDiffFiles } from "../../state/wsBridge.ts";
 import { useAppStore } from "../../state/store.ts";
@@ -58,6 +58,26 @@ it("a worktree session toggles between uncommitted and since-source-branch chang
 
   fireEvent.change(screen.getByLabelText("Compare with"), { target: { value: "head" } });
   expect(screen.getByTestId("diff-file-count").textContent).toBe("1");
+});
+
+it("branch mode refetches when a turn ends with the HEAD set unchanged", async () => {
+  const setAgentStatus = (agentStatus: "running" | "idle") =>
+    useAppStore.setState((state) => ({ transcript: { ...state.transcript, agentStatus } }));
+  setAgentStatus("idle");
+  render(<DiffPanel />);
+  fireEvent.change(screen.getByLabelText("Compare with"), { target: { value: "branch" } });
+  await waitFor(() => expect(screen.getByTestId("diff-file-count").textContent).toBe("2"));
+
+  // The agent edits and commits in one turn: no diff_push, the branch set grows.
+  act(() => setAgentStatus("running"));
+  vi.mocked(fetchBranchDiffFiles).mockResolvedValue({
+    repo: true,
+    files: [entry("a.txt"), entry("committed.txt"), entry("new-commit.txt")],
+    truncated: false,
+  });
+  act(() => setAgentStatus("idle"));
+  await waitFor(() => expect(screen.getByTestId("diff-file-count").textContent).toBe("3"));
+  expect(screen.getByText("new-commit.txt")).toBeTruthy();
 });
 
 it("an ordinary session has no base toggle", () => {

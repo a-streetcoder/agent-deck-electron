@@ -265,4 +265,23 @@ describe("SessionAuthorStore", () => {
     // Other sessions are unaffected.
     expect(reloaded.attachToUserCell("s2", live("hello"), raw("hello")).author).toBeUndefined();
   });
+
+  it("a rejected message's staged author is rolled back, so the next sender gets the cell", () => {
+    const store = new SessionAuthorStore(new SessionAuthorIndex(dataDir));
+    const ale = { id: "ale@example.com", name: "Ale" };
+    const andrea = { id: "andrea@example.com", name: "Andrea" };
+    const cell: UserCell = { kind: "user", id: "u-retry", text: "retry me" };
+    store.stage("s3", "retry me", ale);
+    store.unstage("s3", "retry me", ale);
+    store.stage("s3", "retry me", andrea);
+    expect(store.attachToUserCell("s3", cell, undefined).author).toEqual(andrea);
+
+    // Identical text in flight from both users: the first sender's rejection
+    // must not remove the second sender's (newer) record.
+    store.stage("s4", "retry me", ale);
+    store.stage("s4", "retry me", andrea);
+    store.unstage("s4", "retry me", ale);
+    expect(store.attachToUserCell("s4", cell, undefined).author).toEqual(andrea);
+    expect(store.attachToUserCell("s4", cell, undefined).author).toBeUndefined();
+  });
 });

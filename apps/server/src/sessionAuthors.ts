@@ -57,6 +57,22 @@ export class SessionAuthorStore {
     this.index.upsert({ id: sessionId, turns });
   }
 
+  /** Pi rejected the message: drop the newest unclaimed turn this author staged for it. */
+  unstage(sessionId: string, message: string, author: UserIdentity): void {
+    const turns = this.turns(sessionId);
+    const signature = signatureFor(message);
+    const index = turns.findLastIndex(
+      (turn) =>
+        turn.signature === signature &&
+        turn.author.id === author.id &&
+        !turn.claimed &&
+        !turn.entryId,
+    );
+    if (index === -1) return;
+    turns.splice(index, 1);
+    this.index.upsert({ id: sessionId, turns });
+  }
+
   attachToUserCell(sessionId: string, cell: UserCell, rawMessage: unknown): UserCell {
     const turns = this.turns(sessionId);
     if (turns.length === 0) return cell;
