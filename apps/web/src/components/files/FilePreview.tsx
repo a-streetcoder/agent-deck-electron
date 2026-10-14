@@ -6,6 +6,7 @@ import type { FileContentKind } from "@agent-deck/contracts";
 import { cn } from "@/lib/cn";
 import { FileSaveCoordinator } from "../../lib/fileSaveCoordinator.ts";
 import { MarkdownDocument } from "../../design-system/markdown/MarkdownDocument.tsx";
+import { useAppStore } from "../../state/store.ts";
 import { fetchFileRead, fetchFileWrite } from "../../state/wsBridge.ts";
 import { OpenInPicker } from "../diff/OpenInPicker.tsx";
 import { isMarkdownPreviewFile } from "./filePreviewMode.ts";
@@ -37,17 +38,6 @@ const CodeMirrorView = lazy(() => import("./CodeMirrorView.tsx"));
 
 /** Debounce (ms) after the last keystroke before an edit autosaves (Slice L4b). */
 const AUTOSAVE_DEBOUNCE_MS = 700;
-
-/** localStorage key for the code view's soft-wrap toggle (D3). Default off. */
-const SOFT_WRAP_KEY = "agentdeck:file-preview-soft-wrap";
-
-function readSoftWrap(): boolean {
-  try {
-    return localStorage.getItem(SOFT_WRAP_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
 
 interface PreviewState {
   path: string;
@@ -116,18 +106,8 @@ export function FilePreview(props: {
   // Markdown default: PREVIEW (matches t3code) — a rendered doc is the useful
   // default for a .md; the Code2/Eye toggle flips to the raw CodeMirror view.
   const [markdownMode, setMarkdownMode] = useState<"preview" | "raw">("preview");
-  const [softWrap, setSoftWrap] = useState(readSoftWrap);
-  const toggleSoftWrap = useCallback(() => {
-    setSoftWrap((current) => {
-      const next = !current;
-      try {
-        localStorage.setItem(SOFT_WRAP_KEY, String(next));
-      } catch {
-        // Storage unavailable — the toggle still applies for this session.
-      }
-      return next;
-    });
-  }, []);
+  const softWrap = useAppStore((s) => s.softWrap);
+  const setSoftWrap = useAppStore((s) => s.setSoftWrap);
 
   // Autosave (Slice L4b). versionRef is the conflict guard's base token: set on
   // each (re)load and advanced to the returned token after every successful
@@ -293,7 +273,7 @@ export function FilePreview(props: {
             aria-label="Soft wrap long lines"
             aria-pressed={softWrap}
             data-testid="file-preview-soft-wrap"
-            onClick={toggleSoftWrap}
+            onClick={() => setSoftWrap(!softWrap)}
           >
             <WrapText className="h-3.5 w-3.5" />
           </ControlButton>

@@ -72,6 +72,8 @@ const tokenTheme = EditorView.theme({
 });
 
 const wrapExtension = (wrap: boolean): Extension => (wrap ? EditorView.lineWrapping : []);
+// Compartments are keyed per editor state, so one instance serves every view.
+const wrapCompartment = new Compartment();
 
 export interface CodeMirrorViewProps {
   /** File text. */
@@ -109,9 +111,9 @@ export default function CodeMirrorView(props: CodeMirrorViewProps) {
   const resolvedTheme = useResolvedTheme();
   const [languageExtension, setLanguageExtension] = useState<Extension | null>(null);
   const viewRef = useRef<EditorView | null>(null);
-  const [wrapCompartment] = useState(() => new Compartment());
-  // Read through a ref so a later extensions rebuild (grammar load) seeds the
-  // compartment with the CURRENT wrap state without depending on it.
+  // Seeds the compartment when the editor is first created. A later full
+  // reconfigure (grammar load, theme) keeps the compartment's current content,
+  // because CodeMirror carries it over for the same Compartment instance.
   const lineWrappingRef = useRef(lineWrapping);
   lineWrappingRef.current = lineWrapping;
 
@@ -119,7 +121,7 @@ export default function CodeMirrorView(props: CodeMirrorViewProps) {
     viewRef.current?.dispatch({
       effects: wrapCompartment.reconfigure(wrapExtension(lineWrapping)),
     });
-  }, [lineWrapping, wrapCompartment]);
+  }, [lineWrapping]);
 
   // Re-measure when the tab becomes visible again (a display:none CodeMirror
   // measures 0 height and paints blank until it re-measures).
@@ -159,7 +161,7 @@ export default function CodeMirrorView(props: CodeMirrorViewProps) {
     ];
     if (languageExtension) list.push(languageExtension);
     return list;
-  }, [languageExtension, readOnly, resolvedTheme, wrapCompartment]);
+  }, [languageExtension, readOnly, resolvedTheme]);
 
   return (
     <CodeMirror
