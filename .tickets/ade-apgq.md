@@ -1,6 +1,6 @@
 ---
 id: ade-apgq
-status: open
+status: in_progress
 deps: [ade-mp3j, ade-whg8, ade-j6e5]
 links: []
 created: 2026-10-14T19:54:19Z
