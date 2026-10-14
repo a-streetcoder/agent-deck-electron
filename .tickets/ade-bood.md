@@ -1,6 +1,6 @@
 ---
 id: ade-bood
-status: open
+status: in_progress
 deps: [ade-7zpu]
 links: []
 created: 2026-10-14T18:16:28Z
