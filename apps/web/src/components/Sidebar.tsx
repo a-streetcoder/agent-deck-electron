@@ -21,6 +21,7 @@ import {
   User,
   WandSparkles,
 } from "lucide-react";
+import { useEffect, useRef, type RefObject } from "react";
 import { sectionHeaderClass } from "@/design-system/styles";
 import { cn } from "@/lib/cn";
 import { isMacDesktop } from "@/lib/native";
@@ -64,21 +65,34 @@ const RUNTIME_NAV: Array<{ id: AppView; label: string; icon: typeof Send }> = [
   { id: "doctor", label: "Doctor", icon: Stethoscope },
 ];
 
-/** Display name + initials for the user row; "Local" on loopback (no `me`) or
- * when `me` has neither a name nor an email (never the raw id). */
-function userRowLabel(me: CurrentUser | null): { name: string; initials: string | null } {
+/** Display name + initials for the user row. No name until /me has answered
+ * (avoids a "Local" flash on the shared server); "Local" once it says loopback
+ * or when `me` has neither a name nor an email (never the raw id). */
+function userRowLabel(
+  me: CurrentUser | null,
+  meKnown: boolean,
+): { name: string | null; initials: string | null } {
+  if (!me && !meKnown) return { name: null, initials: null };
   if (!me || (!me.name?.trim() && !me.email)) return { name: "Local", initials: null };
   const identity = { id: me.email, name: me.name };
   return { name: userDisplayName(identity), initials: userInitials(identity) };
 }
 
 /** Collapsed Orchestrate card — pinned at the bottom of the sessions layer. */
-export function OrchestrateCollapsedCard({ onExpand }: { onExpand: () => void }) {
+export function OrchestrateCollapsedCard({
+  onExpand,
+  openerRef,
+}: {
+  onExpand: () => void;
+  openerRef?: RefObject<HTMLButtonElement | null>;
+}) {
   const me = useAppStore((state) => state.me);
-  const { name, initials } = userRowLabel(me);
+  const meKnown = useAppStore((state) => state.meKnown);
+  const { name, initials } = userRowLabel(me, meKnown);
   return (
     <div className="px-2 pb-2">
       <ControlButton
+        ref={openerRef}
         data-testid="orchestrate-expand"
         className="w-full rounded-2xl border border-border-subtle bg-surface-elevated p-2 text-left shadow-card hover:bg-hover"
         onClick={onExpand}
@@ -99,7 +113,7 @@ export function OrchestrateCollapsedCard({ onExpand }: { onExpand: () => void })
           >
             {initials ?? <User size={13} aria-hidden />}
           </span>
-          <span className="truncate text-detail text-text-secondary">{name}</span>
+          {name ? <span className="truncate text-detail text-text-secondary">{name}</span> : null}
         </span>
       </ControlButton>
     </div>
@@ -113,12 +127,20 @@ export function OrchestrateCollapsedCard({ onExpand }: { onExpand: () => void })
 export function OrchestrateExpandedOverlay({
   expanded,
   onCollapse,
+  pullUpRef,
+  collapseRef,
 }: {
   expanded: boolean;
   onCollapse: () => void;
+  pullUpRef?: RefObject<HTMLDivElement | null>;
+  collapseRef?: RefObject<HTMLButtonElement | null>;
 }) {
   const view = useAppStore((state) => state.view);
   const setView = useAppStore((state) => state.setView);
+  // Background sessions needing attention stay visible on nav screens.
+  const attentionCount = useAppStore(
+    (state) => state.sessions.filter((session) => session.needsAttention === true).length,
+  );
 
   const rowClass = (active: boolean): string =>
     cn(
@@ -153,6 +175,7 @@ export function OrchestrateExpandedOverlay({
 
   return (
     <div
+      ref={pullUpRef}
       className="absolute inset-0 z-10 flex flex-col px-2 pb-2"
       data-testid="orchestrate-expanded"
       inert={!expanded}
@@ -168,14 +191,27 @@ export function OrchestrateExpandedOverlay({
       <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-border-subtle bg-surface-elevated p-2 shadow-elevated">
         <div className="flex items-center justify-between gap-1 px-1.5 pb-1.5">
           <span className="text-detail font-semibold text-text-primary">Orchestrate</span>
-          <ControlButton
-            data-testid="orchestrate-collapse"
-            className="rounded-capsule p-1 text-text-muted hover:bg-hover hover:text-text-primary"
-            title="Back to sessions"
-            onClick={onCollapse}
-          >
-            <ChevronDown size={14} />
-          </ControlButton>
+          <span className="flex items-center gap-1">
+            {attentionCount > 0 ? (
+              <span
+                className="rounded-full bg-accent-surface px-1.5 py-0.5 text-micro text-text-primary"
+                data-testid="orchestrate-attention-count"
+                aria-label={`${attentionCount} sessions across all projects need attention`}
+                title="Sessions needing attention across all projects"
+              >
+                {attentionCount}
+              </span>
+            ) : null}
+            <ControlButton
+              ref={collapseRef}
+              data-testid="orchestrate-collapse"
+              className="rounded-capsule p-1 text-text-muted hover:bg-hover hover:text-text-primary"
+              title="Back to sessions"
+              onClick={onCollapse}
+            >
+              <ChevronDown size={14} />
+            </ControlButton>
+          </span>
         </div>
         <div className="-mx-2 min-h-0 flex-1 overflow-y-auto pb-2">
           {sectionHeader("Workspace")}
@@ -196,6 +232,24 @@ export function Sidebar({ width }: { width?: number }) {
   // so drop the wordmark below them and make the strip a drag region.
   const macDesktop = isMacDesktop();
   const isChat = view === "chat";
+
+  // Focus handoff: the layer going inert must not keep focus. Opening moves it
+  // to the collapse button, closing back to the Orchestrate card — but only when
+  // focus was in the layer being hidden (or already dropped to body), so a
+  // toggle from the composer or a dialog never steals it.
+  const sessionsLayerRef = useRef<HTMLDivElement>(null);
+  const pullUpRef = useRef<HTMLDivElement>(null);
+  const openerRef = useRef<HTMLButtonElement>(null);
+  const collapseRef = useRef<HTMLButtonElement>(null);
+  const shownExpanded = useRef(panelExpanded);
+  useEffect(() => {
+    if (shownExpanded.current === panelExpanded) return;
+    shownExpanded.current = panelExpanded;
+    const active = document.activeElement;
+    const hidden = panelExpanded ? sessionsLayerRef.current : pullUpRef.current;
+    if (active && active !== document.body && !hidden?.contains(active)) return;
+    (panelExpanded ? collapseRef : openerRef).current?.focus();
+  }, [panelExpanded]);
 
   return (
     <aside
@@ -233,6 +287,7 @@ export function Sidebar({ width }: { width?: number }) {
       <div className="relative min-h-0 flex-1">
         {/* Sessions layer — the main one, always in view. */}
         <div
+          ref={sessionsLayerRef}
           className="absolute inset-0 flex flex-col"
           data-testid="sessions-layer"
           inert={panelExpanded}
@@ -246,13 +301,15 @@ export function Sidebar({ width }: { width?: number }) {
           }}
         >
           <SessionsMainPanel />
-          <OrchestrateCollapsedCard onExpand={() => setPanelExpanded(true)} />
+          <OrchestrateCollapsedCard onExpand={() => setPanelExpanded(true)} openerRef={openerRef} />
         </div>
 
         {/* Orchestrate layer — docks below the logo, full height. */}
         <OrchestrateExpandedOverlay
           expanded={panelExpanded}
           onCollapse={() => setPanelExpanded(false)}
+          pullUpRef={pullUpRef}
+          collapseRef={collapseRef}
         />
       </div>
     </aside>

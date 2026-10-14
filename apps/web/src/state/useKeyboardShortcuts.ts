@@ -13,7 +13,7 @@ import { useAppStore } from "./store.ts";
  * moment the store's `keybindings` change.
  *
  * Defaults preserve the shortcuts the app already had: ⌘1–6 screens, ⌘N new
- * session, ⌘. stop, ⌘] / ⌘[ next/prev session, ⌘S sessions panel, ⌘` terminal
+ * session, ⌘. stop, ⌘] / ⌘[ next/prev session, ⌘S Orchestrate pull-up, ⌘` terminal
  * (the VS Code binding, per the t3code donor) — plus the new ⌘K palette. The
  * primary modifier is Ctrl on Windows/Linux (the port's targets) and ⌘ on a
  * macOS dev build; `resolveKeybindings`/`commandForChordEvent` handle the swap.

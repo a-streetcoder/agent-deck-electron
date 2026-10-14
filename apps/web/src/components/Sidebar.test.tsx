@@ -13,6 +13,7 @@ beforeEach(() => {
     view: "chat",
     panelExpanded: false,
     me: null,
+    meKnown: true,
     connection: "open",
     session: null,
     projects: [{ id: "p1", name: "Alpha", path: "/alpha", createdAt: "2026-01-01T00:00:00.000Z" }],
@@ -38,6 +39,15 @@ describe("Sidebar (UI-01 inverted layering)", () => {
     expect(card.textContent).toContain("Orchestrate");
     expect(screen.getByTestId("orchestrate-user").textContent).toBe("Local");
     expect(screen.getByTestId("orchestrate-user-icon").querySelector("svg")).toBeTruthy();
+  });
+
+  it("shows only the generic icon until /me answers (no Local flash on a shared server)", () => {
+    useAppStore.setState({ meKnown: false });
+    render(<Sidebar />);
+    expect(screen.getByTestId("orchestrate-user").textContent).toBe("");
+    expect(screen.getByTestId("orchestrate-user-icon").querySelector("svg")).toBeTruthy();
+    act(() => useAppStore.getState().setMe(null));
+    expect(screen.getByTestId("orchestrate-user").textContent).toBe("Local");
   });
 
   it("shows initials and the display name, with the email in the title", () => {
@@ -85,5 +95,52 @@ describe("Sidebar (UI-01 inverted layering)", () => {
     expect(layer("orchestrate-expanded").getAttribute("aria-hidden")).toBe("false");
     act(() => runCommand("panel.sessions.toggle"));
     expect(layer("orchestrate-expanded").getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("entering chat collapses the pull-up without persisting it", () => {
+    render(<Sidebar />);
+    fireEvent.click(screen.getByTestId("orchestrate-expand"));
+    expect(localStorage.getItem("agentdeck-orchestrate-expanded")).toBe("1");
+    act(() => useAppStore.getState().setView("skills"));
+    expect(layer("orchestrate-expanded").getAttribute("aria-hidden")).toBe("false");
+    act(() => useAppStore.getState().setView("chat"));
+    expect(layer("sessions-layer").getAttribute("aria-hidden")).toBe("false");
+    expect(layer("orchestrate-expanded").getAttribute("aria-hidden")).toBe("true");
+    expect(localStorage.getItem("agentdeck-orchestrate-expanded")).toBe("1");
+  });
+
+  it("shows the attention count on the Orchestrate header", () => {
+    useAppStore.setState({
+      panelExpanded: true,
+      sessions: [
+        { id: "a", cwd: "/alpha", createdAt: "2026-01-01T00:00:00.000Z", needsAttention: true },
+        { id: "b", cwd: "/alpha", createdAt: "2026-01-01T00:00:00.000Z" },
+      ],
+    });
+    render(<Sidebar />);
+    expect(screen.getByTestId("orchestrate-attention-count").textContent).toBe("1");
+  });
+
+  it("hands focus to the collapse button on open and back to the card on close", () => {
+    render(<Sidebar />);
+    const opener = screen.getByTestId("orchestrate-expand");
+    opener.focus();
+    fireEvent.click(opener);
+    expect(document.activeElement).toBe(screen.getByTestId("orchestrate-collapse"));
+    fireEvent.click(screen.getByTestId("orchestrate-collapse"));
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("does not steal focus from outside the sidebar when the pull-up toggles", () => {
+    render(
+      <>
+        <input data-testid="outside" />
+        <Sidebar />
+      </>,
+    );
+    const outside = screen.getByTestId("outside");
+    outside.focus();
+    act(() => runCommand("panel.sessions.toggle"));
+    expect(document.activeElement).toBe(outside);
   });
 });

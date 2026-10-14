@@ -25,15 +25,20 @@ export type { Page } from "@playwright/test";
 
 /**
  * UI-01: the nav lives in the Orchestrate pull-up. Open it, pick the screen,
- * then fold it back so the sessions list (and new-chat) stay reachable; every
- * spec therefore starts and ends a nav step with the pull-up collapsed.
+ * then fold it back so the sessions list (and new-chat) stay reachable. Works
+ * whether the pull-up starts open or closed; it always ends collapsed.
  */
 export async function openNav(
   page: Page,
   id: string,
   options?: { timeout?: number },
 ): Promise<void> {
-  await page.getByTestId("orchestrate-expand").click(options);
+  const pullUp = page.getByTestId("orchestrate-expanded");
+  // Already open (a spec expanded it, or the persisted state reopened it).
+  if ((await pullUp.getAttribute("aria-hidden", options)) !== "false") {
+    await page.getByTestId("orchestrate-expand").click(options);
+  }
+  await expect(pullUp).toHaveAttribute("aria-hidden", "false");
   await page.getByTestId(`nav-${id}`).click();
   await page.getByTestId("orchestrate-collapse").click();
 }

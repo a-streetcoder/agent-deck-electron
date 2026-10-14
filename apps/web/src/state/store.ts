@@ -259,6 +259,8 @@ export interface CurrentUser {
 export interface AppState {
   connection: ConnectionStatus;
   me: CurrentUser | null;
+  /** True once GET /me has answered (null `me` then means loopback, not "unknown yet"). */
+  meKnown: boolean;
   /** True only after the current session's (re)subscription ack settles. */
   sessionSubscriptionSettled: boolean;
   view: AppView;
@@ -499,7 +501,9 @@ export interface AppState {
   dismissToast(id: string): void;
 }
 
-const PANEL_KEY = "agentdeck-panel-expanded";
+// UI-01: renamed from "agentdeck-panel-expanded", whose "1" meant the old
+// sessions overlay; the new key starts everyone with the Orchestrate pull-up down.
+const PANEL_KEY = "agentdeck-orchestrate-expanded";
 
 /** The panel opens the way you last left it (persisted); collapsed by default. */
 function initialPanelExpanded(): boolean {
@@ -519,6 +523,7 @@ let nextMemoryNavigationRequestId = 0;
 export const useAppStore = create<AppState>((set) => ({
   connection: "connecting",
   me: null,
+  meKnown: false,
   sessionSubscriptionSettled: false,
   view: "chat",
   panelExpanded: initialPanelExpanded(),
@@ -568,10 +573,19 @@ export const useAppStore = create<AppState>((set) => ({
     set({ connection, ...(connection !== "open" ? { sessionSubscriptionSettled: false } : {}) }),
   setSessionSubscriptionSettled: (sessionSubscriptionSettled) =>
     set({ sessionSubscriptionSettled }),
-  // Never touches the Orchestrate pull-up: selecting a nav screen keeps it open
-  // (UI-01), and sessions are only reachable while it is collapsed.
-  setView: (view) => set(view === "memory" ? { view } : { view, memoryNavigationRequest: null }),
+  // UI-01: selecting a nav screen keeps the Orchestrate pull-up open; entering
+  // chat (from any path) collapses it so the sessions list shows again. That
+  // collapse is transient and deliberately does not persist.
+  setView: (view) =>
+    set(
+      view === "chat"
+        ? { view, panelExpanded: false, memoryNavigationRequest: null }
+        : view === "memory"
+          ? { view }
+          : { view, memoryNavigationRequest: null },
+    ),
   // Explicit expand/collapse persists so the panel launches as you left it.
+  // (setView's collapse on entering chat is transient and does not persist.)
   setPanelExpanded: (panelExpanded) => {
     try {
       localStorage.setItem(PANEL_KEY, panelExpanded ? "1" : "0");
@@ -601,7 +615,7 @@ export const useAppStore = create<AppState>((set) => ({
           },
     ),
   setSessions: (sessions) => set({ sessions, sessionsLoaded: true }),
-  setMe: (me) => set({ me }),
+  setMe: (me) => set({ me, meKnown: true }),
   setAttentionAnnouncement: (text) =>
     set((state) => ({
       attentionAnnouncement: { id: (state.attentionAnnouncement?.id ?? 0) + 1, text },

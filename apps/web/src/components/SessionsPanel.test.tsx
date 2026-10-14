@@ -146,7 +146,7 @@ describe("SessionRow durable failure state", () => {
 });
 
 describe("SessionsMainPanel", () => {
-  it("lists newest sessions across all projects and exposes selected-chat status", () => {
+  it("lists sessions from every project and exposes the selected-chat status", () => {
     useAppStore.setState({
       panelExpanded: false,
       connection: "open",
