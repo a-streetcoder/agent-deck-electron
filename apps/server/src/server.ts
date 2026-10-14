@@ -82,6 +82,8 @@ import {
   mcpServerConfigsFromEnv,
 } from "./mcpTools.ts";
 import {
+  legacyMcpToolPrefix,
+  mergeMcpServerNames,
   nativeMcpEnabled,
   nativeMcpList,
   nativeMcpRefusal,
@@ -476,15 +478,18 @@ async function initServer(
         .filter((spec) => delegationAllowed || !DELEGATION_TOOL_NAMES.has(spec.name));
       const allow = mcpAllowlistForSession(meta);
       const native = scope && nativeMcpEnabled() ? nativeMcpFor(scope, allow) : undefined;
+      // The transcript maps Pi server names back to Agent Deck ids, merged so
+      // cells from earlier launches keep their label; persisted with the meta
+      // the spawn publishes.
+      if (native?.idMap.size)
+        meta.mcpServerNames = mergeMcpServerNames(meta.mcpServerNames, native.idMap);
       const tools = scope && !native ? [...nonMcpTools, ...mcp.specs(scope, allow)] : nonMcpTools;
       return writeBridgeExtension({
         endpoint: bridgeAddress.endpoint,
         sessionId: meta.id,
         token,
         tools,
-        ...(native?.servers.length
-          ? { nativeMcp: { servers: native.servers, blockedTools: native.blockedTools } }
-          : {}),
+        ...(native?.servers.length ? { nativeMcp: { servers: native.servers } } : {}),
         // The generated bridge is appended after every provider/user extension.
         // Its single final hook applies recall first, then captures the exact
         // chained prompt Pi will use for this turn.
@@ -547,7 +552,7 @@ async function initServer(
         // subject to an authored Pi tool allowlist (including explicit empty).
         // Native uses one `mcp` proxy. Preserve exact restrictions from older
         // mcp__server__tool allowlists instead of widening them to the whole server.
-        const legacyPrefixes = serverIds.map((id) => `mcp__${id.replace(/[^A-Za-z0-9_]/g, "_")}__`);
+        const legacyPrefixes = serverIds.map(legacyMcpToolPrefix);
         const exactLegacyTools =
           route.tools?.filter((tool) => legacyPrefixes.some((prefix) => tool.startsWith(prefix))) ??
           [];
@@ -572,9 +577,7 @@ async function initServer(
           sessionId: childSessionId,
           token,
           tools,
-          ...(native?.servers.length
-            ? { nativeMcp: { servers: native.servers, blockedTools: native.blockedTools } }
-            : {}),
+          ...(native?.servers.length ? { nativeMcp: { servers: native.servers } } : {}),
         });
         const disposeAccess = registerChildBridgeAccess({
           sessionId: childSessionId,

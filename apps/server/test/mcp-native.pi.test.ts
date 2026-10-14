@@ -141,6 +141,11 @@ describe("native MCP", () => {
     expect(results).toContain("ALPHA: one");
     expect(results).toContain("mcp stdio echo: two");
     expect(JSON.stringify(mock.requests)).not.toContain(PLANTED);
+    // The transcript's name map is on the persisted session meta.
+    expect(deck.sessions.get(parentId)!.meta.mcpServerNames).toEqual({
+      alpha_one: "alpha.one",
+      beta: "beta",
+    });
   });
 
   it("gives a named child only its granted subset under an authored tool list", async () => {

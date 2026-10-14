@@ -794,3 +794,30 @@ describe("context_edit marker", () => {
     expect(screen.getByTestId("assistant-cell")).toBeTruthy();
   });
 });
+
+describe("native MCP tool cell label", () => {
+  const cell = {
+    kind: "tool" as const,
+    id: "tool-1",
+    toolCallId: "1",
+    toolName: "mcp__acme_analytics_warehouse__query",
+    args: {},
+    status: "done" as const,
+  };
+
+  it("uses the session's name map, but not for a child run's cells", () => {
+    useAppStore.setState({
+      session: {
+        id: "s1",
+        cwd: "/tmp",
+        createdAt: "now",
+        mcpServerNames: { acme_analytics_warehouse: "acme-analytics-warehouse-prod" },
+      },
+    });
+    const { unmount } = render(<CellView cell={cell} />);
+    expect(screen.getByText("acme-analytics-warehouse-prod › query")).toBeTruthy();
+    unmount();
+    render(<CellView cell={cell} childTranscript />);
+    expect(screen.getByText("acme_analytics_warehouse › query")).toBeTruthy();
+  });
+});

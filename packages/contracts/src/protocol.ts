@@ -491,6 +491,11 @@ export const SessionMeta = Schema.mutable(
      * system prompt/tools/skills, project assignments, provider/model.
      */
     launchPlan: Schema.optional(Schema.Unknown),
+    /** Pi native MCP server name -> Agent Deck server id, recorded at spawn so
+     * the transcript can label `mcp__<server>__<tool>` cells (PI-03e). */
+    mcpServerNames: Schema.optional(
+      Schema.mutable(Schema.Record({ key: Schema.String, value: Schema.String })),
+    ),
     /** Durable v1 compatibility inputs for recomputing catalog-derived launch
      * resources without losing request-specific extension/skill overrides. */
     launchResourceConfig: Schema.optional(

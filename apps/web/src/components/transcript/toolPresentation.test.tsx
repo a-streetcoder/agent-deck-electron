@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { toolFileReference } from "./toolPresentation.tsx";
+import { toolFileReference, toolPresentation } from "./toolPresentation.tsx";
+
+describe("toolPresentation for native MCP tools", () => {
+  it("labels server and tool with the Agent Deck id when the session map is known", () => {
+    const names = { "my-srv_v2": "my-srv.v2", my: "my" };
+    expect(toolPresentation("mcp__my_srv_v2__get__item", names)).toMatchObject({
+      name: "my-srv.v2 › get__item",
+      variant: "mcp",
+    });
+  });
+
+  it("splits the Pi name on the first `__` without a map", () => {
+    expect(toolPresentation("mcp__docs__search_docs").name).toBe("docs › search_docs");
+    expect(toolPresentation("mcp__docs__search", { other: "other" }).name).toBe("docs › search");
+    expect(toolPresentation("mcp").name).toBe("MCP");
+    // A name reused for another server ("" in the map) is labelled from the Pi name.
+    expect(toolPresentation("mcp__acme__q", { acme: "" }).name).toBe("acme › q");
+  });
+});
 
 describe("toolFileReference", () => {
   it("extracts parsed or raw JSON file fields and preserves the display value", () => {
