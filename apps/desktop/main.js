@@ -34,6 +34,7 @@ import {
   catalogListsPath,
   parseResourceFileRequest,
 } from "./resource-file-request.js";
+import { checkForUpdates } from "./update-check.js";
 import {
   app,
   BrowserWindow,
@@ -47,6 +48,7 @@ import {
   session,
   shell,
 } from "electron";
+import electronUpdater from "electron-updater";
 
 const startupTrace = (phase) => {
   if (process.env.AGENT_DECK_E2E_STARTUP_TRACE === "1") {
@@ -662,6 +664,21 @@ function buildAppMenu() {
               "https://github.com/a-streetcoder/agent-deck/tree/main/agent-deck-documentation",
             ),
         },
+        // DST-04: only an NSIS install carries the update feed (app-update.yml).
+        ...(app.isPackaged && process.platform === "win32"
+          ? [
+              {
+                label: "Check for Updates…",
+                click: () =>
+                  void checkForUpdates({
+                    updater: electronUpdater.autoUpdater,
+                    dialog,
+                    window: mainWindow,
+                    currentVersion: app.getVersion(),
+                  }),
+              },
+            ]
+          : []),
         { type: "separator" },
         { role: "about", label: "About Agent Deck" },
       ],

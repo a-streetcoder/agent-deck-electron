@@ -52,6 +52,25 @@ mac:
 
 win:
   icon: build/icon.ico
+  target:
+    - target: nsis
+      arch: x64
+    - target: dir
+      arch: x64
+  # electron-updater rejects an update whose Authenticode publisher differs from
+  # azureSignOptions.publisherName (set in electron-builder.win-signed.yml).
+  verifyUpdateCodeSignature: true
+
+nsis:
+  oneClick: true
+  perMachine: false
+
+# DST-04: electron-updater feed; latest.yml (with sha512) is uploaded with the installer.
+publish:
+  provider: github
+  owner: a-streetcoder
+  repo: agent-deck-electron
+  releaseType: draft
 
 linux:
   icon: build/icon.png

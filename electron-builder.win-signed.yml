@@ -1,0 +1,22 @@
+# Signed Windows release build (DST-03/04): the base config plus Azure Artifact
+# Signing. Used by `pnpm pack:win:signed` and .github/workflows/release-windows.yml;
+# `pnpm pack:win` loads only electron-builder.yml and stays unsigned.
+# Account, profile and identity: docs/release-windows.md.
+extends: ./electron-builder.yml
+
+# Same reason as pack:win: node-pty's gyp rebuild breaks on a path with spaces;
+# the shipped N-API prebuilds are used.
+npmRebuild: false
+
+win:
+  # electron-builder re-signs every bundled .exe and has no sign hook on the Azure
+  # path, so it would replace Microsoft's signature on node-pty's OpenConsole.exe.
+  # Keep the original: all OpenConsole.exe copies ship Microsoft-signed.
+  signExts: ["!OpenConsole.exe"]
+  azureSignOptions:
+    endpoint: https://neu.codesigning.azure.net/
+    codeSigningAccountName: codemeter-signing
+    certificateProfileName: codemeter-profile
+    timestampRfc3161: http://timestamp.acs.microsoft.com
+    # Must equal the signed subject exactly: electron-updater compares it on update.
+    publisherName: CN=STREETCODING LTD, O=STREETCODING LTD, L=London, C=GB

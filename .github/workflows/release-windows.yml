@@ -1,0 +1,125 @@
+name: Release Windows
+
+# A `v*` tag builds, signs (Azure Artifact Signing) and publishes a DRAFT GitHub
+# release with the installer, its blockmap and latest.yml (the electron-updater
+# feed). A manual dispatch builds and signs the same way but publishes nothing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # electron-builder creates the draft release and uploads its assets
+  packages: read # pnpm install fetches the private @a-streetcoder skill engine
+  id-token: write # azure/login OIDC federated credential
+
+concurrency:
+  group: release-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Sign and publish (x64)
+    runs-on: windows-latest
+    env:
+      # .npmrc reads GITHUB_TOKEN to fetch the private @a-streetcoder skill engine.
+      GITHUB_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}
+      PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="v$(node -p "require('./package.json').version")"
+          if [[ "$GITHUB_REF_NAME" != "$VERSION" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $VERSION." >&2
+            exit 1
+          fi
+
+      - name: Require Azure signing variables
+        shell: bash
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$AZURE_CLIENT_ID" || -z "$AZURE_TENANT_ID" || -z "$AZURE_SUBSCRIPTION_ID" ]]; then
+            echo "Repository variables AZURE_CLIENT_ID, AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID are required (docs/release-windows.md)." >&2
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install pinned Rust
+        shell: bash
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.88.0
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: packages/loop-catalog-native -> packages/loop-catalog-native/target
+          shared-key: loop-catalog-native-release-windows-x64
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:native
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm test
+      - run: pnpm build
+
+      - name: Install TrustedSigning module
+        shell: pwsh
+        run: Install-Module -Name TrustedSigning -MinimumVersion 0.5.8 -Force -Scope CurrentUser -Repository PSGallery
+
+      # Log in only now, after the long build: the GitHub OIDC assertion is
+      # short-lived, so fetch the code-signing token right away (valid about 1 h).
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Fetch code-signing token
+        shell: pwsh
+        run: az account get-access-token --scope "https://codesigning.azure.net/.default" --output none
+
+      - name: Build, sign and publish installer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm exec electron-builder --win nsis --x64 --publish ${{ env.PUBLISH }} -c electron-builder.win-signed.yml
+
+      # The uninstaller exists only inside the installer, so install silently
+      # (this runner is disposable) and check all three signatures.
+      - name: Verify Authenticode signatures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem release -Filter *.exe | Select-Object -First 1
+          Start-Process -Wait -FilePath $installer.FullName -ArgumentList '/S'
+          $uninstaller = Get-ChildItem "$env:LOCALAPPDATA\Programs\*\Uninstall Agent Deck.exe" | Select-Object -First 1
+          if (-not $uninstaller) { throw 'Uninstaller not found after a silent install.' }
+          foreach ($file in @($installer.FullName, 'release\win-unpacked\Agent Deck.exe', $uninstaller.FullName)) {
+            $sig = Get-AuthenticodeSignature $file
+            "{0} | {1} | {2}" -f $sig.Status, $sig.SignerCertificate.Subject, $file
+            if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notlike 'CN=STREETCODING LTD,*') {
+              throw "Not signed by STREETCODING LTD: $file"
+            }
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Agent-Deck-Windows-x64
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
+          if-no-files-found: error

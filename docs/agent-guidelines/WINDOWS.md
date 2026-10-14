@@ -1,8 +1,8 @@
 # Windows development and packaging
 
-How to develop Agent Deck on Windows while using Agent Deck itself. There is no Windows installer, signing, or auto-update yet; the stable copy is an unpacked build promoted by hand.
+How to develop Agent Deck on Windows while using Agent Deck itself. The stable copy here is an unpacked build promoted by hand; the signed NSIS installer with auto-update (`pnpm pack:win:signed`, the `Release Windows` workflow) is the release channel.
 
-Code signing and the planned installer/auto-update setup are in [docs/release-windows.md](../release-windows.md).
+Code signing, the installer, the release workflow and auto-update are in [docs/release-windows.md](../release-windows.md). `pnpm pack:win` stays unsigned and needs no Azure login; an installed copy shares `%APPDATA%\Agent Deck` with the hand-promoted stable copy, so run only one of them at a time.
 
 ## Two copies, side by side
 
