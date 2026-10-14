@@ -4,6 +4,7 @@
 
 `AGENTS.md` and the guides it links are the source of truth for every agent. This file adds only what is specific to driving this repository from Claude Code; do not duplicate guide content here.
 
+- **NAH sessions** (see "Way of working" in `AGENTS.md`): start the architect loop with `/nah:nah`; install the plugin with `/plugin marketplace add almoretti/martech-ai-skills-and-tools` then `/plugin install nah@martech-ai`. Run `export TICKETS_DIR=.tickets` in the architect session and at the start of every developer dispatch, because subagents call `tk` by name. Ticket ids look like `ade-dnvi`. Tickets here are committed on purpose, so the protocol's cleanup step that deletes `.tickets/` files does not apply. The installed protocol is `skills/nah/PROTOCOL.md` under the plugin root (`${CLAUDE_PLUGIN_ROOT}`).
 - **Parity register work** (rows such as SKL/PRM/EXT/DST) goes through the `parity-loop` skill in `.claude/skills/`, not an ad-hoc flow.
 - **On Windows, read [docs/agent-guidelines/WINDOWS.md](docs/agent-guidelines/WINDOWS.md) before running, building, or packaging.** It explains the stable-versus-dev setup and the failures that look like code bugs but are not.
 - **Never start the app as a harness background task.** The harness kills background tasks under memory pressure and orphans the process tree; the orphaned backend then cannot spawn Pi. Launch it in its own terminal window (`win\Agent Deck Dev.cmd`, or `Start-Process` a script), and stop it there.

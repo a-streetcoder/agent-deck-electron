@@ -13,3 +13,7 @@ For detailed guidance, read the relevant guide before editing that area:
 - Test selection and required checks: [docs/agent-guidelines/TESTING.md](docs/agent-guidelines/TESTING.md)
 - macOS packaging and releases: [docs/agent-guidelines/RELEASE.md](docs/agent-guidelines/RELEASE.md)
 - Windows development loop, packaging, and known pitfalls: [docs/agent-guidelines/WINDOWS.md](docs/agent-guidelines/WINDOWS.md)
+
+## Way of working
+
+This repository is worked with [NAH](https://github.com/almoretti/martech-ai-skills-and-tools) (Not Another Harness; plugin `nah`, marketplace `martech-ai`). An architect session plans the work and writes `tk` tickets; a developer agent implements one ticket at a time; a different-vendor model (GPT) reviews the full diff before merge; the plan and the ticket tree go ahead only when the owner replies with the exact word `approved`. Tickets are markdown files in `.tickets/` at the repository root and are committed. If you are handed a ticket id, read it with `tk show <id>` (or open `.tickets/<id>.md`) and treat it as the source of truth. The full loop is in [`plugins/nah/skills/nah/PROTOCOL.md`](https://github.com/almoretti/martech-ai-skills-and-tools/blob/main/plugins/nah/skills/nah/PROTOCOL.md).
