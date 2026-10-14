@@ -1,0 +1,22 @@
+---
+id: ade-s625
+status: open
+deps: [ade-brgd, ade-63d3, ade-fr91, ade-1vjx, ade-gfs4, ade-fdjz, ade-nocm, ade-qr3v, ade-dnvi]
+links: []
+created: 2026-10-14T00:09:01Z
+type: task
+priority: 1
+assignee: almoretti
+---
+# FINAL: validation of the shared-server lane before pushing poc/shared-server
+
+Broad verification after SRV-01..07 and OPS tickets: full pnpm typecheck, pnpm lint, pnpm format:check, server and web unit suites, pinned real-Pi suites touched by identity or git changes, focused Playwright on sessions, mcp and the remote-mode desktop shell, a deploy to the VM via the documented one-liner, and a two-user smoke with the server session. Then the cross-vendor code review (pi-role code-reviewer) against main...HEAD. Pushing the branch still needs the owner explicit go.
+
+## Design
+
+GUARDRAILS (this checkout is mirrored live to the VM by Syncthing and is the server working tree): never git checkout/switch/stash/reset here; never run git on the VM replica; deploy only via: ssh dev then pnpm build:web and systemctl --user restart agent-deck-server; no pnpm build or pack:win while someone is on the server; read docs/agent-guidelines/WINDOWS.md and docs/remote-server-poc.md first.
+
+## Acceptance Criteria
+
+All gates green or failures documented as environmental; review findings dispositioned; owner has the summary needed to say push.
+
