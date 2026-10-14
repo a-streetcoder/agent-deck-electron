@@ -28,3 +28,9 @@ GUARDRAILS as every ticket (worktree, single vitest files, eslint, prettier, app
 ## Acceptance Criteria
 
 Web tests: the sessions list renders without any click; the collapsed Orchestrate card shows "Orchestrate" and the user row (initials + name when `me` is set, generic icon + "Local" when null); clicking the card expands the nav (nav items visible, sessions layer inert/aria-hidden), the collapse control returns; selecting a nav item sets the view and keeps the pull-up open; the old sidebar-signed-in line is gone; existing keyboard/menu toggle test (if any) targets the new pull-up. eslint, prettier, apps/web tsc clean. Live check by the owner in the browser after deploy.
+
+## Notes
+
+**2026-10-14T22:38:31Z**
+
+Dev (a6e7218 on wt/ade-iq7c): Sidebar.tsx (OrchestrateCollapsedCard + OrchestrateExpandedOverlay, sessions layer main), SessionsPanel.tsx (SessionsCollapsedCard deleted, SessionsExpandedOverlay -> SessionsMainPanel without its motion wrapper, new-chat moved into its header), store.ts (setView no longer collapses panelExpanded), commands.ts (label Toggle Orchestrate Panel; command id panel.sessions.toggle / mod+s kept for keybinding compat), Sidebar.test.tsx new (6), SessionsPanel.test.tsx updated. vitest Sidebar+SessionsPanel+store.memoryNavigation: 3 files, 13 passed. eslint, prettier, apps/web tsc clean. Unverified: motion/layout visually (no browser); e2e Playwright specs still use sessions-expand/sessions-collapse/sessions-expanded/chat-list and will fail until updated (not run, out of scope).
