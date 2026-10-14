@@ -1,6 +1,6 @@
 ---
 id: ade-1vjx
-status: in_progress
+status: closed
 deps: [ade-brgd, ade-63d3]
 links: []
 created: 2026-10-14T00:08:58Z
@@ -26,3 +26,7 @@ Decision note in docs/remote-server-poc.md with the chosen mechanism, the proof 
 **2026-10-14T01:06:06Z**
 
 2026-10-14 spike status: candidate 1 code built (AGENT_DECK_CLOUDFLARED opt-in, cf-access-token header injected via onBeforeSendHeaders; 22/22 desktop tests) but NOT proven end to end: cloudflared access login needs the owner to complete the system-browser login; two attempts timed out unattended. Remaining proof steps are in docs/remote-server-poc.md Desktop login.
+
+**2026-10-14T07:17:02Z**
+
+2026-10-14 decision: candidate 1 (cloudflared non-browser flow) proven on this PC. access login completed in the already signed-in system browser (passkey session from the earlier attempt); /me 200, /health 200, /rpc upgrade 101 with cf-access-token, 302 without; recovery routes accept x-agent-deck-desktop-recovery-token through the edge; token lifetime 168 h, aud matches the server. Electron with AGENT_DECK_CLOUDFLARED and a fresh --user-data-dir opened straight on the app, 'Signed in as alemoretti', no Access/GitHub page or frame. trustedProxy.ts unchanged; no exchange endpoint needed, server-minted design shelved. Candidate 2 not tried. Decision note in docs/remote-server-poc.md Desktop login; launcher line left opt-in.
