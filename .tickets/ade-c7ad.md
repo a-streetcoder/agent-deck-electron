@@ -1,6 +1,6 @@
 ---
 id: ade-c7ad
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-14T22:18:37Z
@@ -26,3 +26,9 @@ GUARDRAILS as every PI/SRV ticket (worktree, single test files, no builds, no ss
 ## Acceptance Criteria
 
 Web tests: with bridge only -> one "Claude" group with plain model names, no `anthropic/*` entries; with API key only -> entries labelled API; with both -> both entries per model; OAuth-only anthropic credential -> no direct entries and the Providers screen shows API key only. Server test: validateModel refuses `anthropic/*` for an owner whose Anthropic credential is OAuth-only, allows it with an API key. Live check by the architect on the VM: the owner's picker shows Claude once.
+
+## Notes
+
+**2026-10-14T23:06:27Z**
+
+2026-10-15 merged (wt/ade-c7ad: b4f144f, 05b394a, a1a91e0, 9435131). Contrarian + GPT review11 rounds fixed: bridge availability = bundled bridge + Claude Code executable + 'claude auth status' logged in (cached 60 s, seam ctx.claudeCodeLoggedIn), available to every owner alike (shared host login, ADR 0003); sk-ant-oat keys and ANTHROPIC_OAUTH_TOKEN classified oauth; SRV-13 preflight runs the lazy bridge discovery first; cached anthropic entries require a current API key; /me providersConnected = usable transport; Loop evaluator/stage models substituted; no-model launch refused instead of Pi fallback; API badge outside the truncated chip label and only for API-key-backed models; dated ids match undated bridge twins; 409 text mentions refresh Models; discovery skips the NeuralWatt resync. Post-merge: resources/server/web tsc clean; claudeTransport + rpcHandler + loopHonesty 120 passed (2 skipped), pickers + ProvidersScreen + Sidebar 30. Known limits (no code): Loop stage models without provider, named agents with anthropic/... models, Pi enabledModels scoping, loose short names, ANTHROPIC_AUTH_TOKEN bearer. The trusted-proxy test in remoteServerIdentity needs the VM run (symlinks).
