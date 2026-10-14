@@ -34,6 +34,27 @@ pinned native addon `@a-streetcoder/skill-engine-native` stays as a code depende
    rewritten after ade-0v9e lands.
 4. The standalone Syncr app keeps its own engine; nothing here changes it.
 
+## Implementation options (design pass, 2026-10-15)
+
+The contrarian design pass on D1 measured the engine at about 5,400 lines of Rust with 165 tests
+and 21 engine calls in use (the per-file git conflict feature included), owning a plain-file
+layout (`~/.agents/skills/<slug>`, staging and `.<slug>.displaced.*` recovery folders inside the
+catalog, `~/.agents/skill-repos/<id>/{collection.json,clone,base}`) whose hashes must match byte
+for byte wherever a collection already exists. Two ways to honour this ADR:
+
+- **A. Port to TypeScript** behind the same seam: about 2,500 to 3,200 lines plus the test
+  triage; five sub-tickets (golden fixtures, local store, git collections with async hardened
+  git, removal, docs). Removes the native build for skills; re-implements mature conflict logic.
+- **B. Vendor the Rust crate** into this repository next to `loop-catalog-native` (same napi-rs
+  CLI and targets, dependencies `sha2`, `hex`, `serde_json`, `junction`): removes the private
+  registry, the token, the CI secret and the Syncr pin, keeps the 165 tests and exact hashes;
+  the native build stays (it stays for `loop-catalog-native` regardless). Event-loop blocking
+  and per-user git credentials are then fixed in Rust.
+
+The owner chooses between A and B (D4). Until then D1 holds; inventory of real stores: this PC
+and the VM hold no collections and no recoveries, so compatibility is a one-time concern only
+where a collection is created later.
+
 ## Consequences
 
 - Fewer moving parts to build and package: no private registry at build time, no native addon
