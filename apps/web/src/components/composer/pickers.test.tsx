@@ -248,14 +248,25 @@ describe("PRV-01 one Claude entry per model", () => {
     ]);
   });
 
-  it("shows the API badge on the chip for a session on an anthropic model", () => {
-    render(
+  it("badges the chip API only when the model is API-key backed", () => {
+    const state = { provider: "anthropic", modelId: "claude-opus-4-5", thinkingLevel: "off" };
+    const view = render(
       <ModelChip
-        state={{ provider: "anthropic", modelId: "claude-opus-4-5", thinkingLevel: "off" }}
-        models={[]}
+        state={state}
+        models={[{ provider: "anthropic", id: "claude-opus-4-5" }]}
         onSelect={vi.fn()}
       />,
     );
-    expect(screen.getByTestId("model-chip-label").textContent).toBe("claude-opus-4-5 · API");
+    expect(screen.getByTestId("model-chip-label").textContent).toBe("claude-opus-4-5");
+    expect(screen.getByTestId("model-chip-api").textContent).toBe("API");
+    // An existing session still on the OAuth sign-in: the server lists no anthropic.
+    view.rerender(
+      <ModelChip
+        state={state}
+        models={[{ provider: "claude-bridge", id: "claude-opus-4-5" }]}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("model-chip-api")).toBeNull();
   });
 });

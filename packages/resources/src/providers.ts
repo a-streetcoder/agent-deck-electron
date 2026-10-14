@@ -21,16 +21,26 @@ export interface ProviderAuthInfo {
 export const API_KEY_ONLY_PROVIDERS = new Set(["anthropic"]);
 
 /** The kind of credential Pi resolves for a provider, following
- * getProviderAuthStatus: runtime key, then the stored entry, then env/config. */
-export function providerCredentialType(
+ * getProviderAuthStatus: runtime key, then the stored entry, then env/config.
+ * For an API-key-only provider a subscription token counts as OAuth: Pi sends
+ * Claude Code identity headers for any key containing `sk-ant-oat`, stored or
+ * from ANTHROPIC_OAUTH_TOKEN / ANTHROPIC_API_KEY (pi-ai anthropic-messages). */
+export async function providerCredentialType(
   models: ModelRuntime,
   providerId: string,
   credentials: readonly { providerId: string; type: "api_key" | "oauth" }[],
-): "api_key" | "oauth" | undefined {
+): Promise<"api_key" | "oauth" | undefined> {
   const status = models.getProviderAuthStatus(providerId);
   if (!status.configured) return undefined;
-  if (status.source !== "stored") return "api_key";
-  return credentials.find((credential) => credential.providerId === providerId)?.type;
+  const stored =
+    status.source === "stored"
+      ? credentials.find((credential) => credential.providerId === providerId)?.type
+      : "api_key";
+  if (stored !== "api_key" || !API_KEY_ONLY_PROVIDERS.has(providerId)) return stored;
+  const resolved = await models.getAuth(providerId).catch(() => undefined);
+  if (resolved?.source === "ANTHROPIC_OAUTH_TOKEN" || resolved?.auth.apiKey?.includes("sk-ant-oat"))
+    return "oauth";
+  return "api_key";
 }
 
 async function runtime(roots: ResourceRoots): Promise<ModelRuntime> {
@@ -45,23 +55,25 @@ export async function listProviders(roots: ResourceRoots): Promise<ProviderAuthI
   const models = await runtime(roots);
   const credentials = await models.listCredentials();
   const stored = new Set(credentials.map((credential) => credential.providerId));
-  return models
-    .getProviders()
-    .filter((provider) => provider.auth?.apiKey || provider.auth?.oauth)
-    .map((provider) => {
-      const status = models.getProviderAuthStatus(provider.id);
-      return {
-        id: provider.id,
-        name: provider.name || provider.id,
-        configured: status.configured,
-        source: status.source,
-        label: status.label,
-        signedIn: stored.has(provider.id),
-        supportsAPIKey: Boolean(provider.auth?.apiKey?.login),
-        supportsOAuth: Boolean(provider.auth?.oauth) && !API_KEY_ONLY_PROVIDERS.has(provider.id),
-        credentialType: providerCredentialType(models, provider.id, credentials),
-      };
-    });
+  return Promise.all(
+    models
+      .getProviders()
+      .filter((provider) => provider.auth?.apiKey || provider.auth?.oauth)
+      .map(async (provider) => {
+        const status = models.getProviderAuthStatus(provider.id);
+        return {
+          id: provider.id,
+          name: provider.name || provider.id,
+          configured: status.configured,
+          source: status.source,
+          label: status.label,
+          signedIn: stored.has(provider.id),
+          supportsAPIKey: Boolean(provider.auth?.apiKey?.login),
+          supportsOAuth: Boolean(provider.auth?.oauth) && !API_KEY_ONLY_PROVIDERS.has(provider.id),
+          credentialType: await providerCredentialType(models, provider.id, credentials),
+        };
+      }),
+  );
 }
 
 export async function logoutProvider(roots: ResourceRoots, id: string): Promise<void> {

@@ -630,7 +630,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
   });
 
   // The discovery itself, shared with the PRV-01 launch guard (claudeTransport.ts).
-  const discoverModels = async (signal?: AbortSignal) => {
+  const discoverModels = async (signal?: AbortSignal, options?: { reconcile?: boolean }) => {
     const defaults = envDefaults();
     const home = resourceHome();
     // Native reconciles NeuralWatt's models.json block BEFORE asking pi for the
@@ -639,10 +639,13 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     // since pi would otherwise keep listing models the user cannot call.
     // Best-effort: it never throws, and with no stored key it does not contact
     // NeuralWatt at all.
-    const signedInToNeuralWatt = (await listProviders(rootsFor())).some(
-      (provider) => provider.id === "neuralwatt" && provider.signedIn,
-    );
-    await reconcileNeuralWattCatalog(rootsFor(), { hasRealKey: signedInToNeuralWatt });
+    // The PRV-01 launch guard skips it: it only needs the claude-bridge entries.
+    if (options?.reconcile !== false) {
+      const signedInToNeuralWatt = (await listProviders(rootsFor())).some(
+        (provider) => provider.id === "neuralwatt" && provider.signedIn,
+      );
+      await reconcileNeuralWattCatalog(rootsFor(), { hasRealKey: signedInToNeuralWatt });
+    }
     // Match an ordinary no-project launch: environment defaults first, then
     // enabled global extensions, then provider-registration fallbacks.
     const extensions = [

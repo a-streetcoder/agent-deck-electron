@@ -289,8 +289,16 @@ export function ModelChip({
           <Cpu size={12} />
         )}
         <span className="max-w-[16ch] truncate" data-testid="model-chip-label">
-          {state?.modelId ? modelLabel(state.provider, state.modelId) : "model"}
+          {state?.modelId ?? "model"}
         </span>
+        {/* The server lists anthropic models only with an API key, so a session
+            still on an OAuth anthropic model (not in the list) gets no badge. */}
+        {state?.provider === "anthropic" &&
+        models.some((model) => model.provider === "anthropic" && model.id === state.modelId) ? (
+          <span className="shrink-0 text-text-muted" data-testid="model-chip-api">
+            API
+          </span>
+        ) : null}
         {ownerLabel ? (
           <span className="max-w-[24ch] truncate text-text-muted" data-testid="model-chip-owner">
             {ownerLabel}

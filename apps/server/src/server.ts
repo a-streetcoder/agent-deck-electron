@@ -17,6 +17,7 @@ import {
   readMcpServerCatalog,
   resolveCodexPluginSkillRefs,
   scanAgents,
+  API_KEY_ONLY_PROVIDERS,
   listProviders,
   runtimeEnvFiles,
   scanEnv,
@@ -52,6 +53,7 @@ import {
   type NamedAgentLaunch,
   type ServerContext,
 } from "./context.ts";
+import { bridgeAvailable } from "./claudeTransport.ts";
 import {
   registerDeckBridgeTools,
   registerSupervisorAnswerBridgeTool,
@@ -228,6 +230,8 @@ export interface StartServerOptions {
   mcpOAuthStore?: McpOAuthStore;
   /** Provider sign-in seam: tests assert which auth.json a login targets. */
   providerLoginFn?: ProviderLoginFn;
+  /** PRV-01 seam: the host's Claude Code login state (default: `claude auth status`). */
+  claudeCodeLoggedIn?: () => Promise<boolean>;
 }
 
 export async function startServer(options: StartServerOptions = {}): Promise<AgentDeckServer> {
@@ -1292,9 +1296,15 @@ async function initServer(
     // would then treat the server as loopback); the field is just omitted.
     let providersConnected: boolean | undefined;
     try {
-      providersConnected = (await listProviders(userRoots(rootsFor(), user, userAgentDirs))).some(
-        (provider) => provider.signedIn || provider.configured,
-      );
+      // PRV-01: a usable transport: the host's Claude Code login (shared by every
+      // owner), or a credential other than a refused Anthropic sign-in.
+      providersConnected =
+        (await bridgeAvailable(ctx)) ||
+        (await listProviders(userRoots(rootsFor(), user, userAgentDirs))).some(
+          (provider) =>
+            (provider.signedIn || provider.configured) &&
+            !(API_KEY_ONLY_PROVIDERS.has(provider.id) && provider.credentialType === "oauth"),
+        );
     } catch (error) {
       request.log.warn({ err: error }, "providersConnected check failed");
     }
@@ -1503,6 +1513,7 @@ async function initServer(
   // object, assembled once, so every moved handler body reads exactly as it
   // did in the monolith.
   const ctx: ServerContext = {
+    ...(options.claudeCodeLoggedIn ? { claudeCodeLoggedIn: options.claudeCodeLoggedIn } : {}),
     composerDrafts,
     fastify,
     sessions,

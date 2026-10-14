@@ -4,7 +4,7 @@ import path from "node:path";
 import type * as PiHost from "@agent-deck/pi-host";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import { claudeChoice } from "../src/claudeTransport.ts";
+import { claudeChoice, discoveredUsable } from "../src/claudeTransport.ts";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 // The extension-discovered catalog (claude-bridge), without spawning Pi.
@@ -34,7 +34,9 @@ const authFile = path.join(fakeHome, ".pi", "agent", "auth.json");
 const piSettingsFile = path.join(fakeHome, ".pi", "agent", "settings.json");
 const savedEnv = { ...process.env };
 const REFUSED =
-  "Claude through the Anthropic sign-in is not used. Add an Anthropic API key under Settings > Providers, or pick the Claude model without the API badge.";
+  "Claude through the Anthropic sign-in is not used. Add an Anthropic API key under Settings > Providers, pick the Claude model without the API badge, or refresh Models.";
+// The host's Claude Code login (the claude-bridge source of truth), stubbed.
+let claudeCodeLoggedIn = true;
 let server: AgentDeckServer;
 let sessionId: string;
 const endpoint = (pathname: string) => `http://127.0.0.1:${server.port}${pathname}`;
@@ -83,7 +85,7 @@ beforeAll(async () => {
   process.env.AGENT_DECK_PI_ENV = JSON.stringify({ HOME: fakeHome });
   mkdirSync(path.dirname(authFile), { recursive: true });
   writeAuth(API_KEY);
-  server = await startServer({ dataDir });
+  server = await startServer({ dataDir, claudeCodeLoggedIn: async () => claudeCodeLoggedIn });
   const created = await fetch(endpoint("/sessions"), {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -224,9 +226,117 @@ describe("PRV-01 launch and set_model choices", () => {
       modelId: "m",
     });
     expect(() => claudeChoice("anthropic", "other", refused, bridge)).toThrow(REFUSED);
+    // A dated anthropic id matches its undated bridge alias.
+    expect(claudeChoice("anthropic", "m-20251101", refused, bridge)).toEqual({
+      provider: "claude-bridge",
+      modelId: "m",
+    });
     expect(claudeChoice("anthropic", "m", new Set(), [])).toEqual({
       provider: "anthropic",
       modelId: "m",
     });
+  });
+});
+
+describe("PRV-01 transport sources of truth", () => {
+  const draftModels = async () =>
+    (
+      (await (await fetch(endpoint(`/sessions/${sessionId}/models`))).json()) as {
+        models: Array<{ provider: string; id: string }>;
+      }
+    ).models;
+  const discover = async (models: Array<{ provider: string; id: string }>) => {
+    discovered.models = models;
+    expect(
+      (
+        await fetch(endpoint("/runtime/models/discover"), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        })
+      ).status,
+    ).toBe(200);
+  };
+
+  it("classifies a subscription token pasted as an API key as OAuth", async () => {
+    writeAuth({ type: "api_key", key: "sk-ant-oat01-subscription" });
+    expect(await anthropicModels()).toEqual([]);
+    expect(await anthropicProvider()).toMatchObject({ credentialType: "oauth" });
+  });
+
+  it("classifies env-only ANTHROPIC_OAUTH_TOKEN (and an oat ANTHROPIC_API_KEY) as OAuth", async () => {
+    writeFileSync(authFile, "{}");
+    try {
+      process.env.ANTHROPIC_OAUTH_TOKEN = "sk-ant-oat01-env";
+      process.env.ANTHROPIC_API_KEY = "sk-ant-api-real";
+      // Pi prefers ANTHROPIC_OAUTH_TOKEN over ANTHROPIC_API_KEY.
+      expect(await anthropicProvider()).toMatchObject({ credentialType: "oauth" });
+      delete process.env.ANTHROPIC_OAUTH_TOKEN;
+      expect(await anthropicProvider()).toMatchObject({ credentialType: "api_key" });
+      process.env.ANTHROPIC_API_KEY = "sk-ant-oat01-env";
+      expect(await anthropicProvider()).toMatchObject({ credentialType: "oauth" });
+      expect(await anthropicModels()).toEqual([]);
+    } finally {
+      delete process.env.ANTHROPIC_OAUTH_TOKEN;
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+  });
+
+  it("drops discovered anthropic entries once the API key is gone", async () => {
+    writeAuth(API_KEY);
+    const modelId = (await anthropicModels())[0]!.id;
+    await discover([{ provider: "anthropic", id: `${modelId}-cached` }]);
+    expect((await anthropicModels()).some((model) => model.id === `${modelId}-cached`)).toBe(true);
+    writeFileSync(authFile, "{}");
+    expect(await anthropicModels()).toEqual([]);
+  });
+
+  it("offers claude-bridge only while Claude Code is logged in", async () => {
+    writeAuth(OAUTH);
+    await discover([{ provider: "claude-bridge", id: "claude-x" }]);
+    expect((await draftModels()).some((model) => model.provider === "claude-bridge")).toBe(true);
+    claudeCodeLoggedIn = false;
+    try {
+      expect((await draftModels()).some((model) => model.provider === "claude-bridge")).toBe(false);
+    } finally {
+      claudeCodeLoggedIn = true;
+    }
+  });
+
+  it("refuses a launch with no model and nothing usable instead of letting Pi pick the sign-in", async () => {
+    writeAuth(OAUTH);
+    writeFileSync(piSettingsFile, "{}");
+    await discover([]);
+    claudeCodeLoggedIn = false;
+    const create = vi.spyOn(server.sessions, "create");
+    try {
+      const response = await fetch(endpoint("/sessions"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd: dataDir, startImmediately: true }),
+      });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: REFUSED });
+      expect(create).not.toHaveBeenCalled();
+    } finally {
+      create.mockRestore();
+      claudeCodeLoggedIn = true;
+    }
+  });
+
+  it("makes claude-bridge usable for every owner on the host login alone", () => {
+    const transport = { refused: new Set(["anthropic"]), apiKey: new Set<string>(), bridge: true };
+    // A trusted-proxy owner whose own runtime reports the bridge unconfigured.
+    const ownerConfigured = (provider: string) => provider === "openai";
+    expect(discoveredUsable("claude-bridge", transport, ownerConfigured)).toBe(true);
+    expect(discoveredUsable("claude-bridge", { ...transport, bridge: false }, undefined)).toBe(
+      false,
+    );
+    expect(discoveredUsable("anthropic", transport, undefined)).toBe(false);
+    expect(
+      discoveredUsable("anthropic", { ...transport, apiKey: new Set(["anthropic"]) }, undefined),
+    ).toBe(true);
+    expect(discoveredUsable("ext", transport, ownerConfigured)).toBe(false);
+    expect(discoveredUsable("openai", transport, ownerConfigured)).toBe(true);
   });
 });

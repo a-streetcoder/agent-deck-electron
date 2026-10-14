@@ -399,7 +399,14 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
   an API key (otherwise a 409 / RPC `ok: false` saying to add one). A launch (start, draft
   start, fork, Loop parent) or a live `set_model` whose model would be a refused `anthropic/<m>`,
   including one coming from Pi's default settings or the forked history, runs on
-  `claude-bridge/<m>` instead when the owner has it, and is refused with the same message when not. The picker shows one
+  `claude-bridge/<m>` instead when the owner has it, and is refused with the same message when not.
+  The bridge counts as available, for every owner alike, only while the host's Claude Code is
+  installed and logged in (`claude auth status`, cached for a minute); its models are discovered
+  on the first launch that needs them. A subscription token is an OAuth credential however it
+  arrives: a key containing `sk-ant-oat` (stored, or in `ANTHROPIC_API_KEY`) or
+  `ANTHROPIC_OAUTH_TOKEN`, because Pi sends Claude Code identity headers for it. `/me`
+  `providersConnected` means a usable transport: the bridge, or any credential other than such an
+  Anthropic sign-in. The picker shows one
   "Claude" group: bridge models by plain name, API-key models as "<model> · API". An existing
   Anthropic sign-in stays in `auth.json`, with a note on the Providers screen that it is unused;
   sessions already on an `anthropic/*` OAuth model keep running. This applies on every server,

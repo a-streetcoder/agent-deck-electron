@@ -23,19 +23,24 @@ import { SessionAuthorStore } from "../src/sessionAuthors.ts";
 import { userAgentDir } from "../src/userAgentDirs.ts";
 
 // SRV-13: the operator's extension-discovered catalog, without spawning Pi.
+// PRV-01: plus claude-bridge when a test turns it on.
+const bridgeCatalog = vi.hoisted(() => ({ on: false }));
 vi.mock("@agent-deck/pi-host", async (importOriginal) => ({
   ...(await importOriginal<typeof PiHost>()),
-  discoverModelCatalog: async () => [
-    {
-      provider: "ext-provider",
-      id: "ext-model",
+  discoverModelCatalog: async () =>
+    [
+      { provider: "ext-provider", id: "ext-model" },
+      ...(bridgeCatalog.on ? [{ provider: "claude-bridge", id: "claude-bridge-model" }] : []),
+    ].map((model) => ({
+      ...model,
       contextWindow: 1000,
       maxTokens: 100,
       reasoning: false,
       input: ["text"],
-    },
-  ],
+    })),
 }));
+// PRV-01: the host's Claude Code login (claude-bridge), stubbed.
+let claudeCodeLoggedIn = false;
 
 const TEAM = "team.cloudflareaccess.test";
 const AUD = "aud-remote";
@@ -103,6 +108,7 @@ beforeAll(async () => {
   server = await startServer({
     dataDir,
     providerLoginFn: async (authPath) => void loginAuthPaths.push(authPath),
+    claudeCodeLoggedIn: async () => claudeCodeLoggedIn,
   });
 });
 afterAll(async () => {
@@ -370,6 +376,53 @@ describe.skipIf(!canSymlink)("SRV-13 no provider connected on a shared server", 
       socket.on("error", reject);
     });
     expect(reply).toMatchObject({ ok: false, error: NO_PROVIDER });
+  });
+});
+
+// Runs on the Linux VM (symlinks); skipped on Windows without Developer Mode.
+describe.skipIf(!canSymlink)("PRV-01 claude-bridge for a trusted-proxy owner", () => {
+  const andrea = { "cf-access-jwt-assertion": assertionFor("andrea@example.com") };
+  const userAuth = (email: string) =>
+    path.join(userAgentDir(realpathSync(dataDir), email), "auth.json");
+  const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
+  const me = async () =>
+    (
+      (await (await fetch(endpoint("/me"), { headers: andrea })).json()) as {
+        user: { providersConnected: boolean };
+      }
+    ).user.providersConnected;
+
+  it("reaches the bridge with only an Anthropic sign-in, and counts it as connected", async () => {
+    await me(); // creates the user dir
+    writeFileSync(userAuth("andrea@example.com"), JSON.stringify({ anthropic: oauth }));
+    claudeCodeLoggedIn = false;
+    expect(await me()).toBe(false); // the sign-in alone is not a usable transport
+    claudeCodeLoggedIn = true;
+    bridgeCatalog.on = true;
+    try {
+      expect(await me()).toBe(true);
+      const discovered = await fetch(endpoint("/runtime/models/discover"), {
+        method: "POST",
+        headers: { ...andrea, "content-type": "application/json" },
+        body: "{}",
+      });
+      expect(discovered.status).toBe(200);
+      const created = await fetch(endpoint("/sessions"), {
+        method: "POST",
+        headers: { ...andrea, "content-type": "application/json" },
+        body: JSON.stringify({ cwd: dataDir, startImmediately: false }),
+      });
+      expect(created.status).toBe(201);
+      const { session } = (await created.json()) as { session: { id: string } };
+      const { models } = (await (
+        await fetch(endpoint(`/sessions/${session.id}/models`), { headers: andrea })
+      ).json()) as { models: Array<{ provider: string }> };
+      expect(models.some((model) => model.provider === "claude-bridge")).toBe(true);
+      expect(models.some((model) => model.provider === "anthropic")).toBe(false);
+    } finally {
+      claudeCodeLoggedIn = false;
+      bridgeCatalog.on = false;
+    }
   });
 });
 

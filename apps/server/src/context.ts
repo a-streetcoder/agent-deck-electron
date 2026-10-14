@@ -121,8 +121,13 @@ export interface ServerContext {
   /** Last model discovery; draft reads never spawn Pi to fill it (only a launch
    * guard that needs claude-bridge does, claudeTransport.ts). */
   discoveredModels?: CatalogModel[];
+  /** PRV-01 test seam: whether the host's Claude Code is logged in (claudeTransport.ts). */
+  claudeCodeLoggedIn?: () => Promise<boolean>;
   /** The discovery behind `POST /runtime/models/discover`; stores `discoveredModels`. */
-  discoverModels?: (signal?: AbortSignal) => Promise<CatalogModel[]>;
+  discoverModels?: (
+    signal?: AbortSignal,
+    options?: { reconcile?: boolean },
+  ) => Promise<CatalogModel[]>;
   fastify: FastifyInstance;
   /** DOC-01/02 test seam: run a doctor fix command / the pi self-update in the
    * user's terminal. Omitted in production — the settings routes construct the

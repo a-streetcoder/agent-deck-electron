@@ -20,9 +20,11 @@ import {
   ANTHROPIC_NEEDS_API_KEY,
   claudeChoice,
   claudeLaunchModel,
-  oauthOnlyProviders,
+  ensureBridgeCatalog,
+  liveUsable,
   ownerCatalog,
   ownerRuntime,
+  ownerTransport,
 } from "../claudeTransport.ts";
 import { z } from "zod";
 import {
@@ -272,19 +274,22 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   const draftModels = (owner: UserIdentity | undefined) => ownerCatalog(ctx, owner);
   // PRV-01: a live set_model to a refused anthropic model switches to its
   // claude-bridge twin, or is refused (rpcHandler).
-  sessions.modelChoice = async (meta, provider, modelId, available) =>
-    claudeChoice(
-      provider,
-      modelId,
-      await oauthOnlyProviders(await ownerRuntime(ctx, meta.createdBy)),
-      available,
-    );
+  sessions.modelChoice = async (meta, provider, modelId, available) => {
+    const transport = await ownerTransport(ctx, await ownerRuntime(ctx, meta.createdBy));
+    return claudeChoice(provider, modelId, transport.refused, liveUsable(available, transport));
+  };
 
   // SRV-13: an owner (shared server) whose credentials unlock no model at all
   // gets one stable, actionable message instead of `unknown model` or Pi's
   // missing-API-key error after the spawn.
   async function ownerModels(owner: UserIdentity | undefined) {
-    const models = await draftModels(owner);
+    let models = await draftModels(owner);
+    // PRV-01: an OAuth-only owner with the host's Claude Code login reaches the
+    // bridge: fill its catalog (lazy discovery) before calling them unconnected.
+    if (owner && models.length === 0) {
+      await ensureBridgeCatalog(ctx);
+      models = await draftModels(owner);
+    }
     if (owner && models.length === 0) {
       throw Object.assign(
         new Error("No model provider connected. Connect one under Settings > Providers."),
@@ -301,10 +306,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const session = sessions.get(id);
     if (!session) return reply.status(404).send({ error: "unknown session" });
     try {
-      const refused = await oauthOnlyProviders(await ownerRuntime(ctx, session.meta.createdBy));
-      const models = (await session.getAvailableModels()).filter(
-        (model) => !refused.has(model.provider),
-      );
+      const transport = await ownerTransport(ctx, await ownerRuntime(ctx, session.meta.createdBy));
+      const models = liveUsable(await session.getAvailableModels(), transport);
       // Mark models the user hid from the picker (app-level, native "Disabled").
       const disabled = new Set(settings.get().disabledModels);
       return {

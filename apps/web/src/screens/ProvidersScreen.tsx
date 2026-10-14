@@ -282,7 +282,7 @@ function ProviderGroup({
                 className="px-3.5 pt-1 text-caption text-text-muted"
               >
                 Your Anthropic sign-in is not used: Claude runs through Claude Code. Add an API key
-                to use the Anthropic API.
+                to use the Anthropic API, or sign out to use ANTHROPIC_API_KEY from the environment.
               </p>
             ) : null}
           </div>
