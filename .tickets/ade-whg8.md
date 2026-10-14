@@ -1,6 +1,6 @@
 ---
 id: ade-whg8
-status: in_progress
+status: closed
 deps: [ade-5vm8]
 links: []
 created: 2026-10-14T19:54:18Z
@@ -20,3 +20,9 @@ Depends on PI-03b. GUARDRAILS as every PI ticket. The owner runs one real OAuth 
 ## Acceptance Criteria
 
 Ingest test: a notify with a URL becomes a visible card; route or RPC test: the sign-in command reaches the session; real-Pi test with a fake OAuth MCP server completing the paste flow; mcp-auth.json created under the user's agent dir with mode 0600; docs updated; live sign-in by the owner recorded in the note.
+
+## Notes
+
+**2026-10-14T22:18:27Z**
+
+2026-10-14 merged (wt/ade-whg8: 60cc87c, merge 05a3f48, review fix c46a933) on top of PI-03c and PI-03e; conflicts (cells.test, ARCHITECTURE) resolved by the architect keeping both sides. Contrarian: no blocker; GPT review9: three should-fix. Applied: owner-only /mcp prompts on the shared server, Pi 'handled' disposition skips user-turn bookkeeping, paste box closed on the sign-in's closing notify, 502 when the session cannot resume, Sign in hidden for header-auth servers, screen switches to the session, link punctuation trimmed, legacy-session 403 test. Loopback coordinator kept for the flag-off path (PI-03f removes it). Post-merge checks: web tsc + cells/McpScreen 102, server tsc + mcpNative/mcpNativeLogin/mcpAuthorize 25, mcp-native.pi 4, domain ingest 28, pi-host nativeMcpOAuth.pi + nativeMcp.pi 13. Open: nativeMcpNameFor must read meta.mcpServerNames (PI-03f); mcp-auth.json 0600 and the live MCP sign-in need the VM with the flag on.
