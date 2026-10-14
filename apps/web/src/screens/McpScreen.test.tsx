@@ -86,7 +86,6 @@ describe("MCP master policy", () => {
                 connected: enabled,
                 toolNames: enabled ? ["mcp__server__echo"] : [],
                 editable: true,
-                auth: { status: "unauthenticated" },
               },
             ],
           }),
@@ -121,7 +120,6 @@ describe("MCP master policy", () => {
     expect(screen.getByTestId("mcp-remove-server")).toBeTruthy();
     expect(screen.getByTestId("mcp-add")).toBeTruthy();
     expect(screen.getByTestId("mcp-reload")).toBeTruthy();
-    expect((screen.getByTestId("mcp-login-server") as HTMLButtonElement).disabled).toBe(false);
     expect(screen.getByTestId("mcp-assign-all-server")).toBeTruthy();
     expect(document.activeElement).toBe(toggle);
   });
@@ -707,7 +705,7 @@ describe("project MCP assignment saving state", () => {
     await waitFor(() => expect((checkbox as HTMLInputElement).disabled).toBe(false));
     expect((checkbox as HTMLInputElement).checked).toBe(true);
     expect(screen.getByText("Assigned")).toBeTruthy();
-    expect(screen.getByTestId("mcp-status-server").textContent).toBe("disconnected");
+    expect(screen.getByTestId("mcp-status-server").textContent).toBe("not checked");
 
     const beforeBroadcastLoads = catalogLoads;
     useAppStore.setState({ resourcesVersion: 1 });
@@ -897,305 +895,7 @@ describe("project MCP assignment saving state", () => {
     );
     expect(await screen.findByTestId("mcp-global")).toBeTruthy();
     expect(screen.queryByTestId("mcp-assign-global")).toBeNull();
-    expect(screen.getByTestId("mcp-status-global").textContent).toBe("disconnected");
-  });
-});
-
-describe("MCP OAuth callback", () => {
-  const project = {
-    id: "oauth-project",
-    name: "OAuth project",
-    path: "/tmp/oauth-project",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    assignedMcpServers: ["remote"],
-  };
-
-  it("opens the browser, waits accessibly, preserves paste fallback, and cancels", async () => {
-    useAppStore.setState({ session: sessionFor(project.id), projects: [project] });
-    const openExternal = vi.fn().mockResolvedValue(true);
-    window.agentDeck = { isElectron: true, openExternal };
-    let cancelled = false;
-    vi.mocked(fetch).mockImplementation((input, init) => {
-      const url = String(input);
-      if (url === `/mcp?projectId=${project.id}`)
-        return Promise.resolve(
-          jsonResponse({
-            assignedServerIds: ["remote"],
-            missingAssignedServerIds: [],
-            servers: [
-              {
-                id: "remote",
-                transport: "http",
-                connected: false,
-                toolNames: [],
-                auth: { status: "unauthenticated" },
-              },
-            ],
-          }),
-        );
-      if (url === `/mcp/remote/login?projectId=${project.id}` && init?.method === "POST")
-        return Promise.resolve(
-          jsonResponse({
-            auth: {
-              status: "authorizing",
-              automatic: true,
-              authUrl: "https://auth.example/authorize?state=STATE",
-            },
-          }),
-        );
-      if (url === `/mcp/remote/login?projectId=${project.id}` && init?.method === "DELETE") {
-        cancelled = true;
-        return Promise.resolve(jsonResponse({ ok: true }));
-      }
-      throw new Error(`unexpected request: ${url}`);
-    });
-
-    render(<McpScreen />);
-    await screen.findByTestId("mcp-remote");
-    fireEvent.click(screen.getByTestId("mcp-login-remote"));
-    expect((await screen.findByRole("status")).textContent).toContain("Waiting for authorization");
-    await waitFor(() =>
-      expect(openExternal).toHaveBeenCalledWith("https://auth.example/authorize?state=STATE"),
-    );
-    expect(screen.queryByTestId("mcp-login-code-remote")).toBeNull();
-    expect(document.activeElement).not.toBe(screen.getByTestId("mcp-login-manual-remote"));
-    fireEvent.click(screen.getByTestId("mcp-login-manual-remote"));
-    const codeInput = await screen.findByTestId("mcp-login-code-remote");
-    await waitFor(() => expect(document.activeElement).toBe(codeInput));
-    fireEvent.keyDown(codeInput, { key: "Escape" });
-    await waitFor(() => expect(cancelled).toBe(true));
-    expect(screen.queryByTestId("mcp-login-panel-remote")).toBeNull();
-    await waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByTestId("mcp-login-remote")),
-    );
-    delete window.agentDeck;
-  });
-
-  it("cancels stale cross-server login responses without replacing the newer flow", async () => {
-    useAppStore.setState({ session: sessionFor(project.id), projects: [project] });
-    const openExternal = vi.fn().mockResolvedValue(true);
-    window.agentDeck = { isElectron: true, openExternal };
-    let resolveFirst!: (response: Response) => void;
-    const cancelled: string[] = [];
-    vi.mocked(fetch).mockImplementation((input, init) => {
-      const url = String(input);
-      if (url === `/mcp?projectId=${project.id}`)
-        return Promise.resolve(
-          jsonResponse({
-            assignedServerIds: ["one", "two"],
-            servers: ["one", "two"].map((id) => ({
-              id,
-              transport: "http",
-              connected: false,
-              toolNames: [],
-              auth: { status: "unauthenticated" },
-            })),
-          }),
-        );
-      if (url === `/mcp/one/login?projectId=${project.id}` && init?.method === "POST")
-        return new Promise<Response>((resolve) => (resolveFirst = resolve));
-      if (url === `/mcp/two/login?projectId=${project.id}` && init?.method === "POST")
-        return Promise.resolve(
-          jsonResponse({
-            auth: {
-              status: "authorizing",
-              automatic: true,
-              authUrl: "https://auth.example/two?state=TWO",
-            },
-          }),
-        );
-      if (init?.method === "DELETE") {
-        cancelled.push(url);
-        return Promise.resolve(jsonResponse({ ok: true }));
-      }
-      throw new Error(`unexpected request: ${url}`);
-    });
-
-    render(<McpScreen />);
-    await screen.findByTestId("mcp-one");
-    fireEvent.click(screen.getByTestId("mcp-login-one"));
-    fireEvent.click(screen.getByTestId("mcp-login-two"));
-    await screen.findByTestId("mcp-login-panel-two");
-    resolveFirst(
-      jsonResponse({
-        auth: {
-          status: "authorizing",
-          automatic: true,
-          authUrl: "https://auth.example/one?state=ONE",
-        },
-      }),
-    );
-    await waitFor(() => expect(cancelled).toContain(`/mcp/one/login?projectId=${project.id}`));
-    expect(screen.queryByTestId("mcp-login-panel-one")).toBeNull();
-    expect(screen.getByTestId("mcp-login-panel-two")).toBeTruthy();
-    expect(openExternal).toHaveBeenCalledTimes(1);
-    expect(openExternal).toHaveBeenCalledWith("https://auth.example/two?state=TWO");
-    delete window.agentDeck;
-  });
-
-  it("cancels a pending login after unmount once its stale response materializes", async () => {
-    useAppStore.setState({ session: sessionFor(project.id), projects: [project] });
-    let resolveLogin!: (response: Response) => void;
-    let cancelled = false;
-    vi.mocked(fetch).mockImplementation((input, init) => {
-      const url = String(input);
-      if (url === `/mcp?projectId=${project.id}`)
-        return Promise.resolve(
-          jsonResponse({
-            assignedServerIds: ["remote"],
-            servers: [
-              {
-                id: "remote",
-                transport: "http",
-                connected: false,
-                toolNames: [],
-                auth: { status: "unauthenticated" },
-              },
-            ],
-          }),
-        );
-      if (url === `/mcp/remote/login?projectId=${project.id}` && init?.method === "POST")
-        return new Promise<Response>((resolve) => (resolveLogin = resolve));
-      if (url === `/mcp/remote/login?projectId=${project.id}` && init?.method === "DELETE") {
-        cancelled = true;
-        return Promise.resolve(jsonResponse({ ok: true }));
-      }
-      throw new Error(`unexpected request: ${url}`);
-    });
-    const rendered = render(<McpScreen />);
-    await screen.findByTestId("mcp-remote");
-    fireEvent.click(screen.getByTestId("mcp-login-remote"));
-    expect((screen.getByTestId("mcp-refresh-remote") as HTMLButtonElement).disabled).toBe(true);
-    rendered.unmount();
-    resolveLogin(
-      jsonResponse({
-        auth: {
-          status: "authorizing",
-          automatic: true,
-          authUrl: "https://auth.example/authorize?state=STALE",
-        },
-      }),
-    );
-    await waitFor(() => expect(cancelled).toBe(true));
-  });
-
-  it("locks repeated manual submission and announces pending state", async () => {
-    useAppStore.setState({ session: sessionFor(project.id), projects: [project] });
-    window.agentDeck = { isElectron: true, openExternal: vi.fn().mockResolvedValue(true) };
-    let callbackCount = 0;
-    let resolveCallback!: (response: Response) => void;
-    vi.mocked(fetch).mockImplementation((input, init) => {
-      const url = String(input);
-      if (url === `/mcp?projectId=${project.id}`)
-        return Promise.resolve(
-          jsonResponse({
-            assignedServerIds: ["remote"],
-            servers: [
-              {
-                id: "remote",
-                transport: "http",
-                connected: false,
-                toolNames: [],
-                auth: { status: "unauthenticated" },
-              },
-            ],
-          }),
-        );
-      if (url === `/mcp/remote/login?projectId=${project.id}` && init?.method === "POST")
-        return Promise.resolve(
-          jsonResponse({
-            auth: {
-              status: "authorizing",
-              automatic: false,
-              authUrl: "https://auth.example/authorize?state=STATE",
-            },
-          }),
-        );
-      if (url.includes("/login/callback") && init?.method === "POST") {
-        callbackCount += 1;
-        return new Promise<Response>((resolve) => (resolveCallback = resolve));
-      }
-      if (url === `/mcp/remote/login?projectId=${project.id}` && init?.method === "DELETE")
-        return Promise.resolve(jsonResponse({ ok: true }));
-      throw new Error(`unexpected request: ${url}`);
-    });
-    render(<McpScreen />);
-    await screen.findByTestId("mcp-remote");
-    fireEvent.click(screen.getByTestId("mcp-login-remote"));
-    const input = await screen.findByTestId("mcp-login-code-remote");
-    const reconnect = screen.getByTestId("mcp-refresh-remote") as HTMLButtonElement;
-    expect(reconnect.disabled).toBe(true);
-    expect(reconnect.getAttribute("aria-busy")).toBe("true");
-    fireEvent.change(input, { target: { value: "code" } });
-    const submit = screen.getByTestId("mcp-login-submit-remote");
-    fireEvent.click(submit);
-    fireEvent.click(submit);
-    expect(callbackCount).toBe(1);
-    expect(screen.getByTestId("mcp-login-panel-remote").getAttribute("aria-busy")).toBe("true");
-    expect(screen.getByRole("status").textContent).toContain("Submitting authorization code");
-    expect((submit as HTMLButtonElement).disabled).toBe(true);
-    expect(reconnect.disabled).toBe(true);
-    resolveCallback(jsonResponse({ auth: { status: "authorized" } }));
-    await waitFor(() => expect(screen.queryByTestId("mcp-login-panel-remote")).toBeNull());
-    delete window.agentDeck;
-  });
-
-  it("replaces dead manual input with an actionable restart after an automatic failure", async () => {
-    useAppStore.setState({ session: sessionFor(project.id), projects: [project] });
-    window.agentDeck = { isElectron: true, openExternal: vi.fn().mockResolvedValue(true) };
-    let failed = false;
-    let begins = 0;
-    vi.mocked(fetch).mockImplementation((input, init) => {
-      const url = String(input);
-      if (url === `/mcp?projectId=${project.id}`)
-        return Promise.resolve(
-          jsonResponse({
-            assignedServerIds: ["remote"],
-            servers: [
-              {
-                id: "remote",
-                transport: "http",
-                connected: false,
-                toolNames: [],
-                auth: failed
-                  ? { status: "error", error: "authorization timed out" }
-                  : { status: "unauthenticated" },
-              },
-            ],
-          }),
-        );
-      if (url === `/mcp/remote/login?projectId=${project.id}` && init?.method === "POST") {
-        begins += 1;
-        return Promise.resolve(
-          jsonResponse({
-            auth: {
-              status: "authorizing",
-              automatic: true,
-              authUrl: `https://auth.example/authorize?state=STATE${begins}`,
-            },
-          }),
-        );
-      }
-      if (url === `/mcp/remote/login?projectId=${project.id}` && init?.method === "DELETE")
-        return Promise.resolve(jsonResponse({ ok: true }));
-      throw new Error(`unexpected request: ${url}`);
-    });
-
-    render(<McpScreen />);
-    await screen.findByTestId("mcp-remote");
-    fireEvent.click(screen.getByTestId("mcp-login-remote"));
-    await screen.findByTestId("mcp-login-manual-remote");
-    failed = true;
-    useAppStore.setState({ resourcesVersion: 1 });
-    expect(await screen.findByRole("alert")).toHaveProperty(
-      "textContent",
-      "authorization timed out",
-    );
-    expect(screen.queryByTestId("mcp-login-code-remote")).toBeNull();
-    fireEvent.click(screen.getByTestId("mcp-login-restart-remote"));
-    await waitFor(() => expect(begins).toBe(2));
-    await screen.findByTestId("mcp-login-manual-remote");
-    delete window.agentDeck;
+    expect(screen.getByTestId("mcp-status-global").textContent).toBe("not checked");
   });
 });
 
@@ -2207,7 +1907,7 @@ describe("MCP per-tool descriptions (MCP-19)", () => {
 
     fireEvent.click(screen.getByTestId("mcp-tools-toggle-github"));
 
-    expect((await screen.findByTestId("mcp-tools-github")).textContent).toContain("Connect");
+    expect((await screen.findByTestId("mcp-tools-github")).textContent).toContain("Check");
   });
 
   it("distinguishes a connected server that simply has no tools", async () => {
@@ -2219,7 +1919,7 @@ describe("MCP per-tool descriptions (MCP-19)", () => {
 
     const region = await screen.findByTestId("mcp-tools-github");
     expect(region.textContent).not.toContain("Loading");
-    expect(region.textContent).not.toContain("Connect this server");
+    expect(region.textContent).not.toContain("Check this server");
     expect(region.textContent).toMatch(/no tools/i);
   });
 
@@ -2266,17 +1966,14 @@ describe("MCP project picker", () => {
     useAppStore.setState({ session: null, projects: [alpha, beta] });
     vi.mocked(fetch).mockImplementation((input) => {
       if (String(input) === "/mcp")
-        return Promise.resolve(
-          jsonResponse({ servers: [http("remote", { auth: { status: "none" } })] }),
-        );
+        return Promise.resolve(jsonResponse({ servers: [http("remote", { oauth: true })] }));
       throw new Error(`unexpected request: ${String(input)}`);
     });
     render(<McpScreen />);
     await screen.findByTestId("mcp-remote");
     expect((screen.getByTestId("mcp-project-picker") as HTMLSelectElement).value).toBe("");
     expect(screen.queryByTestId("mcp-assign-remote")).toBeNull();
-    expect(screen.queryByTestId("mcp-login-remote")).toBeNull();
-    expect(screen.queryByTestId("mcp-auth-remote")).toBeNull();
+    expect(screen.queryByTestId("mcp-native-login-remote")).toBeNull();
     expect(screen.getByTestId("mcp-trust-copy").textContent).toContain("Pick a project");
     expect(screen.getByTestId("mcp-trust-copy").textContent).toContain(
       "assigning it grants access",
@@ -2346,57 +2043,7 @@ describe("MCP project picker", () => {
     await screen.findByText("Assigned");
   });
 
-  it("shows Sign in only for an assigned, unconnected OAuth server and starts the flow for the selected project", async () => {
-    useAppStore.setState({ session: null, projects: [alpha, beta] });
-    window.agentDeck = { isElectron: true, openExternal: vi.fn().mockResolvedValue(true) };
-    const logins: string[] = [];
-    vi.mocked(fetch).mockImplementation((input, init) => {
-      const url = String(input);
-      if (url === "/mcp") return Promise.resolve(jsonResponse({ servers: [] }));
-      if (url === "/mcp?projectId=beta")
-        return Promise.resolve(
-          jsonResponse({
-            assignedServerIds: ["oauth", "public"],
-            defaultAssignedServerIds: ["signed"],
-            servers: [
-              http("oauth", { auth: { status: "unauthenticated" } }),
-              // Connected without a sign-in: a public endpoint, not "sign-in required".
-              http("public", { connected: true, auth: { status: "unauthenticated" } }),
-              // Not assigned here: nothing has tried to connect, so no login yet.
-              http("unassigned", { auth: { status: "unauthenticated" } }),
-              http("signed", { connected: true, auth: { status: "authorized" } }),
-            ],
-          }),
-        );
-      if (url === "/mcp/oauth/login?projectId=beta" && init?.method === "POST") {
-        logins.push(url);
-        return Promise.resolve(
-          jsonResponse({
-            auth: { status: "authorizing", automatic: true, authUrl: "https://a.example/?state=S" },
-          }),
-        );
-      }
-      if (url === "/mcp/oauth/login?projectId=beta" && init?.method === "DELETE")
-        return Promise.resolve(jsonResponse({ ok: true }));
-      throw new Error(`unexpected request: ${url}`);
-    });
-    render(<McpScreen />);
-    await screen.findByTestId("mcp-empty");
-    pickProject("beta");
-    await screen.findByTestId("mcp-oauth");
-    expect(screen.getByTestId("mcp-login-oauth")).toBeTruthy();
-    expect(screen.getByTestId("mcp-auth-oauth").textContent).toBe("sign-in required");
-    expect(screen.queryByTestId("mcp-login-public")).toBeNull();
-    expect(screen.queryByTestId("mcp-auth-public")).toBeNull();
-    expect(screen.queryByTestId("mcp-login-unassigned")).toBeNull();
-    expect(screen.getByTestId("mcp-logout-signed")).toBeTruthy();
-    expect(screen.getByTestId("mcp-auth-signed").textContent).toBe("signed in");
-    fireEvent.click(screen.getByTestId("mcp-login-oauth"));
-    await screen.findByTestId("mcp-login-panel-oauth");
-    expect(logins).toEqual(["/mcp/oauth/login?projectId=beta"]);
-  });
-
-  it("with native MCP, Sign in sends /mcp login through a live session of the project (PI-03d)", async () => {
+  it("Sign in sends /mcp login through a live session of the project", async () => {
     const live = { id: "live", projectId: "beta", createdAt: "2026-10-14", title: "Work" };
     useAppStore.setState({
       session: null,
@@ -2414,10 +2061,9 @@ describe("MCP project picker", () => {
       if (url === "/mcp?projectId=beta")
         return Promise.resolve(
           jsonResponse({
-            nativeMcp: true,
             assignedServerIds: ["oauth", "keyed"],
             servers: [
-              http("oauth", { oauth: true, auth: { status: "unauthenticated" } }),
+              http("oauth", { oauth: true, needsSignIn: true }),
               // A fixed Authorization header: Pi offers no OAuth for it.
               http("keyed", { oauth: false }),
             ],
@@ -2433,9 +2079,7 @@ describe("MCP project picker", () => {
     await screen.findByTestId("mcp-empty");
     pickProject("beta");
     fireEvent.click(await screen.findByTestId("mcp-native-login-oauth"));
-    // The proxy's loopback flow and auth chip do not apply to native MCP.
-    expect(screen.queryByTestId("mcp-login-oauth")).toBeNull();
-    expect(screen.queryByTestId("mcp-auth-oauth")).toBeNull();
+    expect(screen.getByTestId("mcp-status-oauth").textContent).toBe("needs sign-in");
     await waitFor(() =>
       expect(posts).toEqual([["/mcp/oauth/native-login", { sessionId: "live" }]]),
     );
