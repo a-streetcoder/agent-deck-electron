@@ -30,3 +30,9 @@ GUARDRAILS as PI-01 (worktree, single test files, typecheck per package, no full
 ## Acceptance Criteria
 
 ingest test for a context_edit entry; sessionManager test asserting the settled status follows the aborted flag; tool duration test uses the event value; the remaining items each have one unit test or a note explaining the skip; docs/agent-guidelines/ARCHITECTURE.md event section updated.
+
+## Notes
+
+**2026-10-14T18:21:11Z**
+
+2026-10-14: item 6 made concrete: Pi 1.2 changed before_agent_start into a union on messageType; audit packages/pi-host/src/bridge.ts ~188 (recall hook reads event.prompt) and any other generated-string extension.

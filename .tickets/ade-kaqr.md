@@ -28,3 +28,9 @@ Depends on PI-01. Before sub-tickets: nah-contrarian on the target architecture 
 ## Acceptance Criteria
 
 Written per sub-ticket after the design pass. Epic acceptance: one stdio and one HTTP MCP server configured in Agent Deck are callable from a Pi session with no proxy tool registered, assignment per project still gates visibility, the import wizard still works, and the shared server completes an MCP OAuth from the user browser.
+
+## Notes
+
+**2026-10-14T18:21:11Z**
+
+2026-10-14 contrarian amendments: the mcp proxy is the Agent Deck generated bridge extension (packages/pi-host/src/bridge.ts, mcpTools.ts ~566), not pi-claude-bridge; fix the wording in PI-03d. Native MCP stays off under --no-extensions; enabling it needs -e builtin:mcp. Pi reads the same mcp.json files Agent Deck already writes (packages/resources/src/mcp.ts:8-9), so turning native on would expose every server to every session and bypass assignment: materialise to a folder only Agent Deck spawns read. The proxy enforces what native cannot: live policy at admission, publication and dispatch (mcpTools.ts ~417), mid-call revocation (~643, ~780), refusal of prompt and writes approval modes (~41-48), child-agent tool limits (~408); and the proxy shares one client pool where native starts stdio servers per Pi process (memory on the VM). Pi MCP OAuth runs through TUI /mcp login screens with no RPC path shown in the changelog. The design pass therefore picks native or hybrid item by item; hybrid (native connection where policy is not needed, proxy kept for revocation, approval refusal and child limits) is the default expectation.

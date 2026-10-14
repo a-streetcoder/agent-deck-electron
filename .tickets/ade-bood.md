@@ -24,3 +24,9 @@ GUARDRAILS as PI-01. Depends on PI-01. Small: a one-time migration helper with a
 ## Acceptance Criteria
 
 Unit tests: migration maps the old azure id in each persisted field and is idempotent; providerLogin forwards the new interaction kinds (fake login fn); doctor probe honours agentDir. Live: an OAuth sign-in started from the Providers screen through the tunnel completes in the browser (owner runs it once; architect prepares the step).
+
+## Notes
+
+**2026-10-14T18:21:11Z**
+
+2026-10-14: PI-04 also migrates the azure provider key inside every per-user auth.json created by SRV-11 (<dataDir>/users/*/agent/auth.json), and the agentDir-aware Doctor probe is a follow-up to SRV-11, not a prerequisite.
