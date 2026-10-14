@@ -103,6 +103,7 @@ import { SessionImageStore } from "./sessionImages.ts";
 import { forkSessionAttachmentStores } from "./sessionAttachmentLifecycle.ts";
 import { SessionPasteStore } from "./sessionPastes.ts";
 import { SessionAuthorStore } from "./sessionAuthors.ts";
+import { GitIdentityMap } from "./gitIdentity.ts";
 import {
   authenticateProxiedRequest,
   CloudflareAccessVerifier,
@@ -260,6 +261,7 @@ async function initServer(
     ? new SessionAuthorStore(new SessionAuthorIndex(dataDir))
     : undefined;
   sessionAuthors?.retainSessions(new Set(index.list().map((session) => session.id)));
+  const gitIdentities = trustedProxy ? new GitIdentityMap(dataDir) : undefined;
   // App-managed tool bridge (memory/mcp/subagents register here). The endpoint
   // is only known after listen(), so the factory reads it lazily and returns no
   // extension until both a tool is registered and the address is bound.
@@ -687,6 +689,7 @@ async function initServer(
     () => mcpPolicy.enabled(),
     planEvents,
     () => settings.get().subagentsEnabled,
+    gitIdentities,
   );
   // Loop run engine (native single-agent loop). Each run's agent executor is
   // built per-run, bound to a parent session in the project cwd.
@@ -1380,6 +1383,7 @@ async function initServer(
     projectImages,
     sessionPastes,
     sessionAuthors,
+    gitIdentities,
     index,
     projects,
     settings,

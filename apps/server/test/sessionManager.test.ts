@@ -23,6 +23,7 @@ import { ManagedSession, SessionCreationError, SessionManager } from "../src/Ses
 import { ReceiptBus, type ReceiptName } from "../src/receipts.ts";
 import type { ServerRuntime } from "../src/runtime.ts";
 import { SubagentRunStore } from "../src/subagentRunStore.ts";
+import { GIT_IDENTITIES_FILE, GitIdentityMap } from "../src/gitIdentity.ts";
 import {
   PiHost,
   PiHostLive,
@@ -2726,8 +2727,13 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
    */
   function makeFakeRuntime(
     seed: Effect.Effect<void> = Effect.die(new Error("seed failed: pi exited")),
-  ): { runtime: ServerRuntime; exitHandledCalls: () => number } {
+  ): {
+    runtime: ServerRuntime;
+    exitHandledCalls: () => number;
+    spawned: SpawnSessionParams[];
+  } {
     let calls = 0;
+    const spawned: SpawnSessionParams[] = [];
     const fakeBus: SessionPushBusHandle = {
       lastSeq: Effect.succeed(0),
       append: () => Effect.succeed({ seq: 0, event: {} as DomainEvent }),
@@ -2740,7 +2746,7 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
       params: SpawnSessionParams,
     ): Effect.Effect<ManagedSessionRuntime, never, Scope.Scope> =>
       Effect.succeed({
-        meta: params.meta,
+        meta: (spawned.push(params), params.meta),
         bus: fakeBus,
         ingest: Effect.void,
         seedFromHistory: seed,
@@ -2754,8 +2760,41 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
       PiHostLive,
     );
     const runtime = ManagedRuntime.make(layers) as ServerRuntime;
-    return { runtime, exitHandledCalls: () => calls };
+    return { runtime, exitHandledCalls: () => calls, spawned };
   }
+
+  it("spawns Pi with the session owner's git identity, and none without an owner", async () => {
+    const { runtime, spawned } = makeFakeRuntime();
+    const dataDir = mkdtempSync(path.join(tmpdir(), "deck-sm-git-identity-"));
+    writeFileSync(
+      path.join(dataDir, GIT_IDENTITIES_FILE),
+      JSON.stringify({ "o@example.com": { name: "Owner", email: "1+o@users.noreply.github.com" } }),
+    );
+    // gitIdentities is the 24th positional constructor argument; the rest default.
+    const args: unknown[] = [runtime, new ReceiptBus(false)];
+    args[23] = new GitIdentityMap(dataDir);
+    const manager = new SessionManager(...(args as ConstructorParameters<typeof SessionManager>));
+    const meta = (createdBy?: SessionMeta["createdBy"]): SessionMeta => ({
+      id: randomUUID(),
+      cwd: process.cwd(),
+      createdAt: new Date().toISOString(),
+      ...(createdBy ? { createdBy } : {}),
+    });
+    try {
+      await manager.resume(meta({ id: "o@example.com" }), { kind: "parent" }).catch(() => {});
+      await manager.resume(meta(), { kind: "parent" }).catch(() => {});
+      expect(spawned[0]!.spawn.env).toMatchObject({
+        GIT_AUTHOR_NAME: "Owner",
+        GIT_AUTHOR_EMAIL: "1+o@users.noreply.github.com",
+        GIT_COMMITTER_NAME: "Owner",
+        GIT_COMMITTER_EMAIL: "1+o@users.noreply.github.com",
+      });
+      expect(Object.keys(spawned[1]!.spawn.env ?? {})).not.toContain("GIT_AUTHOR_NAME");
+    } finally {
+      await runtime.dispose();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
 
   it("exposes cleanup completion after a post-spawn create failure", async () => {
     let released = false;

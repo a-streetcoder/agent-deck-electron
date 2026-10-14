@@ -15,6 +15,7 @@ import type { LaunchPlan } from "@agent-deck/pi-host";
 import type { IncomingMessage } from "node:http";
 import { createSessionDraftGateway } from "../sessionDrafts.ts";
 import { requestUser } from "../trustedProxy.ts";
+import { coAuthorTrailers, gitIdentityEnv, withTrailers } from "../gitIdentity.ts";
 import { listProjectFiles, piAgentHome } from "@agent-deck/resources";
 import { z } from "zod";
 import {
@@ -967,6 +968,15 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         worktreeSourceBranch,
         projectId,
       } = meta;
+      // SRV-04: both app-composed commits carry the session owner's identity and
+      // credit the other prompt authors. Attribution only, not authorization
+      // (gitIdentity.ts). No owner (no trusted proxy) leaves git config in charge.
+      const ownerEnv = gitIdentityEnv(meta.createdBy, ctx.gitIdentities);
+      const coAuthors = coAuthorTrailers(
+        meta.createdBy,
+        ctx.sessionAuthors?.authors(id) ?? [],
+        ctx.gitIdentities,
+      );
       // One merge follows the policy selected when it started; a concurrent
       // preference toggle applies to the next merge, not halfway through this one.
       const keepWorktreeAfterMerge = settings.get().keepWorktreeAfterMerge;
@@ -1258,7 +1268,11 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         }
 
         try {
-          await gitCommitAll(worktreePath, `Agent Deck: ${meta.title ?? "session"} changes`);
+          await gitCommitAll(
+            worktreePath,
+            withTrailers(`Agent Deck: ${meta.title ?? "session"} changes`, coAuthors),
+            ownerEnv,
+          );
           worktreeCommitted = true;
           // Auto-commit empties the session's working-tree diff even when a later
           // ahead check or merge fails; never replay the stale pre-commit cache.
@@ -1297,7 +1311,10 @@ export function registerSessionRoutes(ctx: ServerContext): void {
           );
 
         try {
-          await gitMergeNoCheckout(project.path, worktreeBranch);
+          await gitMergeNoCheckout(project.path, worktreeBranch, {
+            env: ownerEnv,
+            trailers: coAuthors,
+          });
         } catch (error) {
           const conflict = await gitHasUnmergedEntries(project.path).catch(() => false);
           const mergeActive = await gitMergeInProgress(project.path).catch(() => false);

@@ -55,6 +55,14 @@ unchanged and mutually exclusive with `AGENT_DECK_REMOTE_SERVER_URL`.
     user on every `prompt` / `steer` / `follow_up`; the user-cell decorator binds it to the cell
     Pi echoes back (live, and again on history rebuild by stable entry id). Stored in
     `session-authors.json` next to the session index, so snapshots and replay carry it.
+- Git identity follows the session **owner** (`apps/server/src/gitIdentity.ts`): every Pi
+  launch of a session with `createdBy` (create, resume, fork, refresh) gets
+  `GIT_AUTHOR_NAME/EMAIL` and `GIT_COMMITTER_NAME/EMAIL`, fixed at spawn so a later prompt
+  author cannot change them. The two commits the app composes, the worktree auto-commit and the
+  worktree merge commit (`POST /sessions/:id/merge`), use the same identity and add a
+  `Co-authored-by:` trailer for each other prompt author of the session. Checkpoint refs,
+  terminals and project-level commits from the Git panel are unchanged. A session without
+  `createdBy` (no trusted proxy) keeps the machine's git config.
 
 ## VM setup (Linux, shared OS user)
 
@@ -242,6 +250,18 @@ Data directory on the VM, `~/.local/share/agent-deck-electron/`: `sessions.json`
 A session's owner is in `session-authors.json` under its id, `turns[].author.id` (the email), or
 on the initials chip.
 
+`git-identities.json` (operator-maintained, optional, no UI) maps an Access email to the
+identity its sessions commit with. It is read on every launch and app commit, so an edit applies
+to the next one; a malformed file is logged and ignored.
+
+```json
+{ "user@example.com": { "name": "User Name", "email": "12345+user@users.noreply.github.com" } }
+```
+
+A user with no entry commits as their Access name (else the email's local part) with the Access
+email, never as the VM's default identity. Add an entry for anyone whose Access email is a
+private GitHub email: GitHub rejects pushes whose commits expose it.
+
 ### Access and identity
 
 - **Add a user**: Cloudflare Zero Trust → Access → Applications → "Agent Deck · Streetcoding
@@ -362,3 +382,6 @@ Electron.
   people, not for a fleet.
 - No per-user authorization, quotas or private sessions; no identity in Loops or subagent
   runs beyond the parent session's `createdBy`.
+- Session git identity is attribution, not authorization: Pi and its tools run as the service
+  user and can still commit as anyone (`git -c user.name=...`, editing the env), and
+  `Co-authored-by:` lines reflect who prompted, not who wrote which change.

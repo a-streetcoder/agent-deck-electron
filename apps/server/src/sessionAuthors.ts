@@ -95,6 +95,15 @@ export class SessionAuthorStore {
     return { ...cell, author: { ...selected.author } };
   }
 
+  /** Distinct authors of the session's recorded turns, in first-seen order. */
+  authors(sessionId: string): UserIdentity[] {
+    const byId = new Map<string, UserIdentity>();
+    for (const { author } of this.turns(sessionId)) {
+      if (!byId.has(author.id)) byId.set(author.id, { ...author });
+    }
+    return [...byId.values()];
+  }
+
   /** The session is gone (DELETE /sessions/:id): its authors go with it. */
   deleteSession(sessionId: string): void {
     this.index.remove(sessionId);

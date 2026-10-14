@@ -28,6 +28,7 @@ import type { ReceiptBus } from "./receipts.ts";
 import type { SubagentRunStore } from "./subagentRunStore.ts";
 import type { ServerRuntime } from "./runtime.ts";
 import { SessionMutationClaims } from "./sessionMutationClaims.ts";
+import { gitIdentityEnv, type GitIdentityMap } from "./gitIdentity.ts";
 import { normalizeSessionError } from "./sessionFailure.ts";
 import type { LaunchResourceConfigV1, ResolvedLaunchResources } from "./launchResources.ts";
 import type { PiSpawnOptions } from "./services/piHost.ts";
@@ -716,6 +717,8 @@ export class SessionManager {
     private readonly planEvents?: PlanEventServiceShape,
     /** Live app-level delegation default (native areSubagentsEnabledForNewSessions). */
     private readonly subagentsEnabled: () => boolean = () => true,
+    /** Remote-server POC: owner git identity for the Pi env (gitIdentity.ts). */
+    private readonly gitIdentities?: GitIdentityMap,
   ) {}
 
   /** Reconfigure all live deadlines. Existing parked placeholders remain cold. */
@@ -1216,7 +1219,14 @@ export class SessionManager {
       const params = this.buildSpawnParams(
         meta,
         plan,
-        { ...this.envFileLayer(meta.projectId), ...env },
+        {
+          ...this.envFileLayer(meta.projectId),
+          ...env,
+          // SRV-04: the session OWNER's git identity, fixed at spawn so later
+          // prompt authors cannot change it, and re-derived from meta on every
+          // resume. Attribution, not authorization: Pi can still override it.
+          ...gitIdentityEnv(meta.createdBy, this.gitIdentities),
+        },
         tempDirs,
         publishMeta,
         resumedIdle,

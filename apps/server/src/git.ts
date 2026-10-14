@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { access, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { withTrailers } from "./gitIdentity.ts";
 
 /**
  * Git automation (native GitRepositoryService): commit the agent's work in a
@@ -327,12 +328,17 @@ export async function gitPullFfInto(cloneDir: string, ref?: string): Promise<str
  * the work tree is clean (native noChanges) and "not_a_repo" outside a repo, so
  * the route maps them to a 400 with a clear message.
  */
-export async function gitCommitAll(cwd: string, message: string): Promise<{ committed: true }> {
+export async function gitCommitAll(
+  cwd: string,
+  message: string,
+  /** Session-owner GIT_AUTHOR_* / GIT_COMMITTER_* (gitIdentity.ts); omitted = git config. */
+  identityEnv: Record<string, string> = {},
+): Promise<{ committed: true }> {
   const status = await gitStatus(cwd);
   if (!status.repo) throw new Error("not_a_repo");
   if (status.clean) throw new Error("nothing_to_commit");
   await runGit(cwd, ["add", "-A"]);
-  await runGit(cwd, ["commit", "-m", message]);
+  await runGitEnv(cwd, ["commit", "-m", message], { ...process.env, ...identityEnv });
   return { committed: true };
 }
 
@@ -1147,8 +1153,17 @@ export async function gitMergeInProgress(cwd: string): Promise<boolean> {
 }
 
 /** Merge only; checkout and all safety preflights belong to the caller. */
-export async function gitMergeNoCheckout(cwd: string, branch: string): Promise<void> {
-  await runGit(cwd, ["merge", "--no-ff", branch, "-m", `Merge ${branch}`]);
+export async function gitMergeNoCheckout(
+  cwd: string,
+  branch: string,
+  /** Session-owner identity env and Co-authored-by lines (gitIdentity.ts). */
+  attribution: { env?: Record<string, string>; trailers?: readonly string[] } = {},
+): Promise<void> {
+  await runGitEnv(
+    cwd,
+    ["merge", "--no-ff", branch, "-m", withTrailers(`Merge ${branch}`, attribution.trailers ?? [])],
+    { ...process.env, ...attribution.env },
+  );
 }
 
 /** Backwards-compatible convenience for non-session callers. */

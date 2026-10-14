@@ -19,6 +19,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ServerContext } from "../src/context.ts";
 import { registerSessionRoutes } from "../src/routes/sessions.ts";
 import { SubagentRunStore } from "../src/subagentRunStore.ts";
+import { GIT_IDENTITIES_FILE, GitIdentityMap } from "../src/gitIdentity.ts";
 
 // These real Git/native integration cases include repository creation, several
 // linked worktrees, durable fsync and teardown in the test body. CI34276187155
@@ -28,7 +29,11 @@ vi.setConfig({ testTimeout: 20_000 });
 
 // HTTP routes + actual durable child store + native ownership + real Git. No Pi
 // or user checkout is needed to reproduce the missing parent-cwd failure.
-async function fixture(keep = false, childCount = 2) {
+async function fixture(
+  keep = false,
+  childCount = 2,
+  extra: { meta?: Partial<SessionMeta>; ctx?: Partial<ServerContext> } = {},
+) {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "deck-merge-children-")));
   const repo = path.join(root, "repo");
   const data = path.join(root, "data");
@@ -61,6 +66,7 @@ async function fixture(keep = false, childCount = 2) {
     worktreeIdentity: identity,
     worktreeBranch: branch,
     worktreeSourceBranch: "main",
+    ...extra.meta,
   } as SessionMeta);
   const children: { id: string; cwd: string }[] = [];
   for (let i = 0; i < childCount; i++) {
@@ -110,6 +116,7 @@ async function fixture(keep = false, childCount = 2) {
     askUser: { cancelSession: vi.fn() },
     broadcast: vi.fn(),
     dropDiffCache: vi.fn(),
+    ...extra.ctx,
   } as unknown as ServerContext;
   registerSessionRoutes(ctx);
   return {
@@ -140,6 +147,67 @@ async function fixture(keep = false, childCount = 2) {
     },
   };
 }
+
+describe("session git identity (SRV-04)", () => {
+  it("auto-commit and merge are authored by the owner's mapping and credit other authors", async () => {
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "deck-git-identity-")));
+    writeFileSync(
+      path.join(root, GIT_IDENTITIES_FILE),
+      JSON.stringify({
+        "owner@example.com": { name: "Owner", email: "1+owner@users.noreply.github.com" },
+      }),
+    );
+    const sessionAuthors = {
+      authors: () => [{ id: "owner@example.com" }, { id: "guest@example.com", name: "Guest" }],
+    };
+    const f = await fixture(true, 0, {
+      meta: { createdBy: { id: "owner@example.com", name: "Owner Access" } },
+      ctx: {
+        gitIdentities: new GitIdentityMap(root),
+        sessionAuthors,
+      } as unknown as Partial<ServerContext>,
+    });
+    try {
+      writeFileSync(path.join(f.parent, "uncommitted"), "auto-commit me");
+      const result = await f.merge();
+      expect(result.statusCode, result.body).toBe(200);
+      expect(result.json()).toMatchObject({ worktreeCommitted: true });
+      const show = (ref: string) =>
+        f.git(f.repo, "log", "-1", "--format=%an <%ae>|%cn <%ce>|%B", ref);
+      const owner = "Owner <1+owner@users.noreply.github.com>";
+      const trailer = "Co-authored-by: Guest <guest@example.com>";
+      const auto = show("agent-deck/session-a1b2c3d4");
+      expect(auto).toContain(`${owner}|${owner}|Agent Deck:`);
+      expect(auto).toContain(trailer);
+      const merge = show("main");
+      expect(merge).toContain(`${owner}|${owner}|Merge agent-deck/session-a1b2c3d4`);
+      expect(merge).toContain(trailer);
+      expect(merge).not.toContain("Co-authored-by: Owner");
+      // The session's own earlier commit keeps the repo's configured identity.
+      expect(f.git(f.repo, "log", "-1", "--format=%an", "HEAD^2^")).toBe("Fixture");
+    } finally {
+      await f.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a session without an owner keeps the repo's configured identity", async () => {
+    const f = await fixture(true, 0);
+    try {
+      writeFileSync(path.join(f.parent, "uncommitted"), "auto-commit me");
+      expect((await f.merge()).statusCode).toBe(200);
+      expect(f.git(f.repo, "log", "-1", "--format=%an <%ae>|%B", "main")).not.toContain(
+        "Co-authored-by",
+      );
+      expect(f.git(f.repo, "log", "-1", "--format=%an", "main")).toBe("Fixture");
+      expect(f.git(f.repo, "log", "-1", "--format=%an", "agent-deck/session-a1b2c3d4")).toBe(
+        "Fixture",
+      );
+    } finally {
+      await f.close();
+    }
+  });
+});
 
 describe("merge cleanup with children rooted at a linked session checkout", () => {
   it("reaps children before their parent, retains history across restart, then deletes successfully", async () => {

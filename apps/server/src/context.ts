@@ -27,6 +27,7 @@ import type { PlanEventServiceShape } from "./services/planEvents.ts";
 import type { SessionImageStore } from "./sessionImages.ts";
 import type { SessionPasteStore } from "./sessionPastes.ts";
 import type { SessionAuthorStore } from "./sessionAuthors.ts";
+import type { GitIdentityMap } from "./gitIdentity.ts";
 import type { SkillStore } from "./skills/skillStore.ts";
 import type { InjectedCommandStore } from "./injectedCommands.ts";
 import type { SupervisorLog } from "./supervisor.ts";
@@ -134,6 +135,8 @@ export interface ServerContext {
   sessionPastes: SessionPasteStore;
   /** Remote-server POC: who sent each user message; absent without a trusted proxy. */
   sessionAuthors?: SessionAuthorStore;
+  /** Remote-server POC: session-owner git identity (gitIdentity.ts); absent without a trusted proxy. */
+  gitIdentities?: GitIdentityMap;
   index: SessionIndex;
   projects: ProjectIndex;
   settings: SettingsStore;
