@@ -1,6 +1,6 @@
 ---
 id: ade-iq7c
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-14T22:33:57Z
@@ -42,3 +42,7 @@ Dev round 2 (486a6d3): e2e updated to the inverted layering, edit only, Playwrig
 **2026-10-14T22:48:58Z**
 
 Dev round 3 (560139e), contrarian + GPT focus items: PANEL_KEY -> agentdeck-orchestrate-expanded (old key not migrated, everyone starts collapsed); setView('chat') sets panelExpanded false without persisting (covers Loops/MCP/Issues/palette/commands/menu/notification paths since all route through setView('chat')), nav picks keep it open; orchestrate-attention-count on the pull-up header; store meKnown (set by setMe): icon only until /me answers, Local after a null answer; if /me never answers the row stays icon-only; focus handoff via refs + effect on panelExpanded (open -> orchestrate-collapse, close -> orchestrate-expand), only when focus was inside the layer going inert or on body, so mod+s from the composer does not steal focus; e2e openNav checks orchestrate-expanded aria-hidden before expanding; useKeyboardShortcuts comment and SessionsPanel test name nits. Files: apps/web/src/components/Sidebar.tsx, Sidebar.test.tsx, SessionsPanel.test.tsx, apps/web/src/state/store.ts, useKeyboardShortcuts.ts, e2e/helpers/fixtures.ts. Checks: vitest Sidebar+SessionsPanel+store.memoryNavigation+wsBridge.refreshMe 4 files, 21 passed (Sidebar 12); eslint + prettier on touched files clean; apps/web tsc clean; e2e tsc clean. Playwright still not run; focus behaviour with real inert verified only in jsdom (no inert there). Owner note: from a nav screen back to a session is now two clicks (collapse, then row) where it was one for top-five sessions.
+
+**2026-10-14T22:50:03Z**
+
+2026-10-14 merged (wt/ade-iq7c: a6e7218, 486a6d3 e2e, 560139e review fixes). Contrarian: storage key renamed (old value meant the opposite), setView(chat) collapses the pull-up again, attention count on the Orchestrate header, icon-only user row until /me answers (meKnown), focus handoff on open/close (GPT review10), e2e openNav helper tolerant of an open pull-up. Post-merge: web tsc + Sidebar/SessionsPanel/store tests 19, e2e tsc clean. Not run: Playwright (45 specs edited, selectors only); visual.spec baselines need --update-snapshots on a machine with memory. Owner live check pending after deploy; UX note: nav screen -> session is now two clicks (collapse, then row).
