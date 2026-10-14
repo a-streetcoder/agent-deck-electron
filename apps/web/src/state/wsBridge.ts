@@ -17,6 +17,7 @@ import type {
 } from "@agent-deck/contracts";
 import { reduceTranscript } from "@agent-deck/domain";
 import type {
+  DiffFilesResult,
   FileListResult,
   FileReadResult,
   FileWriteResult,
@@ -648,14 +649,24 @@ export async function openFileInEditor(
   });
 }
 
+/** Fetch the CURRENT session's changed-file set against the source-branch
+ * base (ROAD-S20 worktree toggle). The store keeps the HEAD set; the diff
+ * panel holds this one locally. */
+export async function fetchBranchDiffFiles(): Promise<DiffFilesResult | null> {
+  const sessionId = currentSessionId;
+  if (!sessionId) return null;
+  return await transport.diffFiles(sessionId, "branch");
+}
+
 /** Fetch one changed file's unified diff for the CURRENT session. */
 export async function fetchFileDiff(
   path: string,
   scope?: "all" | "staged" | "unstaged",
+  base?: "head" | "branch",
 ): Promise<{ diff: string; truncated: boolean; binary: boolean } | null> {
   const sessionId = currentSessionId;
   if (!sessionId) return null;
-  const result = await transport.diffFile(sessionId, path, scope);
+  const result = await transport.diffFile(sessionId, path, scope, base);
   return { diff: result.diff, truncated: result.truncated, binary: result.binary };
 }
 

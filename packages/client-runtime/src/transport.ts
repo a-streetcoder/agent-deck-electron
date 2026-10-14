@@ -558,8 +558,12 @@ export class RpcTransport {
    * set (`repo: false` + empty for non-git sessions); rejects on a server
    * failure reply (unknown session) or while disconnected.
    */
-  async diffFiles(sessionId: string): Promise<DiffFilesResult> {
-    const settled = await this.sendRequest({ type: "diff_files", sessionId });
+  async diffFiles(sessionId: string, base?: "head" | "branch"): Promise<DiffFilesResult> {
+    const settled = await this.sendRequest({
+      type: "diff_files",
+      sessionId,
+      ...(base !== undefined ? { base } : {}),
+    });
     if (settled.kind !== "diff_files") {
       throw new Error("diff_files settled without a diff_files_ok reply");
     }
@@ -574,12 +578,14 @@ export class RpcTransport {
     sessionId: string,
     path: string,
     scope?: "all" | "staged" | "unstaged",
+    base?: "head" | "branch",
   ): Promise<DiffFileResult> {
     const settled = await this.sendRequest({
       type: "diff_file",
       sessionId,
       path,
       ...(scope !== undefined ? { scope } : {}),
+      ...(base !== undefined ? { base } : {}),
     });
     if (settled.kind !== "diff_file") {
       throw new Error("diff_file settled without a diff_file_ok reply");

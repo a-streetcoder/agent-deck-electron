@@ -1094,6 +1094,27 @@ describe("createRpcConnection diff ops (Slice 9)", () => {
     expect(diffs.calls).toEqual([]);
   });
 
+  it("a branch-base request on a session without its own worktree is refused", async () => {
+    const { session } = makeSession("s1");
+    const diffs = makeDiffGateway();
+    const { conn, frames } = harness(
+      makeManager({ s1: session }),
+      undefined,
+      undefined,
+      diffs.gateway,
+    );
+    await conn.handleMessage(frame(6, { type: "diff_files", sessionId: "s1", base: "branch" }));
+    expect(frames).toEqual([
+      {
+        kind: "reply",
+        id: 6,
+        ok: false,
+        error: "Error: branch diff is only available for worktree sessions",
+      },
+    ]);
+    expect(diffs.calls).toEqual([]);
+  });
+
   it("a throwing diff gateway surfaces as a typed failure reply, not a crash", async () => {
     const { session } = makeSession("s1");
     const diffs = makeDiffGateway();

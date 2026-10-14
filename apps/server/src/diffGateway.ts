@@ -1,7 +1,7 @@
-import type { DiffScope, SessionMeta } from "@agent-deck/contracts";
+import type { DiffBase, DiffScope, SessionMeta } from "@agent-deck/contracts";
 import { Effect } from "effect";
 import { runPromiseUnwrapped } from "./effectRun.ts";
-import { gitFullyQualifiedBranchRef } from "./git.ts";
+import { gitFullyQualifiedBranchRef, gitMergeBase } from "./git.ts";
 import type { ServerRuntime } from "./runtime.ts";
 import {
   SessionDiff,
@@ -35,9 +35,28 @@ export interface DiffGateway {
   readonly drop: (sessionId: string) => void;
 }
 
-/** Select a Loop review base exclusively from durable server-owned metadata. */
-export async function sessionDiffBase(meta: SessionMeta): Promise<string | undefined> {
-  if (!meta.loopReviewRunId) return undefined;
+/** Select a diff base exclusively from durable server-owned metadata: a Loop
+ * review always compares with its source branch; a worktree session does so
+ * only when the client asks for the `branch` base (ROAD-S20). */
+export async function sessionDiffBase(
+  meta: SessionMeta,
+  requested: DiffBase = "head",
+): Promise<string | undefined> {
+  if (!meta.loopReviewRunId) {
+    if (requested === "head") return undefined;
+    if (
+      !meta.worktreePath ||
+      meta.cwd !== meta.worktreePath ||
+      !meta.worktreeBranch ||
+      !meta.worktreeSourceBranch
+    ) {
+      throw new Error("branch diff is only available for worktree sessions");
+    }
+    // sourceBranch...HEAD: the merge base, so source-branch commits made after
+    // the worktree forked never show up as reverted worktree changes.
+    const sourceRef = await gitFullyQualifiedBranchRef(meta.cwd, meta.worktreeSourceBranch);
+    return gitMergeBase(meta.cwd, sourceRef, "HEAD");
+  }
   if (
     !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       meta.loopReviewRunId,

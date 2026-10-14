@@ -72,11 +72,20 @@ export type DiffFileEntry = typeof DiffFileEntry.Type;
 export const DiffScope = Schema.Literal("all", "staged", "unstaged");
 export type DiffScope = typeof DiffScope.Type;
 
+/** Which revision a worktree session's diff compares against (ROAD-S20).
+ * `head` = working tree vs HEAD (the default); `branch` = working tree vs the
+ * merge base of the worktree's source branch, so committed branch work shows
+ * too. Only valid for a session running in its own worktree. */
+export const DiffBase = Schema.Literal("head", "branch");
+export type DiffBase = typeof DiffBase.Type;
+
 export const DiffClientRequest = Schema.Union(
   Schema.Struct({
     /** List the session's changed files (served from the per-session cache). */
     type: Schema.Literal("diff_files"),
     sessionId: Schema.String,
+    /** Omitted = "head". */
+    base: Schema.optional(DiffBase),
   }),
   Schema.Struct({
     /** Fetch one file's unified diff (bounded — see DIFF_MAX_PATCH_CHARS). */
@@ -86,6 +95,8 @@ export const DiffClientRequest = Schema.Union(
     path: DiffPath,
     /** Omitted = "all" (working tree vs the session base). */
     scope: Schema.optional(DiffScope),
+    /** Omitted = "head". */
+    base: Schema.optional(DiffBase),
   }),
 );
 export type DiffClientRequest = typeof DiffClientRequest.Type;

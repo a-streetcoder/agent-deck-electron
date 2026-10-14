@@ -4,6 +4,7 @@ import {
   ControlSelect,
   ControlTextArea,
 } from "@/design-system/components/NativeControls";
+import type { DiffFileEntry } from "@agent-deck/contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, MessageSquarePlus, Pencil, Trash2 } from "lucide-react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
@@ -16,7 +17,7 @@ import {
   isCommentableLine,
   type PendingReviewComment,
 } from "@/lib/reviewComments";
-import { fetchFileDiff, mergeWorktreeSession } from "../../state/wsBridge.ts";
+import { fetchBranchDiffFiles, fetchFileDiff, mergeWorktreeSession } from "../../state/wsBridge.ts";
 import { useAppStore } from "../../state/store.ts";
 import { ChangedFilesTree } from "./ChangedFilesTree.tsx";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel.tsx";
@@ -42,6 +43,7 @@ interface CommentBoxState {
 
 /** Stable empty reference so the selector never returns a fresh array. */
 const EMPTY_COMMENTS: readonly PendingReviewComment[] = [];
+const EMPTY_FILES: readonly DiffFileEntry[] = [];
 
 /**
  * The changed-files / diff panel (Slice 10): a right-hand aside on the chat
@@ -379,8 +381,8 @@ function WorktreeMergeToolbar(props: {
 export function DiffPanel() {
   const sessionId = useAppStore((state) => state.session?.id ?? null);
   const repo = useAppStore((state) => state.diffRepo);
-  const files = useAppStore((state) => state.diffFiles);
-  const truncatedSet = useAppStore((state) => state.diffTruncated);
+  const headFiles = useAppStore((state) => state.diffFiles);
+  const headTruncated = useAppStore((state) => state.diffTruncated);
 
   // Slice 20: a worktree session is identified by the presence of these meta
   // fields (there is no isWorktree boolean). When set, the panel shows the
@@ -407,6 +409,43 @@ export function DiffPanel() {
   // DIF-01 (native GitDiffKind): which relation the file patch shows.
   const [diffScope, setDiffScope] = useState<"all" | "staged" | "unstaged">("all");
   const [fileDiff, setFileDiff] = useState<FileDiffState | null>(null);
+
+  // ROAD-S20: a worktree session can compare against its source branch (merge
+  // base) so committed branch work shows too. The store keeps the HEAD set
+  // (diff_push); the branch set lives here and refetches whenever that set
+  // changes (every push is a turn boundary).
+  const canCompareBranch =
+    loopReviewRunId === null && worktreeBranch !== null && worktreeSourceBranch !== null;
+  const [diffBase, setDiffBase] = useState<"head" | "branch">("head");
+  const branchMode = canCompareBranch && diffBase === "branch";
+  const [branchSet, setBranchSet] = useState<{
+    sessionId: string;
+    files: readonly DiffFileEntry[];
+    truncated: boolean;
+    error?: string;
+  } | null>(null);
+  useEffect(() => {
+    setDiffBase("head");
+  }, [sessionId]);
+  useEffect(() => {
+    if (!branchMode || sessionId === null) return;
+    let stale = false;
+    fetchBranchDiffFiles()
+      .then((result) => {
+        if (stale || result === null) return;
+        setBranchSet({ sessionId, files: result.files, truncated: result.truncated });
+      })
+      .catch((error: unknown) => {
+        if (!stale) setBranchSet({ sessionId, files: [], truncated: false, error: String(error) });
+      });
+    return () => {
+      stale = true;
+    };
+  }, [branchMode, sessionId, headFiles]);
+  const activeBranchSet = branchMode && branchSet?.sessionId === sessionId ? branchSet : null;
+  const files = branchMode ? (activeBranchSet?.files ?? EMPTY_FILES) : headFiles;
+  const truncatedSet = branchMode ? (activeBranchSet?.truncated ?? false) : headTruncated;
+  const patchScope = branchMode ? "all" : diffScope;
 
   // Slice 11: the server-detected editors + the remembered default. The
   // affordances (file-header picker, tree-row hover action) are hover-revealed
@@ -515,7 +554,7 @@ export function DiffPanel() {
             empty: false,
           },
     );
-    void fetchFileDiff(selectedPath, diffScope)
+    void fetchFileDiff(selectedPath, patchScope, branchMode ? "branch" : undefined)
       .then((result) => {
         if (stale || result === null) return;
         setFileDiff({
@@ -544,7 +583,7 @@ export function DiffPanel() {
     return () => {
       stale = true;
     };
-  }, [selectedPath, sessionId, files, diffScope]);
+  }, [selectedPath, sessionId, files, patchScope, branchMode]);
 
   if (sessionId === null) return null;
   // The tab only opens for a git repo (the diffRepo gate lives on the header /
@@ -641,6 +680,18 @@ export function DiffPanel() {
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {canCompareBranch && (
+            <ControlSelect
+              className="shrink-0 rounded-md border border-border-subtle bg-surface px-1.5 py-0.5 text-micro text-text-muted focus:border-accent focus:outline-none"
+              aria-label="Compare with"
+              data-testid="diff-base"
+              value={diffBase}
+              onChange={(event) => setDiffBase(event.target.value as "head" | "branch")}
+            >
+              <option value="head">Uncommitted</option>
+              <option value="branch">Since {worktreeSourceBranch}</option>
+            </ControlSelect>
+          )}
           {files.length > 0 && (
             <ControlButton
               type="button"
@@ -676,13 +727,17 @@ export function DiffPanel() {
           />
         )}
 
+      {activeBranchSet?.error !== undefined && (
+        <NoticeBar>{`Couldn’t load the branch diff: ${activeBranchSet.error}`}</NoticeBar>
+      )}
+
       {truncatedSet && (
         <NoticeBar>The changed-file list was truncated at the server limit.</NoticeBar>
       )}
 
       {files.length === 0 ? (
         <CenteredState testId="diff-empty">
-          {loopReviewRunId
+          {loopReviewRunId || branchMode
             ? "No changes from the source branch."
             : "No changes in the working tree."}
         </CenteredState>
@@ -727,7 +782,7 @@ export function DiffPanel() {
             </span>
             {/* Scoped patches contradict a loop review's source-branch base —
                 the selector only exists for ordinary sessions (Codex). */}
-            {loopReviewRunId === null && (
+            {loopReviewRunId === null && !branchMode && (
               <ControlSelect
                 className="ml-auto shrink-0 rounded-md border border-border-subtle bg-surface px-1.5 py-0.5 text-micro text-text-muted focus:border-accent focus:outline-none"
                 aria-label="Diff scope"
@@ -745,11 +800,11 @@ export function DiffPanel() {
             {selectedEntry &&
               !selectedEntry.binary &&
               selectedEntry.insertions !== null &&
-              diffScope === "all" && (
+              patchScope === "all" && (
                 <span
                   className={cn(
                     "shrink-0 font-mono text-micro tabular-nums",
-                    loopReviewRunId !== null && "ml-auto",
+                    (loopReviewRunId !== null || branchMode) && "ml-auto",
                   )}
                 >
                   <DiffStatLabel
