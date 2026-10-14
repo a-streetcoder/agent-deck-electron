@@ -51,7 +51,7 @@ single-user tool.
   collaboration model. The Syncr skill-engine addon remains a pinned **code dependency**
   ([ADR 0002](docs/adr/0002-consolidate-skill-engine.md), [`docs/skill-store-contract.md`](docs/skill-store-contract.md));
   that is a build fact, not a product direction, and the seam design in
-  [`docs/sync-seams.md`](docs/sync-seams.md) now describes an option, not a plan.
+  [`docs/sync-seams.md`](docs/sync-seams.md) is closed under ADR 0005 and kept as history.
 - **Identity is Cloudflare Access plus per-user provider sign-in**, with `createdBy`/`author`
   as attribution labels. No device enrolment, no attestation chains, no signing code.
 - **Edge execution is a deployment mode, not the default product model.** Local desktop and

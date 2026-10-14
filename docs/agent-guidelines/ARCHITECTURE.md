@@ -13,16 +13,16 @@ Keep boundaries explicit:
 
 ## Packages
 
-- `apps/desktop`: the Electron shell and preload bridge; it starts the backend and hosts the web UI.
+- `apps/desktop`: the Electron shell and preload bridge; it hosts the web UI and starts the backend, or attaches to a remote server when `AGENT_DECK_REMOTE_SERVER_URL` is set.
 - `apps/server`: the Fastify backend: sessions, Loops, subagent runs, skills, MCP definitions, checkpoints and the HTTP/WebSocket API.
 - `apps/web`: the React/Vite renderer.
 - `packages/pi-host`: Pi process launch (`launchPlan.ts`), JSONL RPC framing and the generated bridge extension (`bridge.ts`).
-- `packages/contracts` and `packages/domain`: typed transport contracts and domain shapes shared by renderer and backend.
+- `packages/contracts` and `packages/domain`: typed transport contracts, and the domain shapes plus pure behaviour (transcript ingest and reducer, loops) shared by renderer and backend.
 - `packages/client-runtime`: the renderer's transport to the backend.
 - `packages/resources`: discovery of bundled and user resources (agents, skills, prompts, Loops, MCP) and the override layer.
 - `packages/memory`: project memory store and recall.
 - `packages/mcp`: the MCP client used by the status probe.
-- `packages/loop-catalog-native`: the NAPI-RS containment module for Loops and worktrees ([ADR 0001](../adr/0001-native-containment-module.md)).
+- `packages/loop-catalog-native`: the NAPI-RS containment module for Loops, worktrees, resource catalog writes and recoveries, managed skill repositories and subagent artifacts ([ADR 0001](../adr/0001-native-containment-module.md)).
 - `packages/testkit`: mock providers and MCP servers for tests.
 
 ## Syncr skill-engine boundary
@@ -82,5 +82,5 @@ Names: an Agent Deck id becomes a Pi server name of at most 24 characters in `[A
 - Orchestration behaviour (delegation cancellation, session merge cleanup, managed child provider settlement, stopped child cards and Loop snapshots): [orchestration reference](../orchestration-reference.md).
 - Shared server, identity and credentials: [remote server POC](../remote-server-poc.md) and [ADR 0003](../adr/0003-shared-server-trust-model.md).
 - Pi launch flags: [Pi RPC launch flags](../pi-rpc-launch-flags.md).
-- Skill storage contract (historical, see ADR 0005): [skill-store contract](../skill-store-contract.md).
+- Skill storage contract (being retired under ADR 0005; holds until D1 lands): [skill-store contract](../skill-store-contract.md).
 - Direction and decisions: [VISION_ORCHESTRATION.md](../../VISION_ORCHESTRATION.md) and [docs/adr](../adr/).

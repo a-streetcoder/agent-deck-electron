@@ -77,14 +77,11 @@ See [`release-windows.md`](release-windows.md). Tickets in `.tickets/`.
 
 - ade-kaqr — PI-03 (epic): Pi-native MCP as the transport — closed 2026-10-15 (PI-03a..f)
 - ade-0v9e — D1: retire the Syncr skill-engine addon ([ADR 0005](adr/0005-retire-skill-engine-addon.md)) — approved, design pass first
-- ade-dwji — D2: ARCHITECTURE.md trim + sync-seams closing note + parity-loop seam rule removed — open (after D1)
+- ade-dwji — D2: ARCHITECTURE.md trimmed to the map, per-ticket sections in `orchestration-reference.md`, sync-seams closed, parity-loop seam rule removed — closed 2026-10-15
 - ade-u3ny — D3: CodeMirror soft-wrap toggle — open
 - ade-4sjs — D4: owner decisions (ANA-01, FINAL push gating, A0 timing) — open
 - ade-w87w — D5: Playwright run + visual baselines on a machine with memory — open, blocks ade-s625
-- `docs/agent-guidelines/ARCHITECTURE.md` — trim back to architecture; its per-ticket
-  sections (delegation cancellation, merge cleanup, child provider settlement, stopped child
-  cards) move to an orchestration reference doc once A2 lands and the shapes are stable. Not
-  before PI-03f, which rewrites its MCP section.
+- `docs/agent-guidelines/ARCHITECTURE.md` — trimmed (D2); the orchestration reference will change again when A2 settles the node shapes.
 - `docs/sync-seams.md` — closed under ADR 0005 (D2).
 
 ## Suggested order

@@ -123,13 +123,12 @@ Ask one focused question only when product, security, privacy, data ownership, d
 - For Pi-facing work, inspect the pinned Pi package and use its protocol types rather than recreating them.
 - Keep implementation, tests, and documentation in the same coherent slice.
 
-## Sync-engine seams
+## Store seams
 
-Agent Deck consolidates durable user-owned state onto the shared Syncr-owned engine through explicit seams. The contract and live registry are `docs/sync-seams.md`; precedents are `docs/skill-store-contract.md` and `docs/adr/0002-consolidate-skill-engine.md`.
+Durable user-owned state (skills, agents, prompts, Loop definitions, MCP configuration, session durable records, subagent run records, memory, settings and assignments) is written through explicit seams on the Electron side. The shared Syncr engine is no longer the target: [ADR 0005](../../../docs/adr/0005-retire-skill-engine-addon.md) retires the skill-engine addon (implementation option pending); `docs/sync-seams.md` is closed and kept as history, and `docs/skill-store-contract.md` holds only until D1 lands.
 
-- Before a row touching durable or syncable state—skills, agents, prompts, Loop definitions, MCP configuration, session durable records, subagent run records, memory, or settings/assignments—read `docs/sync-seams.md` and the current engine contract.
-- Where engine surface exists, consume it through the seam (`ctx.skillStore` for skills). Never call raw storage behind a seam or reimplement shipped engine capability; check the contract's N-API surface first.
-- Missing engine surface is not a blocker. Implement the behavior on the **Electron side**, behind a seam: one narrow store interface before all mutations, injected at server construction, typed domain shapes, typed failure codes, and one write path. Routes and renderer never reach past it. Follow `SkillStore` in `apps/server/src/skills/skillStore.ts`. Here “native implementation” means this Electron-side host implementation, never editing the read-only native Agent Deck repository.
+- Where a seam exists, consume it (`ctx.skillStore` for skills); never call raw storage behind a seam.
+- New durable state gets a seam: one narrow store interface before all mutations, injected at server construction, typed domain shapes, typed failure codes, and one write path. Routes and renderer never reach past it. Follow `SkillStore` in `apps/server/src/skills/skillStore.ts`. Here “native implementation” means this Electron-side host implementation, never editing the read-only native Agent Deck repository.
 - Reads may remain host-side, following the scanner precedent. Runtime orchestration—assignment, streaming, process control, and worktrees—is never seam or sync material.
 
 ## Quality and acceptance gate
