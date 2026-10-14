@@ -77,7 +77,7 @@ describe("mcp config routes", () => {
       (await api("PATCH", `/projects/${projectId}`, { assignedMcpServers: ["mock"] })).status,
     ).toBe(200);
 
-    type Row = { id: string; connected: boolean; toolNames: string[] };
+    type Row = { id: string; connected: boolean; toolNames: string[]; error?: string };
     const scoped = async () =>
       (
         (await (await api("GET", `/mcp?projectId=${encodeURIComponent(projectId)}`)).json()) as {
@@ -96,15 +96,19 @@ describe("mcp config routes", () => {
       connected: true,
       toolNames: expect.arrayContaining(["mock/echo"]),
     });
-    // An edit drops the old probe and checks the server again where it is assigned.
+    // An edit drops the old probe at once and checks the server again where it
+    // is assigned, after answering.
     expect(
       (await api("PATCH", "/mcp/mock", { command: "definitely-not-a-command-xyz" })).status,
     ).toBe(200);
     expect(await scoped()).toMatchObject({ connected: false, toolNames: [] });
+    await expect.poll(async () => (await scoped())?.error, { timeout: 20_000 }).toBeTruthy();
     expect(
       (await api("PATCH", "/mcp/mock", { command: launch.command, args: launch.args })).status,
     ).toBe(200);
-    expect((await scoped())?.connected).toBe(true);
+    await expect.poll(async () => (await scoped())?.connected, { timeout: 20_000 }).toBe(true);
+    // The All Projects view shows no status, so a check needs a project.
+    expect((await api("POST", "/mcp/mock/refresh")).status).toBe(400);
 
     const globalList = (await (await api("GET", "/mcp")).json()) as {
       servers: Array<{ id: string; connected: boolean; toolNames: string[] }>;

@@ -110,6 +110,9 @@ export class McpClient {
       // custom vars would otherwise drop them and the server couldn't launch.
       env: config.env ? { ...getDefaultEnvironment(), ...config.env } : undefined,
       cwd: config.cwd,
+      // Whatever the server prints (a secret, if it prints one) never reaches
+      // the backend's own stderr or log.
+      stderr: "ignore",
     });
     return await McpClient.connect(transport, "agent-deck", options);
   }

@@ -326,6 +326,7 @@ export function McpScreen() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [expandedToolServers, setExpandedToolServers] = useState<Set<string>>(() => new Set());
   const [reloading, setReloading] = useState(false);
+  const [checking, setChecking] = useState<Set<string>>(() => new Set());
   const [saving, setSaving] = useState(false);
   const [transport, setTransport] = useState<McpTransport>("stdio");
   const [inputMode, setInputMode] = useState<McpInputMode>("manual");
@@ -818,15 +819,24 @@ export function McpScreen() {
     }
   };
 
+  // A check runs for one project (the server refuses the All Projects view).
   const refresh = async (id: string): Promise<void> => {
+    if (!currentProjectId || checking.has(id)) return;
+    setChecking((current) => new Set(current).add(id));
     try {
-      const query = currentProjectId ? `?projectId=${encodeURIComponent(currentProjectId)}` : "";
-      const response = await fetch(`/mcp/${encodeURIComponent(id)}/refresh${query}`, {
-        method: "POST",
-      });
+      const response = await fetch(
+        `/mcp/${encodeURIComponent(id)}/refresh?projectId=${encodeURIComponent(currentProjectId)}`,
+        { method: "POST" },
+      );
       if (!response.ok) throw new Error(await response.text());
     } catch (err) {
       setError(String(err));
+    } finally {
+      setChecking((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
     }
     await load();
   };
@@ -1747,7 +1757,8 @@ export function McpScreen() {
                       </div>
                     ) : server.needsSignIn ? (
                       <div className="truncate text-detail text-text-muted">
-                        The server asks for a sign-in. Sign in from a session of this project.
+                        The check holds no token, so it cannot tell whether you signed in; sessions
+                        use your own sign-in.
                       </div>
                     ) : server.error ? (
                       <div
@@ -1779,16 +1790,21 @@ export function McpScreen() {
                     data-testid={`mcp-refresh-${server.id}`}
                     size="sm"
                     title={
-                      mcpEnabled
-                        ? "Check: connect, list tools, disconnect"
-                        : "MCP is paused; turn it on to check"
+                      !mcpEnabled
+                        ? "MCP is paused; turn it on to check"
+                        : !currentProjectId
+                          ? "Pick a project to check this server"
+                          : "Check: connect, list tools, disconnect"
                     }
                     aria-label={
-                      mcpEnabled
-                        ? `Check ${server.id}`
-                        : `Check ${server.id} unavailable while MCP is paused`
+                      !mcpEnabled
+                        ? `Check ${server.id} unavailable while MCP is paused`
+                        : !currentProjectId
+                          ? `Check ${server.id} unavailable without a project`
+                          : `Check ${server.id}`
                     }
-                    disabled={!mcpEnabled}
+                    aria-busy={checking.has(server.id)}
+                    disabled={!mcpEnabled || !currentProjectId || checking.has(server.id)}
                     icon={<RefreshCw />}
                     onClick={() => void refresh(server.id)}
                   />

@@ -44,10 +44,16 @@ const gitMocks = vi.hoisted(() => ({
   gitWorktreeRegistrations: vi.fn(),
 }));
 
-vi.mock("@agent-deck/resources", () => ({
-  listProjectFiles: resourceMocks.listProjectFiles,
-  scanPrompts: vi.fn(() => []),
-}));
+vi.mock("@agent-deck/resources", async () => {
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  return {
+    listProjectFiles: resourceMocks.listProjectFiles,
+    scanPrompts: vi.fn(() => []),
+    // The route resolves the owner's agent dir; keep it in the temp folder.
+    piAgentHome: () => join(tmpdir(), "deck-worktree-routes-agent"),
+  };
+});
 
 vi.mock("../src/git.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof GitModule>()),

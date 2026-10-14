@@ -8,8 +8,27 @@ import {
   startMockProvider,
   writeMockProviderExtension,
 } from "@agent-deck/testkit";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import type * as PiHost from "@agent-deck/pi-host";
 import { startServer } from "../src/index.ts";
+
+// Every generated extension's session and token, so the test can call the
+// bridge as a live child (and replay its token after teardown).
+const bridges = vi.hoisted(() => [] as Array<{ sessionId: string; token: string; child: boolean }>);
+vi.mock("@agent-deck/pi-host", async (importOriginal) => {
+  const original = await importOriginal<typeof PiHost>();
+  return {
+    ...original,
+    writeBridgeExtension: (options: Parameters<typeof original.writeBridgeExtension>[0]) => {
+      bridges.push({
+        sessionId: options.sessionId,
+        token: options.token,
+        child: options.tools.some((tool) => tool.name === "contact_supervisor"),
+      });
+      return original.writeBridgeExtension(options);
+    },
+  };
+});
 
 process.env.AGENT_DECK_TEST = "1";
 
@@ -30,6 +49,16 @@ it("scopes named child MCP calls, continuation and live policy to the parent pro
   // Runs once, after Pi received its tool list and before it calls the tool:
   // a stale generated extension must not bypass current app authorization.
   let revokeBeforeCall: (() => Promise<void>) | undefined;
+  // Calls the bridge as the live child once (forbidden tools, then the policy hook).
+  let bridgeUrl = "";
+  let childAuthorize: Record<string, unknown> | undefined;
+  let probeChildAccess = true;
+  const postBridge = (body: Record<string, unknown>) =>
+    fetch(bridgeUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
   const firstTurn = (body: { messages: Array<{ role: string }> }) => {
     const lastUser = body.messages.findLastIndex((message) => message.role === "user");
     return !body.messages.slice(lastUser + 1).some((message) => message.role === "tool");
@@ -38,6 +67,27 @@ it("scopes named child MCP calls, continuation and live policy to the parent pro
     beforeResponse: async (_lastUser, body) => {
       const revoke = revokeBeforeCall;
       const offered = JSON.stringify(body.tools ?? []).includes(`"${ECHO}"`);
+      if (probeChildAccess && offered && firstTurn(body)) {
+        probeChildAccess = false;
+        const child = bridges.findLast((entry) => entry.child)!;
+        const call = { sessionId: child.sessionId, token: child.token, toolCallId: "probe" };
+        for (const tool of [
+          "mcp__unlisted__echo",
+          "managed_subagent",
+          "__recall__",
+          "__prompt_audit__",
+        ]) {
+          expect((await postBridge({ ...call, tool, params: {} })).status).toBe(403);
+        }
+        childAuthorize = {
+          ...call,
+          tool: "__mcp_authorize__",
+          params: { serverId: "scoped-server", server: "scoped-server", toolName: ECHO },
+        };
+        const allowed = await postBridge(childAuthorize);
+        expect(allowed.status).toBe(200);
+        expect(await allowed.json()).toEqual({ allow: true });
+      }
       if (revoke && offered && firstTurn(body)) {
         revokeBeforeCall = undefined;
         await revoke();
@@ -56,6 +106,7 @@ it("scopes named child MCP calls, continuation and live policy to the parent pro
   let server: Awaited<ReturnType<typeof startServer>> | undefined;
   try {
     server = await startServer({ dataDir: path.join(root, "data") });
+    bridgeUrl = `http://127.0.0.1:${server.port}/bridge`;
     const api = async (route: string, body: unknown, method = "POST") => {
       const response = await fetch(`http://127.0.0.1:${server!.port}${route}`, {
         method,
@@ -144,6 +195,9 @@ it("scopes named child MCP calls, continuation and live policy to the parent pro
     expect(first.tools).toContain(ECHO);
     expect(JSON.stringify(first.requests)).toContain("PROJECT_A: child-sentinel");
     expect(JSON.stringify(first.requests)).not.toContain("PROJECT_B: child-sentinel");
+    // The Pi-owned run has exited: its token cannot be reused.
+    expect(childAuthorize).toBeDefined();
+    expect((await postBridge(childAuthorize!)).status).toBe(403);
     const continued = await run(parents[0]!, undefined, first.result.runId);
     expect(continued.result.runId).toBe(first.result.runId);
     expect(continued.tools).toContain(ECHO);

@@ -316,6 +316,12 @@ export function resolveLaunchResources(
             ...ctx.mcpAssignments.projectServerNames(project.id),
           ]
       : [];
+  // A broken catalog must not quietly start (or restart) a session with no MCP:
+  // refuse, so start and wake fail and a refresh keeps the running process.
+  if (mcpSnapshot && !mcpSnapshot.valid && requestedMcp.length > 0)
+    throw new LaunchResourceResolutionError(
+      "Global or project .pi/mcp.json is not valid JSON. Fix it before starting a session that uses MCP.",
+    );
   const configuredMcp = new Set(
     mcpSnapshot
       ? mcpSnapshot.valid

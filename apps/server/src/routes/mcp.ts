@@ -230,11 +230,16 @@ export function registerMcpRoutes(ctx: ServerContext): void {
       }),
   ]);
 
-  // A changed definition: drop its old probes and probe it again wherever it
-  // is assigned (probeMcp runs nothing elsewhere).
-  const reprobe = async (id: string): Promise<void> => {
+  // A changed definition: drop its old probes and probe it again wherever it is
+  // assigned (probeMcp runs nothing elsewhere, and one probe per distinct
+  // config), after the response: a save never waits for a server to answer.
+  const reprobe = (id: string): void => {
     ctx.forgetMcpProbes((_projectId, serverId) => serverId === id);
-    await Promise.all(projects.list().map((project) => ctx.probeMcp(project.id, id)));
+    void Promise.all(projects.list().map((project) => ctx.probeMcp(project.id, id)))
+      .then((probed) => {
+        if (probed.some(Boolean)) broadcast({ type: "resources_changed" });
+      })
+      .catch(() => {});
   };
 
   // Settings (policy, timeouts, references) are not secrets: they round-trip so
@@ -420,6 +425,12 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     try {
       // Durable assignment is authoritative and must land before runtime changes.
       defaultAssignedServerIds = mcpAssignments.setDefaultServer(id, parsed.data.enabled);
+      // An unassigned server's old check result must not come back on reassignment.
+      if (!parsed.data.enabled)
+        ctx.forgetMcpProbes(
+          (projectId, serverId) =>
+            serverId === id && !ctx.projectHasEffectiveMcpGrant(projectId, serverId),
+        );
     } catch (error) {
       return reply.code(500).send({
         code: "RESOURCE_WRITE_FAILED",
@@ -466,15 +477,18 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     // else's session would put your account in their mcp-auth.json.
     if (ctx.sharedServer && session.meta.createdBy?.id !== requestUser(request.raw)?.id)
       return reply.code(403).send({ error: "sign in from one of your own sessions" });
-    const name = ctx.nativeMcpNameFor(session.meta, id);
-    if (!name) return reply.code(404).send({ error: "this session does not use that MCP server" });
     // Resume a parked session first (getState spawns Pi if needed), so a session
-    // that cannot start answers here instead of after the detached prompt.
+    // that cannot start answers here instead of after the detached prompt, and
+    // the name comes from the spawn that will run the command (a parked session
+    // may wake with a newly assigned server).
     try {
       await session.getState();
     } catch (error) {
       return reply.code(502).send({ error: `The session could not start: ${String(error)}` });
     }
+    const meta = ctx.sessions.get(parsed.data.sessionId)?.meta ?? session.meta;
+    const name = ctx.nativeMcpNameFor(meta, id);
+    if (!name) return reply.code(404).send({ error: "this session does not use that MCP server" });
     // Not awaited: Pi answers an extension-command prompt only once the command
     // ends, i.e. after the user pasted the redirect URL, far past the RPC
     // timeout. A timeout is not recorded as a session failure.
@@ -547,7 +561,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
           : "The MCP server definition could not be saved.";
       return reply.code(400).send({ error: message });
     }
-    await reprobe(data.name);
+    reprobe(data.name);
     broadcast({ type: "resources_changed" });
     return reply.code(201).send({
       ok: true,
@@ -630,7 +644,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
           : "The MCP server definition could not be saved.";
       return reply.code(400).send({ error: message });
     }
-    await reprobe(id);
+    reprobe(id);
     broadcast({ type: "resources_changed" });
     return {
       ok: true,
@@ -715,23 +729,15 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     }
     const id = (request.params as { id: string }).id;
     const requested = (request.query as { projectId?: unknown }).projectId;
+    // One project per check: the All Projects view shows no status anyway, and
+    // a check there would start one probe per project.
+    if (requested === undefined)
+      return reply.code(400).send({ error: "Pick a project to check this server." });
     const scope = projectScope(requested);
-    if (requested !== undefined && !scope)
-      return reply.code(404).send({ error: "unknown project" });
-    const scopes = scope ? [scope] : projects.list().map((project) => project.id);
-    const probed = (
-      await Promise.all(
-        scopes.map(async (projectId) => ((await ctx.probeMcp(projectId, id)) ? projectId : [])),
-      )
-    ).flat();
-    if (probed.length === 0)
-      return scope
-        ? reply.code(404).send({ error: "unknown assigned MCP server" })
-        : reply.code(409).send({
-            error: "MCP server is not assigned to any project; assign it before checking.",
-          });
+    if (!scope) return reply.code(404).send({ error: "unknown project" });
+    if (!(await ctx.probeMcp(scope, id)))
+      return reply.code(404).send({ error: "unknown assigned MCP server" });
     broadcast({ type: "resources_changed" });
-    const servers = probed.map((projectId) => ({ id, ...ctx.mcpProbe(projectId, id) }));
-    return scope ? { server: servers[0] } : { servers };
+    return { server: { id, ...ctx.mcpProbe(scope, id) } };
   });
 }

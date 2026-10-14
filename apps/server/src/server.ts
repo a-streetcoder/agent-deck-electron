@@ -333,11 +333,12 @@ async function initServer(
       toolAllowlist,
     );
   };
-  // The Pi name a session's generated extension gave one server, for
-  // `/mcp login <name>`: from the spawn-time map (the last launch's name wins),
-  // recomputed only for a session launched before the map existed.
+  // The Pi name the session's current generated extension gave one server, for
+  // `/mcp login <name>`: from the latest spawn's map, recomputed only for a
+  // session spawned before that map existed.
   const nativeMcpNameFor = (meta: SessionMeta, serverId: string): string | undefined => {
-    if (meta.mcpServerNames) return storedMcpServerName(meta.mcpServerNames, serverId);
+    if (meta.mcpServerNamesCurrent)
+      return storedMcpServerName(meta.mcpServerNamesCurrent, serverId);
     if (!meta.projectId) return undefined;
     const list = nativeMcpFor(meta.projectId, mcpAllowlistForSession(meta));
     return [...list.idMap].find(([, id]) => id === serverId)?.[0];
@@ -478,10 +479,11 @@ async function initServer(
         .filter((spec) => delegationAllowed || !DELEGATION_TOOL_NAMES.has(spec.name));
       const native = scope ? nativeMcpFor(scope, mcpAllowlistForSession(meta)) : undefined;
       // The transcript maps Pi server names back to Agent Deck ids, merged so
-      // cells from earlier launches keep their label; persisted with the meta
-      // the spawn publishes.
+      // cells from earlier launches keep their label; sign-in uses this spawn's
+      // map alone. Both persist with the meta the spawn publishes.
       if (native?.idMap.size)
         meta.mcpServerNames = mergeMcpServerNames(meta.mcpServerNames, native.idMap);
+      meta.mcpServerNamesCurrent = Object.fromEntries(native?.idMap ?? []);
       return writeBridgeExtension({
         endpoint: bridgeAddress.endpoint,
         sessionId: meta.id,
@@ -1002,8 +1004,18 @@ async function initServer(
     call: { serverId: string; server: string; toolName: string },
   ) => {
     const child = childMcpAssignments.get(sessionId);
-    const projectId = child ? child.projectId : sessions.get(sessionId)?.meta.projectId;
+    const meta = child ? undefined : sessions.get(sessionId)?.meta;
+    const projectId = child ? child.projectId : meta?.projectId;
     const project = projects.find((candidate) => candidate.id === projectId);
+    // A named parent's `tools:` list is read live too, so narrowing it applies
+    // to the running session (a list with `mcp` grants every assigned server).
+    const parent = meta?.agentName ? resolveNamedAgent(meta.agentName, meta.projectId) : undefined;
+    const parentTools = parent?.status === "ok" ? parent.agent.tools : undefined;
+    const legacyGrant = child?.toolAllowlist
+      ? { tools: child.toolAllowlist, serverIds: child.serverIds }
+      : meta && parentTools && !parentTools.includes(LEGACY_MCP_GRANT)
+        ? { tools: parentTools, serverIds: mcpAllowlistForSession(meta) }
+        : undefined;
     return nativeMcpRefusal({
       enabled: mcpPolicy.enabled(),
       projectVisible: !!project && !project.hidden,
@@ -1011,9 +1023,7 @@ async function initServer(
         ? effectiveMcpConfigs(project.id).configs.find((config) => config.id === call.serverId)
         : undefined,
       assigned: mcpServerAllowedForSession(sessionId, call.serverId),
-      ...(child?.toolAllowlist
-        ? { legacyGrant: { tools: child.toolAllowlist, serverIds: child.serverIds } }
-        : {}),
+      ...(legacyGrant ? { legacyGrant } : {}),
       server: call.server,
       toolName: call.toolName,
     });
@@ -1049,16 +1059,38 @@ async function initServer(
   const mcpProbes = new Map<string, McpServerStatus>();
   const mcpProbeKey = (projectId: string, serverId: string): string =>
     JSON.stringify([projectId, serverId]);
-  const probeMcp = async (projectId: string, serverId: string): Promise<boolean> => {
+  // One probe per distinct effective config at a time, however many projects
+  // share it; shutdown waits for them (each is capped at 15 s).
+  const runningMcpProbes = new Map<string, Promise<McpServerStatus>>();
+  // Bumped by every invalidation: a probe that started before one is dropped.
+  let mcpProbeGeneration = 0;
+  const grantedMcpConfig = (projectId: string, serverId: string) => {
     const project = projects.find((item) => item.id === projectId);
-    const config = effectiveMcpConfigs(projectId).configs.find((item) => item.id === serverId);
     // Same trust grant as a launch: a definition is inert until assigned.
-    if (!mcpPolicy.enabled() || !project || project.hidden || !config) return false;
-    if (!projectHasEffectiveMcpGrant(projectId, serverId)) return false;
-    mcpProbes.set(mcpProbeKey(projectId, serverId), await probeMcpServer(config));
+    if (!mcpPolicy.enabled() || !project || project.hidden) return undefined;
+    if (!projectHasEffectiveMcpGrant(projectId, serverId)) return undefined;
+    return effectiveMcpConfigs(projectId).configs.find((item) => item.id === serverId);
+  };
+  const probeMcp = async (projectId: string, serverId: string): Promise<boolean> => {
+    const config = grantedMcpConfig(projectId, serverId);
+    if (!config) return false;
+    const configKey = JSON.stringify(config);
+    const generation = mcpProbeGeneration;
+    let running = runningMcpProbes.get(configKey);
+    if (!running) {
+      running = probeMcpServer(config).finally(() => runningMcpProbes.delete(configKey));
+      runningMcpProbes.set(configKey, running);
+    }
+    const status = await running;
+    // Keep it only if nothing was invalidated meanwhile and the definition and
+    // grant still match what was probed.
+    const current = grantedMcpConfig(projectId, serverId);
+    if (generation === mcpProbeGeneration && current && JSON.stringify(current) === configKey)
+      mcpProbes.set(mcpProbeKey(projectId, serverId), status);
     return true;
   };
   const forgetMcpProbes = (match: (projectId: string, serverId: string) => boolean): void => {
+    mcpProbeGeneration += 1;
     for (const key of mcpProbes.keys()) {
       const [projectId, serverId] = JSON.parse(key) as [string, string];
       if (match(projectId, serverId)) mcpProbes.delete(key);
@@ -1492,6 +1524,7 @@ async function initServer(
         await step(() => Promise.all([drainHttpRequests(), drainWebSocketOperations()]));
         // Catch a resume/rebind published after the first stopAll snapshot.
         await step(() => sessions.stopAll());
+        await step(() => Promise.allSettled([...runningMcpProbes.values()]));
         await step(() => closeWebSockets());
         // Deterministic terminal teardown (the sessions.stopAll() analogue):
         // socket-close teardown is fire-and-forget and terminal scopes are

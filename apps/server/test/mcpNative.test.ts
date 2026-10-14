@@ -189,14 +189,36 @@ describe("mergeMcpServerNames", () => {
     expect(mergeMcpServerNames(second, new Map([["acme", "acme-prod"]]))).toEqual(second);
     expect(mergeMcpServerNames(second, new Map([["docs", "docs"]]))).toEqual(second);
   });
+
+  it("orders keys by the latest launch", () => {
+    // {a-b, a_b} -> {a_b} -> {a-b, a_b}: a_b is re-inserted, so it comes last.
+    const first = mergeMcpServerNames(
+      undefined,
+      new Map([
+        ["a-b", "a-b"],
+        ["a_b_2", "a_b"],
+      ]),
+    );
+    const second = mergeMcpServerNames(first, new Map([["a_b", "a_b"]]));
+    const third = mergeMcpServerNames(
+      second,
+      new Map([
+        ["a-b", "a-b"],
+        ["a_b_2", "a_b"],
+      ]),
+    );
+    expect(Object.keys(third)).toEqual(["a_b", "a-b", "a_b_2"]);
+    expect(third).toEqual({ "a-b": "a-b", a_b: "a_b", a_b_2: "a_b" });
+  });
 });
 
 describe("storedMcpServerName", () => {
-  it("reverse-looks up the spawn-time map, latest name first, never a reused name", () => {
-    const stored = { my_docs: "my.docs", my_docs_2: "my.docs", acme: "" };
-    expect(storedMcpServerName(stored, "my.docs")).toBe("my_docs_2");
-    expect(storedMcpServerName(stored, "acme")).toBeUndefined();
-    expect(storedMcpServerName(stored, "")).toBeUndefined();
+  it("reverse-looks up one spawn's map", () => {
+    const current = { my_docs: "my.docs", acme: "acme-prod" };
+    expect(storedMcpServerName(current, "my.docs")).toBe("my_docs");
+    expect(storedMcpServerName(current, "acme-prod")).toBe("acme");
+    expect(storedMcpServerName(current, "gone")).toBeUndefined();
+    expect(storedMcpServerName(current, "")).toBeUndefined();
   });
 });
 
@@ -288,6 +310,26 @@ describe("nativeMcpRefusal", () => {
     expect(
       live({
         legacyGrant: { ...legacyGrant, serverIds: ["docs.v2", "docs_v2"] },
+        toolName: "mcp__docs_v2__get_page",
+      }),
+    ).toMatch(/not in this agent's tool list/);
+  });
+
+  it("holds a named parent to its live tools: server patterns and exact Pi names", () => {
+    const serverIds = ["docs.v2"];
+    const pattern = { tools: ["read", "mcp__docs_v2__*"], serverIds };
+    expect(live({ legacyGrant: pattern, toolName: "mcp__docs_v2__anything" })).toBeUndefined();
+    expect(live({ legacyGrant: pattern, toolName: "read_mcp_resource" })).toBeUndefined();
+    const exact = { tools: ["mcp__docs_v2__get_page"], serverIds };
+    expect(live({ legacyGrant: exact, toolName: "mcp__docs_v2__get_page" })).toBeUndefined();
+    // Narrowed to no MCP entry at all: refused.
+    expect(
+      live({ legacyGrant: { tools: ["read"], serverIds }, toolName: "mcp__docs_v2__get_page" }),
+    ).toMatch(/not in this agent's tool list/);
+    // A pattern for another server whose name shares the prefix grants nothing here.
+    expect(
+      live({
+        legacyGrant: { tools: ["mcp__docs__*"], serverIds },
         toolName: "mcp__docs_v2__get_page",
       }),
     ).toMatch(/not in this agent's tool list/);

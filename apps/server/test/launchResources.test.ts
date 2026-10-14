@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { projectMemoryDir } from "@agent-deck/memory";
 import { describe, expect, it } from "vitest";
-import { fingerprintLaunchResources, resolveLaunchResources } from "../src/launchResources.ts";
+import {
+  fingerprintLaunchResources,
+  LaunchResourceResolutionError,
+  resolveLaunchResources,
+} from "../src/launchResources.ts";
 import { resolveInstructionsFile } from "../src/routes/shared.ts";
 
 describe("MCP master launch policy", () => {
@@ -324,6 +328,7 @@ describe("MCP launch resource policy", () => {
     const root = mkdtempSync(path.join(tmpdir(), "deck-mcp-launch-"));
     const project = { id: "project", path: root, assignedMcpServers: ["explicit", "stale"] };
     let defaults = ["default", "stale"];
+    let catalogValid = true;
     const context = {
       projects: { find: () => project },
       settings: {
@@ -347,7 +352,7 @@ describe("MCP launch resource policy", () => {
         },
       }),
       effectiveMcpConfigs: () => ({
-        valid: true,
+        valid: catalogValid,
         configs: ["default", "explicit", "named"].map((id) => ({ id, command: "mock" })),
       }),
       enabledExtensionPaths: () => [],
@@ -384,6 +389,14 @@ describe("MCP launch resource policy", () => {
     expect(resolveLaunchResources(context, { projectId: project.id }, {}).fingerprint).not.toBe(
       before,
     );
+    // A broken catalog refuses a launch that asks for MCP instead of starting
+    // it with none; a launch that asks for none is unaffected.
+    catalogValid = false;
+    expect(() => resolveLaunchResources(context, { projectId: project.id }, {})).toThrow(
+      LaunchResourceResolutionError,
+    );
+    project.assignedMcpServers = [];
+    expect(resolveLaunchResources(context, { projectId: project.id }, {}).mcpServerIds).toEqual([]);
   });
 });
 

@@ -225,6 +225,8 @@ export interface McpServerStatus {
   error?: string;
 }
 
+/** A check is a status read, so it never waits longer than this (a server's own
+ * startupTimeoutMs can be an hour). */
 const MCP_PROBE_TIMEOUT_MS = 15_000;
 
 /**
@@ -241,7 +243,7 @@ export async function probeMcpServer(config: McpServerConfig): Promise<McpServer
     error,
   });
   if (config.blocked) return failed(config.blocked);
-  const timeoutMs = config.startupTimeoutMs ?? MCP_PROBE_TIMEOUT_MS;
+  const timeoutMs = Math.min(config.startupTimeoutMs ?? MCP_PROBE_TIMEOUT_MS, MCP_PROBE_TIMEOUT_MS);
   const options = { signal: AbortSignal.timeout(timeoutMs), timeoutMs };
   let client: McpClient | undefined;
   try {

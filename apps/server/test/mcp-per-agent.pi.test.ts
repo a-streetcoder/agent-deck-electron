@@ -11,7 +11,22 @@ import {
   type MockProviderServer,
 } from "@agent-deck/testkit";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type * as PiHost from "@agent-deck/pi-host";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
+
+// The latest bridge token per session, taken from the generated extension's
+// inputs, so a test can ask __mcp_authorize__ what the live policy says.
+const bridgeTokens = vi.hoisted(() => new Map<string, string>());
+vi.mock("@agent-deck/pi-host", async (importOriginal) => {
+  const original = await importOriginal<typeof PiHost>();
+  return {
+    ...original,
+    writeBridgeExtension: (options: Parameters<typeof original.writeBridgeExtension>[0]) => {
+      bridgeTokens.set(options.sessionId, options.token);
+      return original.writeBridgeExtension(options);
+    },
+  };
+});
 
 /**
  * Per-session MCP scoping (native explicit-assignment model): an agent that
@@ -86,6 +101,11 @@ beforeAll(async () => {
   );
   writeGlobalAgent(
     "mcp-legacy-allowlist",
+    "mcpServers: mock\ntools: read, mcp__mock__echo",
+    "You use the MCP echo tool.",
+  );
+  writeGlobalAgent(
+    "mcp-narrowed",
     "mcpServers: mock\ntools: read, mcp__mock__echo",
     "You use the MCP echo tool.",
   );
@@ -173,6 +193,74 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
       expect(toolResults(reqs)).toContain("mcp stdio echo: scoped");
     },
   );
+
+  const createNamed = async (agentName: string): Promise<string> => {
+    const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        startImmediately: true,
+        projectId,
+        agentName,
+        provider: MOCK_PROVIDER_ID,
+        model: MOCK_MODEL_ID,
+        extensions: [mockExt],
+        env,
+      }),
+    });
+    expect(response.status).toBe(201);
+    return ((await response.json()) as { session: { id: string } }).session.id;
+  };
+  // What the extension's policy hook would hear for mcp__mock__echo right now.
+  const authorize = async (sessionId: string) => {
+    const response = await fetch(`http://127.0.0.1:${server.port}/bridge`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        sessionId,
+        token: bridgeTokens.get(sessionId),
+        tool: "__mcp_authorize__",
+        toolCallId: "live-check",
+        params: { serverId: "mock", server: "mock", toolName: "mcp__mock__echo" },
+      }),
+    });
+    expect(response.status).toBe(200);
+    return (await response.json()) as { allow: boolean; reason?: string };
+  };
+
+  it("refuses a named parent's MCP call once its agent is disabled mid-session", async () => {
+    const sessionId = await createNamed("mcp-legacy-allowlist");
+    expect(await authorize(sessionId)).toEqual({ allow: true });
+    writeGlobalAgent(
+      "mcp-legacy-allowlist",
+      "disabled: true\nmcpServers: mock\ntools: read, mcp__mock__echo",
+      "You use the MCP echo tool.",
+    );
+    try {
+      expect(await authorize(sessionId)).toMatchObject({
+        allow: false,
+        reason: expect.stringContaining("no longer assigned"),
+      });
+    } finally {
+      writeGlobalAgent(
+        "mcp-legacy-allowlist",
+        "mcpServers: mock\ntools: read, mcp__mock__echo",
+        "You use the MCP echo tool.",
+      );
+      await server.sessions.destroy(sessionId);
+    }
+  });
+
+  it("applies a narrowed named-parent tools: list to the running session", async () => {
+    const sessionId = await createNamed("mcp-narrowed");
+    expect(await authorize(sessionId)).toEqual({ allow: true });
+    writeGlobalAgent("mcp-narrowed", "mcpServers: mock\ntools: read", "You use the MCP echo tool.");
+    expect(await authorize(sessionId)).toMatchObject({
+      allow: false,
+      reason: expect.stringContaining("not in this agent's tool list"),
+    });
+    await server.sessions.destroy(sessionId);
+  });
 
   it("hides all MCP tools from an agent that declares none (opt-in)", async () => {
     const reqs = await runSession("mcp-none");

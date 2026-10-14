@@ -1974,6 +1974,8 @@ describe("MCP project picker", () => {
     expect((screen.getByTestId("mcp-project-picker") as HTMLSelectElement).value).toBe("");
     expect(screen.queryByTestId("mcp-assign-remote")).toBeNull();
     expect(screen.queryByTestId("mcp-native-login-remote")).toBeNull();
+    // A check runs for one project, so it is off in the All Projects view.
+    expect((screen.getByTestId("mcp-refresh-remote") as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByTestId("mcp-trust-copy").textContent).toContain("Pick a project");
     expect(screen.getByTestId("mcp-trust-copy").textContent).toContain(
       "assigning it grants access",
@@ -2120,6 +2122,10 @@ describe("MCP project picker", () => {
     render(<McpScreen />);
     await screen.findByTestId("mcp-a-row");
     fireEvent.click(screen.getByTestId("mcp-refresh-a-row"));
+    // One check per server at a time.
+    await waitFor(() =>
+      expect((screen.getByTestId("mcp-refresh-a-row") as HTMLButtonElement).disabled).toBe(true),
+    );
     pickProject("beta");
     await screen.findByTestId("mcp-b-row");
     resolveRefresh(jsonResponse({ ok: true }));

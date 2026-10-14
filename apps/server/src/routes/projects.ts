@@ -353,6 +353,12 @@ export function registerProjectRoutes(ctx: ServerContext): void {
         ...(projectFieldsSaved ? { projectFieldsSaved: true } : {}),
       });
     }
+    // An unassigned server's old check result must not come back on reassignment.
+    if (parsed.data.assignedMcpServers !== undefined)
+      ctx.forgetMcpProbes(
+        (projectId, serverId) =>
+          projectId === id && !ctx.projectHasEffectiveMcpGrant(projectId, serverId),
+      );
     broadcast({ type: "resources_changed" });
     return { project: next };
   });
