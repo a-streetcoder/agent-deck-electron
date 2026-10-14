@@ -51,6 +51,9 @@ process.env.AGENT_DECK_MCP_SERVERS = JSON.stringify([
   server("alpha.one", "ALPHA"),
   server("beta"),
   server("gamma", "GAMMA"),
+  // Pi names twin_one and twin_one_2: an unassigned twin.one must not pass as twin_one.
+  server("twin.one", "TWIN-DOT"),
+  server("twin_one", "TWIN-UNDERSCORE"),
 ]);
 
 let mock: MockProviderServer;
@@ -159,5 +162,48 @@ describe("native MCP", () => {
     expect(results).toContain("ALPHA: child-one");
     expect(results).not.toContain("echo: child-two");
     expect(results).toContain("mcp__beta__echo");
+  });
+
+  it("refuses a call to a server unassigned after the session started (PI-03c)", async () => {
+    const assign = (ids: string[]) =>
+      fetch(`http://127.0.0.1:${deck.port}/projects/${projectId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ assignedMcpServers: ids }),
+      });
+    expect((await assign(["alpha.one", "beta", "twin.one", "twin_one"])).status).toBe(200);
+    const created = await fetch(`http://127.0.0.1:${deck.port}/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        startImmediately: true,
+        projectId,
+        provider: MOCK_PROVIDER_ID,
+        model: MOCK_MODEL_ID,
+        env: piEnv,
+      }),
+    });
+    expect(created.status).toBe(201);
+    const sessionId = ((await created.json()) as { session: { id: string } }).session.id;
+    // beta and twin.one stay in this Pi process's list; the live policy hook refuses them.
+    expect((await assign(["alpha.one", "twin_one"])).status).toBe(200);
+    plan = [
+      { name: "mcp__beta__echo", arguments: { message: "three" } },
+      { name: "mcp__twin_one__echo", arguments: { message: "dot" } },
+      { name: "mcp__twin_one_2__echo", arguments: { message: "underscore" } },
+      { name: "mcp__alpha_one__echo", arguments: { message: "four" } },
+    ];
+    const start = mock.requests.length;
+    await deck.sessions.get(sessionId)!.prompt("use the mcp echo tools again");
+    await deck.receipts.waitFor("idle", sessionId);
+    const requests = mock.requests.slice(start).filter((r) => toolNames(r).length > 0);
+    expect(toolNames(requests[0])).toContain("mcp__beta__echo");
+    const results = toolText(requests);
+    expect(results).toContain('MCP server \\"beta\\" is no longer assigned to this session.');
+    expect(results).not.toContain("echo: three");
+    expect(results).toContain('MCP server \\"twin_one\\" is no longer assigned to this session.');
+    expect(results).not.toContain("TWIN-DOT");
+    expect(results).toContain("TWIN-UNDERSCORE: underscore");
+    expect(results).toContain("ALPHA: four");
   });
 });

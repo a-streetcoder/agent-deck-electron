@@ -182,6 +182,11 @@ export interface ServerContext {
     release(): Promise<void>;
   }>;
   effectiveMcpConfigs(projectId: string): McpConfigSnapshot;
+  /** PI-03c: why a native MCP call or its result is refused right now, if it is. */
+  nativeMcpRefusal(
+    sessionId: string,
+    call: { serverId: string; server: string; toolName: string },
+  ): string | undefined;
   globalMcpConfigs(): McpConfigSnapshot;
   isMcpEnvOverride(id: string): boolean;
   oauthKey(scope: string, id: string): string;

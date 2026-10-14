@@ -91,10 +91,12 @@ export interface BridgeExtensionOptions {
    * extension via createMcpExtension with a fixed server list instead of
    * <agentDir>/mcp.json. Blocked tools are refused in tool_call; suppressed
    * tools have their result replaced in tool_result. Names are Pi's
-   * normalised `mcp__<server>__<tool>`.
+   * normalised `mcp__<server>__<tool>`. Every other `mcp__` call and result is
+   * checked live through the endpoint (tool `__mcp_authorize__`).
    */
   nativeMcp?: {
-    servers: Array<{ name: string; config: Record<string, unknown> }>;
+    /** `id` is the Agent Deck server id the policy hook sends back. */
+    servers: Array<{ name: string; id: string; config: Record<string, unknown> }>;
     blockedTools?: string[];
     suppressedTools?: string[];
   };
@@ -276,13 +278,64 @@ ${
             stderr: "pipe",
           }),
   })(pi);
-  pi.on("tool_call", (event) => {
-    if (blockedMcp.has(event.toolName)) return { block: true, reason: "Blocked by Agent Deck policy." };
-  });
-  pi.on("tool_result", (event) => {
-    if (suppressedMcp.has(event.toolName)) {
-      return { content: [{ type: "text", text: "Result withheld by Agent Deck policy." }], details: {}, isError: true };
+  // PI-03c: policy stays in Agent Deck. Every MCP call, resource tools
+  // included, asks the bridge (__mcp_authorize__, internal like __recall__)
+  // about the server id embedded here before it runs and again on its result;
+  // no answer counts as a refusal (fail closed). The owning server comes from
+  // the tool's namespace (Pi sets aliases: [server]), never from the name.
+  const MCP_RESOURCE_TOOLS = new Set(["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"]);
+  const isMcpCall = (name) => name.startsWith("mcp__") || MCP_RESOURCE_TOOLS.has(name);
+  const mcpRefusal = async (event, ctx) => {
+    const resource = MCP_RESOURCE_TOOLS.has(event.toolName);
+    const serverName = resource
+      ? event.input && event.input.server
+      : (pi.getAllTools().find((t) => t.name === event.toolName)?.namespace?.aliases ?? [])[0];
+    const entry = nativeMcp.servers.find((s) => s.name === serverName);
+    if (!entry) {
+      // A resource listing without a server would reach every server at once.
+      return { reason: resource
+        ? "Name one MCP server in the server argument: Agent Deck checks each server separately."
+        : "Agent Deck cannot tell which MCP server " + event.toolName + " belongs to." };
     }
+    const timeout = AbortSignal.timeout(10000);
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId, token, tool: "__mcp_authorize__", toolCallId: event.toolCallId, params: {
+          serverId: entry.id,
+          server: entry.name,
+          toolName: event.toolName,
+        } }),
+        signal: ctx && ctx.signal ? AbortSignal.any([ctx.signal, timeout]) : timeout,
+      });
+      if (!res.ok) return { reason: "Agent Deck policy check failed (" + res.status + ").", failed: true };
+      const data = await res.json();
+      return data && data.allow === true ? undefined : { reason: String((data && data.reason) || "Refused by Agent Deck policy.") };
+    } catch (err) {
+      return { reason: "Agent Deck policy check failed: " + String(err), failed: true };
+    }
+  };
+  pi.on("tool_call", async (event, ctx) => {
+    if (blockedMcp.has(event.toolName)) return { block: true, reason: "Blocked by Agent Deck policy." };
+    if (!isMcpCall(event.toolName)) return;
+    const refusal = await mcpRefusal(event, ctx);
+    if (refusal) return { block: true, reason: refusal.reason };
+  });
+  // The call already ran: withholding the result is all that is left when the
+  // policy changed meanwhile or the bridge cannot answer.
+  pi.on("tool_result", async (event, ctx) => {
+    let text;
+    if (suppressedMcp.has(event.toolName)) text = "Result withheld by Agent Deck policy.";
+    else if (isMcpCall(event.toolName)) {
+      const refusal = await mcpRefusal(event, ctx);
+      if (refusal) {
+        text = refusal.failed
+          ? "The call ran; its result was withheld because Agent Deck could not be reached. Do not repeat the call."
+          : "Result withheld by Agent Deck policy.";
+      }
+    }
+    if (text) return { content: [{ type: "text", text }], details: {}, isError: true };
   });
 `
     : ""
