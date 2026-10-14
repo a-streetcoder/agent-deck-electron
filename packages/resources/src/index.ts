@@ -141,7 +141,13 @@ export {
   type DiscoveryCandidate,
 } from "./discovery.ts";
 export { listProjectFiles, type ListProjectFilesOptions } from "./files.ts";
-export { listProviders, logoutProvider, type ProviderAuthInfo } from "./providers.ts";
+export {
+  API_KEY_ONLY_PROVIDERS,
+  listProviders,
+  logoutProvider,
+  providerCredentialType,
+  type ProviderAuthInfo,
+} from "./providers.ts";
 export {
   reconcileNeuralWattCatalog,
   type NeuralWattReconcileOptions,

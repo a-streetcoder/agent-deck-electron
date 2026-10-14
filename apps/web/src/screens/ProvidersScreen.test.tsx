@@ -115,3 +115,58 @@ describe("provider catalog refresh ordering", () => {
     expect(screen.queryByRole("button", { name: "Sign out of Provider A" })).toBeNull();
   });
 });
+
+describe("PRV-01 Anthropic is API key only", () => {
+  it("offers only the API key and says an old sign-in is not used", async () => {
+    // The server sends supportsOAuth false for anthropic even with a stored sign-in.
+    const anthropic = {
+      id: "anthropic",
+      name: "Anthropic",
+      configured: true,
+      signedIn: true,
+      supportsAPIKey: true,
+      supportsOAuth: false,
+      credentialType: "oauth",
+    };
+    vi.mocked(fetch).mockImplementation(async (input) =>
+      String(input) === "/runtime/providers"
+        ? jsonResponse({ providers: [anthropic] })
+        : jsonResponse({ loginId: "l1", events: [], status: "running" }),
+    );
+    render(<ProvidersScreen />);
+    expect((await screen.findByTestId("provider-oauth-unused-anthropic")).textContent).toContain(
+      "Your Anthropic sign-in is not used",
+    );
+    expect(screen.queryByText("Subscriptions")).toBeNull();
+    expect(screen.getByText("API key")).toBeTruthy();
+    fireEvent.click(document.querySelector<HTMLButtonElement>('[data-provider-id="anthropic"]')!);
+    expect(screen.queryByText("Use a subscription")).toBeNull();
+    await waitFor(() =>
+      expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+        "/runtime/providers/anthropic/login",
+        expect.objectContaining({ body: JSON.stringify({ authType: "api_key" }) }),
+      ),
+    );
+  });
+
+  it("shows no note for an API key credential", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        providers: [
+          {
+            id: "anthropic",
+            name: "Anthropic",
+            configured: true,
+            signedIn: true,
+            supportsAPIKey: true,
+            supportsOAuth: false,
+            credentialType: "api_key",
+          },
+        ],
+      }),
+    );
+    render(<ProvidersScreen />);
+    await screen.findByText("Anthropic");
+    expect(screen.queryByTestId("provider-oauth-unused-anthropic")).toBeNull();
+  });
+});

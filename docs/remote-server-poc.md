@@ -389,6 +389,18 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
   in the user's dir); when it is false the composer and the empty session view show a banner
   linking to Providers, and starting a session whose owner unlocks no model answers 409 (RPC
   `ok: false`) with "No model provider connected. Connect one under Settings > Providers."
+- **Claude (PRV-01).** Claude on a subscription goes through `claude-bridge` (pi-claude-bridge:
+  the real Claude Code, through the Agent SDK, under the host's Claude Code login), the route
+  Anthropic allows. Pi's own Anthropic OAuth sign-in is not used: with it Pi presents itself as
+  Claude Code, which Anthropic's consumer terms forbid and enforce with account bans. So the
+  Providers screen offers Anthropic with an API key only, `GET /runtime/providers` reports each
+  provider's `credentialType` (`api_key` or `oauth`, the stored entry winning over env as in Pi),
+  and `anthropic/*` models are listed and accepted only when the owner's Anthropic credential is
+  an API key (otherwise a 409 / RPC `ok: false` saying to add one). The picker shows one
+  "Claude" group: bridge models by plain name, API-key models as "<model> · API". An existing
+  Anthropic sign-in stays in `auth.json`, with a note on the Providers screen that it is unused;
+  sessions already on an `anthropic/*` OAuth model keep running. This applies on every server,
+  shared or not.
 - **Operator.** `AGENT_DECK_OPERATOR_EMAIL` maps the operator to the shared `~/.pi/agent`, so the
   existing sign-ins stay where they are with no file move. Sessions without an owner (created
   before identities existed, or on a loopback server), Doctor (its auth probe reads the agent

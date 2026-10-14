@@ -215,6 +215,45 @@ export function AgentChip({
   );
 }
 
+/** PRV-01: Claude shows once, under one "Claude" group. `claude-bridge` (the
+ * real Claude Code) is plain Claude; `anthropic` (only listed by the server with
+ * an API key) carries an "API" badge. Other providers keep their own group. */
+const CLAUDE_PROVIDERS = new Set(["claude-bridge", "anthropic"]);
+
+function modelGroup(provider: string): { key: string; label: string; logo: string } {
+  return CLAUDE_PROVIDERS.has(provider)
+    ? { key: "claude", label: "Claude", logo: "anthropic" }
+    : { key: provider, label: provider, logo: provider };
+}
+
+function modelLabel(provider: string | undefined, id: string): string {
+  return provider === "anthropic" ? `${id} · API` : id;
+}
+
+/** Groups by presentation group; in the Claude group each API entry follows its
+ * bridge twin, so the same model reads as "<model>" then "<model> · API". */
+function groupModels(models: PiModelInfo[]) {
+  const groups = new Map<string, { label: string; logo: string; models: PiModelInfo[] }>();
+  for (const model of models) {
+    const { key, label, logo } = modelGroup(model.provider);
+    const group = groups.get(key) ?? { label, logo, models: [] };
+    groups.set(key, group);
+    group.models.push(model);
+  }
+  const claude = groups.get("claude");
+  if (claude) {
+    const api = claude.models.filter((model) => model.provider === "anthropic");
+    const ordered = claude.models.filter((model) => model.provider !== "anthropic");
+    for (const model of api) {
+      const twin = ordered.findIndex((entry) => entry.id === model.id);
+      if (twin === -1) ordered.push(model);
+      else ordered.splice(twin + 1, 0, model);
+    }
+    claude.models = ordered;
+  }
+  return [...groups.entries()];
+}
+
 export function ModelChip({
   state,
   models,
@@ -233,11 +272,6 @@ export function ModelChip({
   }, [disabled]);
   const ownerLabel = useAppStore((s) => credentialsOwnerLabel(s.me, s.session?.createdBy));
 
-  const byProvider = new Map<string, PiModelInfo[]>();
-  for (const model of models) {
-    byProvider.set(model.provider, [...(byProvider.get(model.provider) ?? []), model]);
-  }
-
   return (
     <div className="relative" ref={ref}>
       <ControlButton
@@ -250,12 +284,12 @@ export function ModelChip({
         onClick={() => setOpen((v) => !v)}
       >
         {state?.provider ? (
-          <ProviderLogo providerId={state.provider} size={13} />
+          <ProviderLogo providerId={modelGroup(state.provider).logo} size={13} />
         ) : (
           <Cpu size={12} />
         )}
         <span className="max-w-[16ch] truncate" data-testid="model-chip-label">
-          {state?.modelId ?? "model"}
+          {state?.modelId ? modelLabel(state.provider, state.modelId) : "model"}
         </span>
         {ownerLabel ? (
           <span className="max-w-[24ch] truncate text-text-muted" data-testid="model-chip-owner">
@@ -271,16 +305,16 @@ export function ModelChip({
           aria-label="Model"
           className="absolute bottom-full left-0 z-20 mb-1.5 max-h-72 w-64 overflow-y-auto rounded-xl border border-border-strong bg-surface-elevated p-1.5 shadow-elevated"
         >
-          {[...byProvider.entries()].map(([provider, providerModels]) => (
-            <div key={provider}>
+          {groupModels(models).map(([key, group]) => (
+            <div key={key} data-testid={`model-group-${key}`}>
               <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1.5 text-micro font-medium text-text-muted">
-                <ProviderLogo providerId={provider} size={12} className="text-text-secondary" />
-                {provider}
+                <ProviderLogo providerId={group.logo} size={12} className="text-text-secondary" />
+                {group.label}
               </div>
-              {providerModels.map((model) => (
+              {group.models.map((model) => (
                 <ControlButton
                   key={`${model.provider}/${model.id}`}
-                  data-testid={`model-option-${model.id}`}
+                  data-testid={`model-option-${model.provider === "anthropic" ? "api-" : ""}${model.id}`}
                   className={cn(
                     "block w-full truncate rounded-md px-2 py-1 text-left text-detail",
                     "disabled:cursor-not-allowed disabled:opacity-40",
@@ -295,7 +329,7 @@ export function ModelChip({
                     onSelect(model);
                   }}
                 >
-                  {model.id}
+                  {modelLabel(model.provider, model.id)}
                 </ControlButton>
               ))}
             </div>

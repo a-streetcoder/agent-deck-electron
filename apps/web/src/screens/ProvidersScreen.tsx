@@ -23,6 +23,8 @@ interface ProviderEntry {
   signedIn: boolean;
   supportsAPIKey: boolean;
   supportsOAuth: boolean;
+  /** The credential Pi uses; "oauth" for an Anthropic sign-in that is no longer used. */
+  credentialType?: "api_key" | "oauth";
 }
 
 type AuthType = "api_key" | "oauth";
@@ -233,41 +235,55 @@ function ProviderGroup({
       <h3 className={cn(sectionHeaderClass, "mb-1 px-2 text-text-muted")}>{title}</h3>
       <div className="space-y-1" data-testid="provider-list">
         {providers.map((provider) => (
-          <div
-            key={provider.id}
-            className="flex items-center rounded-xl border border-border-subtle bg-surface-elevated px-3.5 py-2.5"
-          >
-            <ControlButton
-              data-provider-id={provider.id}
-              data-configured={provider.configured ? "true" : "false"}
-              className="flex min-w-0 flex-1 items-center gap-3 rounded-xl text-left"
-              disabled={disconnectingId !== null}
-              onClick={() => onSelect(provider)}
-            >
-              <ProviderLogo providerId={provider.id} size={20} className="shrink-0" />
-              <span className="min-w-0 flex-1 truncate text-label font-medium text-text-primary">
-                {provider.name}
-              </span>
-              {provider.configured ? (
-                <CheckCircle2 size={15} className="shrink-0 text-success" aria-label="Connected" />
-              ) : (
-                <ChevronRight size={14} className="shrink-0 text-text-muted" />
-              )}
-            </ControlButton>
-            {provider.signedIn ? (
-              <Button
-                type="button"
-                data-testid={`provider-signout-${provider.id}`}
-                size="sm"
-                variant="destructiveOutline"
-                leadingIcon={<LogOut size={12} aria-hidden />}
-                aria-label={`Sign out of ${provider.name}`}
-                title={`Sign out of ${provider.name} and remove its stored credentials`}
+          <div key={provider.id}>
+            <div className="flex items-center rounded-xl border border-border-subtle bg-surface-elevated px-3.5 py-2.5">
+              <ControlButton
+                data-provider-id={provider.id}
+                data-configured={provider.configured ? "true" : "false"}
+                className="flex min-w-0 flex-1 items-center gap-3 rounded-xl text-left"
                 disabled={disconnectingId !== null}
-                onClick={() => onSignOut(provider)}
+                onClick={() => onSelect(provider)}
               >
-                {disconnectingId === provider.id ? "Signing out…" : "Sign out"}
-              </Button>
+                <ProviderLogo providerId={provider.id} size={20} className="shrink-0" />
+                <span className="min-w-0 flex-1 truncate text-label font-medium text-text-primary">
+                  {provider.name}
+                </span>
+                {provider.configured ? (
+                  <CheckCircle2
+                    size={15}
+                    className="shrink-0 text-success"
+                    aria-label="Connected"
+                  />
+                ) : (
+                  <ChevronRight size={14} className="shrink-0 text-text-muted" />
+                )}
+              </ControlButton>
+              {provider.signedIn ? (
+                <Button
+                  type="button"
+                  data-testid={`provider-signout-${provider.id}`}
+                  size="sm"
+                  variant="destructiveOutline"
+                  leadingIcon={<LogOut size={12} aria-hidden />}
+                  aria-label={`Sign out of ${provider.name}`}
+                  title={`Sign out of ${provider.name} and remove its stored credentials`}
+                  disabled={disconnectingId !== null}
+                  onClick={() => onSignOut(provider)}
+                >
+                  {disconnectingId === provider.id ? "Signing out…" : "Sign out"}
+                </Button>
+              ) : null}
+            </div>
+            {/* PRV-01: the server offers Anthropic with an API key only; an old
+              sign-in stays in auth.json but no model uses it. */}
+            {provider.id === "anthropic" && provider.credentialType === "oauth" ? (
+              <p
+                data-testid="provider-oauth-unused-anthropic"
+                className="px-3.5 pt-1 text-caption text-text-muted"
+              >
+                Your Anthropic sign-in is not used: Claude runs through Claude Code. Add an API key
+                to use the Anthropic API.
+              </p>
             ) : null}
           </div>
         ))}

@@ -17,7 +17,12 @@ import { createSessionDraftGateway } from "../sessionDrafts.ts";
 import { requestUser } from "../trustedProxy.ts";
 import { coAuthorTrailers, gitIdentityEnv, withTrailers } from "../gitIdentity.ts";
 import { userRoots } from "../userAgentDirs.ts";
-import { listProjectFiles, piAgentHome } from "@agent-deck/resources";
+import {
+  API_KEY_ONLY_PROVIDERS,
+  listProjectFiles,
+  piAgentHome,
+  providerCredentialType,
+} from "@agent-deck/resources";
 import { z } from "zod";
 import {
   canonicalWorktreePath,
@@ -49,6 +54,10 @@ import { envDefaults, type ServerContext } from "../context.ts";
 import { HistoryActionCoordinator, HistoryActionError } from "../historyActions.ts";
 import { LaunchResourceResolutionError, resolveLaunchResources } from "../launchResources.ts";
 import { assembleSlashUniverseForSession } from "../slashUniverse.ts";
+
+/** PRV-01: the stable refusal for `anthropic/*` without an Anthropic API key. */
+const ANTHROPIC_NEEDS_API_KEY =
+  "Claude through the Anthropic sign-in is not used. Add an Anthropic API key under Settings > Providers, or pick the Claude model without the API badge.";
 
 const mergeLocks = new Set<string>();
 
@@ -263,8 +272,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   // SRV-11: a draft lists the models its OWNER's credentials unlock (the owner's
   // agent dir), since that is what the session will spawn with. models.json
   // stays the shared operator config.
-  async function draftModels(owner: UserIdentity | undefined) {
-    const runtime = await ModelRuntime.create({
+  function ownerRuntime(owner: UserIdentity | undefined) {
+    return ModelRuntime.create({
       authPath: nodePath.join(
         piAgentHome(userRoots(ctx.rootsFor(), owner, ctx.userAgentDirs)),
         "auth.json",
@@ -272,18 +281,38 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       modelsPath: nodePath.join(piAgentHome(ctx.rootsFor()), "models.json"),
       allowModelNetwork: false,
     });
+  }
+
+  // PRV-01: an API-key-only provider (anthropic) whose credential is an OAuth
+  // sign-in is not offered: Pi would impersonate Claude Code with it. Claude
+  // goes through claude-bridge instead. The credential stays in auth.json.
+  async function oauthOnlyProviders(runtime: ModelRuntime): Promise<Set<string>> {
+    const credentials = await runtime.listCredentials();
+    return new Set(
+      [...API_KEY_ONLY_PROVIDERS].filter(
+        (id) => providerCredentialType(runtime, id, credentials) === "oauth",
+      ),
+    );
+  }
+
+  async function draftModels(owner: UserIdentity | undefined) {
+    const runtime = await ownerRuntime(owner);
+    const refused = await oauthOnlyProviders(runtime);
     const disabled = new Set(settings.get().disabledModels);
-    const models: SessionModelInfo[] = (await runtime.getAvailable()).map((model) => ({
-      ...model,
-      supportedThinkingLevels: getSupportedThinkingLevels(model),
-      disabled: disabled.has(`${model.provider}:${model.id}`),
-    }));
+    const models: SessionModelInfo[] = (await runtime.getAvailable())
+      .filter((model) => !refused.has(model.provider))
+      .map((model) => ({
+        ...model,
+        supportedThinkingLevels: getSupportedThinkingLevels(model),
+        disabled: disabled.has(`${model.provider}:${model.id}`),
+      }));
     // Extension-defined providers can be selected after an explicit Models
     // refresh. Reuse that catalog without launching any process for this draft.
     // SRV-13: the catalog is the operator's discovery (anyone may refresh it), so
     // an owner only gets the models whose provider their own dir has auth for.
     for (const model of ctx.discoveredModels ?? []) {
       if (owner && !runtime.getProviderAuthStatus(model.provider).configured) continue;
+      if (refused.has(model.provider)) continue;
       if (!models.some((entry) => entry.provider === model.provider && entry.id === model.id)) {
         models.push({ ...model, disabled: disabled.has(`${model.provider}:${model.id}`) });
       }
@@ -312,7 +341,10 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const session = sessions.get(id);
     if (!session) return reply.status(404).send({ error: "unknown session" });
     try {
-      const models = await session.getAvailableModels();
+      const refused = await oauthOnlyProviders(await ownerRuntime(session.meta.createdBy));
+      const models = (await session.getAvailableModels()).filter(
+        (model) => !refused.has(model.provider),
+      );
       // Mark models the user hid from the picker (app-level, native "Disabled").
       const disabled = new Set(settings.get().disabledModels);
       return {
@@ -1876,8 +1908,11 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     broadcast,
     validateModel: async (provider, modelId, owner) => {
       const models = await ownerModels(owner);
-      if (!models.some((model) => model.provider === provider && model.id === modelId))
+      if (!models.some((model) => model.provider === provider && model.id === modelId)) {
+        if (API_KEY_ONLY_PROVIDERS.has(provider))
+          throw Object.assign(new Error(ANTHROPIC_NEEDS_API_KEY), { statusCode: 409 });
         throw new Error(`unknown model: ${provider}/${modelId}`);
+      }
     },
     launch: (draft) => {
       const config = draft.launchResourceConfig;

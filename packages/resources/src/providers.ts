@@ -11,6 +11,26 @@ export interface ProviderAuthInfo {
   signedIn: boolean;
   supportsAPIKey: boolean;
   supportsOAuth: boolean;
+  /** PRV-01: the credential Pi uses (a stored auth.json entry wins over env). */
+  credentialType?: "api_key" | "oauth";
+}
+
+/** PRV-01: Pi's Anthropic OAuth sign-in impersonates Claude Code, which
+ * Anthropic's consumer terms forbid. Claude goes through `claude-bridge`
+ * (the real Claude Code); `anthropic` is offered with an API key only. */
+export const API_KEY_ONLY_PROVIDERS = new Set(["anthropic"]);
+
+/** The kind of credential Pi resolves for a provider, following
+ * getProviderAuthStatus: runtime key, then the stored entry, then env/config. */
+export function providerCredentialType(
+  models: ModelRuntime,
+  providerId: string,
+  credentials: readonly { providerId: string; type: "api_key" | "oauth" }[],
+): "api_key" | "oauth" | undefined {
+  const status = models.getProviderAuthStatus(providerId);
+  if (!status.configured) return undefined;
+  if (status.source !== "stored") return "api_key";
+  return credentials.find((credential) => credential.providerId === providerId)?.type;
 }
 
 async function runtime(roots: ResourceRoots): Promise<ModelRuntime> {
@@ -38,7 +58,8 @@ export async function listProviders(roots: ResourceRoots): Promise<ProviderAuthI
         label: status.label,
         signedIn: stored.has(provider.id),
         supportsAPIKey: Boolean(provider.auth?.apiKey?.login),
-        supportsOAuth: Boolean(provider.auth?.oauth),
+        supportsOAuth: Boolean(provider.auth?.oauth) && !API_KEY_ONLY_PROVIDERS.has(provider.id),
+        credentialType: providerCredentialType(models, provider.id, credentials),
       };
     });
 }
