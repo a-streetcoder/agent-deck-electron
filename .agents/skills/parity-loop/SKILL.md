@@ -131,7 +131,6 @@ Agent Deck consolidates durable user-owned state onto the shared Syncr-owned eng
 - Where engine surface exists, consume it through the seam (`ctx.skillStore` for skills). Never call raw storage behind a seam or reimplement shipped engine capability; check the contract's N-API surface first.
 - Missing engine surface is not a blocker. Implement the behavior on the **Electron side**, behind a seam: one narrow store interface before all mutations, injected at server construction, typed domain shapes, typed failure codes, and one write path. Routes and renderer never reach past it. Follow `SkillStore` in `apps/server/src/skills/skillStore.ts`. Here “native implementation” means this Electron-side host implementation, never editing the read-only native Agent Deck repository.
 - Reads may remain host-side, following the scanner precedent. Runtime orchestration—assignment, streaming, process control, and worktrees—is never seam or sync material.
-- When a slice creates or extends a durable store, update `docs/sync-seams.md` in the same slice with the domain, interface/write path, status, and engine surface needed for a future lift. If new capability naturally belongs in the engine, also draft a short Syncr request following `docs/archive/syncr-requests/skill-engine-per-file-conflict-request.md`, then continue the Electron-side implementation without waiting.
 
 ## Quality and acceptance gate
 

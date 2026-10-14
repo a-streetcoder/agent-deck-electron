@@ -1,5 +1,7 @@
 # User-level sync seams — the host contract for lifting onto the shared engine
 
+> **Closed.** The lift posture below is closed under [ADR 0005](adr/0005-retire-skill-engine-addon.md): both of its implementation options retire the shared-engine lift, so no slice updates this file or drafts Syncr requests any more. The registry stays as history.
+
 How agent-deck builds **durable, user-owned state** so each domain can later be lifted onto the
 shared, Syncr-owned engine (`@a-streetcoder/skill-engine-native` today; its successors as the
 surface grows) without rewriting call sites. Companion to
