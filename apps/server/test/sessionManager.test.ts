@@ -3450,6 +3450,38 @@ describe("durable session attention", () => {
     );
   }, 20_000);
 
+  it("drops an MCP sign-in paste box Pi settled itself once the sign-in result arrives", async () => {
+    const { piHost } = makeFakePiHost();
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const params = makeParams({ receipts: new ReceiptBus(true) });
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+          yield* Effect.fork(rt.ingest);
+          const idle = params.receipts.waitFor("idle", params.meta.id);
+          yield* rt.prompt("mcp-signin-loopback");
+          yield* Effect.promise(() => idle);
+          expect((yield* rt.parkingState).pendingExtensionUi).toBe(false);
+        }),
+      ),
+    );
+  }, 20_000);
+
+  it("leaves no pending user turn after a prompt Pi handled as an extension command", async () => {
+    const { piHost } = makeFakePiHost();
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, makeParams());
+          yield* Effect.fork(rt.ingest);
+          yield* rt.prompt("/handled login docs");
+          // No agent run follows a handled command, so nothing would clear it.
+          expect(yield* rt.parkingState).toMatchObject({ pendingUserTurn: false });
+        }),
+      ),
+    );
+  }, 20_000);
+
   it("does not mark an explicitly aborted turn", async () => {
     const { piHost } = makeFakePiHost();
     await Effect.runPromise(

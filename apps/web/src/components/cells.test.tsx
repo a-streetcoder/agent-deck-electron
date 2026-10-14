@@ -821,3 +821,44 @@ describe("native MCP tool cell label", () => {
     expect(screen.getByText("acme_analytics_warehouse › query")).toBeTruthy();
   });
 });
+
+describe("notice cell (extension notify, PI-03d)", () => {
+  it("renders the MCP sign-in URL as a link that opens externally", () => {
+    const openExternal = vi.fn().mockResolvedValue(true);
+    window.agentDeck = { isElectron: true, openExternal } as never;
+    const url = "https://auth.example/authorize?state=s1";
+    render(
+      <CellView
+        cell={{
+          kind: "notice",
+          id: "notice-1",
+          message: `Sign in to MCP server "docs" in your browser:\n${url}`,
+          level: "info",
+        }}
+      />,
+    );
+    const link = screen.getByRole("link", { name: url });
+    expect(link.getAttribute("href")).toBe(url);
+    fireEvent.click(link);
+    expect(openExternal).toHaveBeenCalledWith(url);
+    expect(screen.getByTestId("notice-cell").textContent).toContain('MCP server "docs"');
+  });
+
+  it("keeps trailing punctuation out of the link", () => {
+    render(
+      <CellView
+        cell={{
+          kind: "notice",
+          id: "notice-2",
+          message: 'Open "https://a.example/x?y=1". (see https://b.example/doc)',
+          level: "warning",
+        }}
+      />,
+    );
+    const hrefs = screen.getAllByRole("link").map((link) => link.getAttribute("href"));
+    expect(hrefs).toEqual(["https://a.example/x?y=1", "https://b.example/doc"]);
+    expect(screen.getByTestId("notice-cell").textContent).toBe(
+      'Open "https://a.example/x?y=1". (see https://b.example/doc)',
+    );
+  });
+});

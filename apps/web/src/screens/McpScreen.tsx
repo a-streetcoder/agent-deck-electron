@@ -20,7 +20,7 @@ import { openExternal, revealResourceFile } from "@/lib/native";
 import { derivedMcpServerName, parseMcpConfigPaste } from "@agent-deck/domain";
 import { useAppStore } from "../state/store.ts";
 import { McpImportPanel } from "./McpImportPanel.tsx";
-import { updateProject } from "../state/wsBridge.ts";
+import { switchToSession, updateProject } from "../state/wsBridge.ts";
 
 /**
  * MCP screen (native Runtime → MCP): the configured MCP servers whose tools are
@@ -98,6 +98,8 @@ interface McpServer extends McpServerSettings {
   tools?: { name: string; description?: string }[];
   error?: string;
   auth?: McpAuth;
+  /** Pi can sign in to it: HTTP without a fixed Authorization header. */
+  oauth?: boolean;
   source?: "global" | "project" | "environment";
   provenance?: McpDefinitionProvenance;
   editable?: boolean;
@@ -336,9 +338,13 @@ function parseCallback(input: string, fallbackState: string): { code: string; st
 export function McpScreen() {
   const setError = useAppStore((state) => state.setError);
   const pushToast = useAppStore((state) => state.pushToast);
+  const setView = useAppStore((state) => state.setView);
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const projects = useAppStore((state) => state.projects);
   const sessionProjectId = useAppStore((state) => state.session?.projectId);
+  const activeSessionId = useAppStore((state) => state.session?.id);
+  const sessions = useAppStore((state) => state.sessions);
+  const me = useAppStore((state) => state.me);
   // Screen-local scope (same pattern as GitScreen): the global project selection
   // is cleared by session activation, which hid project-scoped auth and
   // assignment controls. undefined = follow the session; "" = no project.
@@ -353,6 +359,8 @@ export function McpScreen() {
   const selectedProject = availableProjects.find((project) => project.id === currentProjectId);
   const [servers, setServers] = useState<McpServer[]>([]);
   const [mcpEnabled, setMcpEnabled] = useState<boolean | null>(null);
+  // PI-03d: with native MCP, sign-in runs inside a live Pi session (`/mcp login`).
+  const [nativeMcp, setNativeMcp] = useState(false);
   const [policySaving, setPolicySaving] = useState(false);
   const [policyError, setPolicyError] = useState<string | null>(null);
   const [assignedServerIds, setAssignedServerIds] = useState<string[]>([]);
@@ -434,6 +442,7 @@ export function McpScreen() {
           const data = (await response.json()) as {
             servers: McpServer[];
             mcpEnabled?: boolean;
+            nativeMcp?: boolean;
             assignedServerIds?: string[];
             defaultAssignedServerIds?: string[];
             missingAssignedServerIds?: string[];
@@ -442,6 +451,7 @@ export function McpScreen() {
           if (seq !== loadSeq.current) return "superseded";
           setCatalogLoadFailed(false);
           setMcpEnabled(data.mcpEnabled !== false);
+          setNativeMcp(data.nativeMcp === true);
           setServers((current) => {
             if (!preserveRows) return data.servers;
             const incoming = new Map(data.servers.map((server) => [server.id, server]));
@@ -1051,6 +1061,8 @@ export function McpScreen() {
   // Begin OAuth: the backend starts its callback owner before returning the
   // authorization URL. The renderer opens it and shows waiting/manual fallback;
   // state parsed here is used only by that explicit manual completion path.
+  // PI-03f: remove beginLogin/submitCode/cancelLogin/logout, the login panel and
+  // the auth chip with the proxy; nativeLogin below is the native path.
   const beginLogin = async (id: string): Promise<void> => {
     if (pendingLoginRef.current === id) return;
     const projectId = currentProjectId ?? "";
@@ -1176,6 +1188,50 @@ export function McpScreen() {
       );
     } finally {
       requestAnimationFrame(() => loginButtonRefs.current.get(flow.id)?.focus());
+    }
+  };
+
+  // The session a native sign-in runs in: the open one if it belongs to this
+  // project, else the newest live one; on a shared server only your own (its Pi
+  // stores the token in its owner's agent dir).
+  const signInSession = (() => {
+    const live = sessions.filter(
+      (session) =>
+        session.projectId === currentProjectId &&
+        session.lifecycle !== "draft" &&
+        !session.endedAt &&
+        (!me || session.createdBy?.id === me.id),
+    );
+    return (
+      live.find((session) => session.id === activeSessionId) ??
+      live.sort((a, b) => (b.updatedAt ?? b.createdAt).localeCompare(a.updatedAt ?? a.createdAt))[0]
+    );
+  })();
+
+  const nativeLogin = async (id: string): Promise<void> => {
+    if (!signInSession) {
+      pushToast({
+        kind: "error",
+        message: `Sign-in to ${id} runs inside a live session: start or open a session in this project first.`,
+      });
+      return;
+    }
+    try {
+      const response = await fetch(`/mcp/${encodeURIComponent(id)}/native-login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId: signInSession.id }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      pushToast({
+        kind: "success",
+        message: `Sign-in requested in "${signInSession.title ?? "session"}": follow the link there, then paste the address the browser lands on if the 127.0.0.1 page does not load.`,
+      });
+      // The link and the paste box appear in that session's transcript.
+      setView("chat");
+      await switchToSession(signInSession);
+    } catch (err) {
+      setError(String(err));
     }
   };
 
@@ -1782,7 +1838,10 @@ export function McpScreen() {
               !currentProjectId ||
               defaultAssignedServerIds.includes(server.id) ||
               assignedServerIds.includes(server.id);
-            const auth = authPresentation(server, assignedHere);
+            // Native MCP: Pi owns the tokens, so the proxy's auth state does not apply.
+            const auth = nativeMcp ? undefined : authPresentation(server, assignedHere);
+            const nativeSignIn =
+              nativeMcp && currentProjectId !== null && assignedHere && server.oauth === true;
             return (
               <div key={server.id}>
                 <div
@@ -1955,6 +2014,23 @@ export function McpScreen() {
                       </div>
                     ) : null}
                   </div>
+                  {nativeSignIn ? (
+                    <Button
+                      data-testid={`mcp-native-login-${server.id}`}
+                      size="sm"
+                      variant="primary"
+                      leadingIcon={<LogIn size={12} />}
+                      title={
+                        signInSession
+                          ? `Sign in through "${signInSession.title ?? "session"}"`
+                          : "Start a session in this project first"
+                      }
+                      aria-label={`Sign in to ${server.id}`}
+                      onClick={() => void nativeLogin(server.id)}
+                    >
+                      Sign in
+                    </Button>
+                  ) : null}
                   {auth ? (
                     auth === "authorized" ? (
                       <Button

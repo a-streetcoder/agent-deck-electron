@@ -1232,6 +1232,9 @@ export const makeManagedSessionRuntime = (
           );
         }
         emit(domainEvent);
+        // Ingest closes a question Pi settled on its own (MCP sign-in paste box).
+        if (domainEvent.type === "question_answered")
+          pendingUiRequests.delete(domainEvent.cellId.slice("question-".length));
         if (domainEvent.type === "provider_retry") retryChanged = true;
         if (domainEvent.type === "cell_delta" && !sawFirstDelta) {
           sawFirstDelta = true;
@@ -1736,8 +1739,11 @@ export const makeManagedSessionRuntime = (
             // An accepted prompt is the authoritative recovery boundary for
             // failures that PRECEDE it. A later provider error in the same turn
             // will set failure again.
-            Effect.tap(() =>
+            Effect.tap((disposition) =>
               Effect.sync(() => {
+                // An extension command (`/mcp login`, ...) opens no turn: no
+                // agent run follows, so no idle would ever clear pendingUserTurn.
+                if (disposition === "handled") return;
                 latestUserPrompt = message;
                 const locked = lockTitleSource(titleSourceLocked, pendingTitleSource, titleSource);
                 titleSourceLocked = locked.locked;

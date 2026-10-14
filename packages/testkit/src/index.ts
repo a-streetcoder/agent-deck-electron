@@ -14,4 +14,8 @@ export {
   writeUiCardsExtension,
 } from "./extension.ts";
 export { mockMcpServerLaunch } from "./mockMcpServer.ts";
-export { startMockHttpMcpServer, type MockHttpMcpServer } from "./mockHttpMcpServer.ts";
+export {
+  MOCK_OAUTH_TOKEN,
+  startMockHttpMcpServer,
+  type MockHttpMcpServer,
+} from "./mockHttpMcpServer.ts";

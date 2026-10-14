@@ -3,7 +3,13 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "../state/store.ts";
+import { switchToSession } from "../state/wsBridge.ts";
 import { McpScreen } from "./McpScreen.tsx";
+
+vi.mock("../state/wsBridge.ts", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  switchToSession: vi.fn(async () => {}),
+}));
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -2388,6 +2394,67 @@ describe("MCP project picker", () => {
     fireEvent.click(screen.getByTestId("mcp-login-oauth"));
     await screen.findByTestId("mcp-login-panel-oauth");
     expect(logins).toEqual(["/mcp/oauth/login?projectId=beta"]);
+  });
+
+  it("with native MCP, Sign in sends /mcp login through a live session of the project (PI-03d)", async () => {
+    const live = { id: "live", projectId: "beta", createdAt: "2026-10-14", title: "Work" };
+    useAppStore.setState({
+      session: null,
+      projects: [alpha, beta],
+      sessions: [
+        live,
+        { id: "old", projectId: "beta", createdAt: "2026-10-01", endedAt: "x" },
+      ] as never,
+      toasts: [],
+    });
+    const posts: Array<[string, unknown]> = [];
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/mcp") return Promise.resolve(jsonResponse({ servers: [] }));
+      if (url === "/mcp?projectId=beta")
+        return Promise.resolve(
+          jsonResponse({
+            nativeMcp: true,
+            assignedServerIds: ["oauth", "keyed"],
+            servers: [
+              http("oauth", { oauth: true, auth: { status: "unauthenticated" } }),
+              // A fixed Authorization header: Pi offers no OAuth for it.
+              http("keyed", { oauth: false }),
+            ],
+          }),
+        );
+      if (url === "/mcp/oauth/native-login" && init?.method === "POST") {
+        posts.push([url, JSON.parse(String(init.body))]);
+        return Promise.resolve(jsonResponse({ ok: true }, 202));
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    render(<McpScreen />);
+    await screen.findByTestId("mcp-empty");
+    pickProject("beta");
+    fireEvent.click(await screen.findByTestId("mcp-native-login-oauth"));
+    // The proxy's loopback flow and auth chip do not apply to native MCP.
+    expect(screen.queryByTestId("mcp-login-oauth")).toBeNull();
+    expect(screen.queryByTestId("mcp-auth-oauth")).toBeNull();
+    await waitFor(() =>
+      expect(posts).toEqual([["/mcp/oauth/native-login", { sessionId: "live" }]]),
+    );
+    expect(screen.queryByTestId("mcp-native-login-keyed")).toBeNull();
+    await waitFor(() =>
+      expect(useAppStore.getState().toasts.at(-1)?.message).toContain(
+        'Sign-in requested in "Work"',
+      ),
+    );
+    // Opens the session, where the link and the paste box appear.
+    expect(vi.mocked(switchToSession)).toHaveBeenCalledWith(live);
+    expect(useAppStore.getState().view).toBe("chat");
+    act(() => useAppStore.setState({ view: "mcp" }));
+
+    // No live session in the project: say so instead of posting.
+    act(() => useAppStore.setState({ sessions: [] }));
+    fireEvent.click(screen.getByTestId("mcp-native-login-oauth"));
+    expect(useAppStore.getState().toasts.at(-1)?.message).toContain("runs inside a live session");
+    expect(posts).toHaveLength(1);
   });
 
   it("drops a reconnect's catalog refresh that completes after switching projects", async () => {

@@ -11,6 +11,7 @@ import {
 import {
   emptyTranscript,
   isAnswerableUiRequest,
+  openQuestion,
   reduceTranscript,
   type TranscriptState,
 } from "../src/transcript.ts";
@@ -550,6 +551,87 @@ describe("answerable UI requests (the pending/attention chokepoint)", () => {
     for (const method of ["setStatus", "notify", "widget", ""]) {
       expect(isAnswerableUiRequest(method)).toBe(false);
     }
+  });
+
+  it("shows a notify as a notice cell, so Pi's MCP sign-in URL reaches the user", () => {
+    const ingest = createIngestState();
+    const message =
+      'Sign in to MCP server "docs" in your browser:\nhttps://auth.example/authorize?state=s1';
+    const events = ingestPiEvent(ingest, {
+      type: "extension_ui_request",
+      id: "n-1",
+      method: "notify",
+      message,
+      notifyType: "info",
+    } as unknown as PiInboundEvent);
+    expect(events).toEqual([
+      { type: "cell_open", cell: { kind: "notice", id: "notice-n-1", message, level: "info" } },
+    ]);
+    // Not a question: it never counts as pending input.
+    expect(openQuestion(events.reduce(reduceTranscript, emptyTranscript()))).toBeNull();
+  });
+
+  it("also shows a notify without a URL (sign-in result or failure), keeping its level", () => {
+    const events = ingestPiEvent(createIngestState(), {
+      type: "extension_ui_request",
+      id: "n-2",
+      method: "notify",
+      message: "The redirect URL belongs to a different sign-in",
+      notifyType: "error",
+    } as unknown as PiInboundEvent);
+    expect(events).toEqual([
+      {
+        type: "cell_open",
+        cell: {
+          kind: "notice",
+          id: "notice-n-2",
+          message: "The redirect URL belongs to a different sign-in",
+          level: "error",
+        },
+      },
+    ]);
+  });
+
+  it("closes Pi's MCP sign-in paste box when the sign-in ends without it (loopback won, cancel, failure)", () => {
+    const run = (closing: { message: string; notifyType: string }) => {
+      const ingest = createIngestState();
+      const input = ingestPiEvent(ingest, {
+        type: "extension_ui_request",
+        id: "paste-1",
+        method: "input",
+        title:
+          'Waiting for sign-in to "docs". If the browser cannot reach this machine, paste the URL it was redirected to.',
+      } as unknown as PiInboundEvent);
+      const unrelated = ingestPiEvent(ingest, {
+        type: "extension_ui_request",
+        id: "n-0",
+        method: "notify",
+        message: "MCP servers need attention",
+        notifyType: "info",
+      } as unknown as PiInboundEvent);
+      const done = ingestPiEvent(ingest, {
+        type: "extension_ui_request",
+        id: "n-1",
+        method: "notify",
+        ...closing,
+      } as unknown as PiInboundEvent);
+      const state = [...input, ...unrelated, ...done].reduce(reduceTranscript, emptyTranscript());
+      return { unrelated, done, open: openQuestion(state) };
+    };
+    for (const closing of [
+      { message: 'Signed in to MCP server "docs" (3 tools).', notifyType: "info" },
+      { message: "Sign-in cancelled.", notifyType: "info" },
+      { message: "invalid_grant", notifyType: "error" },
+    ]) {
+      const { unrelated, done, open } = run(closing);
+      expect(unrelated.some((e) => e.type === "question_answered")).toBe(false);
+      expect(done).toContainEqual({ type: "question_answered", cellId: "question-paste-1" });
+      expect(open).toBeNull();
+    }
+    // Another server's success leaves this paste box open.
+    expect(
+      run({ message: 'Signed in to MCP server "other" (1 tools).', notifyType: "info" }).open,
+    ).not.toBeNull();
   });
 
   it("keeps a passive setStatus out of the transcript entirely", () => {

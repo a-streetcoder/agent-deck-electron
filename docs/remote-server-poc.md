@@ -406,6 +406,18 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
   Agent Deck does refuse a user dir whose `users`, `<hash>` or `agent` component, or whose
   `auth.json`, is a symlink or not a regular entry, so a planted alias cannot redirect a
   sign-in or a spawn.
+- **MCP sign-ins (native MCP, `AGENT_DECK_NATIVE_MCP=1`, PI-03d).** Pi keeps MCP OAuth tokens
+  in `<user agent dir>/mcp-auth.json`, which is not on the link list, so each user has their own
+  file (Pi writes it 0600 and puts its refresh locks beside it). Sign in from the MCP screen:
+  "Sign in" on an HTTP server sends `/mcp login <name>` to one of your own live sessions in that
+  project (none running: the screen says so). That session shows the sign-in link; open it,
+  sign in, and the browser lands on a `http://127.0.0.1:.../callback?...` page that does not
+  load on the shared server: copy that address into the session's input card. Tokens from the
+  proxy path under `<dataDir>/mcp-oauth` are not migrated: everyone signs in again.
+  Only a session's owner may run `/mcp` in it (the composer and the Sign in route refuse
+  anyone else, and sessions without an owner), since `/mcp login` and `/mcp logout` act on the
+  owner's tokens. The paste box of an owner's sign-in can still be answered by any viewer of
+  that session: accepted, the same trust boundary as prompting someone else's session.
 - **Limits.** The linked files are shared: one user's settings, model or MCP change applies to
   everyone. Pi locks `settings.json` and `trust.json` beside the link (`realpath: false`), so two
   users writing them at the same time are not locked against each other.
@@ -454,6 +466,13 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
   writable by design: `AWS_*` for `amazon-bedrock`, `GOOGLE_APPLICATION_CREDENTIALS` for
   `google-vertex`, and the Anthropic workload-identity names (`ANTHROPIC_IDENTITY_TOKEN_FILE`,
   `ANTHROPIC_FEDERATION_RULE_ID`, ...).
+- Every Pi `notify` shows as a notice in the session transcript, for every viewer of that
+  session. That includes Pi's MCP notices, such as "MCP servers need attention" on resume and
+  the stderr tail of a stdio MCP server that fails to start, which can carry whatever the
+  server printed (a secret, if it prints one).
+- Native MCP sign-in needs the paste step: the redirect page is Pi's loopback listener on the
+  VM, which the user's browser cannot reach. Pi only accepts the full address from the address
+  bar of that same sign-in (same origin, path and state).
 - Pi 1.0.3 renamed the Azure provider `azure-openai-responses` to `azure` (PI-04). Agent Deck
   maps the old id in its own state on load (app settings, session metadata) and renames the key
   in the shared and every per-user `auth.json` at startup. Pi's own `settings.json`

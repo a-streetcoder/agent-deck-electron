@@ -153,6 +153,17 @@ rl.on("line", (line) => {
         });
         break;
       }
+      if (cmd.message.startsWith("/handled")) {
+        // An extension command: Pi runs it and starts no agent run.
+        send({
+          id: cmd.id,
+          type: "response",
+          command: "prompt",
+          success: true,
+          data: { disposition: "handled" },
+        });
+        break;
+      }
       if (cmd.message === "error-before-ack") {
         // The provider error lands BEFORE the prompt acknowledgement. Real pi can
         // interleave this way on a loaded machine, and it is what CI kept hitting:
@@ -275,6 +286,25 @@ rl.on("line", (line) => {
             assistantMessageEvent: { type: "text_delta", delta: `chunk-${streamed} ` },
           });
         }, 15);
+      } else if (cmd.message === "mcp-signin-loopback") {
+        // Pi's /mcp login when its loopback callback wins: the paste box is
+        // settled inside Pi (no RPC event), only the result notify arrives.
+        send({
+          type: "extension_ui_request",
+          id: "paste-1",
+          method: "input",
+          title:
+            'Waiting for sign-in to "docs". If the browser cannot reach this machine, paste the URL it was redirected to.',
+        });
+        send({
+          type: "extension_ui_request",
+          id: "notify-1",
+          method: "notify",
+          message: 'Signed in to MCP server "docs" (1 tools).',
+          notifyType: "info",
+        });
+        send({ type: "agent_end", messages: [] });
+        streamTimer = setInterval(() => {}, 1000);
       } else if (cmd.message === "request-extension-ui") {
         send({
           type: "extension_ui_request",

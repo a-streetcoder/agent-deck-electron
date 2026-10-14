@@ -338,6 +338,14 @@ async function initServer(
       toolAllowlist,
     );
   };
+  // PI-03d: the Pi name a session's generated extension gives one server, for
+  // `/mcp login <name>` (recomputed; matches spawn unless assignments changed).
+  // PI-03e: use meta.mcpServerNames.
+  const nativeMcpNameFor = (meta: SessionMeta, serverId: string): string | undefined => {
+    if (!meta.projectId) return undefined;
+    const list = nativeMcpFor(meta.projectId, mcpAllowlistForSession(meta));
+    return [...list.idMap].find(([, id]) => id === serverId)?.[0];
+  };
   // Blocking supervisor requests awaiting an answer: requestId → resolver. The
   // child's contact_supervisor call is suspended on the /bridge request until
   // answerSupervisor() (via POST /supervisor/:id/answer) settles it.
@@ -999,6 +1007,12 @@ async function initServer(
   // OAuth provider whose URL-bound credentials persist under app data. A stable
   // env-overridable loopback callback is captured automatically; external
   // redirects and loopback bind failures retain the manual-code fallback.
+  // PI-03f: remove with the proxy. Native MCP (PI-03d) signs in through Pi
+  // (`/mcp login`, tokens in each owner's <agentDir>/mcp-auth.json); this
+  // coordinator only serves the flag-off proxy path. Goes: mcpOAuth.ts,
+  // mcpLoopback.ts, the /mcp/:id/login* and /logout routes, oauthKey and the
+  // credential cleanup in routes/projects.ts, packages/mcp oauth.ts, the
+  // McpScreen loopback sign-in UI, and <dataDir>/mcp-oauth.
   const mcpOAuthRedirect = resolveMcpOAuthRedirectMode(process.env.AGENT_DECK_MCP_OAUTH_REDIRECT);
   const mcpOAuth = new McpOAuthCoordinator({
     store: options.mcpOAuthStore ?? new FileMcpOAuthStore(nodePath.join(dataDir, "mcp-oauth")),
@@ -1527,6 +1541,8 @@ async function initServer(
     globalMcpConfigs,
     isMcpEnvOverride: (id) => mcpEnvConfigs.some((config) => config.id === id),
     oauthKey,
+    nativeMcp: nativeMcpEnabled,
+    nativeMcpNameFor,
     projectHasEffectiveMcpGrant: (projectId, serverId) => {
       const snapshot = effectiveMcpConfigs(projectId);
       if (!snapshot.valid || !snapshot.configs.some((config) => config.id === serverId))

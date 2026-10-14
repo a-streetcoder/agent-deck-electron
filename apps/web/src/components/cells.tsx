@@ -16,6 +16,7 @@ import {
 import {
   memoryToolCardLabel,
   type MemoryRecallCell,
+  type NoticeCell,
   type ProviderRetryCell,
   type QuestionCell,
   type SubagentCell,
@@ -55,7 +56,11 @@ import { ExpandedImageDialog } from "./composer/ExpandedImageDialog.tsx";
 import { PastePreviewDialog } from "./transcript/PastePreviewDialog.tsx";
 import { visibleAssistantBlocks } from "../lib/transcriptVisibility.ts";
 import { userDisplayName } from "../lib/userIdentity.ts";
-import { canRevealSubagentArtifacts, revealSubagentArtifacts } from "../lib/native.ts";
+import {
+  canRevealSubagentArtifacts,
+  openExternal,
+  revealSubagentArtifacts,
+} from "../lib/native.ts";
 import { ChildTranscriptDialog } from "./ChildTranscriptDialog.tsx";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { sectionHeaderClass } from "@/design-system/styles";
@@ -146,6 +151,44 @@ function ToolCellView({
           </div>
         }
       />
+    </div>
+  );
+}
+
+/** An extension notify (Pi's /mcp login sends its sign-in URL this way); http(s) URLs become links. */
+function NoticeCellView({ cell }: { cell: NoticeCell }) {
+  const tone =
+    cell.level === "error"
+      ? "border-danger/30 bg-danger/5"
+      : cell.level === "warning"
+        ? "border-warning/30 bg-warning/5"
+        : "border-border-subtle bg-surface";
+  return (
+    <div
+      data-testid="notice-cell"
+      role={cell.level === "error" ? "alert" : "status"}
+      className={`whitespace-pre-wrap break-all rounded-lg border px-3 py-2 text-body text-text-secondary ${tone}`}
+    >
+      {cell.message.split(/(https?:\/\/\S+)/).map((part, i) => {
+        if (i % 2 === 0) return part;
+        // Sentence punctuation after a URL is not part of it.
+        const url = part.replace(/[)\].,;:!?"'>]+$/, "");
+        return (
+          <span key={i}>
+            <a
+              href={url}
+              className="text-accent underline"
+              onClick={(event) => {
+                event.preventDefault();
+                void openExternal(url);
+              }}
+            >
+              {url}
+            </a>
+            {part.slice(url.length)}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -946,6 +989,8 @@ export function CellView({
       return <SupervisorQuestionCellView cell={cell} />;
     case "question":
       return <QuestionCellView cell={cell} />;
+    case "notice":
+      return <NoticeCellView cell={cell} />;
     case "ask_user":
       return <AskUserDecisionCard cell={cell} />;
   }

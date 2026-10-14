@@ -376,6 +376,22 @@ export function createRpcConnection(deps: {
       return;
     }
 
+    // PI-03d: `/mcp login|logout` act on the session OWNER's mcp-auth.json, so on
+    // a shared server only the owner may run /mcp in a session.
+    if (
+      deps.user &&
+      (request.type === "prompt" || request.type === "steer" || request.type === "follow_up") &&
+      /^\/mcp(\s|$)/.test(request.message.trimStart())
+    ) {
+      const meta = sessions.get(request.sessionId)?.meta ?? deps.drafts?.find(request.sessionId);
+      if (meta?.createdBy?.id !== deps.user.id) {
+        replyError(
+          "Only the session owner can run /mcp here: it signs in or out with the owner's MCP tokens.",
+        );
+        return;
+      }
+    }
+
     // A draft is durable metadata, not a fake running Pi session. Only a first
     // prompt may allocate its runtime and checkout; inspecting or configuring
     // one must remain process-free, including after a server restart.

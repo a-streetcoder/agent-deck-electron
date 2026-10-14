@@ -235,7 +235,9 @@ export interface PiHostHandle {
     message: string,
     images?: PiCommand<"prompt">["images"],
     streamingBehavior?: PiCommand<"prompt">["streamingBehavior"],
-  ) => Effect.Effect<void, PiRequestError>;
+    /** Pi's disposition: "handled" means an extension command (or input
+     * handler) took the text and no agent run starts. */
+  ) => Effect.Effect<string | undefined, PiRequestError>;
   readonly steer: (message: string) => Effect.Effect<void, PiRequestError>;
   readonly followUp: (message: string) => Effect.Effect<void, PiRequestError>;
   /** Ask pi to stop the current turn (it stays alive and answers with agent_end). */
@@ -433,7 +435,10 @@ export const spawnPiProcess = (
           pid: Effect.sync(() => Option.fromNullable(proc.pid)),
           stderr: Effect.sync(() => proc.stderr),
           prompt: (message, images, streamingBehavior) =>
-            Effect.asVoid(request({ type: "prompt", message, images, streamingBehavior })),
+            Effect.map(
+              request({ type: "prompt", message, images, streamingBehavior }),
+              (data) => (data as { disposition?: string } | undefined)?.disposition,
+            ),
           steer: (message) => Effect.asVoid(request({ type: "steer", message })),
           followUp: (message) => Effect.asVoid(request({ type: "follow_up", message })),
           abort: Effect.asVoid(request({ type: "abort" })),
