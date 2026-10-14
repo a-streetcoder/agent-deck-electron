@@ -288,6 +288,20 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     return models;
   }
 
+  // SRV-13: an owner (shared server) whose credentials unlock no model at all
+  // gets one stable, actionable message instead of `unknown model` or Pi's
+  // missing-API-key error after the spawn.
+  async function ownerModels(owner: UserIdentity | undefined) {
+    const models = await draftModels(owner);
+    if (owner && models.length === 0) {
+      throw Object.assign(
+        new Error("No model provider connected. Connect one under Settings > Providers."),
+        { statusCode: 409 },
+      );
+    }
+    return models;
+  }
+
   fastify.get("/sessions/:id/models", async (request, reply) => {
     const { id } = request.params as { id: string };
     const draft = ctx.sessionDrafts?.find(id);
@@ -1593,6 +1607,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         });
       },
     };
+    // Draft start and immediate start: refuse before any worktree or spawn.
+    await ownerModels(draft?.createdBy ?? createdBy);
     const defaults = envDefaults();
     let cwd = body.cwd ?? defaults.cwd ?? process.cwd();
     let project: ProjectMeta | undefined;
@@ -1856,7 +1872,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     sessions,
     broadcast,
     validateModel: async (provider, modelId, owner) => {
-      const models = await draftModels(owner);
+      const models = await ownerModels(owner);
       if (!models.some((model) => model.provider === provider && model.id === modelId))
         throw new Error(`unknown model: ${provider}/${modelId}`);
     },

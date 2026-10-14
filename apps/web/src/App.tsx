@@ -13,6 +13,7 @@ import { CommandPalette } from "./components/CommandPalette.tsx";
 import { KeybindingsEditor } from "./components/KeybindingsEditor.tsx";
 import { DeckPanel } from "./components/DeckPanel.tsx";
 import { OnboardingOverlay } from "./components/OnboardingOverlay.tsx";
+import { ProviderMissingBanner } from "./components/ProviderMissingBanner.tsx";
 import { TabbedPane } from "./components/workspace/TabbedPane.tsx";
 import { ResizeHandle, useResizable } from "./components/common/Resizable.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
@@ -86,6 +87,7 @@ function ChatColumn() {
         </>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto p-6" data-testid="no-active-session">
+          <ProviderMissingBanner />
           <AppEmptyState
             layout="fill"
             className="min-h-48"

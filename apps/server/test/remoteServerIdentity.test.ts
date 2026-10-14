@@ -111,13 +111,13 @@ describe("trusted proxy on the HTTP surface", () => {
 
   it("reports the verified user on /me (header or Access cookie)", async () => {
     const viaHeader = await fetch(endpoint("/me"), { headers: ale });
-    expect(await viaHeader.json()).toEqual({
+    expect(await viaHeader.json()).toMatchObject({
       user: { id: "ale@example.com", email: "ale@example.com", name: "Ale" },
     });
     const viaCookie = await fetch(endpoint("/me"), {
       headers: { cookie: `CF_Authorization=${assertionFor("andrea@example.com")}` },
     });
-    expect(await viaCookie.json()).toEqual({
+    expect(await viaCookie.json()).toMatchObject({
       user: { id: "andrea@example.com", email: "andrea@example.com" },
     });
   });
@@ -282,6 +282,71 @@ describe.skipIf(!canSymlink)("SRV-11 per-user provider credentials on a shared s
     expect((await post(`${route}/cancel`, andrea, {})).status).toBe(404);
     expect((await fetch(endpoint(route), { headers: ale })).status).toBe(200);
     expect((await post(`${route}/cancel`, ale, {})).status).toBe(200);
+  });
+});
+
+describe.skipIf(!canSymlink)("SRV-13 no provider connected on a shared server", () => {
+  const andrea = { "cf-access-jwt-assertion": assertionFor("andrea@example.com") };
+  const userAuth = (email: string) =>
+    path.join(userAgentDir(realpathSync(dataDir), email), "auth.json");
+  const NO_PROVIDER = "No model provider connected. Connect one under Settings > Providers.";
+  const me = async (headers: Record<string, string>) =>
+    (
+      (await (await fetch(endpoint("/me"), { headers })).json()) as {
+        user: { providersConnected: boolean };
+      }
+    ).user.providersConnected;
+  const createSession = (headers: Record<string, string>, startImmediately: boolean) =>
+    fetch(endpoint("/sessions"), {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ cwd: dataDir, startImmediately }),
+    });
+
+  it("reports providersConnected per user on /me", async () => {
+    await me(ale); // creates both user dirs
+    await me(andrea);
+    writeFileSync(
+      userAuth("ale@example.com"),
+      JSON.stringify({ anthropic: { type: "api_key", key: "ale-own" } }),
+    );
+    writeFileSync(userAuth("andrea@example.com"), "{}");
+    expect(await me(ale)).toBe(true);
+    expect(await me(andrea)).toBe(false);
+  });
+
+  it("refuses a start by a user with no provider, on REST and RPC", async () => {
+    const immediate = await createSession(andrea, true);
+    expect(immediate.status).toBe(409);
+    expect(await immediate.json()).toEqual({ error: NO_PROVIDER });
+
+    const created = await createSession(andrea, false);
+    expect(created.status).toBe(201);
+    const { session } = (await created.json()) as { session: { id: string } };
+    const reply = await new Promise<{ ok: boolean; error?: string }>((resolve, reject) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${server.port}/rpc`, { headers: andrea });
+      socket.on("open", () =>
+        socket.send(
+          JSON.stringify({
+            id: 7,
+            request: { type: "prompt", sessionId: session.id, message: "hello" },
+          }),
+        ),
+      );
+      socket.on("message", (raw) => {
+        const frame = JSON.parse(raw.toString()) as {
+          kind: string;
+          id?: number;
+          ok: boolean;
+          error?: string;
+        };
+        if (frame.kind !== "reply" || frame.id !== 7) return;
+        socket.close();
+        resolve(frame);
+      });
+      socket.on("error", reject);
+    });
+    expect(reply).toMatchObject({ ok: false, error: NO_PROVIDER });
   });
 });
 

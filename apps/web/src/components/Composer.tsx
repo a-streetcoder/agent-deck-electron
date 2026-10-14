@@ -70,6 +70,7 @@ import {
 } from "../lib/elementContext.ts";
 import { ComposerPendingUserInput } from "./composer/ComposerPendingUserInput.tsx";
 import { FileTagChips } from "./composer/FileTagChips.tsx";
+import { ProviderMissingBanner } from "./ProviderMissingBanner.tsx";
 import { ExpandedImageDialog } from "./composer/ExpandedImageDialog.tsx";
 import { parseFileMentions, removeFileMention } from "../lib/fileMentions.ts";
 import { buildExpandedImagePreview } from "../lib/expandedImage.ts";
@@ -891,6 +892,7 @@ export function Composer() {
 
   return (
     <div className="px-6 pb-5 pt-2">
+      <ProviderMissingBanner />
       <div
         className={`relative rounded-3xl border bg-surface-elevated shadow-card ${dropActive ? "border-accent ring-2 ring-accent/40" : "border-border-subtle"}`}
         data-testid="composer-drop-target"

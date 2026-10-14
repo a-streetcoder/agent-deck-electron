@@ -1,6 +1,6 @@
 ---
 id: ade-vdes
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-14T19:20:10Z
@@ -26,3 +26,13 @@ GUARDRAILS: checkout mirrored live to the VM by Syncthing; never git checkout/sw
 ## Acceptance Criteria
 
 Route test: with two identities, `/me` reports providersConnected true for the user whose auth.json has a credential and false for the other; starting a draft as the user with no provider returns the stable message (REST 409 and RPC ok:false). Web test: the banner renders when me.providersConnected is false and not when true or when me is null; the button navigates to Providers. Live check by the architect: the owner's `/me` through the tunnel reports true.
+
+## Notes
+
+**2026-10-14T19:26:43Z**
+
+Implemented. Server: GET /me adds user.providersConnected (listProviders on userRoots, signedIn||configured; best-effort, field omitted if the agent dir check throws so /me never loses the identity). routes/sessions.ts: ownerModels(owner) throws 409 'No model provider connected. Connect one under Settings > Providers.' when an owner has zero models; used by validateModel and at the top of launchSession (covers draft start via RPC prompt and REST POST /sessions startImmediately). Web: ProviderMissingBanner (Composer + App no-active-session), CurrentUser.providersConnected?, refreshMe on resources_changed when me is set. Docs: Credentials bullet + /me shape. Tests: remoteServerIdentity.test.ts 14 passed / 4 skipped (new SRV-13 block is skipIf(!canSymlink), skipped on this Windows box; verified via a temporary operator-email variant, 2/2 passed, file deleted); ProviderMissingBanner.test.tsx 2/2; TerminalDrawer 2/2; Composer.test.tsx 8/8. tsc server+web clean, eslint+prettier clean. Deviations: existing /me test assertions loosened toEqual->toMatchObject; no REST draft-start route exists, so REST 409 is exercised through POST /sessions startImmediately.
+
+**2026-10-14T19:27:33Z**
+
+2026-10-14 architect: Linux run on the VM remoteServerIdentity 18/18 (the two SRV-13 cases included). Ponytail: accepted (one flag on /me, one ownerModels guard reused by validateModel and launchSession, one banner in two places). Known: the composer prefixes the server text with its usual "Not acknowledged" line; a provider configured only through server env counts as connected.

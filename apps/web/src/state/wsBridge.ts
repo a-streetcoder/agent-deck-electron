@@ -783,6 +783,8 @@ function handleMessage(message: ServerMessage): void {
       break;
     case "resources_changed":
       store.bumpResourcesVersion();
+      // SRV-13: a provider sign-in or sign-out changes /me's providersConnected.
+      if (store.me) void refreshMe();
       break;
     case "session_meta":
       attentionMetaGeneration.set(

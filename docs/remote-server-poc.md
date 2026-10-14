@@ -38,7 +38,7 @@ unchanged and mutually exclusive with `AGENT_DECK_REMOTE_SERVER_URL`.
 
 ## Server surface
 
-- `GET /me` returns `{ "user": { "id", "email", "name"? } }`, or `{ "user": null }` when the
+- `GET /me` returns `{ "user": { "id", "email", "name"?, "providersConnected"? } }`, or `{ "user": null }` when the
   proxy mode is off. The web UI calls it at bootstrap for "Signed in as".
 - `GET /fs/dirs?path=…` lists the subfolders of a server directory (`{ root, path, parent, dirs }`),
   confined to `AGENT_DECK_PROJECT_ROOT`, directories only, hidden folders skipped, symlinks never
@@ -385,6 +385,10 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
 - **Draft model discovery is scoped to the draft OWNER**, not to whoever is looking: a draft
   lists, and accepts, the models its owner's credentials unlock, because those are the
   credentials the session will spawn with.
+- **No provider yet.** `GET /me` adds `providersConnected` (any provider signed in or configured
+  in the user's dir); when it is false the composer and the empty session view show a banner
+  linking to Providers, and starting a session whose owner unlocks no model answers 409 (RPC
+  `ok: false`) with "No model provider connected. Connect one under Settings > Providers."
 - **Operator.** `AGENT_DECK_OPERATOR_EMAIL` maps the operator to the shared `~/.pi/agent`, so the
   existing sign-ins stay where they are with no file move. Sessions without an owner (created
   before identities existed, or on a loopback server), Doctor (it reads

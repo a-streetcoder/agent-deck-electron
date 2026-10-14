@@ -17,6 +17,7 @@ import {
   readMcpServerCatalog,
   resolveCodexPluginSkillRefs,
   scanAgents,
+  listProviders,
   runtimeEnvFiles,
   scanEnv,
   scanExtensions,
@@ -106,7 +107,7 @@ import { forkSessionAttachmentStores } from "./sessionAttachmentLifecycle.ts";
 import { SessionPasteStore } from "./sessionPastes.ts";
 import { SessionAuthorStore } from "./sessionAuthors.ts";
 import { GitIdentityMap } from "./gitIdentity.ts";
-import { UserAgentDirs } from "./userAgentDirs.ts";
+import { UserAgentDirs, userRoots } from "./userAgentDirs.ts";
 import {
   authenticateProxiedRequest,
   CloudflareAccessVerifier,
@@ -1186,12 +1187,28 @@ async function initServer(
     });
   }
   // Who the server believes the caller is. `null` on a single-user loopback server.
+  // SRV-13: `providersConnected` says whether the caller's own agent dir has any
+  // signed-in or configured provider, so the web can warn before a start fails.
   fastify.get("/me", async (request) => {
     const user = requestUser(request.raw);
+    if (!user) return { user: null };
+    // Best-effort: a failing agent dir must not hide the identity (the web
+    // would then treat the server as loopback); the field is just omitted.
+    let providersConnected: boolean | undefined;
+    try {
+      providersConnected = (await listProviders(userRoots(rootsFor(), user, userAgentDirs))).some(
+        (provider) => provider.signedIn || provider.configured,
+      );
+    } catch (error) {
+      request.log.warn({ err: error }, "providersConnected check failed");
+    }
     return {
-      user: user
-        ? { id: user.id, email: user.email, ...(user.name ? { name: user.name } : {}) }
-        : null,
+      user: {
+        id: user.id,
+        email: user.email,
+        ...(user.name ? { name: user.name } : {}),
+        ...(providersConnected === undefined ? {} : { providersConnected }),
+      },
     };
   });
   const drainHttpRequests = (): Promise<void> => {

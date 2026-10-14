@@ -252,6 +252,8 @@ export interface CurrentUser {
   id: string;
   email: string;
   name?: string;
+  /** SRV-13: false when the user's own agent dir has no provider signed in or configured. */
+  providersConnected?: boolean;
 }
 
 export interface AppState {
