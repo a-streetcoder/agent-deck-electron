@@ -1,6 +1,6 @@
 import { ControlButton } from "@/design-system/components/NativeControls";
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Check, Code2, Eye, Loader2 } from "lucide-react";
+import { AlertTriangle, Check, Code2, Eye, Loader2, WrapText } from "lucide-react";
 import type { EditorId } from "@agent-deck/contracts";
 import type { FileContentKind } from "@agent-deck/contracts";
 import { cn } from "@/lib/cn";
@@ -37,6 +37,17 @@ const CodeMirrorView = lazy(() => import("./CodeMirrorView.tsx"));
 
 /** Debounce (ms) after the last keystroke before an edit autosaves (Slice L4b). */
 const AUTOSAVE_DEBOUNCE_MS = 700;
+
+/** localStorage key for the code view's soft-wrap toggle (D3). Default off. */
+const SOFT_WRAP_KEY = "agentdeck:file-preview-soft-wrap";
+
+function readSoftWrap(): boolean {
+  try {
+    return localStorage.getItem(SOFT_WRAP_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
 
 interface PreviewState {
   path: string;
@@ -105,6 +116,18 @@ export function FilePreview(props: {
   // Markdown default: PREVIEW (matches t3code) — a rendered doc is the useful
   // default for a .md; the Code2/Eye toggle flips to the raw CodeMirror view.
   const [markdownMode, setMarkdownMode] = useState<"preview" | "raw">("preview");
+  const [softWrap, setSoftWrap] = useState(readSoftWrap);
+  const toggleSoftWrap = useCallback(() => {
+    setSoftWrap((current) => {
+      const next = !current;
+      try {
+        localStorage.setItem(SOFT_WRAP_KEY, String(next));
+      } catch {
+        // Storage unavailable — the toggle still applies for this session.
+      }
+      return next;
+    });
+  }, []);
 
   // Autosave (Slice L4b). versionRef is the conflict guard's base token: set on
   // each (re)load and advanced to the returned token after every successful
@@ -234,6 +257,11 @@ export function FilePreview(props: {
   const isMarkdown = isMarkdownPreviewFile(path);
   const isTextLoaded = active?.status === "loaded" && active.contentKind === "text";
   const showMarkdownToggle = isMarkdown && isTextLoaded;
+  const showSoftWrapToggle =
+    isTextLoaded &&
+    active !== null &&
+    active.content.length > 0 &&
+    !(isMarkdown && markdownMode === "preview");
   // Editable = a loaded, non-truncated text file. Binary/image never reach the
   // editor; a TRUNCATED read stays read-only (saving it would drop the tail).
   const editable = isTextLoaded && active !== null && !active.truncated;
@@ -252,6 +280,24 @@ export function FilePreview(props: {
           {path}
         </span>
         {editable && <SaveStatusChip status={saveStatus} onReload={reload} />}
+        {showSoftWrapToggle && (
+          <ControlButton
+            type="button"
+            className={cn(
+              "flex shrink-0 items-center rounded-md p-1 transition-colors",
+              softWrap
+                ? "bg-selection text-text-primary"
+                : "text-text-muted hover:bg-hover hover:text-text-primary",
+            )}
+            title="Soft wrap"
+            aria-label="Soft wrap long lines"
+            aria-pressed={softWrap}
+            data-testid="file-preview-soft-wrap"
+            onClick={toggleSoftWrap}
+          >
+            <WrapText className="h-3.5 w-3.5" />
+          </ControlButton>
+        )}
         {showMarkdownToggle && (
           <div
             className="flex shrink-0 items-center rounded-md border border-border-subtle"
@@ -308,6 +354,7 @@ export function FilePreview(props: {
         isMarkdown={isMarkdown}
         markdownMode={markdownMode}
         editable={editable}
+        softWrap={softWrap}
         onEditorChange={handleEditorChange}
       />
     </div>
@@ -364,9 +411,11 @@ function FilePreviewBody(props: {
   isMarkdown: boolean;
   markdownMode: "preview" | "raw";
   editable: boolean;
+  softWrap: boolean;
   onEditorChange: (value: string) => void;
 }) {
-  const { active, path, isVisible, isMarkdown, markdownMode, editable, onEditorChange } = props;
+  const { active, path, isVisible, isMarkdown, markdownMode, editable, softWrap, onEditorChange } =
+    props;
 
   if (active === null || active.status === "loading") {
     return <CenteredState testId="file-preview-loading">Loading file…</CenteredState>;
@@ -430,6 +479,7 @@ function FilePreviewBody(props: {
               filename={path}
               visible={isVisible}
               readOnly={!editable}
+              lineWrapping={softWrap}
               onChange={onEditorChange}
             />
           </Suspense>
