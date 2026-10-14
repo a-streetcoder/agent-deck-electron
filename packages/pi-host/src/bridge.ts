@@ -59,6 +59,18 @@ export interface BridgeExtensionOptions {
    * prompt Pi will use for the turn. The callback is internal, not model-callable.
    */
   promptAudit?: boolean;
+  /**
+   * SPIKE (ade-cdd5), off unless set: host Pi's native MCP inside this
+   * extension via createMcpExtension with a fixed server list instead of
+   * <agentDir>/mcp.json. Blocked tools are refused in tool_call; suppressed
+   * tools have their result replaced in tool_result. Names are Pi's
+   * normalised `mcp__<server>__<tool>`.
+   */
+  nativeMcp?: {
+    servers: Array<{ name: string; config: Record<string, unknown> }>;
+    blockedTools?: string[];
+    suppressedTools?: string[];
+  };
 }
 
 /** The request body the bridge endpoint receives for each tool call. */
@@ -101,9 +113,15 @@ export function writeBridgeExtension(opts: BridgeExtensionOptions): string {
       promptSnippet: t.promptSnippet,
     })),
   );
+  const nativeMcp = opts.nativeMcp ? JSON.stringify(opts.nativeMcp) : undefined;
   writeFileSync(
     file,
-    `export default function (pi) {
+    `${
+      nativeMcp
+        ? `import { createMcpExtension } from "@earendil-works/pi-coding-agent";
+`
+        : ""
+    }export default function (pi) {
   const endpoint = ${endpoint};
   const sessionId = ${sessionId};
   const token = ${token};
@@ -166,8 +184,33 @@ export function writeBridgeExtension(opts: BridgeExtensionOptions): string {
     }
   });
 ${
-  opts.recall
-    ? `  // Pi 0.82 emits extension message_end before persisting that message,
+  nativeMcp
+    ? `  // SPIKE: Pi's own MCP client, fed only the servers we list. updateConfig is
+  // a no-op so /mcp over RPC can never rewrite an mcp.json.
+  const nativeMcp = ${nativeMcp};
+  const blockedMcp = new Set(nativeMcp.blockedTools ?? []);
+  const suppressedMcp = new Set(nativeMcp.suppressedTools ?? []);
+  createMcpExtension({
+    loadConfig: () => ({
+      servers: nativeMcp.servers.map((s) => ({ name: s.name, config: s.config, source: "agent-deck" })),
+      errors: [],
+      autoEnableCodemode: false,
+    }),
+    updateConfig: () => {},
+  })(pi);
+  pi.on("tool_call", (event) => {
+    if (blockedMcp.has(event.toolName)) return { block: true, reason: "Blocked by Agent Deck policy." };
+  });
+  pi.on("tool_result", (event) => {
+    if (suppressedMcp.has(event.toolName)) {
+      return { content: [{ type: "text", text: "Result withheld by Agent Deck policy." }], details: {}, isError: true };
+    }
+  });
+`
+    : ""
+}${
+      opts.recall
+        ? `  // Pi 0.82 emits extension message_end before persisting that message,
   // and turn_start can also precede user persistence. The first assistant
   // message_start is the deterministic boundary after the user entry and before
   // assistant persistence/output. Clearing first makes retries idempotent.
@@ -178,8 +221,8 @@ ${
     pi.appendEntry("agent-deck.memory-recall", recall);
   });
 `
-    : ""
-}${
+        : ""
+    }${
       opts.recall || opts.promptAudit
         ? `  // This extension is appended after every provider/user extension. Pi runs
   // before_agent_start handlers in extension order, so this is the last prompt
