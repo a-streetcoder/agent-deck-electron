@@ -13,6 +13,7 @@ For detailed guidance, read the relevant guide before editing that area:
 - Test selection and required checks: [docs/agent-guidelines/TESTING.md](docs/agent-guidelines/TESTING.md)
 - macOS packaging and releases: [docs/agent-guidelines/RELEASE.md](docs/agent-guidelines/RELEASE.md)
 - Windows development loop, packaging, and known pitfalls: [docs/agent-guidelines/WINDOWS.md](docs/agent-guidelines/WINDOWS.md)
+- Windows signing and release: [docs/release-windows.md](docs/release-windows.md)
 
 ## Way of working
 

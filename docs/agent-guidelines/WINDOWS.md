@@ -2,6 +2,8 @@
 
 How to develop Agent Deck on Windows while using Agent Deck itself. There is no Windows installer, signing, or auto-update yet; the stable copy is an unpacked build promoted by hand.
 
+Code signing and the planned installer/auto-update setup are in [docs/release-windows.md](../release-windows.md).
+
 ## Two copies, side by side
 
 |         | Stable (daily driver)                         | Dev (under test)                                        |

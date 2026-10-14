@@ -161,6 +161,127 @@ and from a signed-in browser: `https://deck.moretti.cc/me` shows your identity.
   tunnel the server sees loopback requests with no assertion, so with the proxy mode on it
   answers 401. Use one mode or the other on the VM.
 
+## Operations
+
+Verified on the live VM (`ssh dev`, user `ale`) on 2026-10-14. The live layout differs from the
+generic setup above in two places: the checkout is `~/ai-playground/a-streetcoding/agent-deck-electron`
+(the Syncthing replica of the PC checkout), and the tunnel unit is `cloudflared-agent-deck`.
+
+### Daily use
+
+- **Browser**: `https://deck.moretti.cc`, Cloudflare Access with GitHub login, 7-day session.
+  `/me` shows your identity.
+- **Desktop**: `win\Agent Deck Remote (cloudflare).cmd` (Electron with
+  `AGENT_DECK_REMOTE_SERVER_URL=https://deck.moretti.cc` and `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`;
+  extra arguments pass through, for example `--remote-debugging-port=9222`). The first run shows
+  the Access/GitHub login inside the window. GitHub passkey 2FA returns 404 there; use an
+  authenticator app or SMS until the system-browser login lands (ticket ade-1vjx).
+- In remote mode the UI is the same, plus "Signed in as <github email>" under the logo, an
+  initials chip on session rows, an author label above user messages, and folder pickers that
+  browse the VM (no native dialogs).
+- **Projects** live on the VM in `/srv/streetcoding` as server-owned git clones (today
+  CrunchyMurmur and agent-deck-electron). To register one, clone it there
+  (`ssh dev`, `cd /srv/streetcoding && git clone <url>`), then Projects → Add Projects… and either
+  use the folder browser (rooted at `AGENT_DECK_PROJECT_ROOT=/srv/streetcoding`) or Monitored
+  folders (`/srv/streetcoding` → Add folder → add each discovered repo). Registration is server
+  state (`projects.json`). Private repos and pushes need `gh auth login` on the VM, which is not
+  done yet; a bot account would be cleaner than a personal login.
+
+### Dev loop and deploy
+
+Syncthing mirrors saves from the PC checkout to the VM checkout in about 5–15 s; `.git` metadata
+lags by minutes, so never run git on the VM copy. `node_modules` are not synced.
+
+The service runs `pnpm --filter @agent-deck/server dev`, which is tsx **without** watch:
+
+- Changes in `apps/server`, `packages/contracts`, `packages/domain` or `packages/pi-host` need
+  `systemctl --user restart agent-deck-server`.
+- Web changes need `pnpm build:web` on the VM (the server serves `apps/web/dist`); no restart,
+  hard-reload the browser.
+- Desktop changes are PC-side only.
+
+Deploy one-liner from the PC:
+
+```sh
+ssh dev 'cd ~/ai-playground/a-streetcoding/agent-deck-electron && pnpm build:web && export XDG_RUNTIME_DIR=/run/user/$(id -u) && systemctl --user restart agent-deck-server && sleep 8 && curl -s 127.0.0.1:4200/health'
+```
+
+The Syncthing ignore file (`E:\AI Playground\.stignore`, kept identical on PC and VM, not synced
+itself) excludes `packages/loop-catalog-native/native/` and, since 2026-10-14, the
+agent-deck-electron `dist/`, `release/`, `build/pi-runtime`, `build/skill-engine-native` and
+`apps/web/dist`, so PC builds no longer overwrite what the VM serves.
+
+Must not:
+
+- Switch branches, `git checkout` or `git stash` in the PC checkout while the VM depends on the
+  tree.
+- Expect `packages/loop-catalog-native/native/` to sync: each OS builds its own and the PC
+  prebuild wipes it.
+- Change `pnpm-lock.yaml` without re-running `pnpm install --frozen-lockfile` on the VM with
+  `GITHUB_TOKEN=$(gh auth token)` exported.
+- Commit `.sync-conflict-*` files.
+- Run `pnpm install` or builds on the VM while a session is executing.
+
+### Observability
+
+```sh
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+journalctl --user -u agent-deck-server -f
+journalctl --user -u cloudflared-agent-deck -f   # four "Registered tunnel connection" lines = healthy
+curl -s 127.0.0.1:4200/health                    # {"ok":true}
+curl -s 127.0.0.1:4200/me                        # 401 "missing Cloudflare Access assertion" is correct locally
+```
+
+From a signed-in browser `/me` returns `{"user":{...}}`; without the cookie it is a 302 to the
+Access login.
+
+Data directory on the VM, `~/.local/share/agent-deck-electron/`: `sessions.json`,
+`session-authors.json` (owner and per-turn author records keyed by session id), `projects.json`,
+`session-worktrees/`, `checkpoints/`, `plan-events/`, `composer-drafts/`, `Subagent Runs/`,
+`loop-artifacts/`. Pi transcripts are in `~/.pi/agent/sessions/<cwd-slug>/<timestamp>_<id>.jsonl`.
+A session's owner is in `session-authors.json` under its id, `turns[].author.id` (the email), or
+on the initials chip.
+
+### Access and identity
+
+- **Add a user**: Cloudflare Zero Trust → Access → Applications → "Agent Deck · Streetcoding
+  Collective" → policy "Streetcoding Collective" → Include → the person's GitHub-account email.
+  GitHub is the only identity provider. Any Access-authenticated email becomes a user; there is
+  no server-side allowlist yet.
+- **JWT path**: cloudflared injects `cf-access-jwt-assertion` (the server also accepts the
+  `CF_Authorization` cookie); `apps/server/src/trustedProxy.ts` verifies RS256 against
+  `https://streetcoding-collective.cloudflareaccess.com/cdn-cgi/access/certs`, checks `iss`,
+  `aud` (`AGENT_DECK_CF_ACCESS_AUD`), `exp` and `iat`, requires a loopback `remoteAddress` and
+  extracts the email. `/health` and `/bridge` are exempt.
+- **Failure signatures**: tunnel down → Cloudflare 530/502 (the server is unaffected); Access
+  misconfigured → 403 from Cloudflare; server down → 502.
+- **Local test with a real identity**: copy the `CF_Authorization` cookie value from a signed-in
+  browser, then on the VM `curl -H "cf-access-jwt-assertion: <value>" 127.0.0.1:4200/me` → 200.
+
+### Recovery
+
+- **Bad deploy**: fix or `git revert` on the PC checkout (never `git reset --hard` while synced),
+  wait for the sync, then `pnpm build:web` and restart.
+- Stray `*.sync-conflict-*` files mean both sides edited a file.
+- **Restart order**: `agent-deck-server` first, then `cloudflared-agent-deck` only if its log
+  shows no registered connections. `loginctl enable-linger ale` is set.
+- The server runs as `ale` with the full filesystem and `ale`'s Pi/Claude logins; attribution is
+  a label, not isolation.
+- Killing the service mid-session leaves Pi children to `KillMode=control-group` cleanup.
+- The VM has about 8 GB RAM shared with Syncthing and another sandbox user: no parallel loops
+  with many children.
+- Nothing on the branch is pushed; the VM tree is the only other copy.
+
+### Live systemd units
+
+`~/.config/systemd/user/agent-deck-server.service`: `WorkingDirectory` the synced checkout,
+`PORT=4200`, `ExecStart` `pnpm --filter @agent-deck/server dev`, `Restart=on-failure`,
+`KillMode=control-group`. The drop-in `agent-deck-server.service.d/remote.conf` sets
+`AGENT_DECK_TRUSTED_PROXY=cloudflare`, `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`,
+`AGENT_DECK_CF_ACCESS_AUD`, `AGENT_DECK_PUBLIC_ORIGIN=https://deck.moretti.cc` and
+`AGENT_DECK_PROJECT_ROOT=/srv/streetcoding` (and, once ticket ade-gloc is done,
+`AGENT_DECK_DESKTOP_RECOVERY_TOKEN`). The tunnel runs as `cloudflared-agent-deck.service`.
+
 ## Origins
 
 - WebSocket (`apps/server/src/wsHandler.ts`): the guard used to accept only loopback origins

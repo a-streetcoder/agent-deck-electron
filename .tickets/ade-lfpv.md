@@ -1,6 +1,6 @@
 ---
 id: ade-lfpv
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-10-14T00:08:59Z
@@ -16,3 +16,13 @@ Operator-only. On the existing account codemeter-signing (North Europe, endpoint
 
 Profile visible in the portal; a local test signature of any exe via Invoke-TrustedSigning reports Valid with subject CN=STREETCODING LTD; the variable names recorded in docs/release-windows.md.
 
+
+## Notes
+
+**2026-10-14T00:18:24Z**
+
+Decision (owner, 2026-10-14): share the existing codemeter-profile; a second PublicTrust profile is refused on the Basic tier. Machine prereqs verified: az logged in to tenant 55b9578e (StreetCoding), TrustedSigning 0.5.8 installed, .NET SDK 8.0.425.
+
+**2026-10-14T00:18:44Z**
+
+Acceptance met 2026-10-14: Invoke-TrustedSigning with codemeter-profile signed a scratch exe; Get-AuthenticodeSignature = Valid, subject CN=STREETCODING LTD, O=STREETCODING LTD, L=London, C=GB. OperationId 3f378c9c. No browser login needed; az token already had the codesigning scope.

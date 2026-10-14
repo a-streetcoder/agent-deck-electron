@@ -11,18 +11,18 @@ browser/desktop → Cloudflare Tunnel + Cloudflare Access (GitHub login) → Age
 
 ## Branch contents (10 commits on top of main `b4e185e`, nothing pushed)
 
-| commit | what |
-|---|---|
-| d07f38e | `win\Agent Deck Remote (dev VM).cmd` — SSH-tunnel launcher (obsolete while the server is in trusted-proxy mode; keeps 401ing) |
-| fab6a3b | contracts: optional `UserIdentity`, `SessionMeta.createdBy`, `UserCell.author` |
-| cb5c02a | server: opt-in trusted-proxy identity (`apps/server/src/trustedProxy.ts`, RS256/JWKS with `node:crypto`, loopback-only trust), `GET /me`, author sidecar `session-authors.json`, WS/REST origin guard accepts `AGENT_DECK_PUBLIC_ORIGIN` |
-| 7d916ec | web: "Signed in as", owner initials on session rows, author above user messages, `/me` plumbing |
-| b8f1ce6 | desktop: `AGENT_DECK_REMOTE_SERVER_URL` remote mode, `controlPlaneFetch` via `session.defaultSession.fetch`, Access/GitHub navigation allowances, env recovery token, `win\Agent Deck Remote (cloudflare).cmd` |
-| 88241e9 | remote project picking: `GET /fs/dirs` (rooted at `AGENT_DECK_PROJECT_ROOT`), pickers return [] when local paths can't be chosen |
-| d0dc7fa | `docs/remote-server-poc.md` (env vars, VM services, security model) |
-| e36534a | desktop: open the window before the health check so Access login can happen (first-run bug) |
-| 218a414 | web: `ServerFolderBrowser` reachable from toolbar picker, Projects dialog and new-session card |
-| 9ee2423, 0e89eae | roadmap notes (t3 orchestration-v2 ideas; session move between backends) |
+| commit           | what                                                                                                                                                                                                                                     |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| d07f38e          | `win\Agent Deck Remote (dev VM).cmd` — SSH-tunnel launcher (obsolete while the server is in trusted-proxy mode; keeps 401ing)                                                                                                            |
+| fab6a3b          | contracts: optional `UserIdentity`, `SessionMeta.createdBy`, `UserCell.author`                                                                                                                                                           |
+| cb5c02a          | server: opt-in trusted-proxy identity (`apps/server/src/trustedProxy.ts`, RS256/JWKS with `node:crypto`, loopback-only trust), `GET /me`, author sidecar `session-authors.json`, WS/REST origin guard accepts `AGENT_DECK_PUBLIC_ORIGIN` |
+| 7d916ec          | web: "Signed in as", owner initials on session rows, author above user messages, `/me` plumbing                                                                                                                                          |
+| b8f1ce6          | desktop: `AGENT_DECK_REMOTE_SERVER_URL` remote mode, `controlPlaneFetch` via `session.defaultSession.fetch`, Access/GitHub navigation allowances, env recovery token, `win\Agent Deck Remote (cloudflare).cmd`                           |
+| 88241e9          | remote project picking: `GET /fs/dirs` (rooted at `AGENT_DECK_PROJECT_ROOT`), pickers return [] when local paths can't be chosen                                                                                                         |
+| d0dc7fa          | `docs/remote-server-poc.md` (env vars, VM services, security model)                                                                                                                                                                      |
+| e36534a          | desktop: open the window before the health check so Access login can happen (first-run bug)                                                                                                                                              |
+| 218a414          | web: `ServerFolderBrowser` reachable from toolbar picker, Projects dialog and new-session card                                                                                                                                           |
+| 9ee2423, 0e89eae | roadmap notes (t3 orchestration-v2 ideas; session move between backends)                                                                                                                                                                 |
 
 Tests at 218a414: server 1236 pass (2 env-only symlink EPERM failures, see WINDOWS.md), web 592, desktop 20; `pnpm lint`, typecheck, format green.
 
