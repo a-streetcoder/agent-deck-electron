@@ -20,3 +20,9 @@ GUARDRAILS (every ticket): work in a worktree E:/agent-deck-wt/<ticket> on wt/<t
 ## Acceptance Criteria
 
 Real-Pi tests: spawn two, await both, cancel one; managed_subagent still works unchanged for existing agents; results carry the structured fields; events recorded.
+
+## Notes
+
+**2026-10-14T23:43:20Z**
+
+2026-10-15 approved by the owner (lane A tree, reply: 'the rest is approved'); dispatch in dependency order.

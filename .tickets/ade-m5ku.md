@@ -20,3 +20,9 @@ GUARDRAILS (every ticket): work in a worktree E:/agent-deck-wt/<ticket> on wt/<t
 ## Acceptance Criteria
 
 Scheduler unit tests (chains, diamonds, cycles rejected, blocked/skipped propagation); route tests for the new fields; web test renders the DAG for a fixture; real-Pi test: a parent sets a plan with two independent items and one dependent, the server runs the two then the third.
+
+## Notes
+
+**2026-10-14T23:43:20Z**
+
+2026-10-15 approved by the owner (lane A tree, reply: 'the rest is approved'); dispatch in dependency order.

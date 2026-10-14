@@ -20,3 +20,9 @@ GUARDRAILS (every ticket): work in a worktree E:/agent-deck-wt/<ticket> on wt/<t
 ## Acceptance Criteria
 
 Reducer tests: a recorded log of one loop run and one subagent run yields the expected tree; root/child completion semantics; web test renders the tree for the fixture; the DeckPanel and the loop run view read from the tree.
+
+## Notes
+
+**2026-10-14T23:43:20Z**
+
+2026-10-15 approved by the owner (lane A tree, reply: 'the rest is approved'); dispatch in dependency order.

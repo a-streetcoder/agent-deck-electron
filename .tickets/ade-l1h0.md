@@ -20,3 +20,13 @@ GUARDRAILS (every ticket): work in a worktree E:/agent-deck-wt/<ticket> on wt/<t
 ## Acceptance Criteria
 
 The evidence document with at least three goals times three structures, raw run ids kept, and a recommendation line per A6-A12 row (topology / legibility / drop).
+
+## Notes
+
+**2026-10-14T23:43:19Z**
+
+2026-10-15 approved by the owner (lane A tree, reply: 'the rest is approved'); dispatch in dependency order.
+
+**2026-10-14T23:43:20Z**
+
+Held until the owner is back: the runs spend the owner's subscription and the ticket requires the model and iteration budget to be agreed first.

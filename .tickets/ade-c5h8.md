@@ -1,6 +1,6 @@
 ---
 id: ade-c5h8
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-10-14T23:39:30Z
@@ -24,3 +24,9 @@ GUARDRAILS (every ticket): work in a worktree E:/agent-deck-wt/<ticket> on wt/<t
 ## Acceptance Criteria
 
 Epic acceptance after sub-tickets: every orchestration store writes its events to the log; a replay of the log reproduces the loop-run, subagent-run and supervisor views; the web receives new events live for the open project; the shared server shows another member's events in the same stream; replay time and file sizes recorded for one busy day.
+
+## Notes
+
+**2026-10-14T23:43:20Z**
+
+2026-10-15 approved by the owner (lane A tree, reply: 'the rest is approved'); dispatch in dependency order.

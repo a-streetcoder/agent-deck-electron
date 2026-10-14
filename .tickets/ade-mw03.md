@@ -20,3 +20,9 @@ GUARDRAILS (every ticket): work in a worktree E:/agent-deck-wt/<ticket> on wt/<t
 ## Acceptance Criteria
 
 Unit tests for the delta over a recorded child log (first look = full summary; second look = only the new events); real-Pi test where a parent sees the delta of a child it awaited twice.
+
+## Notes
+
+**2026-10-14T23:43:20Z**
+
+2026-10-15 approved by the owner (lane A tree, reply: 'the rest is approved'); dispatch in dependency order.
