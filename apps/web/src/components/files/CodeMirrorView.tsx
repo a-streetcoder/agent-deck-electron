@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import CodeMirror, { EditorState, EditorView, type Extension } from "@uiw/react-codemirror";
+import CodeMirror, {
+  Compartment,
+  EditorState,
+  EditorView,
+  type Extension,
+} from "@uiw/react-codemirror";
 import {
   defaultHighlightStyle,
   LanguageDescription,
@@ -66,6 +71,10 @@ const tokenTheme = EditorView.theme({
   ".cm-scroller": { overflow: "auto" },
 });
 
+const wrapExtension = (wrap: boolean): Extension => (wrap ? EditorView.lineWrapping : []);
+// Compartments are keyed per editor state, so one instance serves every view.
+const wrapCompartment = new Compartment();
+
 export interface CodeMirrorViewProps {
   /** File text. */
   value: string;
@@ -85,13 +94,34 @@ export interface CodeMirrorViewProps {
    * `visible` flips true so a background file tab paints correctly on return.
    */
   visible?: boolean;
+  /** Soft-wrap long lines (D3). Toggled through a compartment, so flipping it
+   * reconfigures the live view instead of recreating the editor. */
+  lineWrapping?: boolean;
 }
 
 export default function CodeMirrorView(props: CodeMirrorViewProps) {
-  const { value, filename, readOnly = true, onChange, visible = true } = props;
+  const {
+    value,
+    filename,
+    readOnly = true,
+    onChange,
+    visible = true,
+    lineWrapping = false,
+  } = props;
   const resolvedTheme = useResolvedTheme();
   const [languageExtension, setLanguageExtension] = useState<Extension | null>(null);
   const viewRef = useRef<EditorView | null>(null);
+  // Seeds the compartment when the editor is first created. A later full
+  // reconfigure (grammar load, theme) keeps the compartment's current content,
+  // because CodeMirror carries it over for the same Compartment instance.
+  const lineWrappingRef = useRef(lineWrapping);
+  lineWrappingRef.current = lineWrapping;
+
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: wrapCompartment.reconfigure(wrapExtension(lineWrapping)),
+    });
+  }, [lineWrapping]);
 
   // Re-measure when the tab becomes visible again (a display:none CodeMirror
   // measures 0 height and paints blank until it re-measures).
@@ -127,6 +157,7 @@ export default function CodeMirrorView(props: CodeMirrorViewProps) {
       EditorState.readOnly.of(readOnly),
       EditorView.editable.of(!readOnly),
       EditorView.contentAttributes.of({ tabindex: "0" }),
+      wrapCompartment.of(wrapExtension(lineWrappingRef.current)),
     ];
     if (languageExtension) list.push(languageExtension);
     return list;
@@ -148,9 +179,9 @@ export default function CodeMirrorView(props: CodeMirrorViewProps) {
       readOnly={readOnly}
       height="100%"
       style={{ height: "100%" }}
-      // No line wrapping (decision: horizontal scroll preserves code layout; a
-      // soft-wrap toggle is deferred to L4b). Line numbers + fold gutter come
-      // from basicSetup; drop the noisy read-only extras.
+      // Line wrapping is off by default (horizontal scroll preserves code
+      // layout); the header's soft-wrap toggle flips it via `lineWrapping`.
+      // Line numbers + fold gutter come from basicSetup; drop the noisy extras.
       basicSetup={{
         lineNumbers: true,
         highlightActiveLine: false,

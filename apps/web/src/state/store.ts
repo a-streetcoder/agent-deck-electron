@@ -270,6 +270,9 @@ export interface AppState {
    * boolean: it persists while you move between nav screens.
    */
   panelExpanded: boolean;
+  /** Soft-wrap in the file preview's code view (D3); persisted, off by default.
+   * Global so every keep-alive file tab agrees. */
+  softWrap: boolean;
   /** Bumped by resources_changed pushes; resource screens refetch on change. */
   resourcesVersion: number;
   projects: ProjectMeta[];
@@ -410,6 +413,7 @@ export interface AppState {
   setSessionSubscriptionSettled(settled: boolean): void;
   setView(view: AppView): void;
   setPanelExpanded(expanded: boolean): void;
+  setSoftWrap(softWrap: boolean): void;
   bumpResourcesVersion(): void;
   setProjects(projects: ProjectMeta[]): void;
   setCurrentProject(projectId: string | null): void;
@@ -514,6 +518,16 @@ function initialPanelExpanded(): boolean {
   }
 }
 
+const SOFT_WRAP_KEY = "agentdeck:file-preview-soft-wrap";
+
+function initialSoftWrap(): boolean {
+  try {
+    return localStorage.getItem(SOFT_WRAP_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
 let nextGitActionToken = 0;
 let nextQuestionNavigationToken = 0;
 let nextResourceCommandToken = 0;
@@ -527,6 +541,7 @@ export const useAppStore = create<AppState>((set) => ({
   sessionSubscriptionSettled: false,
   view: "chat",
   panelExpanded: initialPanelExpanded(),
+  softWrap: initialSoftWrap(),
   resourcesVersion: 0,
   projects: [],
   projectsLoaded: false,
@@ -593,6 +608,14 @@ export const useAppStore = create<AppState>((set) => ({
       // Private-mode / storage-disabled: preference just isn't remembered.
     }
     set({ panelExpanded });
+  },
+  setSoftWrap: (softWrap) => {
+    try {
+      localStorage.setItem(SOFT_WRAP_KEY, String(softWrap));
+    } catch {
+      // Storage unavailable: the toggle still applies for this session.
+    }
+    set({ softWrap });
   },
   bumpResourcesVersion: () => set((state) => ({ resourcesVersion: state.resourcesVersion + 1 })),
   setProjects: (projects) => set({ projects, projectsLoaded: true }),
