@@ -32,7 +32,7 @@ async function bridges(): Promise<
 }
 
 describe("GET /runtime/bridges", () => {
-  it("reports memory + deck-agent bridges active with their tools, and MCP inactive with no server", async () => {
+  it("reports memory + deck-agent bridges active with their tools, and no MCP bridge", async () => {
     server = await startServer({ dataDir: mkdtempSync(path.join(tmpdir(), "agent-deck-data-")) });
     const list = await bridges();
 
@@ -63,10 +63,8 @@ describe("GET /runtime/bridges", () => {
     );
     expect(deckAgents?.toolNames).not.toContain("ask_user");
 
-    // No MCP server connected → the MCP bridge is present but inactive.
-    const mcp = list.find((b) => b.id === "mcp");
-    expect(mcp?.active).toBe(false);
-    expect(mcp?.toolNames).toEqual([]);
+    // MCP runs through Pi native, not a bridge tool.
+    expect(list.find((b) => b.id === "mcp")).toBeUndefined();
   });
 
   it("reflects a live pause and resume in the memory bridge inventory", async () => {

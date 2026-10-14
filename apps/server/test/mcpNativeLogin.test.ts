@@ -11,7 +11,7 @@ describe("POST /mcp/:id/native-login", () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  function harness(options: { native?: boolean; shared?: boolean } = {}) {
+  function harness(options: { shared?: boolean } = {}) {
     const fastify = Fastify({ logger: false });
     apps.push(fastify);
     if (options.shared)
@@ -38,7 +38,6 @@ describe("POST /mcp/:id/native-login", () => {
     registerMcpRoutes({
       fastify,
       sharedServer: options.shared === true,
-      nativeMcp: () => options.native !== false,
       sessions: { get: (id: string) => live.get(id) },
       // The id map gives `my.docs` the Pi name `my_docs`.
       nativeMcpNameFor: (_meta: unknown, id: string) => (id === "my.docs" ? "my_docs" : undefined),
@@ -59,13 +58,11 @@ describe("POST /mcp/:id/native-login", () => {
     expect(prompts).toEqual([["s-a", "/mcp login my_docs"]]);
   });
 
-  it("refuses a server the session does not have, an unknown session and the flag-off path", async () => {
+  it("refuses a server the session does not have and an unknown session", async () => {
     const h = harness();
     expect((await h.post("other", "s-a")).statusCode).toBe(404);
     expect((await h.post("my.docs", "missing")).statusCode).toBe(404);
-    const off = harness({ native: false });
-    expect((await off.post("my.docs", "s-a")).statusCode).toBe(409);
-    expect([...h.prompts, ...off.prompts]).toEqual([]);
+    expect(h.prompts).toEqual([]);
   });
 
   it("answers 502 when the session cannot start, without sending the command", async () => {

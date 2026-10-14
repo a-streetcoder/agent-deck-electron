@@ -374,21 +374,11 @@ describe("MCP launch resource policy", () => {
     expect(named.fingerprint).not.toBe(ordinary.fingerprint);
     // Native MCP: authored grants are normalised against the effective set, so
     // the server missing from the catalog gets no --tools pattern.
-    process.env.AGENT_DECK_NATIVE_MCP = "1";
-    try {
-      const native = resolveLaunchResources(
-        context,
-        { projectId: project.id, agentName: "agent" },
-        {},
-      );
-      expect(native.plan.kind === "agent" && native.plan.tools).toEqual([
-        "read",
-        "mcp",
-        "mcp__named__*",
-      ]);
-    } finally {
-      delete process.env.AGENT_DECK_NATIVE_MCP;
-    }
+    expect(named.plan.kind === "agent" && named.plan.tools).toEqual([
+      "read",
+      "mcp",
+      "mcp__named__*",
+    ]);
     const before = ordinary.fingerprint;
     defaults = [];
     expect(resolveLaunchResources(context, { projectId: project.id }, {}).fingerprint).not.toBe(

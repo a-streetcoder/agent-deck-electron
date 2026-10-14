@@ -1,7 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { FileMcpOAuthStore, type McpOAuthStore } from "@agent-deck/mcp";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import {
@@ -87,12 +86,6 @@ describe("project MCP assignment persistence", () => {
       projects.projects.find((project) => project.id === projectId)?.assignedMcpServers,
     ).toEqual(["not-configured"]);
 
-    const oauthStore = new FileMcpOAuthStore(path.join(dataDir, "mcp-oauth"));
-    const oauthKey = `v2:${JSON.stringify([projectId, "not-configured"])}`;
-    oauthStore.save(oauthKey, {
-      serverUrl: "https://mcp.example/sse",
-      tokens: { access_token: "must-be-cleared", token_type: "Bearer" },
-    });
     expect(
       (
         await api("PATCH", `/projects/${projectId}`, {
@@ -100,7 +93,6 @@ describe("project MCP assignment persistence", () => {
         })
       ).status,
     ).toBe(200);
-    expect(oauthStore.load(oauthKey)).toBeUndefined();
     const persisted = JSON.parse(
       readFileSync(path.join(dataDir, "projects.json"), "utf8"),
     ) as Array<{
@@ -243,120 +235,7 @@ describe("project MCP assignment persistence", () => {
     expect(readFileSync(configPath, "utf8")).toContain('"keep"');
   });
 
-  it("clears OAuth on default removal only where no explicit or named-agent grant remains", async () => {
-    const globalConfig = path.join(home, ".pi", "agent", "mcp.json");
-    mkdirSync(path.dirname(globalConfig), { recursive: true });
-    writeFileSync(
-      globalConfig,
-      JSON.stringify({ mcpServers: { shared: { url: "http://127.0.0.1:1/mcp" } } }),
-    );
-    const noGrantPath = mkdtempSync(path.join(tmpdir(), "deck-mcp-no-grant-"));
-    const namedPath = mkdtempSync(path.join(tmpdir(), "deck-mcp-named-grant-"));
-    mkdirSync(path.join(namedPath, ".pi", "agents"), { recursive: true });
-    writeFileSync(
-      path.join(namedPath, ".pi", "agents", "named.md"),
-      "---\nname: named\nmcpServers: shared\n---\n\nNamed MCP agent.\n",
-    );
-    const noGrantId = (
-      (await (await api("POST", "/projects", { path: noGrantPath })).json()) as {
-        project: { id: string };
-      }
-    ).project.id;
-    const namedId = (
-      (await (await api("POST", "/projects", { path: namedPath })).json()) as {
-        project: { id: string };
-      }
-    ).project.id;
-    expect(
-      (await api("PATCH", `/projects/${projectId}`, { assignedMcpServers: ["shared"] })).status,
-    ).toBe(200);
-    expect((await api("PATCH", "/mcp/shared/default-assignment", { enabled: true })).status).toBe(
-      200,
-    );
-
-    const oauthStore = new FileMcpOAuthStore(path.join(dataDir, "mcp-oauth"));
-    for (const id of [projectId, noGrantId, namedId]) {
-      oauthStore.save(`v2:${JSON.stringify([id, "shared"])}`, {
-        serverUrl: "http://127.0.0.1:1/mcp",
-        tokens: { access_token: id, token_type: "Bearer" },
-      });
-    }
-    expect((await api("PATCH", "/mcp/shared/default-assignment", { enabled: false })).status).toBe(
-      200,
-    );
-    expect(oauthStore.load(`v2:${JSON.stringify([projectId, "shared"])}`)).toBeDefined();
-    expect(oauthStore.load(`v2:${JSON.stringify([namedId, "shared"])}`)).toBeDefined();
-    expect(oauthStore.load(`v2:${JSON.stringify([noGrantId, "shared"])}`)).toBeUndefined();
-  });
-
-  it("reconciles and broadcasts once after OAuth cleanup failures without rolling back unassignment", async () => {
-    await server.close();
-    const failingOAuth: McpOAuthStore = {
-      load: () => undefined,
-      save: () => undefined,
-      clear: (key) => {
-        if (key.startsWith("v2:")) throw new Error("simulated credential cleanup failure");
-      },
-    };
-    await start({ mcpOAuthStore: failingOAuth });
-    const malformedDir = path.join(projectPath, ".pi");
-    mkdirSync(malformedDir, { recursive: true });
-    writeFileSync(path.join(malformedDir, "mcp.json"), "{ malformed", "utf8");
-
-    // A malformed catalog still persists assignment truth while failing closed.
-    expect(
-      (
-        await api("PATCH", `/projects/${projectId}`, {
-          assignedMcpServers: ["cleanup-project"],
-        })
-      ).status,
-    ).toBe(422);
-    const projectEvents = await resourceEvents();
-    const projectRemoval = await api("PATCH", `/projects/${projectId}`, {
-      assignedMcpServers: [],
-    });
-    expect(projectRemoval.status).toBe(500);
-    expect(await projectRemoval.json()).toMatchObject({
-      code: "CREDENTIAL_CLEANUP_FAILED",
-      project: { assignedMcpServers: [] },
-      reconciliationError: expect.stringContaining("not valid JSON"),
-    });
-    await expect
-      .poll(() => projectEvents.messages.filter((type) => type === "resources_changed"))
-      .toHaveLength(1);
-    projectEvents.socket.close();
-
-    expect(
-      (await api("PATCH", "/mcp/cleanup-default/default-assignment", { enabled: true })).status,
-    ).toBe(422);
-    const defaultEvents = await resourceEvents();
-    const defaultRemoval = await api("PATCH", "/mcp/cleanup-default/default-assignment", {
-      enabled: false,
-    });
-    expect(defaultRemoval.status).toBe(500);
-    expect(await defaultRemoval.json()).toMatchObject({
-      code: "CREDENTIAL_CLEANUP_FAILED",
-      defaultAssignedServerIds: [],
-      reconciliationError: expect.stringContaining("not valid JSON"),
-    });
-    await expect
-      .poll(() => defaultEvents.messages.filter((type) => type === "resources_changed"))
-      .toHaveLength(1);
-    defaultEvents.socket.close();
-
-    const projects = (await (await api("GET", "/projects")).json()) as {
-      projects: Array<{ id: string; assignedMcpServers?: string[] }>;
-    };
-    expect(
-      projects.projects.find((project) => project.id === projectId)?.assignedMcpServers,
-    ).toEqual([]);
-    const settings = (await (await api("GET", "/settings")).json()) as {
-      settings: { defaultMcpServers: string[] };
-    };
-    expect(settings.settings.defaultMcpServers).toEqual([]);
-  });
-
-  it("reconciles and broadcasts successful deletion clears when a later assignment write fails", async () => {
+  it("broadcasts successful deletion clears when a later assignment write fails", async () => {
     await server.close();
     let defaults = ["partial-delete"];
     const byProject = new Map([[projectId, ["partial-delete"]]]);
@@ -398,25 +277,7 @@ describe("project MCP assignment persistence", () => {
     events.socket.close();
   });
 
-  it("clears project-scoped credentials when a project is hidden", async () => {
-    expect(
-      (
-        await api("PATCH", `/projects/${projectId}`, {
-          assignedMcpServers: ["hidden-server"],
-        })
-      ).status,
-    ).toBe(200);
-    const oauthStore = new FileMcpOAuthStore(path.join(dataDir, "mcp-oauth"));
-    const oauthKey = `v2:${JSON.stringify([projectId, "hidden-server"])}`;
-    oauthStore.save(oauthKey, {
-      serverUrl: "https://mcp.example/sse",
-      tokens: { access_token: "must-be-cleared", token_type: "Bearer" },
-    });
-    expect((await api("DELETE", `/projects/${projectId}`)).status).toBe(200);
-    expect(oauthStore.load(oauthKey)).toBeUndefined();
-  });
-
-  it("fails closed on malformed project config while preserving the assignment", async () => {
+  it("saves the assignment over a malformed project config and starts nothing", async () => {
     const configDir = path.join(projectPath, ".pi");
     mkdirSync(configDir, { recursive: true });
     writeFileSync(path.join(configDir, "mcp.json"), "{ malformed", "utf8");
@@ -424,8 +285,7 @@ describe("project MCP assignment persistence", () => {
     const response = await api("PATCH", `/projects/${projectId}`, {
       assignedMcpServers: ["repository-server"],
     });
-    expect(response.status).toBe(422);
-    expect(await response.text()).toContain("not valid JSON");
+    expect(response.status).toBe(200);
 
     const projects = (await (await api("GET", "/projects")).json()) as {
       projects: Array<{ id: string; assignedMcpServers?: string[] }>;

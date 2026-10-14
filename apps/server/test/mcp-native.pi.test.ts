@@ -14,7 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 /**
- * PI-03b against real Pi with AGENT_DECK_NATIVE_MCP=1: a project session gets
+ * Native MCP against real Pi: a project session gets
  * exactly its assigned servers as Pi native MCP tools (no `mcp` proxy), ids are
  * mapped to Pi-valid names (`alpha.one` -> `alpha_one`), stdio servers do not
  * inherit Pi's env, and a named child sees only its granted subset.
@@ -45,7 +45,6 @@ const server = (id: string, label?: string) => ({
 });
 
 process.env.AGENT_DECK_TEST = "1";
-process.env.AGENT_DECK_NATIVE_MCP = "1";
 process.env.AGENT_DECK_PI_ENV = JSON.stringify(piEnv);
 process.env.AGENT_DECK_MCP_SERVERS = JSON.stringify([
   server("alpha.one", "ALPHA"),
@@ -101,7 +100,6 @@ afterAll(async () => {
   await mock?.close();
   for (const key of [
     "AGENT_DECK_MCP_SERVERS",
-    "AGENT_DECK_NATIVE_MCP",
     "AGENT_DECK_PI_ENV",
     "AGENT_DECK_PROVIDER_EXTENSIONS",
   ])

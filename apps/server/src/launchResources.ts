@@ -10,7 +10,7 @@ import type { LaunchPlan } from "@agent-deck/pi-host";
 import { resolveExplicitSkills } from "./agentSkillResolution.ts";
 import { asThinkingLevel, envDefaults, type ServerContext } from "./context.ts";
 import { finalizeExtensions, resolveInstructionsFile } from "./routes/shared.ts";
-import { legacyMcpToolPrefix, migrateMcpToolGrants, nativeMcpEnabled } from "./mcpNative.ts";
+import { migrateMcpToolGrants } from "./mcpNative.ts";
 
 /** Durable compatibility inputs needed to recompute catalog-derived launch flags.
  * Values omitted by the request remain live settings/project assignments; values
@@ -28,26 +28,6 @@ export interface ResolvedLaunchResources {
   fingerprint: string;
   config: LaunchResourceConfigV1;
   mcpServerIds: string[];
-}
-
-/**
- * Named parent sessions pass the authored tools directly to Pi. Add the single
- * proxy name when an old exact MCP bridge name refers to one of this agent's
- * assigned servers; dispatch retains the exact legacy restriction.
- */
-export function normalizeAgentMcpProxyTools(
-  tools: readonly string[] | undefined,
-  serverIds: readonly string[],
-): string[] | undefined {
-  if (tools === undefined) return undefined;
-  // Native MCP: Pi drops MCP tools an allowlist does not match, so `mcp` and
-  // legacy exact names become the session's Pi names (same set as the bridge).
-  if (nativeMcpEnabled()) return migrateMcpToolGrants(tools, serverIds);
-  if (tools.includes("mcp")) return [...tools];
-  const prefixes = serverIds.map(legacyMcpToolPrefix);
-  return tools.some((tool) => prefixes.some((prefix) => tool.startsWith(prefix)))
-    ? [...tools, "mcp"]
-    : [...tools];
 }
 
 export class LaunchResourceResolutionError extends Error {
@@ -344,7 +324,10 @@ export function resolveLaunchResources(
       : requestedMcp,
   );
   const mcpServerIds = [...new Set(requestedMcp)].filter((id) => configuredMcp.has(id));
-  if (plan.kind === "agent") plan.tools = normalizeAgentMcpProxyTools(plan.tools, mcpServerIds);
+  // Pi drops MCP tools an allowlist does not match, so the legacy `mcp` grant
+  // and exact proxy-era names become the session's Pi names.
+  if (plan.kind === "agent" && plan.tools)
+    plan.tools = migrateMcpToolGrants(plan.tools, mcpServerIds);
   return {
     plan,
     config,

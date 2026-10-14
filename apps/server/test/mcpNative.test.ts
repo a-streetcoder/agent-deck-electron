@@ -5,9 +5,9 @@ import {
   migrateMcpToolGrants,
   nativeMcpList,
   nativeMcpRefusal,
+  storedMcpServerName,
 } from "../src/mcpNative.ts";
 import { mcpEntryToConfig, type McpServerConfig } from "../src/mcpTools.ts";
-import { normalizeAgentMcpProxyTools } from "../src/launchResources.ts";
 
 const stdio = (id: string, extra: Partial<McpServerConfig> = {}): McpServerConfig =>
   ({ id, command: "node", args: ["server.js"], ...extra }) as McpServerConfig;
@@ -129,26 +129,19 @@ describe("nativeMcpList", () => {
   });
 
   it("adds one --tools pattern per server for a named agent that authors `mcp`", () => {
-    process.env.AGENT_DECK_NATIVE_MCP = "1";
-    try {
-      expect(normalizeAgentMcpProxyTools(["read", "mcp"], ["my-srv.v2"])).toEqual([
-        "read",
-        "mcp",
-        "mcp__my_srv_v2__*",
-      ]);
-      // Collision-suffixed servers get their real Pi pattern.
-      expect(normalizeAgentMcpProxyTools(["mcp"], ["a.b", "a_b"])).toEqual([
-        "mcp",
-        "mcp__a_b__*",
-        "mcp__a_b_2__*",
-      ]);
-      // Legacy exact names map to Pi's names; the proxy entry is not added.
-      expect(normalizeAgentMcpProxyTools(["mcp__a__x"], ["a"])).toEqual(["mcp__a__x"]);
-    } finally {
-      delete process.env.AGENT_DECK_NATIVE_MCP;
-    }
-    expect(normalizeAgentMcpProxyTools(["read", "mcp"], ["a"])).toEqual(["read", "mcp"]);
-    expect(normalizeAgentMcpProxyTools(["mcp__a__x"], ["a"])).toEqual(["mcp__a__x", "mcp"]);
+    expect(migrateMcpToolGrants(["read", "mcp"], ["my-srv.v2"])).toEqual([
+      "read",
+      "mcp",
+      "mcp__my_srv_v2__*",
+    ]);
+    // Collision-suffixed servers get their real Pi pattern.
+    expect(migrateMcpToolGrants(["mcp"], ["a.b", "a_b"])).toEqual([
+      "mcp",
+      "mcp__a_b__*",
+      "mcp__a_b_2__*",
+    ]);
+    // Legacy exact names map to Pi's names; the `mcp` grant is not added.
+    expect(migrateMcpToolGrants(["mcp__a__x"], ["a"])).toEqual(["mcp__a__x"]);
   });
 });
 
@@ -195,6 +188,15 @@ describe("mergeMcpServerNames", () => {
     // A later launch with the same reuse does not bring a label back.
     expect(mergeMcpServerNames(second, new Map([["acme", "acme-prod"]]))).toEqual(second);
     expect(mergeMcpServerNames(second, new Map([["docs", "docs"]]))).toEqual(second);
+  });
+});
+
+describe("storedMcpServerName", () => {
+  it("reverse-looks up the spawn-time map, latest name first, never a reused name", () => {
+    const stored = { my_docs: "my.docs", my_docs_2: "my.docs", acme: "" };
+    expect(storedMcpServerName(stored, "my.docs")).toBe("my_docs_2");
+    expect(storedMcpServerName(stored, "acme")).toBeUndefined();
+    expect(storedMcpServerName(stored, "")).toBeUndefined();
   });
 });
 

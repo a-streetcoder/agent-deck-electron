@@ -101,7 +101,6 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     sessionWorktreeStore,
     broadcast,
     dropDiffCache,
-    prepareProjectMcpSession,
   } = ctx;
 
   const sessionMutations = sessions.mutationClaims;
@@ -1757,27 +1756,9 @@ export function registerSessionRoutes(ctx: ServerContext): void {
 
     if (draft?.draftThinkingLevel && plan.kind !== "helper")
       plan = { ...plan, thinking: draft.draftThinkingLevel };
-    const namedMcpIds = resolvedLaunch.mcpServerIds;
-    let mcpPreparation: Awaited<ReturnType<typeof prepareProjectMcpSession>> | undefined;
     let createdSession: ReturnType<typeof sessions.create> | undefined;
     let announcementAttempted = false;
     try {
-      mcpPreparation = project
-        ? await prepareProjectMcpSession(project.id, namedMcpIds)
-        : undefined;
-      const mcpPreparationResult = mcpPreparation?.result;
-      if (mcpPreparationResult && !mcpPreparationResult.ok) {
-        return reply.status(422).send({ error: mcpPreparationResult.error });
-      }
-      const missingNamed = mcpPreparationResult?.ok
-        ? namedMcpIds.filter((id) => mcpPreparationResult.missing.includes(id))
-        : [];
-      if (missingNamed.length > 0) {
-        return reply.status(409).send({
-          error: `Assigned MCP server definition missing: ${missingNamed.join(", ")}. Add it to global or project .pi/mcp.json, or remove it from the agent.`,
-        });
-      }
-
       const session = sessions.create({
         ...(draft ? { draftMeta: draft } : {}),
         ...(createdBy ? { createdBy } : {}),
@@ -1803,7 +1784,6 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       }
       announcementAttempted = true;
       sessions.announceCreated(session);
-      await mcpPreparation?.release();
       if (draft) draftEnvironment.delete(draft.id);
       return session;
     } catch (error) {
@@ -1817,7 +1797,6 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       if (createdSession) await sessions.destroy(createdSession.meta.id).catch(() => {});
       else if (error instanceof SessionCreationError) await error.cleanup;
       if (partialId) bridgeTokens.delete(partialId);
-      await mcpPreparation?.release();
 
       // Only announcement can make this route own an index row. Never erase a
       // stale/unrelated collision on a pre-return launch failure.

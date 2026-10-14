@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { configToolAllowed, toolApprovalBlock, type McpServerConfig } from "./mcpTools.ts";
 
 /** The per-session server list handed to Pi native MCP through the generated
- * bridge extension (PI-03b). `idMap` maps each Pi server name back to its
+ * bridge extension. `idMap` maps each Pi server name back to its
  * Agent Deck id (persisted on the session meta as `mcpServerNames`). */
 export interface NativeMcpList {
   /** `id` is the Agent Deck id, sent back by the policy hook (PI-03c). */
@@ -10,8 +10,9 @@ export interface NativeMcpList {
   idMap: Map<string, string>;
 }
 
-/** Experimental until the proxy is removed (PI-03f). */
-export const nativeMcpEnabled = (): boolean => process.env.AGENT_DECK_NATIVE_MCP === "1";
+/** The proxy-era tool grant: in an authored `tools:` list it still means
+ * "every assigned MCP server" (migrated to one pattern per server). */
+export const LEGACY_MCP_GRANT = "mcp";
 
 // Pi hashes tool names over 64 characters and keeps only the first 55, so the
 // server part is capped at 24 (suffix included): `mcp__<24>__` is 31 characters,
@@ -35,8 +36,7 @@ const piToolName = (server: string, tool: string): string =>
 export const legacyMcpToolPrefix = (id: string): string =>
   `mcp__${id.replace(/[^A-Za-z0-9_]/g, "_")}__`;
 
-// Mirrors the proxy (mcpTools.ts legacy alias check): when two granted ids share
-// a legacy prefix (`a.b`, `a_b`), an old exact grant cannot say which server it
+// When two granted ids share a legacy prefix (`a.b`, `a_b`), an old exact grant cannot say which server it
 // meant, so it grants neither.
 const uniqueLegacyPrefix = (id: string, ids: readonly string[]): boolean =>
   ids.filter((other) => legacyMcpToolPrefix(other) === legacyMcpToolPrefix(id)).length === 1;
@@ -55,6 +55,14 @@ export function mergeMcpServerNames(
     merged[name] = merged[name] === undefined || merged[name] === id ? id : "";
   return merged;
 }
+
+/** The Pi name a session's stored map gives an id: the latest launch's name
+ * (merged names are appended); "" entries (reused names) never match. */
+export const storedMcpServerName = (
+  stored: Readonly<Record<string, string>>,
+  id: string,
+): string | undefined =>
+  id ? Object.entries(stored).findLast(([, value]) => value === id)?.[0] : undefined;
 
 /**
  * Pi server name per Agent Deck id. Ids are sorted first so the launch plan's
@@ -89,7 +97,7 @@ export function migrateMcpToolGrants(
   const names = nativeMcpNames(serverIds);
   const out = new Set<string>();
   for (const tool of tools) {
-    if (tool === "mcp") {
+    if (tool === LEGACY_MCP_GRANT) {
       out.add(tool);
       for (const name of names.values()) out.add(nativeMcpToolPattern(name));
       continue;

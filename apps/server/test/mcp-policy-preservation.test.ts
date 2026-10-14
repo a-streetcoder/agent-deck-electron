@@ -1,7 +1,6 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { FileMcpOAuthStore } from "@agent-deck/mcp";
 import { mockMcpServerLaunch } from "@agent-deck/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
@@ -47,13 +46,6 @@ beforeAll(async () => {
       })
     ).ok,
   ).toBe(true);
-  new FileMcpOAuthStore(path.join(dataDir, "mcp-oauth")).save(
-    `v2:${JSON.stringify([projectId, "remote"])}`,
-    {
-      serverUrl: "https://mcp.example/mcp",
-      tokens: { access_token: "secret", token_type: "Bearer" },
-    },
-  );
 });
 
 afterAll(async () => {
@@ -63,17 +55,14 @@ afterAll(async () => {
 });
 
 describe("MCP policy preservation", () => {
-  it("changes only policy truth while preserving definitions, assignments, agent policy, and OAuth bytes", async () => {
+  it("changes only policy truth while preserving definitions, assignments and agent policy", async () => {
     const configPath = path.join(home, ".pi", "agent", "mcp.json");
     const agentPath = path.join(home, ".pi", "agent", "agents", "named.md");
     const projectsPath = path.join(dataDir, "projects.json");
-    const oauthDir = path.join(dataDir, "mcp-oauth");
-    const oauthFile = path.join(oauthDir, readdirSync(oauthDir)[0]!);
     const before = {
       config: readFileSync(configPath),
       agent: readFileSync(agentPath),
       projects: readFileSync(projectsPath),
-      oauth: readFileSync(oauthFile),
     };
 
     const paused = await api("PATCH", "/mcp/policy", { enabled: false });
@@ -87,7 +76,6 @@ describe("MCP policy preservation", () => {
     expect(readFileSync(configPath)).toEqual(before.config);
     expect(readFileSync(agentPath)).toEqual(before.agent);
     expect(readFileSync(projectsPath)).toEqual(before.projects);
-    expect(readFileSync(oauthFile)).toEqual(before.oauth);
 
     const catalog = (await (await api("GET", `/mcp?projectId=${projectId}`)).json()) as {
       mcpEnabled: boolean;

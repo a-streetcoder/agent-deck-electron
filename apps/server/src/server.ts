@@ -38,7 +38,6 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { buildMemoryPreamble, injectableIndex, type Embedder } from "@agent-deck/memory";
 import { writeOpenAIFastConfig, writeOpenAIFastExtension } from "./openaiFastMode.ts";
-import { FileMcpOAuthStore, type McpOAuthStore } from "@agent-deck/mcp";
 import { projectAllowsAgent } from "./agentCuration.ts";
 import { resolveExplicitSkills } from "./agentSkillResolution.ts";
 import { AskUserCoordinator } from "./askUserCoordinator.ts";
@@ -74,22 +73,21 @@ import { makePlanEventService } from "./services/planEvents.ts";
 import { createFileService } from "./services/files.ts";
 import { LoopEngine } from "./loopEngine.ts";
 import {
-  McpManager,
-  MCP_PROXY_TOOL_NAME,
-  isLegacyMcpToolPolicy,
   mcpEntryToConfig,
   mergeMcpServerConfigs,
   mcpServerConfigsFromEnv,
+  probeMcpServer,
+  type McpServerStatus,
 } from "./mcpTools.ts";
 import {
+  LEGACY_MCP_GRANT,
   legacyMcpToolPrefix,
   mergeMcpServerNames,
-  nativeMcpEnabled,
   nativeMcpList,
   nativeMcpRefusal,
   nativeMcpToolPattern,
+  storedMcpServerName,
 } from "./mcpNative.ts";
-import { McpOAuthCoordinator, resolveMcpOAuthRedirectMode } from "./mcpOAuth.ts";
 import { FileMcpAssignmentStore, type McpAssignmentStore } from "./mcpAssignments.ts";
 import { FileMcpPolicyStore, type McpPolicyStore } from "./mcpPolicy.ts";
 import { FileMcpDefinitionStore, type McpDefinitionStore } from "./mcpDefinitions.ts";
@@ -224,8 +222,6 @@ export interface StartServerOptions {
   /** Narrow durable MCP-definition mutation seam. */
   mcpDefinitionStore?: McpDefinitionStore;
   composerDraftStore?: ComposerDraftStore;
-  /** Device-local OAuth persistence seam for credential lifecycle tests. */
-  mcpOAuthStore?: McpOAuthStore;
   /** Provider sign-in seam: tests assert which auth.json a login targets. */
   providerLoginFn?: ProviderLoginFn;
 }
@@ -322,9 +318,8 @@ async function initServer(
     }
   >();
   const childAllowedTools = new Map<string, ReadonlySet<string>>();
-  // PI-03b, behind AGENT_DECK_NATIVE_MCP=1 until the proxy goes (PI-03f): each
-  // session's MCP servers are embedded in its generated bridge extension and
-  // hosted by Pi's own MCP client. A missing or hidden project gets none.
+  // Each session's MCP servers are embedded in its generated bridge extension
+  // and hosted by Pi's own MCP client. A missing or hidden project gets none.
   const nativeMcpFor = (
     projectId: string,
     serverIds: readonly string[],
@@ -338,10 +333,11 @@ async function initServer(
       toolAllowlist,
     );
   };
-  // PI-03d: the Pi name a session's generated extension gives one server, for
-  // `/mcp login <name>` (recomputed; matches spawn unless assignments changed).
-  // PI-03e: use meta.mcpServerNames.
+  // The Pi name a session's generated extension gave one server, for
+  // `/mcp login <name>`: from the spawn-time map (the last launch's name wins),
+  // recomputed only for a session launched before the map existed.
   const nativeMcpNameFor = (meta: SessionMeta, serverId: string): string | undefined => {
+    if (meta.mcpServerNames) return storedMcpServerName(meta.mcpServerNames, serverId);
     if (!meta.projectId) return undefined;
     const list = nativeMcpFor(meta.projectId, mcpAllowlistForSession(meta));
     return [...list.idMap].find(([, id]) => id === serverId)?.[0];
@@ -439,10 +435,7 @@ async function initServer(
       index.upsert(meta);
       // An ended session's changed-file cache is stale by definition — drop it
       // (a resume recomputes at the next turn boundary).
-      if (meta.endedAt) {
-        diffs.drop(meta.id);
-        if (meta.projectId && mcp) void reconcileProjectMcp(meta.projectId);
-      }
+      if (meta.endedAt) diffs.drop(meta.id);
       // `broadcast` is initialized during startServer, before any meta changes.
       broadcast({ type: "session_meta", session: meta });
     },
@@ -479,19 +472,16 @@ async function initServer(
         meta.subagentsEnabled === undefined
           ? settings.get().subagentsEnabled !== false
           : meta.subagentsEnabled === true;
-      const nonMcpTools = bridge
+      const tools = bridge
         .specs()
-        .filter((spec) => spec.name !== MCP_PROXY_TOOL_NAME)
         .filter((spec) => agentMemoryEnabled() || !spec.name.startsWith("agent_deck_memory_"))
         .filter((spec) => delegationAllowed || !DELEGATION_TOOL_NAMES.has(spec.name));
-      const allow = mcpAllowlistForSession(meta);
-      const native = scope && nativeMcpEnabled() ? nativeMcpFor(scope, allow) : undefined;
+      const native = scope ? nativeMcpFor(scope, mcpAllowlistForSession(meta)) : undefined;
       // The transcript maps Pi server names back to Agent Deck ids, merged so
       // cells from earlier launches keep their label; persisted with the meta
       // the spawn publishes.
       if (native?.idMap.size)
         meta.mcpServerNames = mergeMcpServerNames(meta.mcpServerNames, native.idMap);
-      const tools = scope && !native ? [...nonMcpTools, ...mcp.specs(scope, allow)] : nonMcpTools;
       return writeBridgeExtension({
         endpoint: bridgeAddress.endpoint,
         sessionId: meta.id,
@@ -550,91 +540,77 @@ async function initServer(
               mcpAllowlistForSession({ ...parent!, agentName: route.agentName }).includes(id),
             )
           : [];
-      const preparation =
-        project && serverIds.length > 0
-          ? await prepareProjectMcpSession(project.id, serverIds)
+      // Unlike the always-added supervisor/memory channels, MCP remains
+      // subject to an authored Pi tool allowlist (including explicit empty):
+      // the legacy `mcp` grant keeps every assigned server, and older
+      // mcp__server__tool names keep their exact restriction.
+      const legacyPrefixes = serverIds.map(legacyMcpToolPrefix);
+      const exactLegacyTools =
+        route.tools?.filter((tool) => legacyPrefixes.some((prefix) => tool.startsWith(prefix))) ??
+        [];
+      const mcpAllowed =
+        route.tools === undefined ||
+        route.tools.includes(LEGACY_MCP_GRANT) ||
+        exactLegacyTools.length > 0;
+      const toolAllowlist =
+        route.tools !== undefined && !route.tools.includes(LEGACY_MCP_GRANT)
+          ? exactLegacyTools
           : undefined;
-      try {
-        if (preparation?.result.ok === false) throw new Error(preparation.result.error);
-        // Unlike the always-added supervisor/memory channels, MCP remains
-        // subject to an authored Pi tool allowlist (including explicit empty).
-        // Native uses one `mcp` proxy. Preserve exact restrictions from older
-        // mcp__server__tool allowlists instead of widening them to the whole server.
-        const legacyPrefixes = serverIds.map(legacyMcpToolPrefix);
-        const exactLegacyTools =
-          route.tools?.filter((tool) => legacyPrefixes.some((prefix) => tool.startsWith(prefix))) ??
-          [];
-        const proxyAllowed =
-          route.tools === undefined ||
-          route.tools.includes(MCP_PROXY_TOOL_NAME) ||
-          exactLegacyTools.length > 0;
-        const toolAllowlist =
-          route.tools !== undefined && !route.tools.includes(MCP_PROXY_TOOL_NAME)
-            ? exactLegacyTools
-            : undefined;
-        const native =
-          project && proxyAllowed && nativeMcpEnabled()
-            ? nativeMcpFor(project.id, serverIds, toolAllowlist)
-            : undefined;
-        const mcpSpecs = project && proxyAllowed && !native ? mcp.specs(project.id, serverIds) : [];
-        const tools = [CONTACT_SUPERVISOR_SPEC, ...memorySpecs, ...mcpSpecs];
-        const toolNames = tools.map((tool) => tool.name);
-        // Generate first; publish authentication/authorization only on success.
-        const extension = writeBridgeExtension({
-          endpoint: bridgeAddress.endpoint,
-          sessionId: childSessionId,
-          token,
-          tools,
-          ...(native?.servers.length ? { nativeMcp: { servers: native.servers } } : {}),
+      const native =
+        project && mcpAllowed ? nativeMcpFor(project.id, serverIds, toolAllowlist) : undefined;
+      const tools = [CONTACT_SUPERVISOR_SPEC, ...memorySpecs];
+      const toolNames = tools.map((tool) => tool.name);
+      // Generate first; publish authentication/authorization only on success.
+      const extension = writeBridgeExtension({
+        endpoint: bridgeAddress.endpoint,
+        sessionId: childSessionId,
+        token,
+        tools,
+        ...(native?.servers.length ? { nativeMcp: { servers: native.servers } } : {}),
+      });
+      const disposeAccess = registerChildBridgeAccess({
+        sessionId: childSessionId,
+        token,
+        // The policy hook's internal callback, never a model-facing tool.
+        toolNames: native?.servers.length ? [...toolNames, "__mcp_authorize__"] : toolNames,
+        ...(parent?.projectId && project
+          ? { authorization: { projectId: parent.projectId, projectPath: project.path } }
+          : {}),
+        tokens: bridgeTokens,
+        allowedTools: childAllowedTools,
+        memoryAuthorizations: childMemoryAuthorizations,
+      });
+      childSupervisors.set(childSessionId, route);
+      if (route.agentName && project && serverIds.length > 0) {
+        childMcpAssignments.set(childSessionId, {
+          parentSessionId: route.parentSessionId,
+          agentName: route.agentName,
+          projectId: project.id,
+          serverIds,
+          ...(toolAllowlist ? { toolAllowlist } : {}),
         });
-        const disposeAccess = registerChildBridgeAccess({
-          sessionId: childSessionId,
-          token,
-          // The policy hook's internal callback, never a model-facing tool.
-          toolNames: native?.servers.length ? [...toolNames, "__mcp_authorize__"] : toolNames,
-          ...(parent?.projectId && project
-            ? { authorization: { projectId: parent.projectId, projectPath: project.path } }
-            : {}),
-          tokens: bridgeTokens,
-          allowedTools: childAllowedTools,
-          memoryAuthorizations: childMemoryAuthorizations,
-        });
-        childSupervisors.set(childSessionId, route);
-        if (route.agentName && project && serverIds.length > 0) {
-          childMcpAssignments.set(childSessionId, {
-            parentSessionId: route.parentSessionId,
-            agentName: route.agentName,
-            projectId: project.id,
-            serverIds,
-            ...(toolAllowlist ? { toolAllowlist } : {}),
-          });
-        }
-        return {
-          extension,
-          // Native MCP tools are not bridge tools; a pattern per granted server
-          // keeps them through an authored --tools list (hidden exposure still
-          // narrows a legacy exact-tool allowlist).
-          toolNames: [
-            ...toolNames,
-            ...(native?.servers ?? []).map((s) => nativeMcpToolPattern(s.name)),
-          ],
-          dispose: async () => {
-            cancelChildSupervisorRequests(childSessionId);
-            disposeAccess();
-            childSupervisors.delete(childSessionId);
-            childMcpAssignments.delete(childSessionId);
-            try {
-              rmSync(nodePath.dirname(extension), { recursive: true, force: true });
-            } catch {
-              // Best-effort: a leftover temp dir is harmless.
-            }
-            await preparation?.release();
-          },
-        };
-      } catch (error) {
-        await preparation?.release();
-        throw error;
       }
+      return {
+        extension,
+        // Native MCP tools are not bridge tools; a pattern per granted server
+        // keeps them through an authored --tools list (hidden exposure still
+        // narrows a legacy exact-tool allowlist).
+        toolNames: [
+          ...toolNames,
+          ...(native?.servers ?? []).map((s) => nativeMcpToolPattern(s.name)),
+        ],
+        dispose: async () => {
+          cancelChildSupervisorRequests(childSessionId);
+          disposeAccess();
+          childSupervisors.delete(childSessionId);
+          childMcpAssignments.delete(childSessionId);
+          try {
+            rmSync(nodePath.dirname(extension), { recursive: true, force: true });
+          } catch {
+            // Best-effort: a leftover temp dir is harmless.
+          }
+        },
+      };
     },
     // Resolve a named agent for `managed_subagent{agent}` delegation, scoped to
     // the delegating session's project. Invoked only at subagent-run time, so the
@@ -1003,22 +979,6 @@ async function initServer(
   // Catalog definitions are inert until a project or named agent explicitly
   // assigns their id. Per-project catalogs merge global < project < environment.
   const mcpEnvConfigs = mcpServerConfigsFromEnv(process.env.AGENT_DECK_MCP_SERVERS, resourceHome());
-  // MCP OAuth (native MCPOAuthService): authed http servers get a per-server
-  // OAuth provider whose URL-bound credentials persist under app data. A stable
-  // env-overridable loopback callback is captured automatically; external
-  // redirects and loopback bind failures retain the manual-code fallback.
-  // PI-03f: remove with the proxy. Native MCP (PI-03d) signs in through Pi
-  // (`/mcp login`, tokens in each owner's <agentDir>/mcp-auth.json); this
-  // coordinator only serves the flag-off proxy path. Goes: mcpOAuth.ts,
-  // mcpLoopback.ts, the /mcp/:id/login* and /logout routes, oauthKey and the
-  // credential cleanup in routes/projects.ts, packages/mcp oauth.ts, the
-  // McpScreen loopback sign-in UI, and <dataDir>/mcp-oauth.
-  const mcpOAuthRedirect = resolveMcpOAuthRedirectMode(process.env.AGENT_DECK_MCP_OAUTH_REDIRECT);
-  const mcpOAuth = new McpOAuthCoordinator({
-    store: options.mcpOAuthStore ?? new FileMcpOAuthStore(nodePath.join(dataDir, "mcp-oauth")),
-    ...mcpOAuthRedirect,
-  });
-  const oauthKey = (scope: string, id: string): string => `v2:${JSON.stringify([scope, id])}`;
   const mcpServerAllowedForSession = (sessionId: string, serverId: string): boolean => {
     const child = childMcpAssignments.get(sessionId);
     if (child) {
@@ -1035,7 +995,6 @@ async function initServer(
     const meta = sessions.get(sessionId)?.meta;
     return meta ? mcpAllowlistForSession(meta).includes(serverId) : false;
   };
-  // PI-03c: the live answer to a native MCP call (the bridge's __mcp_authorize__).
   // PI-03c: the live answer to a native MCP call (the bridge's __mcp_authorize__),
   // for the Agent Deck id the extension embedded at spawn.
   const nativeMcpRefusalFor = (
@@ -1059,36 +1018,6 @@ async function initServer(
       toolName: call.toolName,
     });
   };
-  const mcp: McpManager = new McpManager(bridge, {
-    httpAuthProvider: (scope, id, serverUrl) =>
-      mcpOAuth.providerFor(oauthKey(scope, id), serverUrl, { projectId: scope, serverId: id }),
-    isHttpAuthorizationActive: (scope, id) =>
-      mcpOAuth.state(oauthKey(scope, id)).status === "authorizing",
-    scopeForSession: (sessionId) =>
-      childMcpAssignments.get(sessionId)?.projectId ?? sessions.get(sessionId)?.meta.projectId,
-    allowServerForSession: mcpServerAllowedForSession,
-    toolPolicyForSession: (sessionId) => {
-      const child = childMcpAssignments.get(sessionId);
-      const meta = sessions.get(sessionId)?.meta;
-      const parentResolution =
-        !child && meta?.agentName ? resolveNamedAgent(meta.agentName, meta.projectId) : undefined;
-      if (meta?.agentName && !child && parentResolution?.status !== "ok") {
-        return { restricted: true, allows: () => false };
-      }
-      const parentAgent = parentResolution?.status === "ok" ? parentResolution.agent : undefined;
-      const authored = child?.toolAllowlist ?? parentAgent?.tools;
-      return {
-        restricted: isLegacyMcpToolPolicy(authored),
-        allows: (serverId: string, toolName: string) => {
-          if (!authored || authored.includes(MCP_PROXY_TOOL_NAME)) return true;
-          const legacy = `mcp__${serverId.replace(/[^A-Za-z0-9_]/g, "_")}__${toolName.replace(/[^A-Za-z0-9_]/g, "_")}`;
-          return authored.includes(legacy);
-        },
-      };
-    },
-    isEnabled: () => mcpPolicy.enabled(),
-  });
-
   const globalMcpConfigs = () => {
     const catalog = readMcpServerCatalog(rootsFor());
     const fromFile = catalog.servers.flatMap((entry) => mcpEntryToConfig(entry, resourceHome()));
@@ -1109,113 +1038,40 @@ async function initServer(
     };
   };
 
-  const pendingMcpSessionStarts = new Map<string, Map<string, number>>();
   const namedMcpIdsForProject = (projectId: string): string[] => {
     const project = projects.find((item) => item.id === projectId);
     return scanAgents(rootsFor(projectId))
       .filter((agent) => !agent.shadowed && !agent.disabled && projectAllowsAgent(project, agent))
       .flatMap((agent) => agent.mcpServers ?? []);
   };
-  const namedMcpIdsForLiveProject = (projectId: string): string[] => [
-    ...sessions
-      .list()
-      .filter((meta) => meta.projectId === projectId && !meta.endedAt && meta.agentName)
-      .flatMap((meta) => mcpAllowlistForSession(meta)),
-    ...[...(pendingMcpSessionStarts.get(projectId)?.keys() ?? [])],
-  ];
-
-  const reconcileProjectMcp = async (
-    projectId: string,
-    extraIds: readonly string[] = [],
-  ): Promise<{ ok: true; missing: string[] } | { ok: false; error: string }> => {
-    if (!mcpPolicy.enabled()) {
-      await mcp.reconcile([], projectId);
-      return { ok: true, missing: [] };
-    }
+  // The settings screen's last probe per project and server (mcpTools.ts
+  // probeMcpServer); sessions never read it.
+  const mcpProbes = new Map<string, McpServerStatus>();
+  const mcpProbeKey = (projectId: string, serverId: string): string =>
+    JSON.stringify([projectId, serverId]);
+  const probeMcp = async (projectId: string, serverId: string): Promise<boolean> => {
     const project = projects.find((item) => item.id === projectId);
-    if (!project || project.hidden) {
-      await mcp.reconcile([], projectId);
-      return { ok: true, missing: [] };
+    const config = effectiveMcpConfigs(projectId).configs.find((item) => item.id === serverId);
+    // Same trust grant as a launch: a definition is inert until assigned.
+    if (!mcpPolicy.enabled() || !project || project.hidden || !config) return false;
+    if (!projectHasEffectiveMcpGrant(projectId, serverId)) return false;
+    mcpProbes.set(mcpProbeKey(projectId, serverId), await probeMcpServer(config));
+    return true;
+  };
+  const forgetMcpProbes = (match: (projectId: string, serverId: string) => boolean): void => {
+    for (const key of mcpProbes.keys()) {
+      const [projectId, serverId] = JSON.parse(key) as [string, string];
+      if (match(projectId, serverId)) mcpProbes.delete(key);
     }
-    const wanted = new Set([
-      ...mcpAssignments.defaultServerNames(),
-      ...mcpAssignments.projectServerNames(projectId),
-      ...namedMcpIdsForLiveProject(projectId),
-      ...extraIds,
-    ]);
+  };
+  const projectHasEffectiveMcpGrant = (projectId: string, serverId: string): boolean => {
     const snapshot = effectiveMcpConfigs(projectId);
-    if (!snapshot.valid) {
-      // Parsing failure cannot authorize anything new. Keep only already-live
-      // clients that remain explicitly assigned, so unassignment still tears
-      // down deterministically without disturbing this scope's other clients.
-      await mcp.retain(projectId, wanted);
-      return {
-        ok: false,
-        error:
-          "Global or project .pi/mcp.json is not valid JSON; assigned live connections were preserved and no new server was executed.",
-      };
-    }
-    const byId = new Map(snapshot.configs.map((config) => [config.id, config]));
-    const missing = [...wanted].filter((id) => !byId.has(id));
-    await mcp.reconcile(
-      [...wanted].flatMap((id) => {
-        const config = byId.get(id);
-        return config ? [config] : [];
-      }),
-      projectId,
+    if (!snapshot.valid || !snapshot.configs.some((config) => config.id === serverId)) return false;
+    return (
+      mcpAssignments.defaultServerNames().includes(serverId) ||
+      mcpAssignments.projectServerNames(projectId).includes(serverId) ||
+      namedMcpIdsForProject(projectId).includes(serverId)
     );
-    return { ok: true, missing };
-  };
-
-  const prepareProjectMcpSession = async (projectId: string, serverIds: readonly string[]) => {
-    const counts = pendingMcpSessionStarts.get(projectId) ?? new Map<string, number>();
-    pendingMcpSessionStarts.set(projectId, counts);
-    for (const id of new Set(serverIds)) counts.set(id, (counts.get(id) ?? 0) + 1);
-    let released = false;
-    const release = async (): Promise<void> => {
-      if (released) return;
-      released = true;
-      for (const id of new Set(serverIds)) {
-        const next = (counts.get(id) ?? 1) - 1;
-        if (next > 0) counts.set(id, next);
-        else counts.delete(id);
-      }
-      if (counts.size === 0) pendingMcpSessionStarts.delete(projectId);
-      await reconcileProjectMcp(projectId);
-    };
-    try {
-      return { result: await reconcileProjectMcp(projectId), release };
-    } catch (error) {
-      await release();
-      throw error;
-    }
-  };
-
-  // Missing assignment fields intentionally mean no servers. Defaults, explicit
-  // project assignments, and named-agent declarations are intersected with each
-  // project's configured catalog before any process is connected.
-  for (const project of projects.list()) await reconcileProjectMcp(project.id);
-
-  const reloadMcpConfig = async (
-    projectId?: string,
-  ): Promise<{ ok: true } | { ok: false; error: string }> => {
-    const targets = projectId ? [projectId] : projects.list().map((project) => project.id);
-    const errors: string[] = [];
-    for (const id of targets) {
-      const previouslyOwned = mcpOAuth.ownedServerIds(id);
-      const result = await reconcileProjectMcp(id);
-      if (!result.ok) {
-        errors.push(result.error);
-        continue;
-      }
-      const retained = new Set(effectiveMcpConfigs(id).configs.map((config) => config.id));
-      await Promise.all(
-        previouslyOwned
-          .filter((serverId) => !retained.has(serverId))
-          .map((serverId) => mcpOAuth.clear(oauthKey(id, serverId))),
-      );
-    }
-    return errors.length > 0 ? { ok: false, error: [...new Set(errors)].join(" ") } : { ok: true };
   };
 
   const fastify = Fastify({ logger: false });
@@ -1528,31 +1384,18 @@ async function initServer(
     pendingSupervisor,
     loopEngine,
     providerLogin,
-    mcp,
-    mcpOAuth,
     mcpAssignments,
     mcpPolicy,
     mcpDefinitions,
-    reloadMcpConfig,
-    reconcileProjectMcp,
-    prepareProjectMcpSession,
     effectiveMcpConfigs,
     nativeMcpRefusal: nativeMcpRefusalFor,
     globalMcpConfigs,
     isMcpEnvOverride: (id) => mcpEnvConfigs.some((config) => config.id === id),
-    oauthKey,
-    nativeMcp: nativeMcpEnabled,
     nativeMcpNameFor,
-    projectHasEffectiveMcpGrant: (projectId, serverId) => {
-      const snapshot = effectiveMcpConfigs(projectId);
-      if (!snapshot.valid || !snapshot.configs.some((config) => config.id === serverId))
-        return false;
-      return (
-        mcpAssignments.defaultServerNames().includes(serverId) ||
-        mcpAssignments.projectServerNames(projectId).includes(serverId) ||
-        namedMcpIdsForProject(projectId).includes(serverId)
-      );
-    },
+    projectHasEffectiveMcpGrant,
+    mcpProbe: (projectId, serverId) => mcpProbes.get(mcpProbeKey(projectId, serverId)),
+    probeMcp,
+    forgetMcpProbes,
     memoryEnabled,
     agentMemoryEnabled,
     memoryBaseDir,
@@ -1590,22 +1433,6 @@ async function initServer(
       );
     },
     () => envDefaults().env,
-    async (meta, candidate) => {
-      if (!meta.projectId || candidate.mcpServerIds.length === 0) return async () => {};
-      const preparation = await prepareProjectMcpSession(meta.projectId, candidate.mcpServerIds);
-      if (!preparation.result.ok) {
-        await preparation.release();
-        throw new Error(preparation.result.error);
-      }
-      const missing = candidate.mcpServerIds.filter((id) =>
-        preparation.result.ok ? preparation.result.missing.includes(id) : false,
-      );
-      if (missing.length > 0) {
-        await preparation.release();
-        throw new Error(`Assigned MCP server definition missing: ${missing.join(", ")}.`);
-      }
-      return preparation.release;
-    },
   );
 
   // Route modules. Fastify's router matches on method + path (never on
@@ -1665,10 +1492,6 @@ async function initServer(
         await step(() => Promise.all([drainHttpRequests(), drainWebSocketOperations()]));
         // Catch a resume/rebind published after the first stopAll snapshot.
         await step(() => sessions.stopAll());
-        // OAuth callbacks can refresh MCP, so revoke/settle every attempt before
-        // tearing down the clients they would otherwise reconnect.
-        await step(() => mcpOAuth.close());
-        await step(() => mcp.close());
         await step(() => closeWebSockets());
         // Deterministic terminal teardown (the sessions.stopAll() analogue):
         // socket-close teardown is fire-and-forget and terminal scopes are
