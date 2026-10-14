@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
-import { expect, selectProject, test, type Page } from "../helpers/fixtures.ts";
+import { expect, openNav, type Page, selectProject, test } from "../helpers/fixtures.ts";
 
 /**
  * Visual regression gate (docs/effect-migration-plan.md — standing gate for the
@@ -177,10 +177,9 @@ test.afterAll(async () => {
 const dynamicChrome = (page: Page) => [
   page.getByTestId("session-cwd"),
   page.getByTestId("startup-cwd"),
-  // The whole collapsed session list (titles, agent names, relative times) —
-  // masking its rows individually would also stamp boxes over the HIDDEN
-  // expanded-panel copies of those rows, which overlay the nav.
-  page.getByTestId("chat-list"),
+  // The whole sessions list (titles, agent names, relative times), masked as
+  // one box rather than row by row.
+  page.getByTestId("sessions-panel"),
   page.getByTestId("context-usage"),
   page.getByTestId("session-tokens"),
   page.getByTestId("session-cost"),
@@ -206,7 +205,7 @@ test("visual: app shell (sidebar + empty chat)", async ({ page }) => {
 test("visual: skills screen", async ({ page }) => {
   await page.goto(harness.baseUrl);
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
-  await page.getByTestId("nav-skills").click();
+  await openNav(page, "skills");
   await expect(page.getByTestId("app-view-title")).toContainText("Skills");
   await expect(page).toHaveScreenshot("skills-screen.png", {
     ...SCREENSHOT_OPTS,

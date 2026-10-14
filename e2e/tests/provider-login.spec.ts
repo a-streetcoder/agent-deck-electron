@@ -1,4 +1,4 @@
-import { expect, test } from "../helpers/fixtures.ts";
+import { expect, openNav, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -52,7 +52,7 @@ test("signing in shows the device code, accepts a code, and reports success", as
   });
 
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-providers").click();
+  await openNav(page, "providers");
   await page.locator(`[data-provider-id="${id}"]`).click();
 
   // The sheet opens and shows the device code + a prompt.
@@ -97,7 +97,7 @@ test("providers with two login methods use a labelled, dismissible chooser", asy
   const provider = providers.find((entry) => entry.supportsOAuth && entry.supportsAPIKey)!;
 
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-providers").click();
+  await openNav(page, "providers");
   await page.locator(`[data-provider-id="${provider.id}"]`).click();
 
   const chooser = page.getByRole("dialog", { name: `Connect ${provider.name}` });

@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, openNav, selectProject, test } from "../helpers/fixtures.ts";
 import type { SessionMeta } from "@agent-deck/domain";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
@@ -28,7 +28,7 @@ test("adding projects registers folders; chats stay project-scoped without a glo
   await page.goto(harness.baseUrl);
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
 
-  await page.getByTestId("nav-projects").click();
+  await openNav(page, "projects");
   await expect(page.getByTestId("app-view-title")).toHaveText("Projects");
 
   await page.getByTestId("projects-add").click();
@@ -70,7 +70,7 @@ test("adding projects registers folders; chats stay project-scoped without a glo
   await expect(page.getByTestId("session-cwd")).toHaveText(projectB);
   await expect(page.getByTestId("user-cell")).toHaveCount(0);
 
-  await page.getByTestId("chat-list").getByTestId(`chat-${projectSession!.id}`).click();
+  await page.getByTestId("sessions-panel").getByTestId(`chat-${projectSession!.id}`).click();
   await expect(page.getByTestId("session-cwd")).toHaveText(projectA);
   await expect(page.getByTestId("user-cell")).toContainText("message for alpha");
   await expect(page.getByTestId("assistant-text")).toContainText("message for alpha");
@@ -89,7 +89,7 @@ test("the Projects screen toggles enabled state and hides entries", async ({ pag
   if (!response.ok) throw new Error(await response.text());
 
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-projects").click();
+  await openNav(page, "projects");
 
   const row = page.locator(`[data-project-name="${name}"]`);
   await expect(row).toBeVisible();

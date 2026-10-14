@@ -1,7 +1,7 @@
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "../helpers/fixtures.ts";
+import { expect, openNav, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -66,7 +66,7 @@ test.afterAll(async () => {
 
 test("environment inspector masks values and flags overrides", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-environment").click();
+  await openNav(page, "environment");
   await expect(page.getByTestId("app-view-title")).toHaveText("Environment");
 
   const apiKeyRow = page.locator('[data-env-key="OPENAI_API_KEY"]');
@@ -84,7 +84,7 @@ test("environment inspector masks values and flags overrides", async ({ page }) 
 
 test("doctor reports a healthy pi binary with a version", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-doctor").click();
+  await openNav(page, "doctor");
 
   const binCheck = page.locator('[data-check-id="pi-binary"]');
   await expect(binCheck).toBeVisible();
@@ -142,7 +142,7 @@ test("Doctor inspects the global environment when no project is selected", async
   const doctorRequest = page.waitForRequest((request) =>
     new URL(request.url()).pathname.endsWith("/runtime/doctor"),
   );
-  await page.getByTestId("nav-doctor").click();
+  await openNav(page, "doctor");
   const request = await doctorRequest;
   expect(new URL(request.url()).searchParams.has("projectId")).toBe(false);
 
@@ -206,7 +206,7 @@ test("Doctor preserves results across a retryable refresh failure", async ({ pag
     }
   });
 
-  await page.getByTestId("nav-doctor").click();
+  await openNav(page, "doctor");
   await expect(page.getByTestId("doctor-screen").locator("[aria-busy=true]")).toHaveCount(1);
   await expect(page.getByTestId("doctor-status")).toHaveText("Checking diagnostics…");
   const refresh = page.getByTestId("doctor-refresh");
@@ -269,7 +269,7 @@ test("Doctor offers a copyable fix command for a failing check", async ({ page, 
       },
     });
   });
-  await page.getByTestId("nav-doctor").click();
+  await openNav(page, "doctor");
 
   // A failing provider check exposes a copyable placeholder command; an ok
   // check does not. The response is scripted because the E2E mock provider is

@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "../helpers/fixtures.ts";
+import { expect, openNav, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -34,7 +34,7 @@ test.afterAll(async () => {
 
 test("configure a root, discover projects, and add one", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-projects").click();
+  await openNav(page, "projects");
   await page.getByTestId("projects-add").click();
   await expect(page.getByTestId("add-projects-dialog")).toBeVisible();
 

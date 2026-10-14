@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, openNav, selectProject, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -88,7 +88,7 @@ test("agent warnings and skill visibility are actionable in the global catalog",
 }) => {
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-agents").click();
+  await openNav(page, "agents");
   const row = page.locator('[data-agent-name="append-bot"]');
   await expect(row.getByTestId("agent-warning-indicator")).toHaveAttribute(
     "aria-label",
@@ -139,14 +139,14 @@ test("picking an agent injects its body as the system prompt", async ({ page }) 
   );
 
   const agentChat = await page
-    .getByTestId("chat-list")
+    .getByTestId("sessions-panel")
     .locator('[data-active="true"]')
     .getAttribute("data-testid");
   // Switching back to the default agent restores a separate session.
   await page.getByTestId("agent-picker").selectOption("");
   await expect(page.getByTestId("user-cell")).toHaveCount(0);
   // Return through history: choosing an agent in an unsent draft now edits that draft.
-  await page.getByTestId("chat-list").getByTestId(agentChat!).click();
+  await page.getByTestId("sessions-panel").getByTestId(agentChat!).click();
   await expect(page.getByTestId("user-cell")).toContainText("what is a monad?");
 });
 
@@ -157,7 +157,7 @@ test("imports, replaces, reloads, and removes an app-managed agent avatar", asyn
   );
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-agents").click();
+  await openNav(page, "agents");
   await page.locator('[data-agent-name="pancake-bot"]').click();
   const detail = page.getByTestId("agent-detail");
   await detail.locator('input[type="file"]').setInputFiles({
@@ -178,7 +178,7 @@ test("imports, replaces, reloads, and removes an app-managed agent avatar", asyn
 
   await page.reload();
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-agents").click();
+  await openNav(page, "agents");
   await page.locator('[data-agent-name="pancake-bot"]').click();
   await expect(page.getByTestId("agent-detail").getByTestId("agent-avatar-remove")).toBeVisible();
   await page.getByTestId("agent-detail").getByTestId("agent-avatar-remove").click();
@@ -193,7 +193,7 @@ test("creates a safe editable global replacement from a pure builtin", async ({ 
 
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-agents").click();
+  await openNav(page, "agents");
   await page.locator('[data-agent-name="reviewer"]').first().click();
   await expect(page.getByTestId("agent-create-replacement")).toBeVisible();
   await expect(page.getByTestId("agent-replacement-description")).toContainText(
@@ -239,7 +239,7 @@ test("creates a safe editable global replacement from a pure builtin", async ({ 
 
   await page.reload();
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-agents").click();
+  await openNav(page, "agents");
   await page.locator('[data-agent-name="reviewer"]').first().click();
   await expect(page.getByTestId("agent-detail")).toContainText("replaces builtin");
   await expect(page.getByTestId("agent-output")).toContainText(
@@ -260,7 +260,7 @@ test("creates a replacement from an effective overridden builtin", async ({ page
 
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-agents").click();
+  await openNav(page, "agents");
   const coder = page.locator('[data-agent-name="coder"]').first();
   await expect(coder.getByTestId("overridden-badge")).toBeVisible();
   await coder.click();
@@ -296,7 +296,7 @@ test("creates a replacement from an effective overridden builtin", async ({ page
 
   await page.reload();
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-agents").click();
+  await openNav(page, "agents");
   await page.locator('[data-agent-name="coder"]').first().click();
   await expect(page.getByTestId("agent-detail")).toContainText("replaces builtin");
   await expect(page.getByTestId("agent-create-replacement")).toHaveCount(0);
@@ -308,7 +308,7 @@ test("the agent detail surfaces the system-prompt mode and extensions (native pa
 }) => {
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-agents").click();
+  await openNav(page, "agents");
 
   // pancake-bot declares no mode → the default "replace"; like native, the badge
   // is hidden for the implicit default. Its absent extension field uses the default catalog.
@@ -337,11 +337,9 @@ test("an agent-bound session shows the agent name in the expanded panel (native 
   await page.getByTestId("agent-picker").selectOption("pancake-bot");
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
 
-  // The expanded browsing list surfaces the bound agent's name as a visible line
+  // The sessions list surfaces the bound agent's name as a visible line
   // (native paperplane row), not just the row's hover tooltip.
-  await page.getByTestId("sessions-expand").click();
-  const panel = page.getByTestId("sessions-expanded");
-  await expect(panel).toHaveAttribute("aria-hidden", "false");
+  const panel = page.getByTestId("sessions-panel");
   await expect(panel.getByTestId("chat-agent-name").first()).toHaveText("pancake-bot");
 });
 
@@ -372,7 +370,7 @@ test("project agent diagnostics and named launch retain project context", async 
   expect(created.status(), await created.text()).toBe(201);
   const { session } = await created.json();
   await page.goto(harness.baseUrl);
-  await page.getByTestId("chat-list").getByTestId(`chat-${session.id}`).click();
+  await page.getByTestId("sessions-panel").getByTestId(`chat-${session.id}`).click();
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
   await expect(page.getByTestId("agent-picker")).toHaveValue("pancake-bot");
   const start = harness.mock.requests.length;

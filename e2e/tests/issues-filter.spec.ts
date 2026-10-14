@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "../helpers/fixtures.ts";
+import { expect, openNav, test } from "../helpers/fixtures.ts";
 import { mockIssues } from "../helpers/issues.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
@@ -29,7 +29,7 @@ test("aggregate facets and search remain active when switching List and Board", 
 }) => {
   const requests = await mockIssues(page, [projectId]);
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-issues").click();
+  await openNav(page, "issues");
   await expect(page.getByTestId("issue-7")).toBeVisible();
   await page.getByTestId("issues-state-all").click();
   await expect(page.getByTestId("issue-9")).toBeVisible();

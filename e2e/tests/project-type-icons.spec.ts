@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "../helpers/fixtures.ts";
+import { expect, openNav, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 let h: E2eHarness;
 test.beforeAll(async () => {
@@ -30,7 +30,7 @@ test("renders native project-type icons for detected frameworks", async ({ page 
     });
   }
   await page.goto(h.baseUrl);
-  await page.getByTestId("nav-projects").click();
+  await openNav(page, "projects");
   await expect(page.getByTestId("project-type-icon-rust").first()).toBeVisible();
   await expect(page.getByTestId("project-type-icon-go").first()).toBeVisible();
   await expect(page.getByTestId("project-type-icon-react").first()).toBeVisible();

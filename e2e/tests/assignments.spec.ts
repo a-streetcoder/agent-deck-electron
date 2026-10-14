@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, openNav, selectProject, test } from "../helpers/fixtures.ts";
 import type { SessionMeta } from "@agent-deck/domain";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
@@ -87,7 +87,7 @@ test("project MCP assignments persist independently of accessible All Projects t
   expect(await scoped()).toMatchObject({ assignedServerIds: [name] });
 
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-mcp").click();
+  await openNav(page, "mcp");
   await expect(page.getByTestId("mcp-trust-copy")).toContainText(
     "no-project chats receive no MCP servers",
   );
@@ -129,7 +129,7 @@ test("assigning a project skill injects /skill:<name> into new real sessions", a
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
   // Management remains global even while the project session is active.
-  await page.getByTestId("nav-skills").click();
+  await openNav(page, "skills");
   await expect(page.locator('[data-skill-name="tidy-commits"]')).toHaveCount(0);
 
   const created = await fetch(`${harness.baseUrl}/sessions`, {
@@ -165,7 +165,7 @@ test("an All-Projects (default) skill reaches sessions of every project", async 
 
   await page.goto(harness.baseUrl);
   // Enable it for All Projects from the Skills detail pane (Default context).
-  await page.getByTestId("nav-skills").click();
+  await openNav(page, "skills");
   await page.locator('[data-skill-name="sign-offs"]').click();
   const allProjects = page.getByTestId("assign-skill-all-sign-offs");
   await allProjects.check();
@@ -226,7 +226,7 @@ test("the Skills All Projects toggle rolls back, reloads, and reports failures",
   });
 
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-skills").click();
+  await openNav(page, "skills");
   await page.locator(`[data-skill-name="${name}"]`).click();
   const toggle = page.getByTestId(`assign-skill-all-${name}`);
   await toggle.check();
@@ -366,7 +366,7 @@ test("project default-agent persistence and explicit named launch retain the pro
   expect(created.status()).toBe(201);
   const { session } = await created.json();
   await page.goto(harness.baseUrl);
-  await page.getByTestId("chat-list").getByTestId(`chat-${session.id}`).click();
+  await page.getByTestId("sessions-panel").getByTestId(`chat-${session.id}`).click();
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
   expect(session.agentName).toBe("syrup-bot");
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
@@ -383,6 +383,6 @@ test("project default-agent persistence and explicit named launch retain the pro
       captured!.messages.filter((item) => item.role === "system" || item.role === "developer"),
     ),
   ).toContain("You are syrup-bot.");
-  await page.getByTestId("nav-agents").click();
+  await openNav(page, "agents");
   await expect(page.locator('[data-agent-name="syrup-bot"]')).toHaveCount(0);
 });

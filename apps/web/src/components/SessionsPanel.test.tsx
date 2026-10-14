@@ -3,7 +3,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "../state/store.ts";
-import { SessionRow, SessionsCollapsedCard } from "./SessionsPanel.tsx";
+import { SessionRow, SessionsMainPanel } from "./SessionsPanel.tsx";
 
 afterEach(cleanup);
 
@@ -145,8 +145,8 @@ describe("SessionRow durable failure state", () => {
   });
 });
 
-describe("SessionsCollapsedCard", () => {
-  it("lists newest sessions across all projects and exposes selected-chat status", () => {
+describe("SessionsMainPanel", () => {
+  it("lists sessions from every project and exposes the selected-chat status", () => {
     useAppStore.setState({
       panelExpanded: false,
       connection: "open",
@@ -173,7 +173,7 @@ describe("SessionsCollapsedCard", () => {
         },
       ],
     });
-    render(<SessionsCollapsedCard onExpand={vi.fn()} />);
+    render(<SessionsMainPanel />);
     expect(screen.getByTestId("chat-a")).toBeTruthy();
     expect(screen.getByTestId("chat-b")).toBeTruthy();
     expect(screen.getByTestId("status-indicator").getAttribute("data-status")).toBe("idle");

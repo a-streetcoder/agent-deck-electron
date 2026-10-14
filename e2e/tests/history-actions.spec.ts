@@ -26,9 +26,9 @@ const send = async (page: Page, text: string): Promise<void> => {
   await waitIdle(page);
 };
 
-// Both compact and expanded session panels stay mounted during the native-style
-// transition. Navigation must target the one currently presented to the user.
-const visibleChatList = (page: Page) => page.getByTestId("chat-list").filter({ visible: true });
+// UI-01: one sessions list, always in view; rows are the [data-active] elements.
+const visibleChatList = (page: Page) =>
+  page.getByTestId("sessions-panel").filter({ visible: true });
 
 test("Fork creates and selects an editable target draft and focuses its composer", async ({
   page,
@@ -42,10 +42,7 @@ test("Fork creates and selects an editable target draft and focuses its composer
   };
   const sourceBefore = before.sessions.at(-1)!;
 
-  const sourceRows = await page
-    .getByTestId("chat-list")
-    .locator(":scope > [data-testid^='chat-']")
-    .count();
+  const sourceRows = await page.getByTestId("sessions-panel").locator("[data-active]").count();
   const chosen = page.getByTestId("user-cell").filter({ hasText: "fork this exact turn" });
   await chosen.getByTestId("message-fork").click();
 
@@ -54,9 +51,9 @@ test("Fork creates and selects an editable target draft and focuses its composer
   await expect(composer).toBeFocused();
   await composer.fill("fork this exact turn, edited");
   await expect(composer).toHaveValue("fork this exact turn, edited");
-  await expect(
-    page.getByTestId("chat-list").locator(":scope > [data-testid^='chat-']"),
-  ).toHaveCount(sourceRows + 1);
+  await expect(page.getByTestId("sessions-panel").locator("[data-active]")).toHaveCount(
+    sourceRows + 1,
+  );
   await expect(page.getByTestId("transcript")).not.toContainText(
     "later turn excluded from the fork",
   );
@@ -152,10 +149,7 @@ test("Re-run traps confirmation focus, restores on Escape, keeps one row, and ge
   };
   const activeBefore = before.sessions.at(-1)!;
 
-  const rowsBefore = await page
-    .getByTestId("chat-list")
-    .locator(":scope > [data-testid^='chat-']")
-    .count();
+  const rowsBefore = await page.getByTestId("sessions-panel").locator("[data-active]").count();
   const chosen = page.getByTestId("user-cell").filter({ hasText: "rerun this exact turn" });
   const trigger = chosen.getByTestId("message-rerun");
   await trigger.focus();
@@ -171,9 +165,7 @@ test("Re-run traps confirmation focus, restores on Escape, keeps one row, and ge
   await trigger.click();
   await page.getByTestId("rerun-confirm-button").click();
   await waitIdle(page);
-  await expect(
-    page.getByTestId("chat-list").locator(":scope > [data-testid^='chat-']"),
-  ).toHaveCount(rowsBefore);
+  await expect(page.getByTestId("sessions-panel").locator("[data-active]")).toHaveCount(rowsBefore);
   await expect(page.getByTestId("transcript")).not.toContainText(
     "conversation that will be abandoned",
   );

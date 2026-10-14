@@ -24,6 +24,26 @@ export { expect } from "@playwright/test";
 export type { Page } from "@playwright/test";
 
 /**
+ * UI-01: the nav lives in the Orchestrate pull-up. Open it, pick the screen,
+ * then fold it back so the sessions list (and new-chat) stay reachable. Works
+ * whether the pull-up starts open or closed; it always ends collapsed.
+ */
+export async function openNav(
+  page: Page,
+  id: string,
+  options?: { timeout?: number },
+): Promise<void> {
+  const pullUp = page.getByTestId("orchestrate-expanded");
+  // Already open (a spec expanded it, or the persisted state reopened it).
+  if ((await pullUp.getAttribute("aria-hidden", options)) !== "false") {
+    await page.getByTestId("orchestrate-expand").click(options);
+  }
+  await expect(pullUp).toHaveAttribute("aria-hidden", "false");
+  await page.getByTestId(`nav-${id}`).click();
+  await page.getByTestId("orchestrate-collapse").click();
+}
+
+/**
  * Start a chat in the named project without selecting a global project.
  * Creates a session via HTTP, then activates it from the complete sessions list.
  * Resource management remains global: session activation does not scope catalogs.
@@ -46,21 +66,16 @@ export async function selectProject(page: Page, name: string): Promise<string> {
     const { session } = (await createResponse.json()) as { session: { id: string } };
     return session.id;
   }, name);
-  // The collapsed list contains only five rows, ordered by pin/activity.
-  // Background Loop updates can push even this new session out of it.
-  await page.getByTestId("sessions-expand").click();
-  const overlay = page.getByTestId("sessions-expanded");
-  await expect(overlay).toHaveAttribute("aria-hidden", "false");
-  await expect(overlay).toHaveCSS("pointer-events", "auto");
-  const search = overlay.getByTestId("sessions-search");
+  // UI-01: the full sessions list is the main sidebar layer, always in view.
+  const panel = page.getByTestId("sessions-panel");
+  const search = panel.getByTestId("sessions-search");
   await expect(search).toBeVisible();
   await expect(search).toBeEditable();
   if ((await search.inputValue()) !== "") await search.fill("");
   // session_meta arrives asynchronously after the HTTP creation response.
-  const row = overlay.getByTestId(`chat-${sessionId}`);
+  const row = panel.getByTestId(`chat-${sessionId}`);
   await expect(row).toBeVisible();
   await row.click();
-  await page.getByTestId("sessions-collapse").click();
   await expect(page.getByTestId("composer-input")).toBeVisible();
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
   return sessionId;

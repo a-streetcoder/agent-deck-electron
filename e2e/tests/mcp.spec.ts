@@ -2,7 +2,7 @@ import { mockMcpServerLaunch } from "@agent-deck/testkit";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, openNav, selectProject, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -32,7 +32,7 @@ test.afterAll(async () => {
 async function openProjectMcp(page: Parameters<typeof selectProject>[0]) {
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-mcp").click();
+  await openNav(page, "mcp");
 }
 
 async function assignServer(page: Parameters<typeof selectProject>[0], id: string) {
@@ -55,7 +55,7 @@ async function scopedMcp() {
 
 test("the empty state shows when no servers are configured", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-mcp").click();
+  await openNav(page, "mcp");
   await expect(page.getByTestId("mcp-empty")).toBeVisible();
 });
 
@@ -64,7 +64,7 @@ test("pauses MCP accessibly and preserves the policy across an app-server restar
 }) => {
   await page.setViewportSize({ width: 480, height: 800 });
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-mcp").click();
+  await openNav(page, "mcp");
   const toggle = page.getByRole("switch", { name: "MCP runtime availability" });
   await expect(toggle).toBeChecked();
   const onCapsule = await toggle.locator("..").boundingBox();
@@ -76,7 +76,7 @@ test("pauses MCP accessibly and preserves the policy across an app-server restar
 
   await harness.restart();
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-mcp").click();
+  await openNav(page, "mcp");
   await expect(page.getByRole("switch", { name: "MCP runtime availability" })).not.toBeChecked();
 
   // Restore shared-suite state and prove the explicit true survives too.
@@ -86,7 +86,7 @@ test("pauses MCP accessibly and preserves the policy across an app-server restar
 
 test("adds a remote HTTP server from the MCP form", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-mcp").click();
+  await openNav(page, "mcp");
   await expect(page.getByTestId("mcp-empty")).toBeVisible();
 
   await page.getByTestId("mcp-add").click();
@@ -121,7 +121,7 @@ test("edits a remote HTTP server URL from the MCP form", async ({ page }) => {
   expect(created.ok).toBe(true);
 
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-mcp").click();
+  await openNav(page, "mcp");
   await expect(page.getByTestId("mcp-remote-edit")).toBeVisible();
   await page.getByTestId("mcp-edit-remote-edit").click();
   await expect(page.getByTestId("mcp-edit-form")).toBeVisible();
@@ -159,7 +159,7 @@ test("edits protected HTTP headers without disclosing saved values", async ({ pa
   await page.setViewportSize({ width: 1100, height: 850 });
   await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-mcp").click();
+  await openNav(page, "mcp");
   await page.getByTestId("mcp-edit-protected-edit").click();
   await expect(page.getByLabel("Authorization has a saved value")).toBeVisible();
   await expect(page.getByLabel("X-Remove has a saved value")).toBeVisible();
@@ -202,7 +202,7 @@ test("edits protected HTTP headers without disclosing saved values", async ({ pa
 
   await harness.restart();
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-mcp").click();
+  await openNav(page, "mcp");
   await page.getByTestId("mcp-edit-protected-edit").click();
   await expect(page.getByLabel("Authorization has a saved value")).toBeVisible();
   await expect(page.getByLabel("X-Empty has a saved value")).toBeVisible();

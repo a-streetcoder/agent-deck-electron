@@ -2,7 +2,13 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, selectProject, startDraftWithMessage, test } from "../helpers/fixtures.ts";
+import {
+  expect,
+  openNav,
+  selectProject,
+  startDraftWithMessage,
+  test,
+} from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -128,12 +134,12 @@ test("an isolated session runs in a worktree", async ({ page }) => {
     (session) => (session as { cwd?: string }).cwd === secondWorktree,
   ) as { id: string; worktreeBranch: string };
 
-  await page.getByTestId("nav-git").click();
+  await openNav(page, "git");
   await expect(page.getByTestId("app-view-title")).toHaveText("Git");
   await expect(page.getByTestId("git-no-project")).toBeVisible();
 
-  const deleteButton = page.getByTestId("chat-list").getByTestId(`chat-delete-${isolated.id}`);
-  await page.getByTestId("chat-list").getByTestId(`chat-${isolated.id}`).hover();
+  const deleteButton = page.getByTestId("sessions-panel").getByTestId(`chat-delete-${isolated.id}`);
+  await page.getByTestId("sessions-panel").getByTestId(`chat-${isolated.id}`).hover();
   const canceledMessage = new Promise<string>((resolve) => {
     page.once("dialog", async (dialog) => {
       resolve(dialog.message());

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "../helpers/fixtures.ts";
+import { expect, openNav, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -37,7 +37,7 @@ test.afterAll(async () => {
 
 test("Git generate stays unavailable without a selected project", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-git").click();
+  await openNav(page, "git");
   await expect(page.getByTestId("app-view-title")).toHaveText("Git");
   await expect(page.getByTestId("git-no-project")).toBeVisible();
   await expect(page.getByTestId("git-generate-message")).toHaveCount(0);

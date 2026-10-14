@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "../helpers/fixtures.ts";
+import { expect, openNav, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 let harness: E2eHarness;
@@ -35,7 +35,7 @@ test.afterAll(async () => {
 
 test("Git selects a registered project without an active session", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-git").click();
+  await openNav(page, "git");
   await expect(page.getByTestId("app-view-title")).toHaveText("Git");
   await expect(page.getByTestId("git-no-project")).toBeVisible();
   await page.getByTestId("git-project-picker").selectOption({ label: path.basename(project) });

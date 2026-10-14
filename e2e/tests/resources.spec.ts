@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, openNav, selectProject, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -49,7 +49,7 @@ test("agents screen lists builtins and live-updates when files appear on disk", 
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
 
-  await page.getByTestId("nav-agents").click();
+  await openNav(page, "agents");
 
   // Builtins are present.
   for (const name of ["coder", "explorer", "planner", "reviewer"]) {
@@ -123,7 +123,7 @@ test("skills screen live-updates when a SKILL.md appears on disk", async ({ page
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
 
-  await page.getByTestId("nav-skills").click();
+  await openNav(page, "skills");
 
   const skillDir = path.join(harness.piHome, ".agents", "skills", "release-notes");
   mkdirSync(skillDir, { recursive: true });
@@ -166,7 +166,7 @@ test("multi-select bulk-deletes skills (7.5)", async ({ page }) => {
   await registerProject();
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-skills").click();
+  await openNav(page, "skills");
 
   // Two global skills on disk.
   for (const name of ["bulk-a", "bulk-b"]) {
@@ -202,7 +202,7 @@ test("imports a local .md file as a skill (7.3)", async ({ page }) => {
   await registerProject();
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-skills").click();
+  await openNav(page, "skills");
 
   // A source .md on disk (outside any catalog).
   const source = path.join(mkdtempSync(path.join(tmpdir(), "skill-src-")), "anything.md");
@@ -230,7 +230,7 @@ test("skill detail flags disable-model-invocation as 'manual only' (native 7.6)"
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
-  await page.getByTestId("nav-skills").click();
+  await openNav(page, "skills");
 
   // A skill the model must NOT auto-invoke (disable-model-invocation) and a
   // normal one that it may.
@@ -283,7 +283,7 @@ test("renaming keeps the detail on the renamed skill in a multi-skill list", asy
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
-  await page.getByTestId("nav-skills").click();
+  await openNav(page, "skills");
   await expect(page.locator('[data-skill-name="zeta-skill"]')).toBeVisible({ timeout: 15_000 });
   await page.locator('[data-skill-name="zeta-skill"]').click();
   await expect(page.getByTestId("skill-invocation")).toHaveText("/skill:zeta-skill");

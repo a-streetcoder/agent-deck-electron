@@ -1,4 +1,4 @@
-import { expect, test } from "../helpers/fixtures.ts";
+import { expect, openNav, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -97,7 +97,7 @@ test("prompt rows support explicit keyboard selection without firing row actions
     }),
   });
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-prompts").click();
+  await openNav(page, "prompts");
   const row = page.locator('[data-prompt-name="keyboard-select-check"]');
   await expect(row).toBeVisible();
 
@@ -137,7 +137,7 @@ test("copies the explicitly selected prompt invocation with clipboard feedback",
     });
   });
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-prompts").click();
+  await openNav(page, "prompts");
   const row = page.locator('[data-prompt-name="command-copy-check"]');
   await expect(row).toBeVisible();
   await row.getByRole("button").first().click();
@@ -165,7 +165,7 @@ test("enable/disable command reuses the selected agent toggle workflow", async (
     }),
   });
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-agents").click();
+  await openNav(page, "agents");
   const row = page.locator('[data-agent-name="command-toggle-check"]');
   await expect(row).toBeVisible();
   await row.click();

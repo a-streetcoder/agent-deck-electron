@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, openNav, selectProject, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -37,7 +37,7 @@ test.afterAll(async () => {
 
 test("add a global env var — written to the real file, shown masked", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-environment").click();
+  await openNav(page, "environment");
 
   await page.getByTestId("env-add").click();
   await page.getByTestId("env-new-key").fill("NEW_TOKEN");
@@ -58,7 +58,7 @@ test("add a global env var — written to the real file, shown masked", async ({
 
 test("edit an existing var replaces its value, preserving other lines", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-environment").click();
+  await openNav(page, "environment");
 
   await page.getByTestId("env-edit-EXISTING_KEY").click();
   const input = page.getByTestId("env-edit-input-EXISTING_KEY");
@@ -75,7 +75,7 @@ test("edit an existing var replaces its value, preserving other lines", async ({
 
 test("delete a var removes it from the file", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-environment").click();
+  await openNav(page, "environment");
 
   // Delete is confirm-gated (native parity).
   page.once("dialog", (dialog) => void dialog.accept());
@@ -91,7 +91,7 @@ test("project env writes use the scoped API and stay out of global management", 
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
-  await page.getByTestId("nav-environment").click();
+  await openNav(page, "environment");
 
   await page.getByTestId("env-add").click();
   await expect(page.getByTestId("env-new-scope").locator('option[value="project"]')).toHaveCount(0);
@@ -109,7 +109,7 @@ test("project env writes use the scoped API and stay out of global management", 
   expect(masked).toContain("PROJECT_ONLY");
   expect(masked).not.toContain("project-secret-9876");
   await page.reload();
-  await page.getByTestId("nav-environment").click();
+  await openNav(page, "environment");
   await expect(page.locator('[data-env-key="PROJECT_ONLY"]')).toHaveCount(0);
   expect(existsSync(projectEnvPath())).toBe(true);
   expect(readFileSync(projectEnvPath(), "utf8")).toContain("PROJECT_ONLY=project-secret-9876");

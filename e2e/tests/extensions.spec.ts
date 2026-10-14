@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "../helpers/fixtures.ts";
+import { expect, openNav, test } from "../helpers/fixtures.ts";
 import { writeQuestionCommandExtension } from "@agent-deck/testkit";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
@@ -49,7 +49,7 @@ test("adding an extension loads its command; disabling excludes it", async ({ pa
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
 
   // Add the extension via the screen.
-  await page.getByTestId("nav-extensions").click();
+  await openNav(page, "extensions");
   await page.getByTestId("extension-add").click();
   await page.getByTestId("extension-path").fill(extFile);
   await page.getByTestId("extension-add-confirm").click();
@@ -69,7 +69,7 @@ test("adding an extension loads its command; disabling excludes it", async ({ pa
   await expect.poll(() => commandNames(id1), { timeout: 20_000 }).toContain("ask-test");
 
   // Disable it → the next session excludes it.
-  await page.getByTestId("nav-extensions").click();
+  await openNav(page, "extensions");
   await page.getByTestId(`extension-toggle-${extName}`).click();
   const before2 = await sessionIds();
   await page.getByTestId("new-chat").click();
@@ -86,7 +86,7 @@ test("adding an extension loads its command; disabling excludes it", async ({ pa
 
 test("imports, enables, and deletes one app-owned slash command", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-extensions").click();
+  await openNav(page, "extensions");
   await expect(page.getByTestId("command-catalog")).toBeVisible();
   await page.getByTestId("command-file-input").setInputFiles({
     name: "e2e-command.ts",
@@ -122,7 +122,7 @@ test("flags two enabled extensions that share a filename (§16.2)", async ({ pag
   writeFileSync(b, "export default {};\n");
 
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-extensions").click();
+  await openNav(page, "extensions");
   for (const p of [a, b]) {
     await page.getByTestId("extension-add").click();
     await page.getByTestId("extension-path").fill(p);
@@ -145,7 +145,7 @@ test("refreshes externally added, changed, and deleted extension files in place"
   const extensionPath = path.join(extensionDir, extensionName);
 
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-extensions").click();
+  await openNav(page, "extensions");
   await expect(page.locator(`[data-extension-name="${extensionName}"]`)).toHaveCount(0);
 
   mkdirSync(extensionDir, { recursive: true });
@@ -202,7 +202,7 @@ test("shows a discovered extension with its source label + a bridge-conflict war
   });
 
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-extensions").click();
+  await openNav(page, "extensions");
 
   // The discovered extension is labeled by scope + source, and (being discovered,
   // not added) has no Remove button.
@@ -215,7 +215,7 @@ test("shows a discovered extension with its source label + a bridge-conflict war
 
 test("shows the read-only Agent Deck bridges inventory (memory active)", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-extensions").click();
+  await openNav(page, "extensions");
 
   // The app-bridges section lists what Agent Deck injects over its own bridge.
   await expect(page.getByTestId("app-bridges")).toBeVisible();
@@ -236,7 +236,7 @@ test("shows readable extension load, toggle, and remove failures", async ({ page
     });
   });
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-extensions").click();
+  await openNav(page, "extensions");
   await expect(page.getByTestId("error-banner")).toHaveText(
     "Error: Extension inventory is temporarily unavailable.",
   );
@@ -271,7 +271,7 @@ test("shows readable extension load, toggle, and remove failures", async ({ page
     await route.fulfill({ status: 409, json: { error: "Extension toggle was refused." } });
   });
   await page.reload();
-  await page.getByTestId("nav-extensions").click();
+  await openNav(page, "extensions");
 
   await page.getByTestId("extension-toggle-failing-extension.ts").click();
   await expect(page.getByTestId("error-banner")).toHaveText("Error: Extension toggle was refused.");
@@ -338,7 +338,7 @@ test("serializes mode and extension mutations and reconciles partial bulk failur
   });
 
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-extensions").click();
+  await openNav(page, "extensions");
 
   const managedMode = page.getByTestId("extension-mode-agentDeckManaged");
   await managedMode.click();
@@ -375,7 +375,7 @@ test("loading-mode picker + bulk enable/disable (native PiAgentExtensionLoadingM
   page,
 }) => {
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-extensions").click();
+  await openNav(page, "extensions");
 
   // The mode picker offers both native modes.
   await expect(page.getByTestId("extension-mode-useMyExtensions")).toBeVisible();

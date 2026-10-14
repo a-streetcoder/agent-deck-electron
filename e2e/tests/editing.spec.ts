@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, openNav, selectProject, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -44,7 +44,7 @@ test("editing a builtin writes an override and never mutates the builtin file", 
   const bytesBefore = readFileSync(BUILTIN_CODER);
 
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-agents").click();
+  await openNav(page, "agents");
   // Master-detail: clicking a row selects it; Edit opens the tabbed sheet.
   await page.locator('[data-agent-name="coder"]').click();
   await page.getByTestId("agent-edit").click();
@@ -67,7 +67,7 @@ test("editing an agent's MCP servers persists and round-trips through the editor
   page,
 }) => {
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-agents").click();
+  await openNav(page, "agents");
   await page.locator('[data-agent-name="coder"]').click();
   await page.getByTestId("agent-edit").click();
 
@@ -91,7 +91,7 @@ test("editing an agent's fallback models persists and round-trips through the ed
   page,
 }) => {
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-agents").click();
+  await openNav(page, "agents");
   await page.locator('[data-agent-name="coder"]').click();
   await page.getByTestId("agent-edit").click();
 
@@ -117,7 +117,7 @@ test("creating a global agent in the editor lands on disk and is pickable", asyn
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
 
-  await page.getByTestId("nav-agents").click();
+  await openNav(page, "agents");
   await page.getByTestId("new-agent").click();
   await page.getByTestId("editor-name").fill("waffle-bot");
   await page.getByTestId("editor-scope").selectOption("global");
@@ -151,7 +151,7 @@ test("editing a skill updates its SKILL.md without losing the body", async ({ pa
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
 
-  await page.getByTestId("nav-skills").click();
+  await openNav(page, "skills");
   await page.getByTestId("new-skill").click();
   await page.getByTestId("skill-editor-name").fill("changelog");
   // Management is global; selecting a project chat does not scope resource writes.

@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, openNav, selectProject, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -28,14 +28,14 @@ test.afterAll(async () => {
 
 test("the All Projects workspace prompts to open a project for memory", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-memory").click();
+  await openNav(page, "memory");
   await expect(page.getByTestId("memory-no-project")).toBeVisible();
 });
 
 test("opening a project session does not select Memory onto that project", async ({ page }) => {
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-memory").click();
+  await openNav(page, "memory");
   await expect(page.getByTestId("app-view-title")).toHaveText("Memory");
   await expect(page.getByTestId("memory-no-project")).toBeVisible();
   await expect(page.getByTestId("memory-search")).toHaveCount(0);

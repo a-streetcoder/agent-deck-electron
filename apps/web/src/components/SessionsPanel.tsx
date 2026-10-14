@@ -2,8 +2,6 @@ import { ControlButton, ControlInput } from "@/design-system/components/NativeCo
 import { useEffect, useRef, useState } from "react";
 import {
   BellRing,
-  ChevronDown,
-  ChevronUp,
   CircleAlert,
   GitFork,
   Pencil,
@@ -34,11 +32,13 @@ import { sectionHeaderClass } from "@/design-system/styles";
  * The Coding-Agent sessions panel, ported from the native sidebar
  * (CodingAgentSidebarPanel.swift + CodingAgentPanelLayers in ContentView.swift).
  *
- * Two permanently-mounted layers below the brand title bar:
- *   - the NAV layer (sections + the collapsed sessions card at its bottom),
- *     which recedes (scale .98, y -24, fade) when the panel expands;
- *   - the EXPANDED layer, which fills the whole area below the logo and
- *     slides up to dock there (origin bottom, y +52 → 0, scale .94 → 1).
+ * UI-01 deliberately inverts the native layering. Two permanently-mounted
+ * layers below the brand title bar (see Sidebar.tsx):
+ *   - the SESSIONS layer (this panel, with the collapsed Orchestrate card at
+ *     its bottom) is always in view, and recedes (scale .98, y -24, fade) when
+ *     the Orchestrate pull-up expands;
+ *   - the ORCHESTRATE layer (the nav sections) fills the whole area below the
+ *     logo and slides up to dock there (origin bottom, y +52 → 0, scale .94 → 1).
  * Motion and fade run on separate curves (spring ~420ms / ease-out 220ms);
  * only transform/opacity animate — never layout.
  */
@@ -319,90 +319,10 @@ function useSessionsData() {
   };
 }
 
-/** Collapsed card — lives at the bottom of the NAV layer. */
-export function SessionsCollapsedCard({ onExpand }: { onExpand: () => void }) {
+/** The sessions list — the main sidebar layer, always in view (UI-01). */
+export function SessionsMainPanel() {
   const { byNewest, currentSession, agentStatus, setView, projectName, pendingAttentionCount } =
     useSessionsData();
-  const panelExpanded = useAppStore((state) => state.panelExpanded);
-  const listedSessions = sortSessionsWithPins(byNewest);
-
-  return (
-    <div className="px-2 pb-2">
-      <div className="rounded-2xl border border-border-subtle bg-surface-elevated p-2 shadow-card">
-        <div className="flex items-center justify-between gap-1 px-1.5 pb-1">
-          <span className="text-detail font-semibold text-text-primary">
-            Sessions
-            {pendingAttentionCount > 0 ? (
-              <span
-                className="ml-1.5 rounded-full bg-accent-surface px-1.5 py-0.5 text-micro text-text-primary"
-                data-testid="sessions-attention-count"
-                aria-label={`${pendingAttentionCount} sessions across all projects need attention`}
-                title="Sessions needing attention across all projects"
-              >
-                {pendingAttentionCount}
-              </span>
-            ) : null}
-          </span>
-          <span className="flex min-w-0 items-center gap-1">
-            <SessionStatusIndicator attachTestId={!panelExpanded} />
-            <ControlButton
-              data-testid="new-chat"
-              className="rounded-capsule p-1 text-text-muted hover:bg-hover hover:text-text-primary"
-              title="New chat"
-              onClick={() => {
-                setView("chat");
-                void newChat();
-              }}
-            >
-              <Plus size={14} />
-            </ControlButton>
-            <ControlButton
-              data-testid="sessions-expand"
-              className="rounded-capsule p-1 text-text-muted hover:bg-hover hover:text-text-primary"
-              title="All sessions"
-              onClick={onExpand}
-            >
-              <ChevronUp size={14} />
-            </ControlButton>
-          </span>
-        </div>
-        <div className="space-y-0.5" data-testid="chat-list">
-          {listedSessions.slice(0, 5).map((session) => (
-            <SessionRow
-              key={session.id}
-              session={session}
-              displayTitle={sessionDisplayTitle(session.title, projectName(session.projectId))}
-              active={currentSession?.id === session.id}
-              running={currentSession?.id === session.id && agentStatus === "running"}
-              onSelect={() => {
-                setView("chat");
-                void switchToSession(session);
-              }}
-            />
-          ))}
-          {listedSessions.length === 0 ? (
-            <div className="px-2.5 py-2 text-detail text-text-muted">No sessions yet.</div>
-          ) : null}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Expanded layer — fills the entire area below the brand title bar and
- * slides up to dock there. Rendered as `absolute inset-0` by the sidebar.
- */
-export function SessionsExpandedOverlay({
-  expanded,
-  onCollapse,
-}: {
-  expanded: boolean;
-  onCollapse: () => void;
-}) {
-  const { byNewest, currentSession, agentStatus, setView, projectName, pendingAttentionCount } =
-    useSessionsData();
-  const panelExpanded = useAppStore((state) => state.panelExpanded);
   const [search, setSearch] = useState("");
 
   // Search sessions by title OR content (native Sessions search 18.1 "by title
@@ -445,27 +365,15 @@ export function SessionsExpandedOverlay({
   }
 
   return (
-    <div
-      className="absolute inset-0 z-10 flex flex-col px-2 pb-2"
-      data-testid="sessions-expanded"
-      inert={!expanded}
-      aria-hidden={!expanded}
-      style={{
-        transition: `${PANEL_MOVE}, ${PANEL_FADE}`,
-        transformOrigin: "bottom",
-        transform: expanded ? "none" : "scale(0.94) translateY(52px)",
-        opacity: expanded ? 1 : 0,
-        pointerEvents: expanded ? "auto" : "none",
-      }}
-    >
-      <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-border-subtle bg-surface-elevated p-2 shadow-elevated">
+    <div className="flex min-h-0 flex-1 flex-col px-2 pb-2" data-testid="sessions-panel">
+      <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-border-subtle bg-surface-elevated p-2 shadow-card">
         <div className="flex items-center justify-between gap-1 px-1.5 pb-1.5">
           <span className="text-detail font-semibold text-text-primary">
-            All sessions
+            Sessions
             {pendingAttentionCount > 0 ? (
               <span
                 className="ml-1.5 rounded-full bg-accent-surface px-1.5 py-0.5 text-micro text-text-primary"
-                data-testid="sessions-expanded-attention-count"
+                data-testid="sessions-attention-count"
                 aria-label={`${pendingAttentionCount} sessions across all projects need attention`}
                 title="Sessions needing attention across all projects"
               >
@@ -474,13 +382,17 @@ export function SessionsExpandedOverlay({
             ) : null}
           </span>
           <span className="flex min-w-0 items-center gap-1">
-            <SessionStatusIndicator attachTestId={panelExpanded} />
+            <SessionStatusIndicator attachTestId />
             <ControlButton
-              data-testid="sessions-collapse"
+              data-testid="new-chat"
               className="rounded-capsule p-1 text-text-muted hover:bg-hover hover:text-text-primary"
-              onClick={onCollapse}
+              title="New chat"
+              onClick={() => {
+                setView("chat");
+                void newChat();
+              }}
             >
-              <ChevronDown size={14} />
+              <Plus size={14} />
             </ControlButton>
           </span>
         </div>
@@ -515,8 +427,6 @@ export function SessionsExpandedOverlay({
                     running={currentSession?.id === session.id && agentStatus === "running"}
                     detailed
                     onSelect={() => {
-                      // Stay expanded while moving between sessions (native:
-                      // selecting a session never collapses the panel).
                       setView("chat");
                       void switchToSession(session);
                     }}

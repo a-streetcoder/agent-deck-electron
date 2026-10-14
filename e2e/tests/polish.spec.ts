@@ -69,7 +69,7 @@ test("an ended session resumes with its transcript rebuilt from pi's history", a
 
   // Both panel layers stay mounted (native two-layer animation), so scope to
   // the collapsed list. Clicking an ended session resumes and rebuilds it.
-  const chatButton = page.getByTestId("chat-list").getByTestId(`chat-${liveSession.meta.id}`);
+  const chatButton = page.getByTestId("sessions-panel").getByTestId(`chat-${liveSession.meta.id}`);
   await expect(chatButton).toBeVisible();
   await chatButton.click();
   await expect(page.getByTestId("user-cell").last()).toContainText("remember the number 42", {
