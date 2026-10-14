@@ -81,7 +81,12 @@ import {
   mergeMcpServerConfigs,
   mcpServerConfigsFromEnv,
 } from "./mcpTools.ts";
-import { nativeMcpEnabled, nativeMcpList, nativeMcpToolPattern } from "./mcpNative.ts";
+import {
+  nativeMcpEnabled,
+  nativeMcpList,
+  nativeMcpRefusal,
+  nativeMcpToolPattern,
+} from "./mcpNative.ts";
 import { McpOAuthCoordinator, resolveMcpOAuthRedirectMode } from "./mcpOAuth.ts";
 import { FileMcpAssignmentStore, type McpAssignmentStore } from "./mcpAssignments.ts";
 import { FileMcpPolicyStore, type McpPolicyStore } from "./mcpPolicy.ts";
@@ -574,7 +579,8 @@ async function initServer(
         const disposeAccess = registerChildBridgeAccess({
           sessionId: childSessionId,
           token,
-          toolNames,
+          // The policy hook's internal callback, never a model-facing tool.
+          toolNames: native?.servers.length ? [...toolNames, "__mcp_authorize__"] : toolNames,
           ...(parent?.projectId && project
             ? { authorization: { projectId: parent.projectId, projectPath: project.path } }
             : {}),
@@ -996,6 +1002,41 @@ async function initServer(
     ...mcpOAuthRedirect,
   });
   const oauthKey = (scope: string, id: string): string => `v2:${JSON.stringify([scope, id])}`;
+  const mcpServerAllowedForSession = (sessionId: string, serverId: string): boolean => {
+    const child = childMcpAssignments.get(sessionId);
+    if (child) {
+      const parent = sessions.get(child.parentSessionId)?.meta;
+      return (
+        !!parent &&
+        parent.projectId === child.projectId &&
+        !!projects.find((project) => project.id === child.projectId && !project.hidden) &&
+        resolveNamedAgent(child.agentName, child.projectId).status === "ok" &&
+        child.serverIds.includes(serverId) &&
+        mcpAllowlistForSession({ ...parent, agentName: child.agentName }).includes(serverId)
+      );
+    }
+    const meta = sessions.get(sessionId)?.meta;
+    return meta ? mcpAllowlistForSession(meta).includes(serverId) : false;
+  };
+  // PI-03c: the live answer to a native MCP call (the bridge's __mcp_authorize__).
+  const nativeMcpRefusalFor = (sessionId: string, server: string, tool: string) => {
+    const child = childMcpAssignments.get(sessionId);
+    const meta = child ? undefined : sessions.get(sessionId)?.meta;
+    const projectId = child?.projectId ?? meta?.projectId;
+    const project = projects.find((candidate) => candidate.id === projectId);
+    const serverIds = child?.serverIds ?? (meta ? mcpAllowlistForSession(meta) : []);
+    return nativeMcpRefusal({
+      enabled: mcpPolicy.enabled(),
+      projectVisible: !!project && !project.hidden,
+      configs: project
+        ? effectiveMcpConfigs(project.id).configs.filter((config) => serverIds.includes(config.id))
+        : [],
+      assigned: (id) => mcpServerAllowedForSession(sessionId, id),
+      ...(child?.toolAllowlist ? { toolAllowlist: child.toolAllowlist } : {}),
+      server,
+      tool,
+    });
+  };
   const mcp: McpManager = new McpManager(bridge, {
     httpAuthProvider: (scope, id, serverUrl) =>
       mcpOAuth.providerFor(oauthKey(scope, id), serverUrl, { projectId: scope, serverId: id }),
@@ -1003,22 +1044,7 @@ async function initServer(
       mcpOAuth.state(oauthKey(scope, id)).status === "authorizing",
     scopeForSession: (sessionId) =>
       childMcpAssignments.get(sessionId)?.projectId ?? sessions.get(sessionId)?.meta.projectId,
-    allowServerForSession: (sessionId, serverId) => {
-      const child = childMcpAssignments.get(sessionId);
-      if (child) {
-        const parent = sessions.get(child.parentSessionId)?.meta;
-        return (
-          !!parent &&
-          parent.projectId === child.projectId &&
-          !!projects.find((project) => project.id === child.projectId && !project.hidden) &&
-          resolveNamedAgent(child.agentName, child.projectId).status === "ok" &&
-          child.serverIds.includes(serverId) &&
-          mcpAllowlistForSession({ ...parent, agentName: child.agentName }).includes(serverId)
-        );
-      }
-      const meta = sessions.get(sessionId)?.meta;
-      return meta ? mcpAllowlistForSession(meta).includes(serverId) : false;
-    },
+    allowServerForSession: mcpServerAllowedForSession,
     toolPolicyForSession: (sessionId) => {
       const child = childMcpAssignments.get(sessionId);
       const meta = sessions.get(sessionId)?.meta;
@@ -1489,6 +1515,7 @@ async function initServer(
     reconcileProjectMcp,
     prepareProjectMcpSession,
     effectiveMcpConfigs,
+    nativeMcpRefusal: nativeMcpRefusalFor,
     globalMcpConfigs,
     isMcpEnvOverride: (id) => mcpEnvConfigs.some((config) => config.id === id),
     oauthKey,

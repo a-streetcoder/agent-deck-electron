@@ -109,3 +109,57 @@ export function nativeMcpList(configs: McpServerConfig[], toolAllowlist?: string
   }
   return { servers, blockedTools, idMap };
 }
+
+const sanitise = (s: string): string => s.replace(/[^A-Za-z0-9_]/g, "_");
+
+/**
+ * PI-03c: why a native MCP call may not run, from live state; undefined allows
+ * it. The generated extension asks before each call and again on its result
+ * (the result is withheld on refusal: the side effect already happened, as with
+ * the proxy). `configs` is the list the Pi names are mapped back over (a child's
+ * grant as at spawn, a main session's live assignment), `assigned` the live
+ * assignment check, `server` the Pi server name and `tool` the Pi-sanitised
+ * identifier after `mcp__<server>__`.
+ */
+export function nativeMcpRefusal(input: {
+  enabled: boolean;
+  projectVisible: boolean;
+  configs: McpServerConfig[];
+  assigned: (id: string) => boolean;
+  toolAllowlist?: string[];
+  server: string;
+  tool: string;
+}): string | undefined {
+  const piName = piToolName(input.server, input.tool);
+  if (!input.enabled) return `MCP is turned off in Agent Deck, so "${piName}" cannot run.`;
+  if (!input.projectVisible)
+    return `This session's project is gone or hidden, so "${piName}" cannot run.`;
+  const id = nativeMcpList(input.configs, input.toolAllowlist).idMap.get(input.server);
+  const config = input.configs.find((candidate) => candidate.id === id);
+  if (!config || !input.assigned(config.id))
+    return `MCP server "${input.server}" is no longer assigned to this session.`;
+  if (input.toolAllowlist) {
+    // Legacy grants name `mcp__<sanitised id>__<tool>`; compare sanitised, and
+    // refuse when two granted ids share that alias (the grant is ambiguous).
+    const alias = sanitise(config.id);
+    const granted =
+      input.configs.filter((candidate) => sanitise(candidate.id) === alias).length === 1 &&
+      input.toolAllowlist.some((t) => sanitise(t) === `mcp__${alias}__${input.tool}`);
+    if (!granted) return `"${piName}" is not in this agent's tool list.`;
+  }
+  // Settings name raw tools; Pi only shows the sanitised one, so every raw name
+  // that sanitises to it must be allowed (fails closed on a collision).
+  const raws = [
+    ...(config.enabledTools ?? []),
+    ...(config.disabledTools ?? []),
+    ...Object.keys(config.toolApproval ?? {}),
+  ].filter((t) => sanitise(t) === input.tool);
+  for (const raw of raws.length ? raws : [input.tool]) {
+    if (configToolAllowed(config, raw)) continue;
+    const block = toolApprovalBlock(config, raw);
+    return block
+      ? `"${piName}": ${block}`
+      : `"${piName}" is turned off for "${config.id}" in Agent Deck.`;
+  }
+  return undefined;
+}

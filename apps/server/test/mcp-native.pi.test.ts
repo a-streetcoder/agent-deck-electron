@@ -160,4 +160,40 @@ describe("native MCP", () => {
     expect(results).not.toContain("echo: child-two");
     expect(results).toContain("mcp__beta__echo");
   });
+
+  it("refuses a call to a server unassigned after the session started (PI-03c)", async () => {
+    const created = await fetch(`http://127.0.0.1:${deck.port}/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        startImmediately: true,
+        projectId,
+        provider: MOCK_PROVIDER_ID,
+        model: MOCK_MODEL_ID,
+        env: piEnv,
+      }),
+    });
+    expect(created.status).toBe(201);
+    const sessionId = ((await created.json()) as { session: { id: string } }).session.id;
+    // beta stays in this Pi process's list; the live policy hook refuses it.
+    const unassigned = await fetch(`http://127.0.0.1:${deck.port}/projects/${projectId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assignedMcpServers: ["alpha.one"] }),
+    });
+    expect(unassigned.status).toBe(200);
+    plan = [
+      { name: "mcp__beta__echo", arguments: { message: "three" } },
+      { name: "mcp__alpha_one__echo", arguments: { message: "four" } },
+    ];
+    const start = mock.requests.length;
+    await deck.sessions.get(sessionId)!.prompt("use the mcp echo tools again");
+    await deck.receipts.waitFor("idle", sessionId);
+    const requests = mock.requests.slice(start).filter((r) => toolNames(r).length > 0);
+    expect(toolNames(requests[0])).toContain("mcp__beta__echo");
+    const results = toolText(requests);
+    expect(results).toContain('MCP server \\"beta\\" is no longer assigned to this session.');
+    expect(results).not.toContain("echo: three");
+    expect(results).toContain("ALPHA: four");
+  });
 });

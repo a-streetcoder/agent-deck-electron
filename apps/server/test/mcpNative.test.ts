@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nativeMcpList } from "../src/mcpNative.ts";
+import { nativeMcpList, nativeMcpRefusal } from "../src/mcpNative.ts";
 import { mcpEntryToConfig, type McpServerConfig } from "../src/mcpTools.ts";
 import { normalizeAgentMcpProxyTools } from "../src/launchResources.ts";
 
@@ -130,5 +130,66 @@ describe("nativeMcpList", () => {
       delete process.env.AGENT_DECK_NATIVE_MCP;
     }
     expect(normalizeAgentMcpProxyTools(["read", "mcp"], ["a"])).toEqual(["read", "mcp"]);
+  });
+});
+
+describe("nativeMcpRefusal", () => {
+  const live = (over: Partial<Parameters<typeof nativeMcpRefusal>[0]> = {}) =>
+    nativeMcpRefusal({
+      enabled: true,
+      projectVisible: true,
+      configs: [stdio("docs.v2"), stdio("other")],
+      assigned: () => true,
+      server: "docs_v2",
+      tool: "search",
+      ...over,
+    });
+
+  it("allows an assigned server's tool", () => {
+    expect(live()).toBeUndefined();
+  });
+
+  it("refuses on global disable, hidden project, and an unassigned server", () => {
+    expect(live({ enabled: false })).toMatch(/turned off/);
+    expect(live({ projectVisible: false })).toMatch(/gone or hidden/);
+    expect(live({ assigned: (id) => id !== "docs.v2" })).toMatch(/no longer assigned/);
+    expect(live({ server: "gamma" })).toMatch(/no longer assigned/);
+    // Pi names `a-b` and `a_b` are distinct servers: no sanitised fallback.
+    expect(live({ configs: [stdio("a-b")], server: "a_b" })).toMatch(/no longer assigned/);
+  });
+
+  it("refuses prompt/writes approval modes and disabled tools by their sanitised name", () => {
+    const configs = [
+      stdio("docs.v2", {
+        toolApproval: { "get-page": "prompt" },
+        disabledTools: ["drop.all"],
+      }),
+    ];
+    expect(live({ configs, tool: "get_page" })).toMatch(
+      /"mcp__docs_v2__get_page": .*approval mode "prompt"/,
+    );
+    expect(live({ configs, tool: "drop_all" })).toMatch(/turned off for "docs.v2"/);
+    expect(live({ configs, tool: "search" })).toBeUndefined();
+    expect(live({ configs: [stdio("docs.v2", { defaultToolApproval: "writes" })] })).toMatch(
+      /approval mode "writes"/,
+    );
+  });
+
+  it("holds a child to its legacy grant, compared on sanitised names", () => {
+    const toolAllowlist = ["mcp__docs_v2__get-page"];
+    expect(live({ toolAllowlist, tool: "get_page" })).toBeUndefined();
+    expect(live({ toolAllowlist, tool: "search" })).toMatch(/not in this agent's tool list/);
+    // Two granted ids sharing the legacy alias make the grant ambiguous.
+    expect(
+      live({ toolAllowlist, configs: [stdio("docs.v2"), stdio("docs_v2")], tool: "get_page" }),
+    ).toMatch(/not in this agent's tool list/);
+  });
+
+  it("refuses the result phase once the server was unassigned mid-call", () => {
+    let assigned = true;
+    const call = () => live({ assigned: () => assigned });
+    expect(call()).toBeUndefined();
+    assigned = false;
+    expect(call()).toMatch(/no longer assigned/);
   });
 });

@@ -91,7 +91,8 @@ export interface BridgeExtensionOptions {
    * extension via createMcpExtension with a fixed server list instead of
    * <agentDir>/mcp.json. Blocked tools are refused in tool_call; suppressed
    * tools have their result replaced in tool_result. Names are Pi's
-   * normalised `mcp__<server>__<tool>`.
+   * normalised `mcp__<server>__<tool>`. Every other `mcp__` call and result is
+   * checked live through the endpoint (tool `__mcp_authorize__`).
    */
   nativeMcp?: {
     servers: Array<{ name: string; config: Record<string, unknown> }>;
@@ -276,11 +277,43 @@ ${
             stderr: "pipe",
           }),
   })(pi);
-  pi.on("tool_call", (event) => {
+  // PI-03c: policy stays in Agent Deck. Every MCP call asks the bridge
+  // (__mcp_authorize__, internal like __recall__) against live state before it
+  // runs and again on its result; no answer counts as a refusal (fail closed).
+  // Pi names tools mcp__<server>__<tool> with "-" turned into "_".
+  const mcpRefusal = async (event) => {
+    const owners = nativeMcp.servers.filter((s) => event.toolName.startsWith("mcp__" + s.name.replace(/-/g, "_") + "__"));
+    if (owners.length !== 1) return "Agent Deck cannot tell which MCP server " + event.toolName + " belongs to.";
+    const server = owners[0].name;
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId, token, tool: "__mcp_authorize__", toolCallId: event.toolCallId, params: {
+          toolName: event.toolName,
+          server,
+          tool: event.toolName.slice(("mcp__" + server + "__").length),
+          input: event.input,
+        } }),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) return "Agent Deck policy check failed (" + res.status + ").";
+      const data = await res.json();
+      return data && data.allow === true ? undefined : String((data && data.reason) || "Refused by Agent Deck policy.");
+    } catch (err) {
+      return "Agent Deck policy check failed: " + String(err);
+    }
+  };
+  pi.on("tool_call", async (event) => {
     if (blockedMcp.has(event.toolName)) return { block: true, reason: "Blocked by Agent Deck policy." };
+    if (!event.toolName.startsWith("mcp__")) return;
+    const reason = await mcpRefusal(event);
+    if (reason) return { block: true, reason };
   });
-  pi.on("tool_result", (event) => {
-    if (suppressedMcp.has(event.toolName)) {
+  // The call already ran: withholding the result is all that is left when the
+  // server was turned off or unassigned meanwhile.
+  pi.on("tool_result", async (event) => {
+    if (suppressedMcp.has(event.toolName) || (event.toolName.startsWith("mcp__") && (await mcpRefusal(event)))) {
       return { content: [{ type: "text", text: "Result withheld by Agent Deck policy." }], details: {}, isError: true };
     }
   });
