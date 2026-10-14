@@ -54,13 +54,12 @@ Do these right after L4b lands. Small, mostly local, high polish/security value.
    but the REST mutating routes don't; the in-app browser (L2) makes that
    reachable from arbitrary web content. Mirror the WS guard onto REST. _(small —
    do early; it's the one open security item)_
-4. **S20 branch-vs-base diff** — **in progress, ticket ade-3wuu**. Half built:
-   `apps/server/src/services/diff.ts` already accepts a `selectedBase` for
-   retained Loop reviews (LOOP-27, `57f7974`); worktree sessions do not use it
-   yet. The diff shows working-tree-vs-HEAD only, so a
-   worktree's _committed_ changes (agent/terminal `git commit` inside the
-   worktree) merge but aren't shown in review. Add a `sourceBranch...worktreeBranch`
-   diff base. _(small–medium)_
+4. ~~**S20 branch-vs-base diff**~~ — **DONE** (ade-3wuu, `b6d6d2e` on
+   `poc/shared-server`): the diff panel's "Compare with" select offers
+   "Uncommitted" (working tree vs HEAD) and "Since <source branch>" (merge base
+   of the worktree's source branch and HEAD) for worktree sessions, so committed
+   changes inside the worktree show in review; the branch set refetches at turn
+   end. `diff_files`/`diff_file` take an optional `base`.
 5. ~~**S19 image-dialog focus e2e**~~ — **DONE** (ade-mk3s, `bda3dd2` on
    `poc/shared-server`): `e2e/tests/expanded-image-focus.spec.ts` checks focus
    moves into the dialog, Escape closes it and focus returns to the trigger. The

@@ -329,10 +329,11 @@ Electron.
   verbatim, so `Origin: https://deck.moretti.cc` is admitted (and tested) regardless of the
   Host cloudflared forwards. Non-browser clients without an Origin are still admitted and then
   authenticated by the assertion.
-- REST: the only origin check is the browser-CSRF guard on the two terminal-launching POSTs
-  (`apps/server/src/routes/settings.ts`); it compares the Origin host with `Host`, which
-  matches through cloudflared, and now also accepts the public origin explicitly. No other
-  REST route checks Origin (see Known gaps).
+- REST: every mutating route (POST, PUT, PATCH, DELETE) and the server folder listing
+  `/fs/dirs` apply the WebSocket upgrade's origin rule in an `onRequest` hook
+  (`apps/server/src/server.ts`): a browser Origin must be loopback or the public origin, and a
+  request without an Origin (cloudflared, curl, the desktop main process) passes and is then
+  authenticated by the Access assertion. Untrusted origins get 403 `untrusted_origin`.
 
 ## Security model
 
@@ -356,11 +357,8 @@ Electron.
 
 ### Known gaps (POC)
 
-- The REST surface still has no Origin/CSRF guard (roadmap Track 1 #3). Access and the
-  Electron navigation guards stand in front of it, but a signed-in browser tab remains
-  cross-site-requestable from other sites; mirror the WebSocket guard onto mutating REST
-  routes before widening the audience.
-- `session-authors.json` is one file rewritten per message and never pruned on session
-  deletion; fine for two people, not for a fleet.
+- `session-authors.json` is one file rewritten per message; rows go with `DELETE
+/sessions/:id` and orphans are dropped at startup, but there is no size bound. Fine for two
+  people, not for a fleet.
 - No per-user authorization, quotas or private sessions; no identity in Loops or subagent
   runs beyond the parent session's `createdBy`.
