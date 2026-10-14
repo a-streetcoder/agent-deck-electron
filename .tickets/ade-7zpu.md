@@ -46,3 +46,7 @@ All package typechecks pass (packages/resources, packages/domain, packages/pi-ho
 **2026-10-14T19:30:54Z**
 
 2026-10-14 architect: merged as 831b5cc (merge of wt/ade-7zpu 27f9815). Deploy sequence followed: unit stopped before the merge reached the VM, lockfile synced, pnpm install --frozen-lockfile on the VM (exit 0, 64 packages added), build:web, start. Decision on the workload-identity env names: left out of the shared-server credential list (API keys and OAuth tokens only), as the developer did. Open for PI-03: Pi 1.2 ignores Agent Deck-only mcp.json fields (toolApproval, bearerTokenEnvVar) silently and reads the same files; built-in MCP stays off under --no-extensions. pi-claude-bridge 0.9.3 still needs one real Claude Code run (owner, when Claude Code is installed on the VM).
+
+**2026-10-14T22:10:46Z**
+
+2026-10-14 owner live check on the VM: a session on a claude-bridge model (pi-claude-bridge 0.9.3 on Pi 1.2, Claude Code login present on the VM) answered, and a session on a direct anthropic model (Pi OAuth sign-in through the paste flow) answered too. Both paths work; the owner sees Claude models twice in the picker (direct and via the bridge).
