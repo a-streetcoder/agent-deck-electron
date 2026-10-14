@@ -76,6 +76,30 @@ export async function retryInSlots(
 }
 
 /**
+ * Per-user Cloudflare Access token through cloudflared's non-browser flow
+ * (ade-1vjx): `access token` prints the cached token; when there is none or it
+ * expired, `access login` opens the SYSTEM browser (where passkeys work) and
+ * caches a fresh one. `run(args, timeoutMs)` resolves stdout or rejects. The
+ * token is a credential: never log it.
+ */
+export async function cloudflaredAccessToken(run, origin) {
+  const token = async () => {
+    const value = (await run(["access", "token", `-app=${origin}`], 15_000)).trim();
+    if (!/^[\w-]+\.[\w-]+\.[\w-]+$/.test(value)) {
+      throw new Error("cloudflared access token did not print a token");
+    }
+    return value;
+  };
+  try {
+    return await token();
+  } catch {
+    // No cached token, or it expired: log in through the system browser.
+  }
+  await run(["access", "login", origin], 300_000);
+  return token();
+}
+
+/**
  * Did the main frame land on the app itself? True only for a page on the
  * control-plane origin, so the Access login pages (team domain, GitHub) that
  * precede it never count as "the app loaded".

@@ -1,6 +1,6 @@
 ---
 id: ade-1vjx
-status: open
+status: in_progress
 deps: [ade-brgd, ade-63d3]
 links: []
 created: 2026-10-14T00:08:58Z
@@ -20,3 +20,9 @@ GUARDRAILS (this checkout is mirrored live to the VM by Syncthing and is the ser
 
 Decision note in docs/remote-server-poc.md with the chosen mechanism, the proof (steps reproduced on Windows), token lifetime and renewal on 401, and the follow-up ticket if an exchange endpoint is needed; passkey login works end to end in the proof.
 
+
+## Notes
+
+**2026-10-14T01:06:06Z**
+
+2026-10-14 spike status: candidate 1 code built (AGENT_DECK_CLOUDFLARED opt-in, cf-access-token header injected via onBeforeSendHeaders; 22/22 desktop tests) but NOT proven end to end: cloudflared access login needs the owner to complete the system-browser login; two attempts timed out unattended. Remaining proof steps are in docs/remote-server-poc.md Desktop login.

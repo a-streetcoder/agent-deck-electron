@@ -18,6 +18,9 @@ if not exist "node_modules\" (
 set AGENT_DECK_REMOTE_SERVER_URL=https://deck.moretti.cc
 REM Lets main.js pin the login round-trip to this team's Access pages (optional).
 set AGENT_DECK_CF_ACCESS_TEAM_DOMAIN=streetcoding-collective.cloudflareaccess.com
+REM Spike ade-1vjx (unproven): sign in through the system browser via cloudflared instead of
+REM the in-window Access login. Uncomment to try it.
+REM set "AGENT_DECK_CLOUDFLARED=%ProgramFiles(x86)%\cloudflared\cloudflared.exe"
 REM Optional: the same value the VM service exports, so "Reveal" actions that need the
 REM desktop recovery token keep working against the remote server.
 REM set AGENT_DECK_DESKTOP_RECOVERY_TOKEN=

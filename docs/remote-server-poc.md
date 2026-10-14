@@ -258,6 +258,42 @@ on the initials chip.
 - **Local test with a real identity**: copy the `CF_Authorization` cookie value from a signed-in
   browser, then on the VM `curl -H "cf-access-jwt-assertion: <value>" 127.0.0.1:4200/me` → 200.
 
+### Desktop login
+
+Spike ade-1vjx, **not yet proven** (2026-10-14). Goal: sign in through the system browser
+(passkeys work there) and never render a GitHub page inside Electron.
+
+- **Mechanism under test (candidate 1)**: Cloudflare's non-browser flow.
+  `cloudflared access login https://deck.moretti.cc` opens the system browser and caches a
+  per-user token in `%USERPROFILE%\.cloudflared`; `cloudflared access token -app=https://deck.moretti.cc`
+  prints it. Per Cloudflare's docs the edge accepts it in a `cf-access-token` request header
+  and forwards `cf-access-jwt-assertion` to the server, so `trustedProxy.ts` should need no
+  change (not yet observed).
+- **Code (opt-in)**: with `AGENT_DECK_CLOUDFLARED` set to the cloudflared path, remote-mode
+  `bootstrap()` in `apps/desktop/main.js` runs `access token` (and `access login` only when no
+  valid token is cached, `cloudflaredAccessToken` in `remote-server.js`), then adds
+  `cf-access-token` to every `https://` and `wss://` request to the remote host via
+  `session.defaultSession.webRequest.onBeforeSendHeaders`. That covers renderer fetches, the
+  `/rpc` WebSocket upgrade and `controlPlaneFetch`. Unset keeps the in-window login. The
+  launcher has the line commented out.
+- **Observed so far**: two `access login` runs from this PC printed the
+  `/cdn-cgi/access/cli` URL and waited, but no browser login was completed; each ended after
+  about 8 minutes with `failed to run transfer service: Failed to fetch resource`. Without a
+  token, `/me` answers a 302 to Access, with or without a bogus `cf-access-token`.
+- **To finish the proof** (owner at the machine):
+  1. `cloudflared access login https://deck.moretti.cc`, complete GitHub login in the browser.
+  2. `curl -H "cf-access-token: $(cloudflared access token -app=https://deck.moretti.cc)" https://deck.moretti.cc/me`
+     → 200 with the user JSON.
+  3. Same header on a WebSocket upgrade to `wss://deck.moretti.cc/rpc` → 101.
+  4. Launch with `AGENT_DECK_CLOUDFLARED` set → "Signed in as" with no login page in the window.
+  5. Record the token's `exp` minus `iat` (expected to match the 168 h Access session).
+- **Renewal**: the token is read once per launch. An expired token fails `access token`, so the
+  next launch runs `access login` again. Mid-run expiry is not handled: Access would redirect
+  the window to its login. Restart the app.
+- **If candidate 1 fails**: try the `agentdeck://` callback plus `CF_Authorization` cookie copy,
+  then the server-minted exchange in
+  [handover-shared-server-poc.md](handover-shared-server-poc.md) (Decision 2026-10-14).
+
 ### Recovery
 
 - **Bad deploy**: fix or `git revert` on the PC checkout (never `git reset --hard` while synced),

@@ -5,13 +5,14 @@
 // Electron's embedded Node runtime. Both bind an ephemeral loopback port and
 // serve the renderer same-origin.
 
-import { spawn, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { lstat, realpath, stat } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { attentionEpisodeKey } from "./attention-episodes.js";
 import { createWindowsAttentionOverlay, windowsAttentionDescription } from "./attention-overlay.js";
 import {
@@ -21,6 +22,7 @@ import {
 } from "./preview-guard.js";
 import {
   allowRemoteShellNavigation,
+  cloudflaredAccessToken,
   isControlPlanePage,
   remoteServerOrigin,
   retryInSlots,
@@ -51,6 +53,8 @@ const startupTrace = (phase) => {
 };
 
 startupTrace("module loaded");
+
+const execFileAsync = promisify(execFile);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // apps/desktop -> repository root.
@@ -1111,6 +1115,26 @@ async function bootstrap() {
       // the app page has loaded (createWindow's did-navigate handler).
       controlPlaneOrigin = remoteServer;
       startupTrace("remote server configured");
+      // ade-1vjx: with AGENT_DECK_CLOUDFLARED set, sign in through cloudflared
+      // (system browser) and present the token as `cf-access-token` on every
+      // request and WebSocket upgrade to the origin, so Access never shows its
+      // login inside the window. Unset keeps the in-window login.
+      const cloudflared = process.env.AGENT_DECK_CLOUDFLARED;
+      if (cloudflared) {
+        const run = (args, timeout) =>
+          execFileAsync(cloudflared, args, { timeout, windowsHide: true }).then((r) => r.stdout);
+        const accessToken = await cloudflaredAccessToken(run, remoteServer);
+        const { host } = new URL(remoteServer);
+        // ponytail: token fixed for the run; mid-run expiry (168 h) needs an app restart.
+        session.defaultSession.webRequest.onBeforeSendHeaders(
+          { urls: [`https://${host}/*`, `wss://${host}/*`] },
+          (details, callback) =>
+            callback({
+              requestHeaders: { ...details.requestHeaders, "cf-access-token": accessToken },
+            }),
+        );
+        startupTrace("cloudflared access token attached");
+      }
     } else {
       const configuredPort = externalServerPort();
       serverPort = configuredPort ?? (await startServer());

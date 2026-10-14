@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   allowRemoteShellNavigation,
+  cloudflaredAccessToken,
   isControlPlanePage,
   remoteServerOrigin,
   retryInSlots,
@@ -113,4 +114,25 @@ test("remote health retry accepts a server that becomes healthy within 30 s", as
   );
   assert.equal(calls, 7);
   assert.equal(clock, 30_000, "no wait after the last attempt");
+});
+
+test("cloudflared token: cached token first, system-browser login only when missing", async () => {
+  const origin = "https://deck.example.com";
+  const calls = [];
+  const fake = (outputs) => async (args) => {
+    calls.push(args[1]);
+    const next = outputs.shift();
+    if (next instanceof Error) throw next;
+    return next;
+  };
+  assert.equal(await cloudflaredAccessToken(fake(["a.b.c\n"]), origin), "a.b.c");
+  assert.deepEqual(calls, ["token"]);
+
+  calls.length = 0;
+  const noToken = new Error("Unable to find token");
+  assert.equal(await cloudflaredAccessToken(fake([noToken, "", "x.y.z"]), origin), "x.y.z");
+  assert.deepEqual(calls, ["token", "login", "token"]);
+
+  calls.length = 0;
+  await assert.rejects(cloudflaredAccessToken(fake([noToken, "", "not a token"]), origin));
 });
