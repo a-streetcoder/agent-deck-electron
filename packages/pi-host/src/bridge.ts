@@ -1,6 +1,33 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+/** The pinned Pi's own MCP transports (@earendil-works/pi-mcp), imported by
+ * absolute path because Pi does not expose them to extensions. */
+function piMcpModuleUrl(): string {
+  const piHostRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  for (const root of [piHostRoot, path.resolve(piHostRoot, "..", "..")]) {
+    const pi = path.join(root, "node_modules", "@earendil-works", "pi-coding-agent");
+    if (!existsSync(pi)) continue;
+    const real = realpathSync(pi);
+    for (const candidate of [
+      path.join(real, "..", "pi-mcp", "dist", "index.js"),
+      path.join(real, "node_modules", "@earendil-works", "pi-mcp", "dist", "index.js"),
+    ]) {
+      if (existsSync(candidate)) return pathToFileURL(candidate).href;
+    }
+  }
+  throw new Error("Native MCP: @earendil-works/pi-mcp was not found next to the pinned Pi.");
+}
 
 /**
  * The generated bridge extension: the shared substrate under the native
@@ -93,13 +120,37 @@ export interface BridgeCallResponse {
   details?: unknown;
 }
 
+const BRIDGE_DIR_PREFIX = "agent-deck-bridge-ext-";
+
+/**
+ * Remove generated bridge folders a crash left behind: with native MCP they
+ * hold resolved credentials. Only folders older than `maxAgeMs`, since another
+ * Agent Deck instance (stable next to dev, tests) shares tmpdir() and its live
+ * sessions own theirs. Returns how many were removed.
+ */
+export function sweepStaleBridgeExtensions(maxAgeMs = 60 * 60 * 1000): number {
+  let removed = 0;
+  for (const entry of readdirSync(tmpdir())) {
+    if (!entry.startsWith(BRIDGE_DIR_PREFIX)) continue;
+    const dir = path.join(tmpdir(), entry);
+    try {
+      if (Date.now() - statSync(dir).mtimeMs < maxAgeMs) continue;
+      rmSync(dir, { recursive: true, force: true });
+      removed++;
+    } catch {
+      // Raced with its owner or locked: the next start retries.
+    }
+  }
+  return removed;
+}
+
 /**
  * Write a pi extension that registers each spec'd tool and routes its calls to
  * `endpoint`. Returns the path to load with --extension. The generated file is
  * plain runtime JS (no type annotations) so pi's jiti loader runs it directly.
  */
 export function writeBridgeExtension(opts: BridgeExtensionOptions): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "agent-deck-bridge-ext-"));
+  const dir = mkdtempSync(path.join(tmpdir(), BRIDGE_DIR_PREFIX));
   const file = path.join(dir, "bridge.ts");
   const endpoint = JSON.stringify(opts.endpoint);
   const sessionId = JSON.stringify(opts.sessionId);
@@ -119,6 +170,7 @@ export function writeBridgeExtension(opts: BridgeExtensionOptions): string {
     `${
       nativeMcp
         ? `import { createMcpExtension } from "@earendil-works/pi-coding-agent";
+import { StdioTransport, StreamableHttpTransport } from ${JSON.stringify(piMcpModuleUrl())};
 `
         : ""
     }export default function (pi) {
@@ -190,6 +242,21 @@ ${
   const nativeMcp = ${nativeMcp};
   const blockedMcp = new Set(nativeMcp.blockedTools ?? []);
   const suppressedMcp = new Set(nativeMcp.suppressedTools ?? []);
+  // Pi's default stdio transport hands the server Pi's whole env (provider keys,
+  // tokens). Spawn with the MCP SDK's safe list plus the server's own env, as the
+  // proxy did. Values are used as given: Pi's env-reference and !cmd resolution only runs
+  // in its default transport, and ours are already resolved.
+  const SAFE_ENV = process.platform === "win32"
+    ? ["APPDATA", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "PATH", "PROCESSOR_ARCHITECTURE", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "USERNAME", "USERPROFILE"]
+    : ["HOME", "LOGNAME", "PATH", "SHELL", "TERM", "USER"];
+  const safeEnv = () => {
+    const env = {};
+    for (const key of SAFE_ENV) {
+      const value = process.env[key];
+      if (value !== undefined && !value.startsWith("()")) env[key] = value;
+    }
+    return env;
+  };
   createMcpExtension({
     loadConfig: () => ({
       servers: nativeMcp.servers.map((s) => ({ name: s.name, config: s.config, source: "agent-deck" })),
@@ -197,6 +264,17 @@ ${
       autoEnableCodemode: false,
     }),
     updateConfig: () => {},
+    createTransport: ({ config }, cwd, authProvider) =>
+      "url" in config
+        ? new StreamableHttpTransport({ url: config.url, headers: config.headers, authProvider })
+        : new StdioTransport({
+            command: config.command,
+            args: config.args,
+            cwd: config.cwd ?? cwd,
+            env: { ...safeEnv(), ...config.env },
+            inheritEnv: false,
+            stderr: "pipe",
+          }),
   })(pi);
   pi.on("tool_call", (event) => {
     if (blockedMcp.has(event.toolName)) return { block: true, reason: "Blocked by Agent Deck policy." };

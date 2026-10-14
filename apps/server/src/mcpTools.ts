@@ -47,7 +47,7 @@ export function toolApprovalBlock(config: McpServerConfig, tool: string): string
   return `Tool "${tool}" on "${config.id}" is set to approval mode "${mode}", which needs an approval prompt Agent Deck does not have. Set its approval to "approve" or "auto" in the server settings to allow it.`;
 }
 
-function configToolAllowed(config: McpServerConfig, tool: string): boolean {
+export function configToolAllowed(config: McpServerConfig, tool: string): boolean {
   return (
     (config.enabledTools === undefined || config.enabledTools.includes(tool)) &&
     !config.disabledTools?.includes(tool) &&

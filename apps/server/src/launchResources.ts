@@ -10,6 +10,7 @@ import type { LaunchPlan } from "@agent-deck/pi-host";
 import { resolveExplicitSkills } from "./agentSkillResolution.ts";
 import { asThinkingLevel, envDefaults, type ServerContext } from "./context.ts";
 import { finalizeExtensions, resolveInstructionsFile } from "./routes/shared.ts";
+import { nativeMcpBaseName, nativeMcpEnabled, nativeMcpToolPattern } from "./mcpNative.ts";
 
 /** Durable compatibility inputs needed to recompute catalog-derived launch flags.
  * Values omitted by the request remain live settings/project assignments; values
@@ -38,7 +39,14 @@ export function normalizeAgentMcpProxyTools(
   tools: readonly string[] | undefined,
   serverIds: readonly string[],
 ): string[] | undefined {
-  if (tools === undefined || tools.includes("mcp")) return tools ? [...tools] : undefined;
+  if (tools === undefined) return undefined;
+  // Native MCP: an authored `mcp` grants the agent's servers. Pi drops direct
+  // MCP tools an allowlist does not match, so add one pattern per server.
+  // ponytail: a collision-suffixed name (`a_b_2`) is not matched (fails closed).
+  if (tools.includes("mcp"))
+    return nativeMcpEnabled()
+      ? [...tools, ...serverIds.map((id) => nativeMcpToolPattern(nativeMcpBaseName(id)))]
+      : [...tools];
   const prefixes = serverIds.map((id) => `mcp__${id.replace(/[^A-Za-z0-9_]/g, "_")}__`);
   return tools.some((tool) => prefixes.some((prefix) => tool.startsWith(prefix)))
     ? [...tools, "mcp"]
