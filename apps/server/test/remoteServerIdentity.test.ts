@@ -13,13 +13,29 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type * as PiHost from "@agent-deck/pi-host";
 import type { UserCell } from "@agent-deck/domain";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 import { SessionAuthorIndex, SessionIndex } from "../src/persistence.ts";
 import { SessionAuthorStore } from "../src/sessionAuthors.ts";
 import { userAgentDir } from "../src/userAgentDirs.ts";
+
+// SRV-13: the operator's extension-discovered catalog, without spawning Pi.
+vi.mock("@agent-deck/pi-host", async (importOriginal) => ({
+  ...(await importOriginal<typeof PiHost>()),
+  discoverModelCatalog: async () => [
+    {
+      provider: "ext-provider",
+      id: "ext-model",
+      contextWindow: 1000,
+      maxTokens: 100,
+      reasoning: false,
+      input: ["text"],
+    },
+  ],
+}));
 
 const TEAM = "team.cloudflareaccess.test";
 const AUD = "aud-remote";
@@ -316,6 +332,13 @@ describe.skipIf(!canSymlink)("SRV-13 no provider connected on a shared server", 
   });
 
   it("refuses a start by a user with no provider, on REST and RPC", async () => {
+    // The operator-wide discovered catalog must not count as the user's models.
+    const discovered = await fetch(endpoint("/runtime/models/discover"), {
+      method: "POST",
+      headers: { ...ale, "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(discovered.status).toBe(200);
     const immediate = await createSession(andrea, true);
     expect(immediate.status).toBe(409);
     expect(await immediate.json()).toEqual({ error: NO_PROVIDER });

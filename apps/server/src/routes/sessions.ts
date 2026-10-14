@@ -280,7 +280,10 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     }));
     // Extension-defined providers can be selected after an explicit Models
     // refresh. Reuse that catalog without launching any process for this draft.
+    // SRV-13: the catalog is the operator's discovery (anyone may refresh it), so
+    // an owner only gets the models whose provider their own dir has auth for.
     for (const model of ctx.discoveredModels ?? []) {
+      if (owner && !runtime.getProviderAuthStatus(model.provider).configured) continue;
       if (!models.some((entry) => entry.provider === model.provider && entry.id === model.id)) {
         models.push({ ...model, disabled: disabled.has(`${model.provider}:${model.id}`) });
       }

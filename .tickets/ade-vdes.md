@@ -36,3 +36,11 @@ Implemented. Server: GET /me adds user.providersConnected (listProviders on user
 **2026-10-14T19:27:33Z**
 
 2026-10-14 architect: Linux run on the VM remoteServerIdentity 18/18 (the two SRV-13 cases included). Ponytail: accepted (one flag on /me, one ownerModels guard reused by validateModel and launchSession, one banner in two places). Known: the composer prefixes the server text with its usual "Not acknowledged" line; a provider configured only through server env counts as connected.
+
+**2026-10-14T19:46:36Z**
+
+Correction round (GPT review). (1) routes/sessions.ts draftModels: when an owner is set, ctx.discoveredModels is filtered to providers the owner's own ModelRuntime reports configured (getProviderAuthStatus(provider).configured), so the operator's discovery no longer bypasses the no-provider guard. Test: remoteServerIdentity.test.ts SRV-13 now runs POST /runtime/models/discover (discoverModelCatalog mocked with an ext-provider model) before the REST 409 / RPC ok:false checks; verified on this Windows box through a temporary operator-email variant (2/2 passed; with the filter disabled it fails 201 vs 409), file removed. Full file: 14 passed / 4 skipped (symlink-gated). (2) wsBridge.ts refreshMe keeps the last known identity on a fetch/HTTP failure, sets null only on a successful {user:null}. New wsBridge.refreshMe.test.ts 2/2; ProviderMissingBanner.test.tsx 2/2. tsc server+web clean; eslint+prettier clean on changed files.
+
+**2026-10-14T19:47:12Z**
+
+2026-10-14 architect: review4 fixes accepted (discovered catalog filtered by the owner provider auth status; /me refresh keeps the last identity on failure). Known: a provider configured only through server env still counts; a credential-free extension provider is dropped from a shared-server owner picker.

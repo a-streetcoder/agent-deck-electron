@@ -1508,13 +1508,15 @@ export async function addProject(path: string): Promise<ProjectMeta | undefined>
   }
 }
 
-/** Who the server says we are. Best-effort: a loopback server answers null. */
+/** Who the server says we are. Best-effort: a loopback server answers null. A
+ * failed fetch keeps the last known identity, so a transient error never hides
+ * the shared-server identity (or stops the resources_changed refresh). */
 export async function refreshMe(): Promise<void> {
   try {
     const { user } = await fetchJson<{ user: CurrentUser | null }>("/me");
     useAppStore.getState().setMe(user);
   } catch {
-    useAppStore.getState().setMe(null);
+    // Keep the last known identity.
   }
 }
 
