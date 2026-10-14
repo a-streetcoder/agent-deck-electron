@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "../helpers/fixtures.ts";
+import { expect, openNav, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 import { LONG_ISSUE_TITLE, mockIssues } from "../helpers/issues.ts";
 
@@ -30,7 +30,7 @@ test("List defaults, board groups, owner detail/back and PR external navigation"
 }) => {
   const requests = await mockIssues(page, projectIds);
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-issues").click();
+  await openNav(page, "issues");
   await expect(page.getByTestId("issues-list")).toBeVisible();
   await expect(page.getByTestId("issue-7")).toBeVisible();
   await expect(page.getByTestId("issues-presentation-list")).toHaveAttribute(
@@ -85,7 +85,7 @@ for (const width of [1440, 940]) {
       await page.emulateMedia({ colorScheme, reducedMotion: "reduce" });
       await mockIssues(page, projectIds);
       await page.goto(harness.baseUrl);
-      await page.getByTestId("nav-issues").click();
+      await openNav(page, "issues");
       await expect(page.getByTestId("issue-7")).toBeVisible();
       await page.getByTestId("issues-state-all").click();
       await expect(page.getByTestId("issue-9")).toBeVisible();

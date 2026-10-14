@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, openNav, selectProject, test } from "../helpers/fixtures.ts";
 import { mockIssues } from "../helpers/issues.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
@@ -29,7 +29,7 @@ test("the All Projects workspace loads aggregate issues without a selected proje
 }) => {
   const requests = await mockIssues(page, [projectId]);
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-issues").click();
+  await openNav(page, "issues");
   await expect(page.getByTestId("issue-7")).toBeVisible();
   await expect(page.getByRole("radio", { name: "This project", exact: true })).toBeDisabled();
   expect(requests.searches[0]).toContain("/issues/search?state=open&kind=issues");
@@ -39,7 +39,7 @@ test("opening a project session does not select Issues onto that project", async
   const requests = await mockIssues(page, [projectId]);
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-issues").click();
+  await openNav(page, "issues");
   await expect(page.getByTestId("app-view-title")).toHaveText("Issues");
   await expect(page.getByTestId("issue-7")).toBeVisible();
   await expect(page.getByRole("radio", { name: "This project", exact: true })).toBeDisabled();

@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, openNav, selectProject, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -54,7 +54,7 @@ test.afterAll(async () => {
 test("disabling a builtin agent leaves the bundled file untouched", async ({ page }) => {
   const before = readFileSync(BUILTIN_CODER);
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-agents").click();
+  await openNav(page, "agents");
   await page.locator('[data-agent-name="coder"]').click();
   await page.getByTestId("agent-disable").click();
 
@@ -81,7 +81,7 @@ test("a disabled agent disappears from the composer picker", async ({ page }) =>
   // toaster is pickable to start.
   await expect(page.getByTestId("agent-picker").locator('option[value="toaster"]')).toHaveCount(1);
 
-  await page.getByTestId("nav-agents").click();
+  await openNav(page, "agents");
   await page.locator('[data-agent-name="toaster"]').click();
   await page.getByTestId("agent-disable").click();
   await page.getByTestId("agent-detail-back").click();
@@ -100,7 +100,7 @@ test("deleting a global agent removes its file", async ({ page }) => {
 
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-agents").click();
+  await openNav(page, "agents");
   await page.locator('[data-agent-name="toaster"]').click();
 
   page.on("dialog", (dialog) => void dialog.accept());
@@ -114,7 +114,7 @@ test("disabling a skill excludes it from injection; delete removes its dir", asy
   const skillDir = path.join(harness.piHome, ".agents", "skills", "crumbs");
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-skills").click();
+  await openNav(page, "skills");
 
   // First prove assignment loads the enabled skill into a real Pi session.
   await page.locator('[data-skill-name="crumbs"]').click();

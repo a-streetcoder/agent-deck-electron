@@ -34,14 +34,14 @@ test("rename a chat and see the new title persist", async ({ page }) => {
   });
 
   const id = (await liveSessions())[0]!.id;
-  const row = page.getByTestId("chat-list").getByTestId(`chat-${id}`);
+  const row = page.getByTestId("sessions-panel").getByTestId(`chat-${id}`);
   await row.hover();
-  await page.getByTestId("chat-list").getByTestId(`chat-rename-${id}`).click();
-  const input = page.getByTestId("chat-list").getByTestId(`chat-rename-input-${id}`);
+  await page.getByTestId("sessions-panel").getByTestId(`chat-rename-${id}`).click();
+  const input = page.getByTestId("sessions-panel").getByTestId(`chat-rename-input-${id}`);
   await input.fill("Renamed chat");
   await input.press("Enter");
 
-  await expect(page.getByTestId("chat-list").getByTestId(`chat-${id}`)).toContainText(
+  await expect(page.getByTestId("sessions-panel").getByTestId(`chat-${id}`)).toContainText(
     "Renamed chat",
   );
   await expect
@@ -67,9 +67,9 @@ test("fork duplicates the transcript into an independent session", async ({ page
     .poll(async () => (await liveSessions()).find((s) => s.id === source.id)?.piSessionFile)
     .toBeTruthy();
 
-  const row = page.getByTestId("chat-list").getByTestId(`chat-${source.id}`);
+  const row = page.getByTestId("sessions-panel").getByTestId(`chat-${source.id}`);
   await row.hover();
-  await page.getByTestId("chat-list").getByTestId(`chat-fork-${source.id}`).click();
+  await page.getByTestId("sessions-panel").getByTestId(`chat-fork-${source.id}`).click();
 
   // A new session exists and it carries the forked transcript.
   await expect.poll(async () => (await liveSessions()).length).toBe(before.length + 1);
@@ -96,18 +96,18 @@ test("delete removes a chat", async ({ page }) => {
 
   const target = (await liveSessions()).find((s) => s.title == null || s.title.includes("delete"));
   const id = target?.id ?? (await liveSessions()).at(-1)!.id;
-  const row = page.getByTestId("chat-list").getByTestId(`chat-${id}`);
+  const row = page.getByTestId("sessions-panel").getByTestId(`chat-${id}`);
   await row.hover();
-  await page.getByTestId("chat-list").getByTestId(`chat-delete-${id}`).click();
+  await page.getByTestId("sessions-panel").getByTestId(`chat-delete-${id}`).click();
 
   await expect.poll(async () => (await liveSessions()).some((s) => s.id === id)).toBe(false);
-  await expect(page.getByTestId("chat-list").getByTestId(`chat-${id}`)).toHaveCount(0);
+  await expect(page.getByTestId("sessions-panel").getByTestId(`chat-${id}`)).toHaveCount(0);
 });
 
 /** The id of the currently-active session row (the one new-chat/switch selects). */
 async function activeSessionId(page: Page): Promise<string> {
   const testid = await page
-    .getByTestId("chat-list")
+    .getByTestId("sessions-panel")
     .locator('[data-active="true"]')
     .first()
     .getAttribute("data-testid");
@@ -140,11 +140,11 @@ test("unsent composer drafts stay with their session", async ({ page }) => {
   await expect(page.getByTestId("attachments")).toHaveCount(0);
   await page.getByTestId("composer-input").fill("Draft for the second chat");
 
-  await page.getByTestId("chat-list").getByTestId(`chat-${firstId}`).click();
+  await page.getByTestId("sessions-panel").getByTestId(`chat-${firstId}`).click();
   await expect(page.getByTestId("composer-input")).toHaveValue("Draft for the first chat");
   await expect(page.getByTestId("attachments")).toContainText("first-draft.png");
 
-  await page.getByTestId("chat-list").getByTestId(`chat-${secondId}`).click();
+  await page.getByTestId("sessions-panel").getByTestId(`chat-${secondId}`).click();
   await expect(page.getByTestId("composer-input")).toHaveValue("Draft for the second chat");
   await expect(page.getByTestId("attachments")).toHaveCount(0);
 });
@@ -158,7 +158,7 @@ test("the most recently active session sorts to the top of the list", async ({ p
   // fragile session-count math that flakes on a slow CI runner).
   await page.getByTestId("new-chat").click();
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
-  await expect(page.getByTestId("chat-list").locator('[data-active="true"]')).toBeVisible();
+  await expect(page.getByTestId("sessions-panel").locator('[data-active="true"]')).toBeVisible();
   const idA = await activeSessionId(page);
   await page.getByTestId("composer-input").fill("message in A");
   await page.getByTestId("send-button").click();
@@ -171,7 +171,7 @@ test("the most recently active session sorts to the top of the list", async ({ p
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
 
   // Re-activating A (switch + prompt) must float it back above B.
-  await page.getByTestId("chat-list").getByTestId(`chat-${idA}`).click();
+  await page.getByTestId("sessions-panel").getByTestId(`chat-${idA}`).click();
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
   await page.getByTestId("composer-input").fill("back in A");
   await page.getByTestId("send-button").click();
@@ -180,7 +180,7 @@ test("the most recently active session sorts to the top of the list", async ({ p
   });
 
   const firstRow = page
-    .getByTestId("chat-list")
+    .getByTestId("sessions-panel")
     .locator('[data-testid^="chat-"][role="button"]')
     .first();
   await expect(firstRow).toHaveAttribute("data-testid", `chat-${idA}`);

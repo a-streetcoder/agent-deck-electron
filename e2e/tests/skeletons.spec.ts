@@ -1,4 +1,4 @@
-import { expect, test } from "../helpers/fixtures.ts";
+import { expect, openNav, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -25,7 +25,7 @@ test("the Loop Bank shows a skeleton while loading, then the empty state", async
   });
 
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-loops").click();
+  await openNav(page, "loops");
 
   // Skeleton is up while the (delayed) fetch is in flight; the empty state is NOT.
   await expect(page.getByTestId("skeleton")).toBeVisible();

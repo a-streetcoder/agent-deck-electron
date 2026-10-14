@@ -23,7 +23,7 @@ test.afterAll(async () => {
 
 async function activeSessionId(page: Page): Promise<string> {
   const testId = await page
-    .getByTestId("chat-list")
+    .getByTestId("sessions-panel")
     .locator('[data-active="true"]')
     .first()
     .getAttribute("data-testid");
@@ -122,7 +122,7 @@ test("a large paste stays compact and recoverable through reload, resume, and fo
   );
   expect(forkResponse.status).toBe(201);
   const { session: forkMeta } = (await forkResponse.json()) as { session: SessionMeta };
-  await page.getByTestId("chat-list").getByTestId(`chat-${forkMeta.id}`).click();
+  await page.getByTestId("sessions-panel").getByTestId(`chat-${forkMeta.id}`).click();
   await expect(sentPasteChip(page)).toBeVisible({ timeout: 30_000 });
 });
 

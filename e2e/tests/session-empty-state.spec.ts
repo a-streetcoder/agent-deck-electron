@@ -23,7 +23,7 @@ test("deleting the only draft leaves a usable no-active-session state", async ({
 
   await page.goto(harness.baseUrl);
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
-  const activeRow = page.getByTestId("chat-list").locator('[data-active="true"]');
+  const activeRow = page.getByTestId("sessions-panel").locator('[data-active="true"]');
   await expect(activeRow).toHaveCount(1);
   await expect(activeRow).toContainText("Draft · All Projects");
 
@@ -39,8 +39,8 @@ test("deleting the only draft leaves a usable no-active-session state", async ({
       return body.sessions.length;
     })
     .toBe(0);
-  await expect(page.getByTestId("chat-list")).toContainText("No sessions yet.");
-  await expect(page.getByTestId("chat-list").locator('[data-active="true"]')).toHaveCount(0);
+  await expect(page.getByTestId("sessions-panel")).toContainText("No sessions yet.");
+  await expect(page.getByTestId("sessions-panel").locator('[data-active="true"]')).toHaveCount(0);
 
   const empty = page.getByTestId("no-active-session");
   await expect(empty).toBeVisible();
@@ -59,5 +59,5 @@ test("deleting the only draft leaves a usable no-active-session state", async ({
   await newChat.click();
   await expect(page.getByTestId("session-startup")).toBeVisible();
   await expect(page.getByTestId("composer-input")).toBeVisible();
-  await expect(page.getByTestId("chat-list").locator('[data-active="true"]')).toHaveCount(1);
+  await expect(page.getByTestId("sessions-panel").locator('[data-active="true"]')).toHaveCount(1);
 });

@@ -19,7 +19,7 @@ async function sessions(): Promise<SessionMeta[]> {
 }
 
 async function renameActive(page: Page, title: string): Promise<string> {
-  const active = page.getByTestId("chat-list").locator('[data-active="true"]').first();
+  const active = page.getByTestId("sessions-panel").locator('[data-active="true"]').first();
   const testId = await active.getAttribute("data-testid");
   if (!testId) throw new Error("no active session");
   const id = testId.replace("chat-", "");
@@ -27,7 +27,7 @@ async function renameActive(page: Page, title: string): Promise<string> {
   await active.getByTitle("Rename").click();
   await page.getByTestId(`chat-rename-input-${id}`).fill(title);
   await page.getByTestId(`chat-rename-input-${id}`).press("Enter");
-  await expect(page.getByTestId("chat-list").getByText(title, { exact: true })).toBeVisible();
+  await expect(page.getByTestId("sessions-panel").getByText(title, { exact: true })).toBeVisible();
   return id;
 }
 
@@ -60,7 +60,7 @@ test("pinning is durable, idempotent, and promotes within the project without ch
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
   const newerId = await renameActive(page, "newer ordinary session");
 
-  const list = page.getByTestId("chat-list");
+  const list = page.getByTestId("sessions-panel");
   const titles = list.getByTestId("chat-title");
   await expect(titles.first()).toHaveText("newer ordinary session");
 
@@ -107,7 +107,6 @@ test("keyboard pinning keeps a reordered row focused and visible in a long list"
 
   await page.goto(harness.baseUrl);
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
-  await page.getByTestId("sessions-expand").click();
 
   const scroller = page.getByTestId("sessions-scroll");
   const row = scroller.getByTestId(`chat-${targetId}`);

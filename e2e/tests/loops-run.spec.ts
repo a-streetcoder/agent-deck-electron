@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Page } from "@playwright/test";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, openNav, selectProject, test } from "../helpers/fixtures.ts";
 import type { LoopRun } from "@agent-deck/domain";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
@@ -208,7 +208,7 @@ test.afterAll(async () => {
 async function openLoops(page: Page): Promise<void> {
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-loops").click();
+  await openNav(page, "loops");
   await page.getByTestId("loop-project").selectOption(projectId);
 }
 
@@ -278,7 +278,7 @@ test("authors, duplicates, reloads, and approves an accessible Human Approval ch
   );
   await page.reload();
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-loops").click();
+  await openNav(page, "loops");
   await page.getByTestId("loop-project").selectOption(projectId);
   await expect(page.getByTestId("loop-human-approval-checkpoint")).toBeVisible();
   await expect(page.getByTestId("loop-open-session")).toHaveCount(0);
@@ -432,7 +432,7 @@ test("authors project availability and uses an accessible responsive launch over
   expect(created.ok()).toBe(true);
   await page.reload();
   await selectProject(page, path.basename(secondProject));
-  await page.getByTestId("nav-loops").click();
+  await openNav(page, "loops");
   await page.getByTestId("loop-project").selectOption({ label: path.basename(secondProject) });
   await expect(page.getByTestId("loop-unavailable-Green Suite")).toContainText(
     "Assign this Loop to the project",
@@ -445,7 +445,7 @@ test("authors project availability and uses an accessible responsive launch over
   await page.getByRole("button", { name: "Cancel" }).click();
 
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-loops").click();
+  await openNav(page, "loops");
   await page.getByTestId("loop-project").selectOption(projectId);
   const runButton = page.getByTestId("loop-run-Green Suite");
   await runButton.focus();
@@ -590,7 +590,7 @@ test("retains and restores registered worktree evidence in the run panel", async
 
   await page.reload();
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-loops").click();
+  await openNav(page, "loops");
   await page.getByTestId("loop-project").selectOption(projectId);
   await expect(page.getByTestId("loop-retained-worktree")).toContainText(
     "Review worktree retained.",
@@ -790,7 +790,7 @@ test("authors, reorders, duplicates, runs, and restores an accessible Pipeline",
   await expect(page.getByTestId("loop-run-retry")).toHaveCount(0);
 
   await page.reload();
-  await page.getByTestId("nav-loops").click();
+  await openNav(page, "loops");
   await page.getByTestId("loop-project").selectOption(projectId);
   await expect(page.getByTestId("loop-pipeline-stage-outputs")).toContainText("Stage 3: Agent B");
 });
@@ -861,7 +861,7 @@ test("authors, normalizes, duplicates, runs, and restores accessible Parallel re
   await expect(page.getByTestId("loop-run-retry")).toHaveCount(0);
 
   await page.reload();
-  await page.getByTestId("nav-loops").click();
+  await openNav(page, "loops");
   await page.getByTestId("loop-project").selectOption(projectId);
   await expect(page.getByTestId("loop-parallel-branch-outputs")).toContainText(
     "Configured branch 2: Agent A",
@@ -930,7 +930,7 @@ test("authors, duplicates, runs, reloads, and stops accessible Discovery/Triage"
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.reload();
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-loops").click();
+  await openNav(page, "loops");
   await page.getByTestId("loop-project").selectOption(projectId);
   await expect(page.getByTestId("loop-run-iterations")).toContainText("High impact finding");
 
@@ -1110,7 +1110,7 @@ test("shows ordered Maker+Checker evidence, disables launches, and restores hist
   await expect(page.getByTestId("loop-checker-decision")).toContainText("Checker found concrete");
 
   await page.reload();
-  await page.getByTestId("nav-loops").click();
+  await openNav(page, "loops");
   await page.getByTestId("loop-project").selectOption(projectId);
   await expect(page.getByTestId("loop-run-status")).toHaveAttribute("data-status", "completed");
   await expect(page.getByTestId("loop-run-history")).toContainText("Reviewed Report");
@@ -1244,7 +1244,7 @@ test("shows native-truthful human-input and recovery actions without broad live 
     });
   });
   await page.reload();
-  await page.getByTestId("nav-loops").click();
+  await openNav(page, "loops");
   await page.getByTestId("loop-project").selectOption(projectId);
   const recoveryAlert = page
     .getByRole("alert")

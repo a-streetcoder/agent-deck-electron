@@ -185,15 +185,10 @@ test("review a worktree session's diff and merge it back from the diff panel", a
 
   // Return to the same retained session and make a second iteration.
   await page.goto(harness.baseUrl);
-  await page.getByTestId("sessions-expand").click();
-  const expandedSessions = page.getByTestId("sessions-expanded");
-  await expect(expandedSessions).toBeVisible();
-  await expect(expandedSessions).toHaveAttribute("aria-hidden", "false");
-  const originalSession = expandedSessions.getByTestId(`chat-${sessionId}`);
+  const sessionsPanel = page.getByTestId("sessions-panel");
+  const originalSession = sessionsPanel.getByTestId(`chat-${sessionId}`);
   await expect(originalSession).toBeVisible();
   await originalSession.click();
-  await expandedSessions.getByTestId("sessions-collapse").click();
-  await expect(expandedSessions).toHaveAttribute("aria-hidden", "true");
   await expect(page.getByTestId("composer-input")).toBeVisible();
   await expect(cwdLocator).toHaveText(worktreePath);
   worktreeFileContent = "a second iteration after the retained merge\n";

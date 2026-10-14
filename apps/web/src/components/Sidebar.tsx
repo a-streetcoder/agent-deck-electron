@@ -64,10 +64,11 @@ const RUNTIME_NAV: Array<{ id: AppView; label: string; icon: typeof Send }> = [
   { id: "doctor", label: "Doctor", icon: Stethoscope },
 ];
 
-/** Display name + initials for the user row; "Local" on loopback (no `me`). */
+/** Display name + initials for the user row; "Local" on loopback (no `me`) or
+ * when `me` has neither a name nor an email (never the raw id). */
 function userRowLabel(me: CurrentUser | null): { name: string; initials: string | null } {
-  if (!me) return { name: "Local", initials: null };
-  const identity = { id: me.email || me.id, name: me.name };
+  if (!me || (!me.name?.trim() && !me.email)) return { name: "Local", initials: null };
+  const identity = { id: me.email, name: me.name };
   return { name: userDisplayName(identity), initials: userInitials(identity) };
 }
 

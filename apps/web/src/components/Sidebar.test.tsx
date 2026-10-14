@@ -56,6 +56,13 @@ describe("Sidebar (UI-01 inverted layering)", () => {
     expect(screen.getByTestId("orchestrate-user").textContent).toBe("AD" + "ada");
   });
 
+  it("shows the generic icon and Local, not the raw id, without a name or email", () => {
+    useAppStore.setState({ me: { id: "user-7f3a", email: "" } });
+    render(<Sidebar />);
+    expect(screen.getByTestId("orchestrate-user").textContent).toBe("Local");
+    expect(screen.getByTestId("orchestrate-user-icon").querySelector("svg")).toBeTruthy();
+  });
+
   it("expands the nav from the user row, keeps it open on nav selection, and collapses back", () => {
     render(<Sidebar />);
     fireEvent.click(screen.getByTestId("orchestrate-user"));

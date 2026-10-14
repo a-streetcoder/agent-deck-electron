@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, openNav, selectProject, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -30,7 +30,7 @@ test("the All Projects workspace edits Global; Project scope prompts to pick one
   page,
 }) => {
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-instructions").click();
+  await openNav(page, "instructions");
   await expect(page.getByTestId("instructions-editor")).toBeVisible();
   await page.getByTestId("instructions-scope-project").click();
   await expect(page.getByTestId("instructions-no-project")).toBeVisible();
@@ -38,7 +38,7 @@ test("the All Projects workspace edits Global; Project scope prompts to pick one
 
 test("editing Global AGENTS.md writes ~/.pi/agent/AGENTS.md", async ({ page }) => {
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-instructions").click();
+  await openNav(page, "instructions");
   await page.getByTestId("instructions-scope-global").click();
 
   const editor = page.getByTestId("instructions-editor");
@@ -57,7 +57,7 @@ test("project-scope instructions stay empty without a globally selected project"
 }) => {
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-instructions").click();
+  await openNav(page, "instructions");
   await page.getByTestId("instructions-scope-project").click();
   await expect(page.getByTestId("instructions-no-project")).toBeVisible();
   expect(existsSync(path.join(project, "AGENTS.md"))).toBe(false);

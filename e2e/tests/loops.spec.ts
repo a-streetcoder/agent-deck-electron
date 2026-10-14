@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { expect, test } from "../helpers/fixtures.ts";
+import { expect, openNav, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -41,7 +41,7 @@ test("creates, edits, and deletes a loop through the Bank", async ({ page }) => 
     });
   });
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-loops").click();
+  await openNav(page, "loops");
   await expect(page.getByTestId("loop-empty")).toBeVisible();
 
   // Create. The responsive modal is named, traps focus, closes on Escape,
@@ -205,7 +205,7 @@ test("wraps a long unbroken saved loop name inside the narrow editor", async ({ 
   // modal to exercise its independent responsive containment.
   await page.setViewportSize({ width: 500, height: 600 });
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-loops").click();
+  await openNav(page, "loops");
   const row = page.locator(`[data-loop-name="${longName}"]`);
   await row.getByRole("button").first().click();
   await page.setViewportSize({ width: 320, height: 600 });
@@ -238,7 +238,7 @@ test("preserves legacy unavailable evaluator settings until explicit repair", as
   );
 
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-loops").click();
+  await openNav(page, "loops");
   await page.getByTestId("loop-open-Legacy Evaluator Settings").click();
   await expect(page.getByTestId("loop-evaluator-model")).toHaveValue(
     JSON.stringify(["retired-provider", "retired-model"]),
@@ -267,7 +267,7 @@ test("loads a native-shaped Maker+Checker definition without conversion", async 
   );
 
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-loops").click();
+  await openNav(page, "loops");
   const row = page.locator('[data-loop-name="Native Review"]');
   await expect(row).toContainText("Maker / checker");
 

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, openNav, selectProject, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -31,7 +31,7 @@ test("create, edit, and delete a library prompt template", async ({ page }) => {
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
-  await page.getByTestId("nav-prompts").click();
+  await openNav(page, "prompts");
 
   // Create.
   await page.getByTestId("prompt-new").click();
@@ -109,7 +109,7 @@ test("surfaces the /invocation and argument-hint for a prompt on disk (native 8.
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
-  await page.getByTestId("nav-prompts").click();
+  await openNav(page, "prompts");
 
   // Identity is the basename (pi ignores the frontmatter name), so the row is
   // keyed by deploy-svc, the command is /deploy-svc, and the argument-hint
@@ -134,7 +134,7 @@ test("the All Projects toggle sets a prompt as a default (native defaultPromptTe
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
-  await page.getByTestId("nav-prompts").click();
+  await openNav(page, "prompts");
 
   const toggle = page.getByTestId("prompt-default-changelog-note");
   await expect(toggle).toBeVisible();
@@ -180,7 +180,7 @@ test("shows readable prompt load and default-toggle failures", async ({ page }) 
     });
   });
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-prompts").click();
+  await openNav(page, "prompts");
   await expect(page.getByTestId("error-banner")).toHaveText(
     "Error: Prompt catalog is temporarily unavailable.",
   );
@@ -188,7 +188,7 @@ test("shows readable prompt load and default-toggle failures", async ({ page }) 
   await page.unroute("**/resources/prompts*");
   await page.reload();
   await selectProject(page, path.basename(project));
-  await page.getByTestId("nav-prompts").click();
+  await openNav(page, "prompts");
   const toggle = page.getByTestId("prompt-default-failure-toggle");
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
   await page.route("**/settings", async (route) => {
@@ -215,7 +215,7 @@ test("the editor's per-project availability assigns a global prompt to a project
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(project));
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
-  await page.getByTestId("nav-prompts").click();
+  await openNav(page, "prompts");
 
   // Open the editor for the global prompt, then assign it to this project via
   // the per-project availability checkbox.

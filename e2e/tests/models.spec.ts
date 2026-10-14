@@ -1,4 +1,4 @@
-import { expect, test } from "../helpers/fixtures.ts";
+import { expect, openNav, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -42,7 +42,7 @@ test("browses and curates the full catalog before a session, with retry and no a
   });
 
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-models").click();
+  await openNav(page, "models");
   await expect(page.getByTestId("models-error").getByRole("alert")).toBeVisible();
   const retry = page.getByTestId("models-retry");
   await retry.focus();
@@ -119,7 +119,7 @@ test("the Models screen lists the provider catalog and marks the active model", 
     timeout: 30_000,
   });
 
-  await page.getByTestId("nav-models").click();
+  await openNav(page, "models");
   await expect(page.getByTestId("models-screen")).toBeVisible();
 
   const model = page.getByTestId("model-mock-model");
@@ -141,7 +141,7 @@ test("the Models catalog search filters by name/id/provider", async ({ page }) =
   await expect(page.getByTestId("assistant-text").last()).toContainText("hi", {
     timeout: 30_000,
   });
-  await page.getByTestId("nav-models").click();
+  await openNav(page, "models");
 
   const model = page.getByTestId("model-mock-model");
   await expect(model).toBeVisible();

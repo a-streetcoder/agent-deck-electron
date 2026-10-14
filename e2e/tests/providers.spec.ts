@@ -1,6 +1,6 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { expect, test } from "../helpers/fixtures.ts";
+import { expect, openNav, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -42,15 +42,15 @@ test("lists providers and can explicitly sign out of a seeded credential", async
 
   // Fresh home → nothing signed in.
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-providers").click();
+  await openNav(page, "providers");
   const row = page.locator(`[data-provider-id="${id}"]`);
   await expect(row).toBeVisible();
   await expect(row).toHaveAttribute("data-configured", "false");
 
   // Seed a stored OAuth credential → the provider is shown as configured.
   seedOAuth(id);
-  await page.getByTestId("nav-environment").click(); // leave + return to force a reload
-  await page.getByTestId("nav-providers").click();
+  await openNav(page, "environment"); // leave + return to force a reload
+  await openNav(page, "providers");
   await expect(row).toHaveAttribute("data-configured", "true");
   const signOut = page.getByTestId(`provider-signout-${id}`);
   await expect(signOut).toBeVisible();
@@ -108,7 +108,7 @@ test("renders native provider logos (and a monogram fallback for unknowns)", asy
   });
 
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-providers").click();
+  await openNav(page, "providers");
 
   // Real brand logos render as inline SVGs (anthropic → the claude mark).
   const anthropic = page.getByTestId("provider-logo-anthropic");
@@ -154,7 +154,7 @@ test("keeps a stored provider connected and reports a logout failure", async ({ 
   });
 
   await page.goto(harness.baseUrl);
-  await page.getByTestId("nav-providers").click();
+  await openNav(page, "providers");
   const row = page.locator('[data-provider-id="failure-provider"]');
   const signOut = page.getByTestId("provider-signout-failure-provider");
   await signOut.click();

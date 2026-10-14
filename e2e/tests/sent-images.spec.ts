@@ -21,7 +21,7 @@ test.afterAll(async () => {
 
 async function activeSessionId(page: Page): Promise<string> {
   const testId = await page
-    .getByTestId("chat-list")
+    .getByTestId("sessions-panel")
     .locator('[data-active="true"]')
     .first()
     .getAttribute("data-testid");
@@ -128,7 +128,7 @@ test("sent image survives live delivery, reconnect, resume, fork ownership, and 
   );
   expect(forkResponse.status).toBe(201);
   const { session: forkMeta } = (await forkResponse.json()) as { session: SessionMeta };
-  await page.getByTestId("chat-list").getByTestId(`chat-${forkMeta.id}`).click();
+  await page.getByTestId("sessions-panel").getByTestId(`chat-${forkMeta.id}`).click();
   const forkPreview = page
     .getByTestId("sent-image-gallery")
     .getByRole("button", { name: "Preview pixel.png" });

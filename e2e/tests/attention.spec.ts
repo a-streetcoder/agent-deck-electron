@@ -16,7 +16,7 @@ test("background attention row stays visible and clears only after actual review
   page,
 }) => {
   await page.goto(harness.baseUrl);
-  await expect(page.getByTestId("chat-list").locator('[data-active="true"]')).toHaveCount(1);
+  await expect(page.getByTestId("sessions-panel").locator('[data-active="true"]')).toHaveCount(1);
   const createdResponse = await page.request.post(`${harness.baseUrl}/sessions`, {
     data: { startImmediately: true },
   });
@@ -67,7 +67,7 @@ test("background attention row stays visible and clears only after actual review
       { timeout: 20_000 },
     )
     .toBe(true);
-  const row = page.getByTestId("chat-list").getByTestId(`chat-${background.id}`);
+  const row = page.getByTestId("sessions-panel").getByTestId(`chat-${background.id}`);
   await expect(row).toBeVisible();
   await expect(row).toHaveAttribute("data-needs-attention", "true");
   await expect(row).toHaveAttribute("aria-label", /needs attention/);
@@ -83,13 +83,12 @@ test("background attention row stays visible and clears only after actual review
   const reviewer = ((await reviewerResponse.json()) as { session: SessionMeta }).session;
   await harness.restart();
   await page.goto(harness.baseUrl);
-  const hydratedRow = page.getByTestId("chat-list").getByTestId(`chat-${background.id}`);
+  const hydratedRow = page.getByTestId("sessions-panel").getByTestId(`chat-${background.id}`);
   await expect(hydratedRow).toHaveAttribute("data-needs-attention", "true");
   await expect(page.getByTestId("attention-announcer")).toHaveText("");
-  await expect(page.getByTestId("chat-list").getByTestId(`chat-${reviewer.id}`)).toHaveAttribute(
-    "data-active",
-    "true",
-  );
+  await expect(
+    page.getByTestId("sessions-panel").getByTestId(`chat-${reviewer.id}`),
+  ).toHaveAttribute("data-active", "true");
   // Merely retaining another selection does not acknowledge the hidden row.
   await hydratedRow.click();
   await expect(hydratedRow).toHaveAttribute("data-active", "true");

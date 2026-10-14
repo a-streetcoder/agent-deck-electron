@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, openNav, selectProject, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -51,7 +51,7 @@ test.afterAll(async () => {
 test("Git push stays empty without a globally selected project", async ({ page }) => {
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(work));
-  await page.getByTestId("nav-git").click();
+  await openNav(page, "git");
   await expect(page.getByTestId("app-view-title")).toHaveText("Git");
   await expect(page.getByTestId("git-no-project")).toBeVisible();
   await expect(page.getByTestId("git-commit-push")).toHaveCount(0);

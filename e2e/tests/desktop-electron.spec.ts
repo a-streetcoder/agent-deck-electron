@@ -17,6 +17,7 @@ import {
   windowsAttentionDescription,
   windowsAttentionPng,
 } from "../../apps/desktop/attention-overlay.js";
+import { openNav } from "../helpers/fixtures.ts";
 
 /**
  * Phase-1 gate for the Electron shell: launching the real app boots the same
@@ -198,7 +199,7 @@ test("the desktop shell boots the server and mounts the UI", async () => {
   await window.waitForLoadState("domcontentloaded");
 
   // The sidebar renders → the React bundle served by the in-process server ran.
-  await expect(window.getByTestId("nav-projects")).toBeVisible({ timeout: 30_000 });
+  await expect(window.getByTestId("orchestrate-expand")).toBeVisible({ timeout: 30_000 });
 
   // The preload bridge is present → the native folder picker is reachable.
   const bridge = await window.evaluate(
@@ -443,7 +444,7 @@ test("trusted attachment pickers return only bounded absolute selections", async
   });
   expect(foreignOriginRejected).toBe(true);
   await window.goto(appUrl);
-  await expect(window.getByTestId("nav-projects")).toBeVisible({ timeout: 30_000 });
+  await expect(window.getByTestId("orchestrate-expand")).toBeVisible({ timeout: 30_000 });
 });
 
 test("resource file bridges validate agent/prompt catalogs and reject unsafe identities", async () => {
@@ -620,7 +621,7 @@ test("moves a validated skill recovery through Electron OS Trash", async () => {
   );
   const window = await app.firstWindow();
   await window.reload();
-  await window.getByTestId("nav-skills").click();
+  await openNav(window, "skills");
   // Since 954708e recoveries live under Skills → Manage Sources, not on the catalog view.
   await window.getByTestId("skill-manage-sources").click();
   await expect(window.getByTestId("skill-recovery-trash-test")).toBeVisible();
@@ -648,7 +649,7 @@ test("treats OS Trash as successful when backend acknowledgement transport fails
   try {
     const window = await app.firstWindow();
     await window.reload();
-    await window.getByTestId("nav-skills").click();
+    await openNav(window, "skills");
     await window.getByTestId("skill-manage-sources").click();
     await expect(window.getByTestId("skill-recovery-ack-fails")).toBeVisible();
     await window.getByTestId("skill-recovery-trash-ack-fails").click();
@@ -666,7 +667,7 @@ test("treats OS Trash as successful when backend acknowledgement transport fails
 
 test("adding a project via the native folder picker registers it", async () => {
   const window = await app.firstWindow();
-  await window.getByTestId("nav-projects").click({ timeout: 30_000 });
+  await openNav(window, "projects", { timeout: 30_000 });
   await expect(window.getByTestId("projects-add")).toBeVisible({ timeout: 30_000 });
 
   // Stub the OS folder chooser to return our throwaway project directory, so
@@ -1384,7 +1385,7 @@ test("durable attention observes hidden sessions and badges distinct pending cha
   await notify(targetIds[1]!);
   await expect.poll(async () => (await nativeState()).notifications.length).toBe(3);
 
-  await window.getByTestId("nav-projects").click();
+  await openNav(window, "projects");
   await app.evaluate(() => {
     const g = globalThis as typeof globalThis & {
       agentDeckLastNotification?: { emit(event: string): void };
@@ -1392,10 +1393,9 @@ test("durable attention observes hidden sessions and badges distinct pending cha
     g.agentDeckLastNotification?.emit("click");
   });
   await expect(window.getByTestId("chat-layer")).toHaveAttribute("aria-hidden", "false");
-  await expect(window.getByTestId("chat-list").getByTestId(`chat-${targetIds[1]}`)).toHaveAttribute(
-    "data-active",
-    "true",
-  );
+  await expect(
+    window.getByTestId("sessions-panel").getByTestId(`chat-${targetIds[1]}`),
+  ).toHaveAttribute("data-active", "true");
 });
 
 test("the app presents itself as Agent Deck", async () => {
