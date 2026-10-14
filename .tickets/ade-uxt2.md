@@ -1,0 +1,32 @@
+---
+id: ade-uxt2
+status: open
+deps: [ade-7zpu]
+links: []
+created: 2026-10-14T18:16:28Z
+type: feature
+priority: 2
+assignee: almoretti
+---
+# PI-02: adopt the Pi 1.x event and RPC additions (context_edit, aborted, durationMs, clear_queue, ui_prompt events)
+
+
+After PI-01 compiles, take the behaviour improvements the 1.x RPC offers.
+
+1. packages/domain/src/ingest.ts: handle the `context_edit` SessionEntry (0.87) instead of dropping it in the default branch: a hidden-from-model marker on the affected message so the transcript shows what the model no longer sees. `session.agent.state.messages` is no longer canonical; Agent Deck already uses get_entries/get_messages, so nothing else changes.
+2. apps/server/src/services/sessionManager.ts ~2519: read the `aborted` flag on `agent_settled` (1.1) for the settled status instead of inferring it from the local AbortController where both exist; keep the local path as fallback (childRunLifecycle benefits).
+3. `tool_execution_end.durationMs` (1.1) replaces the local Date.now timer at ~2132-2137 when present; the replay path keeps undefined.
+4. RPC `clear_queue` (0.84.4): expose it where the UI already has a cancel of queued steer/follow-up; otherwise note it as available and skip.
+5. `ui_prompt_start/end` (0.84.4): distinguish agent working from waiting on an extension prompt in the session status, reusing the askUser coordinator state.
+6. `before_agent_start` now fires for sendMessage-triggered runs (1.2): check the settled-state waiting logic in sessionManager and the bridge for double-start assumptions.
+7. Per-input disposition on prompt/steer/follow_up (0.99): check rpcProtocol.ts sends the shape Pi expects and whether a workaround can go.
+
+Not in scope: MCP (PI-03), auth (PI-04), fullscreen tuiMode (RPC only, no TUI).
+
+## Design
+
+GUARDRAILS as PI-01 (worktree, single test files, typecheck per package, no full suites). Ponytail: each item is a small diff at an existing call site; skip any item whose UI counterpart does not exist and say so in the note. Depends on PI-01.
+
+## Acceptance Criteria
+
+ingest test for a context_edit entry; sessionManager test asserting the settled status follows the aborted flag; tool duration test uses the event value; the remaining items each have one unit test or a note explaining the skip; docs/agent-guidelines/ARCHITECTURE.md event section updated.

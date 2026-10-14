@@ -1,7 +1,7 @@
 ---
 id: ade-n41e
 status: open
-deps: [ade-4lga]
+deps: [ade-4lga, ade-7zpu, ade-bood]
 links: []
 created: 2026-10-14T18:00:13Z
 type: feature
