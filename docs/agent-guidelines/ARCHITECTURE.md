@@ -125,3 +125,7 @@ Parent stop/destroy joins child finalizers before returning. Loop cancellation
 uses that teardown before disposing snapshot tracking, so the final snapshot and
 subsequent history restore contain stopped cards, not dead running work. This
 fix does not retroactively reinterpret older snapshots or change crash recovery.
+
+## MCP transport
+
+With `AGENT_DECK_NATIVE_MCP=1` (the default once the proxy is removed), a session's MCP servers run in Pi's own MCP client instead of the `mcp` proxy tool. Before each spawn, `apps/server/src/mcpNative.ts` turns the servers the session may use (global enable, project assignment, named-agent or child grant) into Pi configs, and the generated bridge extension embeds that list and hosts it through `createMcpExtension({ loadConfig })`. Nothing is written to `<agentDir>/mcp.json` or `<project>/.pi/mcp.json`, launches keep `--no-extensions`, and `-e builtin:mcp` is never added. Memory rule: each stdio server starts one process (typically 50 to 100 MB) per live Pi session that has it assigned; HTTP servers start none. A handful of stdio servers fits on the shared VM; recheck before assigning more.

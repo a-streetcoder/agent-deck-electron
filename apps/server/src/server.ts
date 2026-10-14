@@ -77,6 +77,7 @@ import {
   mergeMcpServerConfigs,
   mcpServerConfigsFromEnv,
 } from "./mcpTools.ts";
+import { nativeMcpList } from "./mcpNative.ts";
 import { McpOAuthCoordinator, resolveMcpOAuthRedirectMode } from "./mcpOAuth.ts";
 import { FileMcpAssignmentStore, type McpAssignmentStore } from "./mcpAssignments.ts";
 import { FileMcpPolicyStore, type McpPolicyStore } from "./mcpPolicy.ts";
@@ -307,6 +308,20 @@ async function initServer(
     }
   >();
   const childAllowedTools = new Map<string, ReadonlySet<string>>();
+  // PI-03b, behind AGENT_DECK_NATIVE_MCP=1 until the proxy goes (PI-03f): each
+  // session's MCP servers are embedded in its generated bridge extension and
+  // hosted by Pi's own MCP client. Pi server name -> Agent Deck id per session.
+  const nativeMcpEnabled = () => process.env.AGENT_DECK_NATIVE_MCP === "1";
+  const nativeMcpIdMaps = new Map<string, Map<string, string>>();
+  const nativeMcpFor = (
+    projectId: string,
+    serverIds: readonly string[],
+    toolAllowlist?: string[],
+  ) =>
+    nativeMcpList(
+      effectiveMcpConfigs(projectId).configs.filter((config) => serverIds.includes(config.id)),
+      toolAllowlist,
+    );
   // Blocking supervisor requests awaiting an answer: requestId → resolver. The
   // child's contact_supervisor call is suspended on the /bridge request until
   // answerSupervisor() (via POST /supervisor/:id/answer) settles it.
@@ -446,12 +461,18 @@ async function initServer(
         .filter((spec) => agentMemoryEnabled() || !spec.name.startsWith("agent_deck_memory_"))
         .filter((spec) => delegationAllowed || !DELEGATION_TOOL_NAMES.has(spec.name));
       const allow = mcpAllowlistForSession(meta);
-      const tools = scope ? [...nonMcpTools, ...mcp.specs(scope, allow)] : nonMcpTools;
+      const native = scope && nativeMcpEnabled() ? nativeMcpFor(scope, allow) : undefined;
+      if (native) nativeMcpIdMaps.set(meta.id, native.idMap);
+      else nativeMcpIdMaps.delete(meta.id);
+      const tools = scope && !native ? [...nonMcpTools, ...mcp.specs(scope, allow)] : nonMcpTools;
       return writeBridgeExtension({
         endpoint: bridgeAddress.endpoint,
         sessionId: meta.id,
         token,
         tools,
+        ...(native?.servers.length
+          ? { nativeMcp: { servers: native.servers, blockedTools: native.blockedTools } }
+          : {}),
         // The generated bridge is appended after every provider/user extension.
         // Its single final hook applies recall first, then captures the exact
         // chained prompt Pi will use for this turn.
@@ -522,7 +543,15 @@ async function initServer(
           route.tools === undefined ||
           route.tools.includes(MCP_PROXY_TOOL_NAME) ||
           exactLegacyTools.length > 0;
-        const mcpSpecs = project && proxyAllowed ? mcp.specs(project.id, serverIds) : [];
+        const toolAllowlist =
+          route.tools !== undefined && !route.tools.includes(MCP_PROXY_TOOL_NAME)
+            ? exactLegacyTools
+            : undefined;
+        const native =
+          project && proxyAllowed && nativeMcpEnabled()
+            ? nativeMcpFor(project.id, serverIds, toolAllowlist)
+            : undefined;
+        const mcpSpecs = project && proxyAllowed && !native ? mcp.specs(project.id, serverIds) : [];
         const tools = [CONTACT_SUPERVISOR_SPEC, ...memorySpecs, ...mcpSpecs];
         const toolNames = tools.map((tool) => tool.name);
         // Generate first; publish authentication/authorization only on success.
@@ -531,7 +560,11 @@ async function initServer(
           sessionId: childSessionId,
           token,
           tools,
+          ...(native?.servers.length
+            ? { nativeMcp: { servers: native.servers, blockedTools: native.blockedTools } }
+            : {}),
         });
+        if (native) nativeMcpIdMaps.set(childSessionId, native.idMap);
         const disposeAccess = registerChildBridgeAccess({
           sessionId: childSessionId,
           token,
@@ -550,19 +583,24 @@ async function initServer(
             agentName: route.agentName,
             projectId: project.id,
             serverIds,
-            ...(route.tools !== undefined && !route.tools.includes(MCP_PROXY_TOOL_NAME)
-              ? { toolAllowlist: exactLegacyTools }
-              : {}),
+            ...(toolAllowlist ? { toolAllowlist } : {}),
           });
         }
         return {
           extension,
-          toolNames,
+          // Native MCP tools are not bridge tools; a pattern per granted server
+          // keeps them through an authored --tools list (hidden exposure still
+          // narrows a legacy exact-tool allowlist).
+          toolNames: [
+            ...toolNames,
+            ...(native?.servers ?? []).map((s) => `mcp__${s.name.replace(/-/g, "_")}__*`),
+          ],
           dispose: async () => {
             cancelChildSupervisorRequests(childSessionId);
             disposeAccess();
             childSupervisors.delete(childSessionId);
             childMcpAssignments.delete(childSessionId);
+            nativeMcpIdMaps.delete(childSessionId);
             try {
               rmSync(nodePath.dirname(extension), { recursive: true, force: true });
             } catch {
