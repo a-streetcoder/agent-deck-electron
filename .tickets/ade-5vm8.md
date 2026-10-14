@@ -1,6 +1,6 @@
 ---
 id: ade-5vm8
-status: open
+status: in_progress
 deps: [ade-cdd5]
 links: []
 created: 2026-10-14T19:54:18Z
@@ -20,3 +20,9 @@ Depends on PI-03a go. GUARDRAILS as every PI ticket. The MCP settings screen kee
 ## Acceptance Criteria
 
 Unit tests: id mapping (dots, dash/underscore collisions), bearer header translation, hidden tools from approval modes and allow/deny lists, child list subset; a real-Pi test shows a session sees exactly its assigned servers and a child sees its granted subset.
+
+## Notes
+
+**2026-10-14T21:12:26Z**
+
+2026-10-14 approved by the owner (PI-03b..f lane). Dispatch note: the main-session extension switches to nativeMcp with the resolved list and drops the proxy spec from its tools; children get their subset the same way; live policy comes in PI-03c, so the build is NOT deployed to the VM before PI-03c merges.

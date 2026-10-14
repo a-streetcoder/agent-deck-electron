@@ -1,6 +1,6 @@
 ---
 id: ade-mug8
-status: open
+status: in_progress
 deps: [ade-vdes]
 links: []
 created: 2026-10-14T19:21:19Z
@@ -39,3 +39,7 @@ Written after the design pass.
 **2026-10-14T19:30:30Z**
 
 2026-10-14 owner decision on the policy caveat: "I decide otherwise, this is a server and I will be using it; if others use it in my session that is fine. The only caveat: use it in a session the credential owner owns, not in their private session." Architect reading: credentials are never copied or lent into another user private session; other users use the owner credentials only by prompting sessions the owner created (createdBy), which is exactly what SRV-11 already does (a session always runs on its owner credentials, whoever prompts). So the epic shrinks to a small UI ticket: (1) the session header and the model dropdown of a session you do not own show "runs on <owner name> credentials" next to the model name (the picker lists only the owner models, as today); (2) the SRV-13 banner for a user with no provider adds "or work in a session shared with you". No server change, no shared-credentials.json, no share toggle. Still needs the exact word approved before dispatch; priority 3.
+
+**2026-10-14T21:12:26Z**
+
+2026-10-14 APPROVED by the owner (one-word approval after the shrunk scope). Final scope, no server change: (1) in a session whose createdBy is not the viewer, the session header model control and the model dropdown show "runs on <owner name> credentials" next to the model name (owner name from the session meta createdBy name, falling back to the email local part); the picker lists only the owner models, as today; (2) the SRV-13 ProviderMissingBanner text gains ", or work in a session shared with you" (only on the shared server, where `me` is set). Acceptance: web tests for the label (shown when viewer id differs from createdBy id, hidden when they match or createdBy is missing) and for the banner wording; eslint, prettier and web tsc pass.
