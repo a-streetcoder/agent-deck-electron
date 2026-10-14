@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
+  contextHiddenEntryIds,
   createIngestState,
   finalizeOpenProviderRetry,
   ingestPiEvent,
+  markHiddenFromModel,
   type PiInboundEvent,
 } from "../src/ingest.ts";
 import {
@@ -559,5 +562,35 @@ describe("answerable UI requests (the pending/attention chokepoint)", () => {
       statusText: "ctx 7/100k",
     } as unknown as PiInboundEvent);
     expect(events).toEqual([]);
+  });
+});
+
+describe("context_edit session entries", () => {
+  const base = { parentId: null, timestamp: "2026-10-14T00:00:00.000Z" };
+  const edit = (id: string, targetId: string, replacement: unknown): SessionEntry =>
+    ({ ...base, type: "context_edit", id, targetId, replacement }) as SessionEntry;
+  const message = (id: string): SessionEntry =>
+    ({ ...base, type: "message", id, message: assistantMessage([]) }) as SessionEntry;
+
+  it("hides the targets of the latest null edit and keeps replaced content visible", () => {
+    const chain = [
+      message("a"),
+      message("b"),
+      edit("e1", "a", null),
+      edit("e2", "b", null),
+      edit("e3", "b", { content: [{ type: "text", text: "summary" }] }),
+    ];
+    expect([...contextHiddenEntryIds(chain)]).toEqual(["a"]);
+  });
+
+  it("marks the message cell ingested for a hidden entry", () => {
+    const events = markHiddenFromModel(
+      ingestPiEvent(createIngestState(), {
+        type: "message_end",
+        message: assistantMessage([{ type: "text", text: "failed attempt" }]),
+      } as unknown as PiInboundEvent),
+    );
+    const transcript = events.reduce(reduceTranscript, emptyTranscript());
+    expect(transcript.cells).toMatchObject([{ kind: "assistant", hiddenFromModel: true }]);
   });
 });

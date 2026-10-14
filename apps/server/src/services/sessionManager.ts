@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { SessionMeta } from "@agent-deck/contracts";
 import {
+  contextHiddenEntryIds,
   createIngestState,
   emptyTranscript,
   finalizeOpenProviderRetry,
   ingestMemoryRecallEntry,
   ingestPiEvent,
   isAnswerableUiRequest,
+  markHiddenFromModel,
   normalizeAgentOutput,
   reduceTranscript,
   type AskUserAnswer,
@@ -483,13 +485,16 @@ export function lockTitleSource(
 export function transcriptFromEntries(data: EntriesData): TranscriptState {
   const state = createIngestState();
   let transcript = emptyTranscript();
-  for (const entry of activeEntryChain(data)) {
+  const chain = activeEntryChain(data);
+  const hidden = contextHiddenEntryIds(chain);
+  for (const entry of chain) {
     if (entry.type !== "message") continue;
-    for (const event of ingestPiEvent(state, {
+    const events = ingestPiEvent(state, {
       type: "message_end",
       entryId: entry.id,
       message: entry.message,
-    } as unknown as PiInboundEvent)) {
+    } as unknown as PiInboundEvent);
+    for (const event of hidden.has(entry.id) ? markHiddenFromModel(events) : events) {
       transcript = reduceTranscript(transcript, event);
     }
   }
@@ -1377,6 +1382,7 @@ export const makeManagedSessionRuntime = (
       const entryData = yield* handle.getEntries.pipe(Effect.orDie);
       yield* Effect.sync(() => {
         const entries = activeEntryChain(entryData);
+        const hiddenFromModel = contextHiddenEntryIds(entries);
         const durableRetries = (meta.providerRetries ?? [])
           .flatMap((record) => {
             const normalized = normalizeDurableProviderRetry(record);
@@ -1427,11 +1433,13 @@ export const makeManagedSessionRuntime = (
             // itself proves it is Pi's paired provider-error assistant.
             ingest.messageCount += 1;
           } else {
-            for (const domainEvent of ingestPiEvent(ingest, {
+            const entryEvents = ingestPiEvent(ingest, {
               type: "message_end",
               entryId: entry.id,
               message: entry.message,
-            } as unknown as PiInboundEvent)) {
+            } as unknown as PiInboundEvent);
+            if (hiddenFromModel.has(entry.id)) markHiddenFromModel(entryEvents);
+            for (const domainEvent of entryEvents) {
               if (
                 domainEvent.type === "cell_final" &&
                 domainEvent.cell.kind === "user" &&

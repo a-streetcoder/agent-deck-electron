@@ -29,5 +29,11 @@ export function ingestChildRunLifecycle(state: ChildRunLifecycle, event: PiInbou
   }
   // auto_retry_end.success is not terminal, and Pi emits it even for an
   // aborted assistant. Only a later real assistant response clears its error.
-  if (event.type === "agent_settled") state.settled = true;
+  if (event.type === "agent_settled") {
+    state.settled = true;
+    // Pi 1.1+: the settle event is authoritative for an abort even when no
+    // aborted assistant message preceded it (e.g. aborted during a tool call).
+    // The stop-reason inference above stays as the fallback.
+    if (event.aborted) state.error ??= "Subagent turn was aborted.";
+  }
 }

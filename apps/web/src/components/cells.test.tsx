@@ -776,3 +776,21 @@ describe("user file attachments", () => {
     expect(screen.queryByTestId("paste-preview-dialog")).toBeNull();
   });
 });
+
+describe("context_edit marker", () => {
+  it("labels a message the model no longer sees and still renders it", () => {
+    render(
+      <CellView
+        cell={{
+          kind: "assistant",
+          id: "assistant-hidden",
+          blocks: [{ kind: "text", contentIndex: 0, text: "failed attempt", done: true }],
+          streaming: false,
+          hiddenFromModel: true,
+        }}
+      />,
+    );
+    expect(screen.getByTestId("hidden-from-model").textContent).toContain("Not in model context");
+    expect(screen.getByTestId("assistant-cell")).toBeTruthy();
+  });
+});

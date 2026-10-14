@@ -1,4 +1,8 @@
-import type { RpcEventListener, RpcExtensionUIRequest } from "@earendil-works/pi-coding-agent";
+import type {
+  RpcEventListener,
+  RpcExtensionUIRequest,
+  SessionEntry,
+} from "@earendil-works/pi-coding-agent";
 import type {
   AssistantBlock,
   AssistantCell,
@@ -137,6 +141,36 @@ export function ingestMemoryRecallEntry(
       },
     },
   ];
+}
+
+/**
+ * Pi 0.87+ `context_edit` entries edit an earlier entry's contribution to the
+ * model context without rewriting it (Pi uses `replacement: null` to omit a
+ * failed recovery attempt, for example). Returns the ids of entries on `chain`
+ * (root-to-leaf) the model no longer sees; the latest edit per target wins, as
+ * in Pi's own projection. A content replacement keeps the entry visible.
+ */
+export function contextHiddenEntryIds(chain: readonly SessionEntry[]): Set<string> {
+  const hidden = new Set<string>();
+  for (const entry of chain) {
+    if (entry.type !== "context_edit") continue;
+    if (entry.replacement === null) hidden.add(entry.targetId);
+    else hidden.delete(entry.targetId);
+  }
+  return hidden;
+}
+
+/** Flag the message cells ingested for a hidden entry so the transcript can say so. */
+export function markHiddenFromModel(events: DomainEvent[]): DomainEvent[] {
+  for (const event of events) {
+    if (
+      event.type === "cell_final" &&
+      (event.cell.kind === "user" || event.cell.kind === "assistant" || event.cell.kind === "tool")
+    ) {
+      event.cell = { ...event.cell, hiddenFromModel: true };
+    }
+  }
+  return events;
 }
 
 function coinId(state: IngestState, prefix: string): string {

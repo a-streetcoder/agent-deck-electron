@@ -108,3 +108,19 @@ describe("pinned Pi child lifecycle", () => {
     },
   );
 });
+
+describe("agent_settled.aborted", () => {
+  it("marks a run aborted mid-tool as failed even though the last assistant was a tool call", () => {
+    const state: ChildRunLifecycle = { settled: false };
+    ingestChildRunLifecycle(state, { type: "message_end", message: message("toolUse") });
+    ingestChildRunLifecycle(state, { type: "agent_settled", aborted: true });
+    expect(state).toEqual({ settled: true, error: "Subagent turn was aborted." });
+  });
+
+  it("keeps a more specific error already recorded", () => {
+    const state: ChildRunLifecycle = { settled: false };
+    ingestChildRunLifecycle(state, end("error"));
+    ingestChildRunLifecycle(state, { type: "agent_settled", aborted: true });
+    expect(state).toEqual({ settled: true, error: "500 outage" });
+  });
+});

@@ -86,6 +86,31 @@ Recovered retries return the real final assistant text. Deltas, retry projection
 model/usage accounting, and the child continuation file remain live throughout;
 the existing overall timeout and call-owned cancellation still reap the scope.
 
+`agent_settled.aborted` (Pi 1.1) marks a settled child run as aborted even when
+no aborted assistant message preceded it, such as an abort during a tool call;
+the assistant stop-reason inference stays as the fallback.
+
+## Pi 1.x events and RPC additions
+
+- `context_edit` session entries (Pi 0.87): when a transcript is rebuilt from
+  `get_entries` (resume, child transcript reconstruction), a message whose latest
+  edit has `replacement: null` is flagged `hiddenFromModel` and the renderer
+  labels it "Not in model context". Live `message_end` events carry no entry id,
+  so a live session shows the label only after its next rebuild.
+- `tool_execution_end.durationMs` (Pi 1.1) is not read: tool cells show no
+  duration, and the subagent run timer measures the whole child run, not a tool.
+- `clear_queue` (Pi 0.84.4) is not exposed: the composer lists queued guidance
+  and follow-ups but has no cancel control.
+- `ui_prompt_start` / `ui_prompt_end` are extension events only and never reach
+  RPC stdout; blocking extension prompts already arrive as `extension_ui_request`
+  and drive pending attention.
+- `before_agent_start` is a union on `messageType` (Pi 1.2). The generated recall
+  hook runs only for `messageType: "user"`; the prompt audit reads `systemPrompt`,
+  which both variants carry. Injected commands use `sendUserMessage`, a user run.
+- `prompt`, `steer` and `follow_up` responses carry a `disposition`
+  (`started` / `queued` / `handled`); the host sends the unchanged request shape
+  and does not read it.
+
 ## Stopped child cards and Loop snapshots
 
 Child-scope cleanup terminalizes every interrupted open subagent card exactly

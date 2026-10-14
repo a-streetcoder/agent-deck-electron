@@ -901,6 +901,18 @@ export function CellView({
   editorController?: OpenInEditorController;
   transcriptVisibility?: TranscriptVisibilitySettings;
 }) {
+  if ("hiddenFromModel" in cell && cell.hiddenFromModel) {
+    return (
+      <div data-testid="hidden-from-model">
+        <CellView
+          cell={{ ...cell, hiddenFromModel: undefined }}
+          editorController={editorController}
+          transcriptVisibility={transcriptVisibility}
+        />
+        <p className="mt-1 text-micro text-text-muted">Not in model context</p>
+      </div>
+    );
+  }
   switch (cell.kind) {
     case "user":
       return <UserCellView cell={cell} showImages={transcriptVisibility.showImages} />;

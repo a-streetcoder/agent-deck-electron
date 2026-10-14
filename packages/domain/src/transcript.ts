@@ -59,6 +59,8 @@ export interface UserCell {
   files?: UserFileRef[];
   folders?: UserFolderRef[];
   pastes?: UserPasteRef[];
+  /** A Pi `context_edit` omitted this message from the model context. */
+  hiddenFromModel?: true;
 }
 
 export interface AssistantCell {
@@ -69,6 +71,8 @@ export interface AssistantCell {
   model?: string;
   stopReason?: string;
   errorMessage?: string;
+  /** A Pi `context_edit` omitted this message from the model context. */
+  hiddenFromModel?: true;
 }
 
 export interface ToolCell {
@@ -79,6 +83,8 @@ export interface ToolCell {
   args: unknown;
   status: "running" | "done" | "error";
   result?: unknown;
+  /** A Pi `context_edit` omitted this tool result from the model context. */
+  hiddenFromModel?: true;
 }
 
 export interface RecalledMemoryReference {
