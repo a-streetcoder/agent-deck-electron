@@ -1,6 +1,6 @@
 ---
 id: ade-zvv5
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-14T07:24:20Z
@@ -21,3 +21,9 @@ GUARDRAILS (this checkout is mirrored live to the VM by Syncthing and is the ser
 
 Launching the cloudflare launcher with no cached token shows the Agent Deck window on the sign-in page within 3 s, no browser opens until the button is clicked; after approval in the browser the same window loads the app signed in; cancelling or a cloudflared error leaves a readable message and a retry; existing cached-token launches are unchanged; apps/desktop tests pass; docs/remote-server-poc.md Desktop login updated.
 
+
+## Notes
+
+**2026-10-14T07:36:37Z**
+
+2026-10-14 validated in the real app (isolated profile, cached tokens removed): sign-in page in 1.2 s, no cloudflared process until the click; start -> Chrome Approve (owner clicked) -> same window loaded deck.moretti.cc 'Signed in as'; start -> cancel -> 'Sign-in cancelled.' + Try again, cloudflared gone. Unit tests 7/7, eslint/prettier clean. Ponytail: accepted as is (state helper is the trust boundary keeping the token in main).
