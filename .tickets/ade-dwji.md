@@ -1,6 +1,6 @@
 ---
 id: ade-dwji
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-14T23:39:28Z
@@ -26,3 +26,7 @@ ARCHITECTURE.md under ~250 lines with every removed section reachable by link; n
 **2026-10-14T23:52:38Z**
 
 2026-10-15 unblocked from D1: both ADR 0005 options retire the seam posture, so the sync-seams closing note and the parity-loop seam rule removal can be written now; the AGENTS.md skill-storage paragraph stays as is until D1 lands (say so in the note).
+
+**2026-10-14T23:58:43Z**
+
+2026-10-15 merged (wt/ade-dwji: f1d4994 + architect nits 8dd9590). Contrarian: no lost rule (every must/never sentence survives in ARCHITECTURE.md or orchestration-reference.md); applied nits: contract and ARCHITECTURE wording 'being retired, holds until D1', package one-liners corrected (desktop remote attach, domain behaviour, loop-catalog-native scope), parity-loop 'Sync-engine seams' section rewritten as 'Store seams' pointing at ADR 0005, archive link fixed, roadmap D2 row closed, VISION.md sync-seams sentence updated. ARCHITECTURE.md 133 -> 86 lines.
