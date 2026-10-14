@@ -406,7 +406,7 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
   Agent Deck does refuse a user dir whose `users`, `<hash>` or `agent` component, or whose
   `auth.json`, is a symlink or not a regular entry, so a planted alias cannot redirect a
   sign-in or a spawn.
-- **MCP sign-ins (native MCP, `AGENT_DECK_NATIVE_MCP=1`, PI-03d).** Pi keeps MCP OAuth tokens
+- **MCP sign-ins.** Pi keeps MCP OAuth tokens
   in `<user agent dir>/mcp-auth.json`, which is not on the link list, so each user has their own
   file (Pi writes it 0600 and puts its refresh locks beside it). Sign in from the MCP screen:
   "Sign in" on an HTTP server sends `/mcp login <name>` to one of your own live sessions in that
@@ -470,9 +470,16 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
   session. That includes Pi's MCP notices, such as "MCP servers need attention" on resume and
   the stderr tail of a stdio MCP server that fails to start, which can carry whatever the
   server printed (a secret, if it prints one).
-- Native MCP sign-in needs the paste step: the redirect page is Pi's loopback listener on the
-  VM, which the user's browser cannot reach. Pi only accepts the full address from the address
-  bar of that same sign-in (same origin, path and state).
+- MCP tokens are per user: Pi keeps them in `<user agent dir>/mcp-auth.json` (see
+  [Credentials](#credentials)). Tokens the removed proxy stored under `<dataDir>/mcp-oauth` are
+  no longer read, so everyone signs in again; Agent Deck does not delete that directory, remove
+  it by hand once nobody needs it.
+- MCP sign-in needs the paste step: the redirect page is Pi's loopback listener on the VM,
+  which the user's browser cannot reach, so it fails to load; paste its address into the
+  session's input card. Pi only accepts the full address from the address bar of that same
+  sign-in (same origin, path and state).
+- The MCP screen's status comes from a probe that holds no user token, so a server behind OAuth
+  shows "needs sign-in" even after you signed in; the sessions use your token regardless.
 - Pi 1.0.3 renamed the Azure provider `azure-openai-responses` to `azure` (PI-04). Agent Deck
   maps the old id in its own state on load (app settings, session metadata) and renames the key
   in the shared and every per-user `auth.json` at startup. Pi's own `settings.json`
