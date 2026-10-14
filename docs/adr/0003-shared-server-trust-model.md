@@ -1,7 +1,7 @@
 # ADR 0003 — Shared headless host: a supported deployment with a co-worker trust model
 
 - **Status:** Accepted (2026-10-14)
-- **Qualifies:** [VISION_EDGE](../../VISION_EDGE.md) ("agents run on their owner's machine")
+- **Qualifies:** [VISION_EDGE](../archive/vision-2026-07/VISION_EDGE.md) ("agents run on their owner's machine") — superseded by [ADR 0004](0004-orchestration-and-collaboration-direction.md), which makes the shared host the collaboration direction
 - **Live setup + security model:** [remote-server-poc.md](../remote-server-poc.md)
 - **Consulted:** nah-contrarian, 2026-10-14. Objections accepted:
   - (3) A server-minted bearer token cannot pass the Cloudflare Access edge on its own, so the

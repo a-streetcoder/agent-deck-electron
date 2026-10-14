@@ -170,7 +170,7 @@ What landed, and where reality diverged from the plan above. Full, current detai
 - **P4 — partial.** Dead `NativeSkillStore` deleted; the real engine emitter is pi-round-trip
   guarded. The native skill-write fns are prod-dead but **kept + marked**, not deleted, while P4 is
   partial. Retiring the git-repo importer is **blocked** on the engine exposing git-import through
-  the NAPI — request out at [skill-engine-git-import-request.md](../skill-engine-git-import-request.md).
+  the NAPI — request out at [skill-engine-git-import-request.md](../archive/syncr-requests/skill-engine-git-import-request.md).
 
 **Divergences from the plan, recorded honestly:**
 

@@ -12,13 +12,10 @@ interface Harness {
   fastify: FastifyInstance;
   home: string;
   policy: McpPolicyStore;
-  pause: ReturnType<typeof vi.fn>;
-  reconcile: ReturnType<typeof vi.fn>;
+  forget: ReturnType<typeof vi.fn>;
+  probe: ReturnType<typeof vi.fn>;
   broadcast: ReturnType<typeof vi.fn>;
   writes: boolean[];
-  beginAuth: ReturnType<typeof vi.fn>;
-  clearAuth: ReturnType<typeof vi.fn>;
-  submitCode: ReturnType<typeof vi.fn>;
 }
 
 function makeHarness(
@@ -27,7 +24,6 @@ function makeHarness(
     failWrite?: boolean;
     authoritativeWrite?: boolean;
     hiddenProject?: boolean;
-    callbackError?: string;
     onRootsFor?: (home: string) => void;
     catalogServers?: Record<string, unknown>[];
     status?: Record<string, unknown>[];
@@ -45,41 +41,19 @@ function makeHarness(
       return enabled;
     },
   };
-  const pause = vi.fn().mockResolvedValue(undefined);
-  const reconcile = vi.fn().mockResolvedValue({ ok: true, missing: [] });
+  const forget = vi.fn();
+  // Probing runs only for the assigned `remote` (projectHasEffectiveMcpGrant below).
+  const probe = vi.fn(async (_projectId: string, serverId: string) => serverId === "remote");
   const broadcast = vi.fn();
-  const beginAuth = vi.fn().mockResolvedValue({
-    status: "authorizing",
-    authUrl: "https://auth.example/authorize",
-  });
-  const clearAuth = vi.fn().mockResolvedValue(undefined);
-  const submitCode = vi
-    .fn()
-    .mockResolvedValue(
-      options.callbackError
-        ? { status: "error", error: options.callbackError }
-        : { status: "authorized" },
-    );
   const home = mkdtempSync(path.join(tmpdir(), "mcp-policy-route-home-"));
   registerMcpRoutes({
     fastify,
     mcpPolicy: policy,
     mcpDefinitions: new FileMcpDefinitionStore(),
-    mcp: {
-      pause,
-      status: () => options.status ?? [],
-      refresh: vi.fn().mockResolvedValue(null),
-      scopesFor: () => [],
-      has: () => false,
-    },
-    mcpOAuth: {
-      state: () => ({ status: "unauthenticated" }),
-      beginAuth,
-      clear: clearAuth,
-      submitCode,
-    },
-    reloadMcpConfig: vi.fn().mockResolvedValue({ ok: true }),
-    reconcileProjectMcp: reconcile,
+    forgetMcpProbes: forget,
+    probeMcp: probe,
+    mcpProbe: (_projectId: string, serverId: string) =>
+      options.status?.find((status) => status.id === serverId),
     effectiveMcpConfigs: () => ({
       configs: (options.catalogServers ?? [{ id: "remote", url: "https://mcp.example/mcp" }]).map(
         (server) => ({ id: server.id, url: server.url, command: server.command }),
@@ -110,7 +84,6 @@ function makeHarness(
       catalog: { servers: [], valid: true },
     }),
     isMcpEnvOverride: () => false,
-    oauthKey: (scope: string, id: string) => `${scope}:${id}`,
     broadcast,
     rootsFor: () => {
       options.onRootsFor?.(home);
@@ -147,13 +120,10 @@ function makeHarness(
     fastify,
     home,
     policy,
-    pause,
-    reconcile,
+    forget,
+    probe,
     broadcast,
     writes,
-    beginAuth,
-    clearAuth,
-    submitCode,
   };
 }
 
@@ -359,7 +329,8 @@ describe("MCP policy route", () => {
     expect(toggled.statusCode).toBe(200);
     expect(toggled.json()).toEqual({ mcpEnabled: false });
     expect(harness.writes).toEqual([false]);
-    expect(harness.pause).toHaveBeenCalledOnce();
+    // Pausing drops every cached probe; sessions are refused by the policy hook.
+    expect(harness.forget).toHaveBeenCalledOnce();
     expect(harness.broadcast).toHaveBeenCalledWith({ type: "resources_changed" });
     expect((await harness.fastify.inject({ method: "GET", url: "/mcp" })).json()).toMatchObject({
       mcpEnabled: false,
@@ -377,8 +348,7 @@ describe("MCP policy route", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ mcpEnabled: false });
     expect(harness.writes).toEqual([true]);
-    expect(harness.pause).toHaveBeenCalledOnce();
-    expect(harness.reconcile).not.toHaveBeenCalled();
+    expect(harness.forget).toHaveBeenCalledOnce();
   });
 
   it("changes neither runtime nor UI broadcast when persistence fails", async () => {
@@ -392,118 +362,67 @@ describe("MCP policy route", () => {
     expect(response.statusCode).toBe(500);
     expect(response.json()).toMatchObject({ code: "RESOURCE_WRITE_FAILED", error: "disk full" });
     expect(harness.policy.enabled()).toBe(true);
-    expect(harness.pause).not.toHaveBeenCalled();
-    expect(harness.reconcile).not.toHaveBeenCalled();
+    expect(harness.forget).not.toHaveBeenCalled();
     expect(harness.broadcast).not.toHaveBeenCalled();
   });
 
-  it("serializes concurrent off/on through cleanup before reconnect", async () => {
-    let releasePause!: () => void;
-    harness.pause.mockReturnValueOnce(new Promise<void>((resolve) => (releasePause = resolve)));
-    const off = harness.fastify.inject({
-      method: "PATCH",
-      url: "/mcp/policy",
-      payload: { enabled: false },
-    });
-    await vi.waitFor(() => expect(harness.pause).toHaveBeenCalledOnce());
-    const on = harness.fastify.inject({
-      method: "PATCH",
-      url: "/mcp/policy",
-      payload: { enabled: true },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(harness.writes).toEqual([false]);
-    expect(harness.reconcile).not.toHaveBeenCalled();
-    releasePause();
-    expect((await off).json()).toEqual({ mcpEnabled: false });
-    expect((await on).json()).toEqual({ mcpEnabled: true });
-    expect(harness.writes).toEqual([false, true]);
-    expect(harness.reconcile).toHaveBeenCalledWith("project");
-    expect(harness.policy.enabled()).toBe(true);
-  });
-
-  it.each([true, false])(
-    "rejects hidden-project OAuth login/callback when policy enabled=%s",
-    async (enabled) => {
-      await harness.fastify.close();
-      harness = makeHarness({ enabled, hiddenProject: true });
-      const login = await harness.fastify.inject({
-        method: "POST",
-        url: "/mcp/remote/login?projectId=project",
-      });
-      expect(login.statusCode).toBe(404);
-      const callback = await harness.fastify.inject({
-        method: "POST",
-        url: "/mcp/remote/login/callback?projectId=project",
-        payload: { code: "code", state: "state" },
-      });
-      expect(callback.statusCode).toBe(404);
-      expect(harness.beginAuth).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    "state mismatch (possible CSRF) — restart sign-in",
-    "sign-in attempt is no longer active — restart sign-in",
-    "sign-in attempt was already completed or superseded",
-  ])("maps inactive or mismatched OAuth callback admission to 400: %s", async (error) => {
-    await harness.fastify.close();
-    harness = makeHarness({ callbackError: error });
-    const callback = await harness.fastify.inject({
-      method: "POST",
-      url: "/mcp/remote/login/callback?projectId=project",
-      payload: { code: "code", state: "state" },
-    });
-    expect(callback.statusCode).toBe(400);
-    expect(callback.json()).toMatchObject({ error });
-  });
-
-  it("keeps OAuth management usable while paused and refuses reconnect", async () => {
+  it("refuses a check while paused", async () => {
     await harness.fastify.inject({
       method: "PATCH",
       url: "/mcp/policy",
       payload: { enabled: false },
     });
-    const login = await harness.fastify.inject({
-      method: "POST",
-      url: "/mcp/remote/login?projectId=project",
-    });
-    expect(login.statusCode).toBe(200);
-    expect(login.json()).toMatchObject({ auth: { status: "authorizing" } });
-    expect(harness.beginAuth).toHaveBeenCalledWith(
-      "project:remote",
-      "https://mcp.example/mcp",
-      expect.any(Function),
-      { projectId: "project", serverId: "remote" },
-    );
-
-    const logout = await harness.fastify.inject({
-      method: "POST",
-      url: "/mcp/remote/logout?projectId=project",
-    });
-    expect(logout.statusCode).toBe(200);
-    expect(harness.clearAuth).toHaveBeenCalledWith("project:remote");
-    const reconnect = await harness.fastify.inject({
+    const check = await harness.fastify.inject({
       method: "POST",
       url: "/mcp/remote/refresh?projectId=project",
     });
-    expect(reconnect.statusCode).toBe(409);
-    expect(reconnect.json()).toMatchObject({ error: expect.stringContaining("paused") });
+    expect(check.statusCode).toBe(409);
+    expect(check.json()).toMatchObject({ error: expect.stringContaining("paused") });
+    expect(harness.probe).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /mcp/:id/refresh (probe)", () => {
+  it("probes an assigned server and returns what it found", async () => {
+    await harness.fastify.close();
+    harness = makeHarness({
+      status: [{ id: "remote", connected: true, toolNames: ["remote/echo"], tools: [] }],
+    });
+    const check = await harness.fastify.inject({
+      method: "POST",
+      url: "/mcp/remote/refresh?projectId=project",
+    });
+    expect(check.statusCode).toBe(200);
+    expect(check.json()).toMatchObject({ server: { id: "remote", connected: true } });
+    expect(harness.probe).toHaveBeenCalledWith("project", "remote");
+    expect(harness.broadcast).toHaveBeenCalledWith({ type: "resources_changed" });
   });
 
-  it("returns a cleanup warning while retaining persisted paused truth", async () => {
-    harness.pause.mockRejectedValueOnce(new Error("close failed"));
-    const response = await harness.fastify.inject({
-      method: "PATCH",
-      url: "/mcp/policy",
-      payload: { enabled: false },
+  it("answers 404 for a server not assigned to the project", async () => {
+    const check = await harness.fastify.inject({
+      method: "POST",
+      url: "/mcp/other/refresh?projectId=project",
     });
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({
-      mcpEnabled: false,
-      warning: "Some live MCP connections could not be closed cleanly.",
+    expect(check.statusCode).toBe(404);
+  });
+
+  it("hides a cached probe once the server is no longer assigned", async () => {
+    await harness.fastify.close();
+    harness = makeHarness({
+      catalogServers: [
+        {
+          id: "other",
+          transport: "http",
+          url: "https://o.example/mcp",
+          scope: "global",
+          writable: true,
+        },
+      ],
+      status: [{ id: "other", connected: true, toolNames: ["other/x"], tools: [] }],
     });
-    expect(harness.policy.enabled()).toBe(false);
-    expect(harness.broadcast).toHaveBeenCalledOnce();
+    const servers = (
+      await harness.fastify.inject({ method: "GET", url: "/mcp?projectId=project" })
+    ).json().servers as { id: string; connected: boolean }[];
+    expect(servers).toEqual([expect.objectContaining({ id: "other", connected: false })]);
   });
 });

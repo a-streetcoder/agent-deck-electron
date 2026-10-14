@@ -96,7 +96,7 @@ beforeAll(async () => {
     toolCall: (_lastUser, body) =>
       body.messages.some((message) => message.role === "tool")
         ? null
-        : { name: "mcp", arguments: { tool: "shared/echo", args: { message: "isolated" } } },
+        : { name: "mcp__shared__echo", arguments: { message: "isolated" } },
     reply: () => "streamed parent answer has several deltas",
   });
   providerExtension = writeMockProviderExtension(provider.baseUrl);
@@ -112,7 +112,7 @@ afterAll(async () => {
 });
 
 describe("real Pi project-scoped MCP isolation", () => {
-  it("keeps concurrent same-id project clients isolated and parent streaming incremental", async () => {
+  it("keeps concurrent same-id project servers isolated and parent streaming incremental", async () => {
     const [sessionAId, sessionBId] = await Promise.all([
       createSession(projectAId),
       createSession(projectBId),

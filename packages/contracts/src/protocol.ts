@@ -496,6 +496,10 @@ export const SessionMeta = Schema.mutable(
     mcpServerNames: Schema.optional(
       Schema.mutable(Schema.Record({ key: Schema.String, value: Schema.String })),
     ),
+    /** The latest spawn's map alone (no merge), for `/mcp login <name>`. */
+    mcpServerNamesCurrent: Schema.optional(
+      Schema.mutable(Schema.Record({ key: Schema.String, value: Schema.String })),
+    ),
     /** Durable v1 compatibility inputs for recomputing catalog-derived launch
      * resources without losing request-specific extension/skill overrides. */
     launchResourceConfig: Schema.optional(

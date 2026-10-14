@@ -25,7 +25,7 @@ engine where surface already exists. The rule is:
    implementation swap — the `NativeSkillStore` → `EngineSkillStore` precedent — not a rewrite.
 3. **Capability is engine-adjacent but complex** (sync semantics, conflict resolution, governed
    history) → do the minimum host-side, write a request doc to Syncr
-   ([skill-engine-per-file-conflict-request.md](skill-engine-per-file-conflict-request.md) is the
+   ([skill-engine-per-file-conflict-request.md](archive/syncr-requests/skill-engine-per-file-conflict-request.md) is the
    template), and keep the row/feature shippable on the native implementation meanwhile.
 
 ## What a seam is (the `SkillStore` precedent)
@@ -128,4 +128,4 @@ versioned conflict handling; image/paste payload sync needs a separate consent a
 storage decision. Runtime process/worktree ownership and launch-environment secrets
 remain device-local and outside the seam.
 
-The future lift is described in [the draft-storage request](skill-engine-session-drafts-request.md).
+The future lift is described in [the draft-storage request](archive/syncr-requests/skill-engine-session-drafts-request.md).

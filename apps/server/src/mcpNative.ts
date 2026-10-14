@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { configToolAllowed, toolApprovalBlock, type McpServerConfig } from "./mcpTools.ts";
 
 /** The per-session server list handed to Pi native MCP through the generated
- * bridge extension (PI-03b). `idMap` maps each Pi server name back to its
+ * bridge extension. `idMap` maps each Pi server name back to its
  * Agent Deck id (persisted on the session meta as `mcpServerNames`). */
 export interface NativeMcpList {
   /** `id` is the Agent Deck id, sent back by the policy hook (PI-03c). */
@@ -10,8 +10,9 @@ export interface NativeMcpList {
   idMap: Map<string, string>;
 }
 
-/** Experimental until the proxy is removed (PI-03f). */
-export const nativeMcpEnabled = (): boolean => process.env.AGENT_DECK_NATIVE_MCP === "1";
+/** The proxy-era tool grant: in an authored `tools:` list it still means
+ * "every assigned MCP server" (migrated to one pattern per server). */
+export const LEGACY_MCP_GRANT = "mcp";
 
 // Pi hashes tool names over 64 characters and keeps only the first 55, so the
 // server part is capped at 24 (suffix included): `mcp__<24>__` is 31 characters,
@@ -35,8 +36,7 @@ const piToolName = (server: string, tool: string): string =>
 export const legacyMcpToolPrefix = (id: string): string =>
   `mcp__${id.replace(/[^A-Za-z0-9_]/g, "_")}__`;
 
-// Mirrors the proxy (mcpTools.ts legacy alias check): when two granted ids share
-// a legacy prefix (`a.b`, `a_b`), an old exact grant cannot say which server it
+// When two granted ids share a legacy prefix (`a.b`, `a_b`), an old exact grant cannot say which server it
 // meant, so it grants neither.
 const uniqueLegacyPrefix = (id: string, ids: readonly string[]): boolean =>
   ids.filter((other) => legacyMcpToolPrefix(other) === legacyMcpToolPrefix(id)).length === 1;
@@ -51,10 +51,21 @@ export function mergeMcpServerNames(
   idMap: ReadonlyMap<string, string>,
 ): Record<string, string> {
   const merged = { ...stored };
-  for (const [name, id] of idMap)
-    merged[name] = merged[name] === undefined || merged[name] === id ? id : "";
+  for (const [name, id] of idMap) {
+    const previous = merged[name];
+    // Re-inserted, so the key order follows the latest launch.
+    delete merged[name];
+    merged[name] = previous === undefined || previous === id ? id : "";
+  }
   return merged;
 }
+
+/** The Pi name one spawn's map (`mcpServerNamesCurrent`) gives an id. */
+export const storedMcpServerName = (
+  current: Readonly<Record<string, string>>,
+  id: string,
+): string | undefined =>
+  id ? Object.entries(current).find(([, value]) => value === id)?.[0] : undefined;
 
 /**
  * Pi server name per Agent Deck id. Ids are sorted first so the launch plan's
@@ -89,7 +100,7 @@ export function migrateMcpToolGrants(
   const names = nativeMcpNames(serverIds);
   const out = new Set<string>();
   for (const tool of tools) {
-    if (tool === "mcp") {
+    if (tool === LEGACY_MCP_GRANT) {
       out.add(tool);
       for (const name of names.values()) out.add(nativeMcpToolPattern(name));
       continue;
@@ -212,7 +223,8 @@ const piToolNames = (server: string, raw: string): string[] => {
  * the proxy). `config` is the live config of the server id embedded at spawn
  * (undefined once it left the catalog), `assigned` whether that id is still
  * assigned, `server` its Pi name and `toolName` the full Pi tool name.
- * `legacyGrant` is a child's exact-tool allowlist with its granted server ids.
+ * `legacyGrant` is an authored tool list with the granted server ids: a child's
+ * exact legacy names, or a named parent's live `tools:` (when it has no `mcp`).
  */
 export function nativeMcpRefusal(input: {
   enabled: boolean;
@@ -231,17 +243,24 @@ export function nativeMcpRefusal(input: {
     return `MCP server "${server}" is no longer assigned to this session.`;
   const resource = NATIVE_MCP_RESOURCE_TOOLS.has(toolName);
   if (input.legacyGrant) {
+    // A server pattern (`mcp__<pi name>__*`, what migrateMcpToolGrants writes
+    // for `mcp`) grants the whole server, resources included; an exact Pi tool
+    // name grants that tool.
+    const serverPattern = `mcp__${server.replace(/-/g, "_")}__*`;
+    const { tools } = input.legacyGrant;
     // Legacy grants name `mcp__<sanitised id>__<tool>` and never resources;
     // refuse when two granted ids share that alias (the grant is ambiguous).
     const prefix = `mcp__${sanitise(config.id)}__`;
     const granted =
-      !resource &&
-      input.legacyGrant.serverIds.filter((id) => `mcp__${sanitise(id)}__` === prefix).length ===
-        1 &&
-      input.legacyGrant.tools.some(
-        (t) =>
-          t.startsWith(prefix) && piToolNames(server, t.slice(prefix.length)).includes(toolName),
-      );
+      tools.includes(serverPattern) ||
+      (!resource && tools.includes(toolName)) ||
+      (!resource &&
+        input.legacyGrant.serverIds.filter((id) => `mcp__${sanitise(id)}__` === prefix).length ===
+          1 &&
+        tools.some(
+          (t) =>
+            t.startsWith(prefix) && piToolNames(server, t.slice(prefix.length)).includes(toolName),
+        ));
     if (!granted) return `"${toolName}" is not in this agent's tool list.`;
   }
   if (resource) return undefined;

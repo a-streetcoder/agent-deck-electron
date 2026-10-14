@@ -39,7 +39,7 @@ describe("shellQuotePosix / buildResumeScript", () => {
     const script = buildResumeScript(posixInput.cwd, posixInput.piBinary, posixInput.sessionRef);
     expect(script.startsWith("#!/bin/zsh\n")).toBe(true);
     expect(script).toContain(`cd '/work/my app' || exit 1`);
-    expect(script).toContain(`'/usr/local/bin/pi' --session '/sessions/it'\\''s.jsonl'`);
+    expect(script).toContain(`'/usr/local/bin/pi' --no-mcp --session '/sessions/it'\\''s.jsonl'`);
   });
 });
 
@@ -49,7 +49,7 @@ describe("planExternalTerminalLaunch", () => {
     expect(planExternalTerminalLaunch("win32", input, resolve)).toEqual({
       kind: "spawn",
       command: "C:\\wt\\wt.exe",
-      args: ["-d", input.cwd, input.piBinary, "--session", input.sessionRef],
+      args: ["-d", input.cwd, input.piBinary, "--no-mcp", "--session", input.sessionRef],
       shell: false,
     });
   });
@@ -69,7 +69,7 @@ describe("planExternalTerminalLaunch", () => {
       String.raw`C:\s.jsonl`,
     );
     expect(script).toContain(String.raw`cd /d "C:\dir 100%%" || exit /b 1`);
-    expect(script).toContain(String.raw`"C:\pi.cmd" --session "C:\s.jsonl" || pause`);
+    expect(script).toContain(String.raw`"C:\pi.cmd" --no-mcp --session "C:\s.jsonl" || pause`);
     const nl = String.fromCharCode(10);
     const quote = String.fromCharCode(34);
     expect(() => buildWindowsResumeScript("C:" + nl + "del x", "p", "s")).toThrow(/path/i);
@@ -114,7 +114,7 @@ describe("planExternalTerminalLaunch", () => {
     expect(planExternalTerminalLaunch("linux", posixInput, only("x-terminal-emulator"))).toEqual({
       kind: "spawn",
       command: "/usr/bin/x-terminal-emulator",
-      args: ["-e", posixInput.piBinary, "--session", posixInput.sessionRef],
+      args: ["-e", posixInput.piBinary, "--no-mcp", "--session", posixInput.sessionRef],
       cwd: posixInput.cwd,
       shell: false,
     });
@@ -125,6 +125,7 @@ describe("planExternalTerminalLaunch", () => {
         `--working-directory=${posixInput.cwd}`,
         "--",
         posixInput.piBinary,
+        "--no-mcp",
         "--session",
         posixInput.sessionRef,
       ],
@@ -138,6 +139,7 @@ describe("planExternalTerminalLaunch", () => {
         posixInput.cwd,
         "-e",
         posixInput.piBinary,
+        "--no-mcp",
         "--session",
         posixInput.sessionRef,
       ],
@@ -203,7 +205,7 @@ describe("createExternalTerminalLauncher", () => {
         Record<string, unknown>,
       ];
       expect(command).toBe("C:\\wt\\wt.exe");
-      expect(args).toEqual(["-d", dir, file, "--session", file]);
+      expect(args).toEqual(["-d", dir, file, "--no-mcp", "--session", file]);
       expect(options).toMatchObject({ detached: true, stdio: "ignore", shell: false });
       expect(child.unref).toHaveBeenCalled();
     } finally {

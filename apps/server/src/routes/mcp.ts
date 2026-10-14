@@ -41,18 +41,13 @@ function uiToolInventory(status?: { toolNames: string[]; tools?: McpUiTool[] }):
   };
 }
 
-/** MCP catalog, global-only CRUD, project assignments, and scoped OAuth. */
+/** MCP catalog, global-only CRUD, project assignments, probes and native sign-in. */
 export function registerMcpRoutes(ctx: ServerContext): void {
   const {
     fastify,
-    mcp,
-    mcpOAuth,
-    reloadMcpConfig,
-    reconcileProjectMcp,
     effectiveMcpConfigs,
     globalMcpConfigs,
     isMcpEnvOverride,
-    oauthKey,
     broadcast,
     rootsFor,
     resourceHome,
@@ -235,14 +230,16 @@ export function registerMcpRoutes(ctx: ServerContext): void {
       }),
   ]);
 
-  const reconcileAllProjectsAndBroadcast = async (): Promise<string[]> => {
-    const errors: string[] = [];
-    for (const project of projects.list()) {
-      const result = await reconcileProjectMcp(project.id);
-      if (!result.ok) errors.push(result.error);
-    }
-    broadcast({ type: "resources_changed" });
-    return [...new Set(errors)];
+  // A changed definition: drop its old probes and probe it again wherever it is
+  // assigned (probeMcp runs nothing elsewhere, and one probe per distinct
+  // config), after the response: a save never waits for a server to answer.
+  const reprobe = (id: string): void => {
+    ctx.forgetMcpProbes((_projectId, serverId) => serverId === id);
+    void Promise.all(projects.list().map((project) => ctx.probeMcp(project.id, id)))
+      .then((probed) => {
+        if (probed.some(Boolean)) broadcast({ type: "resources_changed" });
+      })
+      .catch(() => {});
   };
 
   // Settings (policy, timeouts, references) are not secrets: they round-trip so
@@ -331,7 +328,6 @@ export function registerMcpRoutes(ctx: ServerContext): void {
             connected: false,
             ...uiToolInventory(),
             editable,
-            auth: { status: "none" as const },
             ...(editable ? definitionFields(entry) : {}),
           };
         }),
@@ -339,7 +335,6 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     }
 
     const snapshot = effectiveMcpConfigs(scope);
-    const statuses = new Map(mcp.status(scope).map((status) => [status.id, status]));
     const catalog = snapshot.catalog;
     const sourceById = new Map(catalog.servers.map((entry) => [entry.id, entry.scope]));
     const assigned = [...new Set(mcpAssignments.projectServerNames(scope))];
@@ -348,16 +343,18 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     return {
       valid: snapshot.valid,
       mcpEnabled: mcpPolicy.enabled(),
-      nativeMcp: ctx.nativeMcp(),
       projectId: scope,
       defaultAssignedServerIds: defaults,
       missingDefaultAssignedServerIds: defaults.filter((id) => !configured.has(id)),
       assignedServerIds: assigned,
       missingAssignedServerIds: assigned.filter((id) => !configured.has(id)),
       servers: snapshot.configs.map((config) => {
-        const status = statuses.get(config.id);
+        // A probe stops counting once its server is no longer assigned here.
+        const status =
+          mcpPolicy.enabled() && ctx.projectHasEffectiveMcpGrant(scope, config.id)
+            ? ctx.mcpProbe(scope, config.id)
+            : undefined;
         const transport = "url" in config ? "http" : "stdio";
-        const authId = oauthKey(scope, config.id);
         const source = isMcpEnvOverride(config.id)
           ? "environment"
           : (sourceById.get(config.id) ?? "environment");
@@ -369,10 +366,10 @@ export function registerMcpRoutes(ctx: ServerContext): void {
           source,
           provenance: definitionProvenance(source, entry),
           connected: status?.connected ?? false,
+          ...(status?.needsSignIn ? { needsSignIn: true } : {}),
           ...uiToolInventory(status),
           error: status?.error,
           editable,
-          auth: transport === "http" ? mcpOAuth.state(authId) : { status: "none" as const },
           // Pi offers OAuth only to an HTTP server without an Authorization header
           // (bearerTokenEnvVar is already one here).
           oauth:
@@ -405,31 +402,9 @@ export function registerMcpRoutes(ctx: ServerContext): void {
           },
         };
       }
-      const warnings: string[] = [];
-      if (!authoritativeEnabled) {
-        try {
-          await mcp.pause();
-        } catch {
-          warnings.push("Some live MCP connections could not be closed cleanly.");
-        }
-      } else {
-        for (const project of projects.list()) {
-          try {
-            const result = await reconcileProjectMcp(project.id);
-            if (!result.ok) warnings.push(result.error);
-          } catch {
-            warnings.push(`MCP could not reconnect for ${project.name}.`);
-          }
-        }
-      }
+      if (!authoritativeEnabled) ctx.forgetMcpProbes(() => true);
       broadcast({ type: "resources_changed" });
-      return {
-        status: 200,
-        body: {
-          mcpEnabled: mcpPolicy.enabled(),
-          ...(warnings.length > 0 ? { warning: [...new Set(warnings)].join(" ") } : {}),
-        },
-      };
+      return { status: 200, body: { mcpEnabled: mcpPolicy.enabled() } };
     };
     const resultPromise = policyToggleTail.then(run, run);
     policyToggleTail = resultPromise.then(
@@ -450,6 +425,12 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     try {
       // Durable assignment is authoritative and must land before runtime changes.
       defaultAssignedServerIds = mcpAssignments.setDefaultServer(id, parsed.data.enabled);
+      // An unassigned server's old check result must not come back on reassignment.
+      if (!parsed.data.enabled)
+        ctx.forgetMcpProbes(
+          (projectId, serverId) =>
+            serverId === id && !ctx.projectHasEffectiveMcpGrant(projectId, serverId),
+        );
     } catch (error) {
       return reply.code(500).send({
         code: "RESOURCE_WRITE_FAILED",
@@ -459,34 +440,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
             : "The All Projects MCP assignment could not be saved.",
       });
     }
-    let credentialCleanupFailed = false;
-    if (!parsed.data.enabled) {
-      try {
-        await Promise.all(
-          projects
-            .list()
-            .filter((project) => !ctx.projectHasEffectiveMcpGrant(project.id, id))
-            .map((project) => mcpOAuth.clear(oauthKey(project.id, id))),
-        );
-      } catch {
-        credentialCleanupFailed = true;
-      }
-    }
-    // Durable assignment truth has already changed. Runtime convergence and
-    // refresh notification must happen even when device-local cleanup fails.
-    const errors = await reconcileAllProjectsAndBroadcast();
-    if (credentialCleanupFailed) {
-      return reply.code(500).send({
-        code: "CREDENTIAL_CLEANUP_FAILED",
-        error:
-          "The All Projects assignment was saved, but device-local MCP credentials could not be removed. Retry this unassignment to finish cleanup.",
-        defaultAssignedServerIds,
-        ...(errors.length > 0 ? { reconciliationError: errors.join(" ") } : {}),
-      });
-    }
-    if (errors.length > 0) {
-      return reply.code(422).send({ error: errors.join(" "), defaultAssignedServerIds });
-    }
+    broadcast({ type: "resources_changed" });
     return { defaultAssignedServerIds };
   });
 
@@ -495,96 +449,25 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     const scope = projectScope(requested);
     if (requested !== undefined && !scope)
       return reply.status(404).send({ error: "unknown project" });
-    const result = await reloadMcpConfig(scope);
-    if (!result.ok) return reply.code(422).send({ error: result.error });
+    // Sessions read the catalog at spawn; a reload only drops stale probes.
+    const valid = scope
+      ? effectiveMcpConfigs(scope).valid
+      : globalMcpConfigs().valid &&
+        projects.list().every((project) => effectiveMcpConfigs(project.id).valid);
+    if (!valid)
+      return reply.code(422).send({
+        error: "Global or project .pi/mcp.json is not valid JSON; no server was started.",
+      });
+    ctx.forgetMcpProbes((projectId) => !scope || projectId === scope);
     broadcast({ type: "resources_changed" });
     return { ok: true };
   });
 
-  const requireScopedHttp = (request: { query: unknown; params: unknown }) => {
-    const scope = projectScope((request.query as { projectId?: unknown }).projectId);
-    const id = (request.params as { id: string }).id;
-    return scope ? { scope, id, authId: oauthKey(scope, id) } : undefined;
-  };
-
-  const configuredGrantedHttpUrl = (scope: string, id: string): string | undefined => {
-    const project = projects.find((candidate) => candidate.id === scope);
-    // Match reconcileProjectMcp: hidden projects own no executable trust grant.
-    if (!project || project.hidden || !ctx.projectHasEffectiveMcpGrant(scope, id)) return undefined;
-    const config = effectiveMcpConfigs(scope).configs.find((entry) => entry.id === id);
-    return config && "url" in config ? config.url : undefined;
-  };
-
-  // PI-03f: remove (flag-off proxy sign-in; native uses /mcp/:id/native-login).
-  fastify.post("/mcp/:id/login", async (request, reply) => {
-    const target = requireScopedHttp(request);
-    if (!target) return reply.code(400).send({ error: "projectId is required" });
-    const serverUrl = configuredGrantedHttpUrl(target.scope, target.id);
-    if (!serverUrl) return reply.code(404).send({ error: "unknown assigned http MCP server" });
-    const state = await mcpOAuth.beginAuth(
-      target.authId,
-      serverUrl,
-      async (completed) => {
-        if (completed.status === "authorized") await mcp.refresh(target.id, target.scope);
-        broadcast({ type: "resources_changed" });
-      },
-      { projectId: target.scope, serverId: target.id },
-    );
-    if (state.status === "error") return reply.code(502).send({ error: state.error, auth: state });
-    return { auth: state };
-  });
-
-  const mcpCallbackBody = z.object({ code: z.string().min(1), state: z.string().optional() });
-  fastify.post("/mcp/:id/login/callback", async (request, reply) => {
-    const target = requireScopedHttp(request);
-    if (!target) return reply.code(400).send({ error: "projectId is required" });
-    const serverUrl = configuredGrantedHttpUrl(target.scope, target.id);
-    if (!serverUrl) return reply.code(404).send({ error: "unknown assigned http MCP server" });
-    const parsed = mcpCallbackBody.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ error: parsed.error.message });
-    const state = await mcpOAuth.submitCode(
-      target.authId,
-      serverUrl,
-      parsed.data.code,
-      parsed.data.state,
-    );
-    if (state.status !== "authorized") {
-      const callbackAdmissionError =
-        state.error?.includes("state mismatch") ||
-        state.error?.includes("no longer active") ||
-        state.error?.includes("already completed") ||
-        state.error?.includes("superseded");
-      const status = callbackAdmissionError ? 400 : 502;
-      return reply.code(status).send({ error: state.error, auth: state });
-    }
-    return { auth: state, server: mcp.status(target.scope).find((item) => item.id === target.id) };
-  });
-
-  fastify.delete("/mcp/:id/login", async (request, reply) => {
-    const target = requireScopedHttp(request);
-    if (!target) return reply.code(400).send({ error: "projectId is required" });
-    await mcpOAuth.cancel(target.authId);
-    broadcast({ type: "resources_changed" });
-    return { ok: true };
-  });
-
-  fastify.post("/mcp/:id/logout", async (request, reply) => {
-    const target = requireScopedHttp(request);
-    if (!target) return reply.code(400).send({ error: "projectId is required" });
-    if (!ctx.projectHasEffectiveMcpGrant(target.scope, target.id))
-      return reply.code(404).send({ error: "unknown assigned MCP server" });
-    await mcpOAuth.clear(target.authId);
-    await mcp.refresh(target.id, target.scope);
-    broadcast({ type: "resources_changed" });
-    return { ok: true };
-  });
-
-  // PI-03d: native MCP sign-in runs inside a live Pi. `/mcp login <name>` makes
+  // Native MCP sign-in runs inside a live Pi.  // Native MCP sign-in runs inside a live Pi. `/mcp login <name>` makes
   // Pi send the authorization URL (notify card) and ask for the redirect URL
   // (input card) in that session; tokens land in the session owner's
   // <agentDir>/mcp-auth.json.
   fastify.post("/mcp/:id/native-login", async (request, reply) => {
-    if (!ctx.nativeMcp()) return reply.code(409).send({ error: "native MCP is not enabled" });
     const { id } = request.params as { id: string };
     const parsed = z.object({ sessionId: z.string().min(1) }).safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.message });
@@ -594,15 +477,18 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     // else's session would put your account in their mcp-auth.json.
     if (ctx.sharedServer && session.meta.createdBy?.id !== requestUser(request.raw)?.id)
       return reply.code(403).send({ error: "sign in from one of your own sessions" });
-    const name = ctx.nativeMcpNameFor(session.meta, id);
-    if (!name) return reply.code(404).send({ error: "this session does not use that MCP server" });
     // Resume a parked session first (getState spawns Pi if needed), so a session
-    // that cannot start answers here instead of after the detached prompt.
+    // that cannot start answers here instead of after the detached prompt, and
+    // the name comes from the spawn that will run the command (a parked session
+    // may wake with a newly assigned server).
     try {
       await session.getState();
     } catch (error) {
       return reply.code(502).send({ error: `The session could not start: ${String(error)}` });
     }
+    const meta = ctx.sessions.get(parsed.data.sessionId)?.meta ?? session.meta;
+    const name = ctx.nativeMcpNameFor(meta, id);
+    if (!name) return reply.code(404).send({ error: "this session does not use that MCP server" });
     // Not awaited: Pi answers an extension-command prompt only once the command
     // ends, i.e. after the user pasted the redirect URL, far past the RPC
     // timeout. A timeout is not recorded as a session failure.
@@ -675,7 +561,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
           : "The MCP server definition could not be saved.";
       return reply.code(400).send({ error: message });
     }
-    for (const project of projects.list()) await reconcileProjectMcp(project.id);
+    reprobe(data.name);
     broadcast({ type: "resources_changed" });
     return reply.code(201).send({
       ok: true,
@@ -758,8 +644,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
           : "The MCP server definition could not be saved.";
       return reply.code(400).send({ error: message });
     }
-    await Promise.all(projects.list().map((project) => mcpOAuth.clear(oauthKey(project.id, id))));
-    for (const project of projects.list()) await reconcileProjectMcp(project.id);
+    reprobe(id);
     broadcast({ type: "resources_changed" });
     return {
       ok: true,
@@ -806,9 +691,8 @@ export function registerMcpRoutes(ctx: ServerContext): void {
         }
       }
     } catch (error) {
-      // Earlier clears remain authoritative even if a later assignment write
-      // fails. Converge runtime once before reporting the partial durable result.
-      if (assignmentsChanged) await reconcileAllProjectsAndBroadcast();
+      // Earlier clears remain authoritative even if a later assignment write fails.
+      if (assignmentsChanged) broadcast({ type: "resources_changed" });
       return reply.code(500).send({
         code: "RESOURCE_WRITE_FAILED",
         error: assignmentsChanged
@@ -823,62 +707,37 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     try {
       deletedConfig = mcpDefinitions.delete(rootsFor(), "global", id);
     } catch (error) {
-      // The durable clear already won. Apply it to live scopes even though the
-      // definition remains, so a deletion I/O failure cannot retain capability.
-      await reconcileAllProjectsAndBroadcast();
+      // The durable clear already won, even though the definition remains.
+      broadcast({ type: "resources_changed" });
       return reply
         .code(400)
         .send({ error: error instanceof Error ? error.message : String(error) });
     }
     if (!deletedConfig) {
-      await reconcileAllProjectsAndBroadcast();
+      broadcast({ type: "resources_changed" });
       return reply.code(404).send({ error: "unknown global MCP server" });
     }
-    let credentialCleanupFailed = false;
-    try {
-      await Promise.all(projects.list().map((project) => mcpOAuth.clear(oauthKey(project.id, id))));
-    } catch {
-      credentialCleanupFailed = true;
-    }
-    const reconciliationErrors = await reconcileAllProjectsAndBroadcast();
-    if (credentialCleanupFailed) {
-      return reply.code(500).send({
-        code: "CREDENTIAL_CLEANUP_FAILED",
-        error:
-          "The MCP server and assignments were removed, but device-local credentials could not be removed. Recreate the same server ID, then delete it again to retry cleanup.",
-        ...(reconciliationErrors.length > 0
-          ? { reconciliationError: reconciliationErrors.join(" ") }
-          : {}),
-      });
-    }
-    if (reconciliationErrors.length > 0) {
-      return reply.code(422).send({ error: reconciliationErrors.join(" ") });
-    }
+    ctx.forgetMcpProbes((_projectId, serverId) => serverId === id);
+    broadcast({ type: "resources_changed" });
     return { ok: true };
   });
 
+  // Explicit check: connect, list tools, disconnect (no connection stays open).
   fastify.post("/mcp/:id/refresh", async (request, reply) => {
     if (!mcpPolicy.enabled()) {
-      return reply.code(409).send({ error: "MCP is paused. Turn MCP on before reconnecting." });
+      return reply.code(409).send({ error: "MCP is paused. Turn MCP on before checking." });
     }
     const id = (request.params as { id: string }).id;
     const requested = (request.query as { projectId?: unknown }).projectId;
+    // One project per check: the All Projects view shows no status anyway, and
+    // a check there would start one probe per project.
+    if (requested === undefined)
+      return reply.code(400).send({ error: "Pick a project to check this server." });
     const scope = projectScope(requested);
-    if (requested !== undefined && !scope)
-      return reply.code(404).send({ error: "unknown project" });
-    if (scope) {
-      const status = await mcp.refresh(id, scope);
-      if (!status) return reply.code(404).send({ error: "unknown assigned MCP server" });
-      broadcast({ type: "resources_changed" });
-      return { server: status };
-    }
-    const scopes = mcp.scopesFor(id);
-    if (scopes.length === 0)
-      return reply.code(409).send({
-        error: "MCP server is not assigned to any project; assign it before reconnecting.",
-      });
-    const servers = await Promise.all(scopes.map((owner) => mcp.refresh(id, owner)));
+    if (!scope) return reply.code(404).send({ error: "unknown project" });
+    if (!(await ctx.probeMcp(scope, id)))
+      return reply.code(404).send({ error: "unknown assigned MCP server" });
     broadcast({ type: "resources_changed" });
-    return { servers: servers.filter((server) => server !== null) };
+    return { server: { id, ...ctx.mcpProbe(scope, id) } };
   });
 }

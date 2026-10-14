@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { projectMemoryDir } from "@agent-deck/memory";
 import { describe, expect, it } from "vitest";
-import { fingerprintLaunchResources, resolveLaunchResources } from "../src/launchResources.ts";
+import {
+  fingerprintLaunchResources,
+  LaunchResourceResolutionError,
+  resolveLaunchResources,
+} from "../src/launchResources.ts";
 import { resolveInstructionsFile } from "../src/routes/shared.ts";
 
 describe("MCP master launch policy", () => {
@@ -324,6 +328,7 @@ describe("MCP launch resource policy", () => {
     const root = mkdtempSync(path.join(tmpdir(), "deck-mcp-launch-"));
     const project = { id: "project", path: root, assignedMcpServers: ["explicit", "stale"] };
     let defaults = ["default", "stale"];
+    let catalogValid = true;
     const context = {
       projects: { find: () => project },
       settings: {
@@ -347,7 +352,7 @@ describe("MCP launch resource policy", () => {
         },
       }),
       effectiveMcpConfigs: () => ({
-        valid: true,
+        valid: catalogValid,
         configs: ["default", "explicit", "named"].map((id) => ({ id, command: "mock" })),
       }),
       enabledExtensionPaths: () => [],
@@ -374,26 +379,24 @@ describe("MCP launch resource policy", () => {
     expect(named.fingerprint).not.toBe(ordinary.fingerprint);
     // Native MCP: authored grants are normalised against the effective set, so
     // the server missing from the catalog gets no --tools pattern.
-    process.env.AGENT_DECK_NATIVE_MCP = "1";
-    try {
-      const native = resolveLaunchResources(
-        context,
-        { projectId: project.id, agentName: "agent" },
-        {},
-      );
-      expect(native.plan.kind === "agent" && native.plan.tools).toEqual([
-        "read",
-        "mcp",
-        "mcp__named__*",
-      ]);
-    } finally {
-      delete process.env.AGENT_DECK_NATIVE_MCP;
-    }
+    expect(named.plan.kind === "agent" && named.plan.tools).toEqual([
+      "read",
+      "mcp",
+      "mcp__named__*",
+    ]);
     const before = ordinary.fingerprint;
     defaults = [];
     expect(resolveLaunchResources(context, { projectId: project.id }, {}).fingerprint).not.toBe(
       before,
     );
+    // A broken catalog refuses a launch that asks for MCP instead of starting
+    // it with none; a launch that asks for none is unaffected.
+    catalogValid = false;
+    expect(() => resolveLaunchResources(context, { projectId: project.id }, {})).toThrow(
+      LaunchResourceResolutionError,
+    );
+    project.assignedMcpServers = [];
+    expect(resolveLaunchResources(context, { projectId: project.id }, {}).mcpServerIds).toEqual([]);
   });
 });
 

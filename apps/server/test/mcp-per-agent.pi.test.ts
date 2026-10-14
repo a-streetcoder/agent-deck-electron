@@ -11,14 +11,29 @@ import {
   type MockProviderServer,
 } from "@agent-deck/testkit";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type * as PiHost from "@agent-deck/pi-host";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
+
+// The latest bridge token per session, taken from the generated extension's
+// inputs, so a test can ask __mcp_authorize__ what the live policy says.
+const bridgeTokens = vi.hoisted(() => new Map<string, string>());
+vi.mock("@agent-deck/pi-host", async (importOriginal) => {
+  const original = await importOriginal<typeof PiHost>();
+  return {
+    ...original,
+    writeBridgeExtension: (options: Parameters<typeof original.writeBridgeExtension>[0]) => {
+      bridgeTokens.set(options.sessionId, options.token);
+      return original.writeBridgeExtension(options);
+    },
+  };
+});
 
 /**
  * Per-session MCP scoping (native explicit-assignment model): an agent that
  * DECLARES mcpServers exposes only those servers' MCP tools to its sessions; an
  * agent that declares none (opt-in default) gets no MCP tools; a PLAIN project
  * session receives the configured All Projects/default union explicit assignment. End-to-end against real pi with a configured stdio
- * MCP server "mock" (tool mcp__mock__echo).
+ * MCP server "mock" hosted by Pi native (tool mcp__mock__echo).
  */
 
 const tmpHome = mkdtempSync(path.join(tmpdir(), "pi-home-"));
@@ -89,6 +104,11 @@ beforeAll(async () => {
     "mcpServers: mock\ntools: read, mcp__mock__echo",
     "You use the MCP echo tool.",
   );
+  writeGlobalAgent(
+    "mcp-narrowed",
+    "mcpServers: mock\ntools: read, mcp__mock__echo",
+    "You use the MCP echo tool.",
+  );
   // Declares no mcpServers at all → opt-in default is no MCP tools.
   writeGlobalAgent("mcp-none", "description: plain", "You do not use MCP.");
   writeGlobalAgent(
@@ -119,11 +139,8 @@ beforeAll(async () => {
       return body.messages.slice(lastUserIndex + 1).some((message) => message.role === "tool")
         ? null
         : {
-            name: "mcp",
-            arguments: {
-              tool: lastUser.includes("project-only") ? "projectonly/echo" : "mock/echo",
-              args: { message: "scoped" },
-            },
+            name: lastUser.includes("project-only") ? "mcp__projectonly__echo" : "mcp__mock__echo",
+            arguments: { message: "scoped" },
           };
     },
     reply: () => "streamed answer has several ordered deltas",
@@ -159,30 +176,32 @@ afterAll(async () => {
 
 describe("per-session MCP scoping by an agent's declared mcpServers", () => {
   it("exposes the declared server's MCP tool to its agent session", async () => {
-    // The server has the MCP tool registered globally.
-    expect(server.bridge.specs().filter((s) => s.name === "mcp")).toHaveLength(1);
+    // MCP is Pi native: no proxy tool on the bridge.
+    expect(server.bridge.specs().some((s) => s.name === "mcp")).toBe(false);
     const reqs = await runSession("mcp-yes");
     // The agent declared mock, so mcp__mock__echo ran and its result came back.
     expect(toolResults(reqs)).toContain("mcp stdio echo: scoped");
   });
 
   it.each(["mcp-proxy-allowlist", "mcp-legacy-allowlist"])(
-    "lets named parent %s use the single proxy under its authored allowlist",
+    "lets named parent %s use the server's native tool under its authored allowlist",
     async (agentName) => {
       const reqs = await runSession(agentName);
-      expect(JSON.stringify(reqs.flatMap((request) => request.tools ?? []))).toContain('"mcp"');
+      expect(JSON.stringify(reqs.flatMap((request) => request.tools ?? []))).toContain(
+        '"mcp__mock__echo"',
+      );
       expect(toolResults(reqs)).toContain("mcp stdio echo: scoped");
     },
   );
 
-  it("denies a legacy named parent immediately when its agent becomes disabled", async () => {
+  const createNamed = async (agentName: string): Promise<string> => {
     const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         startImmediately: true,
         projectId,
-        agentName: "mcp-legacy-allowlist",
+        agentName,
         provider: MOCK_PROVIDER_ID,
         model: MOCK_MODEL_ID,
         extensions: [mockExt],
@@ -190,32 +209,57 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
       }),
     });
     expect(response.status).toBe(201);
-    const { session } = (await response.json()) as { session: { id: string } };
+    return ((await response.json()) as { session: { id: string } }).session.id;
+  };
+  // What the extension's policy hook would hear for mcp__mock__echo right now.
+  const authorize = async (sessionId: string) => {
+    const response = await fetch(`http://127.0.0.1:${server.port}/bridge`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        sessionId,
+        token: bridgeTokens.get(sessionId),
+        tool: "__mcp_authorize__",
+        toolCallId: "live-check",
+        params: { serverId: "mock", server: "mock", toolName: "mcp__mock__echo" },
+      }),
+    });
+    expect(response.status).toBe(200);
+    return (await response.json()) as { allow: boolean; reason?: string };
+  };
+
+  it("refuses a named parent's MCP call once its agent is disabled mid-session", async () => {
+    const sessionId = await createNamed("mcp-legacy-allowlist");
+    expect(await authorize(sessionId)).toEqual({ allow: true });
     writeGlobalAgent(
       "mcp-legacy-allowlist",
       "disabled: true\nmcpServers: mock\ntools: read, mcp__mock__echo",
       "You use the MCP echo tool.",
     );
     try {
-      const denied = await server.bridge.dispatch(
-        {
-          sessionId: session.id,
-          toolCallId: "disabled-agent-call",
-          tool: "mcp",
-          params: { tool: "mock/echo", args: { message: "must-not-run" } },
-          token: "test",
-        },
-        { token: "test" },
-      );
-      expect(denied).toMatchObject({ isError: true });
-      expect(denied.content).toContain("assigned");
+      expect(await authorize(sessionId)).toMatchObject({
+        allow: false,
+        reason: expect.stringContaining("no longer assigned"),
+      });
     } finally {
       writeGlobalAgent(
         "mcp-legacy-allowlist",
         "mcpServers: mock\ntools: read, mcp__mock__echo",
         "You use the MCP echo tool.",
       );
+      await server.sessions.destroy(sessionId);
     }
+  });
+
+  it("applies a narrowed named-parent tools: list to the running session", async () => {
+    const sessionId = await createNamed("mcp-narrowed");
+    expect(await authorize(sessionId)).toEqual({ allow: true });
+    writeGlobalAgent("mcp-narrowed", "mcpServers: mock\ntools: read", "You use the MCP echo tool.");
+    expect(await authorize(sessionId)).toMatchObject({
+      allow: false,
+      reason: expect.stringContaining("not in this agent's tool list"),
+    });
+    await server.sessions.destroy(sessionId);
   });
 
   it("hides all MCP tools from an agent that declares none (opt-in)", async () => {
@@ -264,14 +308,6 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
         prompt: "use the project-only MCP echo tool",
       });
       expect(toolResults(reqs)).toContain("mcp stdio echo: scoped");
-      const after = (await (
-        await fetch(`http://127.0.0.1:${server.port}/mcp?projectId=${unassignedProjectId}`)
-      ).json()) as {
-        servers: Array<{ id: string; connected: boolean; toolNames: string[] }>;
-      };
-      expect(after.servers.find((entry) => entry.id === "projectonly")).toMatchObject({
-        connected: true,
-      });
     },
   );
 
@@ -379,8 +415,6 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
       },
       { timeout: 15_000, interval: 25 },
     );
-    expect(server.bridge.specs().some((spec) => spec.name === "mcp")).toBe(false);
-
     await promptTurn(ordinaryId, "policy-off ordinary echo");
     await promptTurn(namedId, "policy-off named echo");
     const offRequests = (marker: string) =>
@@ -400,7 +434,7 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
       );
     for (const marker of ["policy-off ordinary", "policy-off named"]) {
       const requests = offRequests(marker);
-      expect(JSON.stringify(requests.at(-1)?.tools ?? [])).not.toContain('"mcp"');
+      expect(JSON.stringify(requests.at(-1)?.tools ?? [])).not.toContain('"mcp__mock__echo"');
       // One successful result is historical from the on turn; pause adds none.
       expect(successfulEchoes(requests)).toBe(1);
     }
@@ -411,10 +445,6 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
       body: JSON.stringify({ enabled: true }),
     });
     expect(enabled.status).toBe(200);
-    await vi.waitFor(
-      () => expect(server.bridge.specs().some((spec) => spec.name === "mcp")).toBe(true),
-      { timeout: 15_000, interval: 25 },
-    );
     await vi.waitFor(
       () => {
         expect(server.sessions.get(ordinaryId)!.meta.launchResourceFingerprint).toBe(
@@ -433,7 +463,7 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
     const restoredDeltas = await promptTurn(namedId, "policy-restored named echo");
     const restoredRequests = mock.requests.slice(restoredStart);
     expect(JSON.stringify(restoredRequests.flatMap((request) => request.tools ?? []))).toContain(
-      '"mcp"',
+      '"mcp__mock__echo"',
     );
     expect(toolResults(restoredRequests)).toContain("mcp stdio echo: scoped");
     expect(restoredDeltas).toBeGreaterThan(1);
@@ -525,11 +555,17 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
     // The ordinary transcript retains its one historical tool result, but the
     // post-refresh turn must not add another one.
     expect(successfulToolMessageCount("res12-after")).toBe(1);
-    expect(JSON.stringify(requests("res12-after").at(-1)?.tools ?? [])).not.toContain('"mcp"');
+    expect(JSON.stringify(requests("res12-after").at(-1)?.tools ?? [])).not.toContain(
+      '"mcp__mock__echo"',
+    );
     expect(toolResults(requests("res12-named"))).toContain("mcp stdio echo: scoped");
-    expect(JSON.stringify(requests("res12-named").at(-1)?.tools ?? [])).toContain('"mcp"');
+    expect(JSON.stringify(requests("res12-named").at(-1)?.tools ?? [])).toContain(
+      '"mcp__mock__echo"',
+    );
     expect(toolResults(requests("res12-no-project"))).not.toContain("mcp stdio echo");
-    expect(JSON.stringify(requests("res12-no-project").at(-1)?.tools ?? [])).not.toContain('"mcp"');
+    expect(JSON.stringify(requests("res12-no-project").at(-1)?.tools ?? [])).not.toContain(
+      '"mcp__mock__echo"',
+    );
     expect(orderedDeltas).toBeGreaterThan(1);
   });
 });

@@ -44,10 +44,19 @@ const gitMocks = vi.hoisted(() => ({
   gitWorktreeRegistrations: vi.fn(),
 }));
 
-vi.mock("@agent-deck/resources", () => ({
-  listProjectFiles: resourceMocks.listProjectFiles,
-  scanPrompts: vi.fn(() => []),
-}));
+vi.mock("@agent-deck/resources", async (importOriginal) => {
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  return {
+    // Keep the real exports (provider credential helpers and the like) and
+    // override only what these routes exercise.
+    ...(await importOriginal<Record<string, unknown>>()),
+    listProjectFiles: resourceMocks.listProjectFiles,
+    scanPrompts: vi.fn(() => []),
+    // The route resolves the owner's agent dir; keep it in the temp folder.
+    piAgentHome: () => join(tmpdir(), "deck-worktree-routes-agent"),
+  };
+});
 
 vi.mock("../src/git.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof GitModule>()),
@@ -216,7 +225,6 @@ function makeRoute(
         throw new Error("MCP assignment writes are not available in this route fixture");
       },
     } satisfies McpAssignmentStore,
-    prepareProjectMcpSession: state.prepareProjectMcpSession,
     sessionImages: { deleteSession: state.deleteSessionImages },
     sessionPastes: { deleteSession: state.deleteSessionPastes },
     dropDiffCache: state.dropDiffCache,
@@ -226,7 +234,6 @@ function makeRoute(
 }
 
 function makeState() {
-  const releaseMcpPreparation = vi.fn(async () => {});
   return {
     live: new Map<string, Meta>(),
     running: new Set<string>(),
@@ -240,11 +247,6 @@ function makeState() {
     deleteWorktree: vi.fn(async () => {}),
     deleteSessionImages: vi.fn(),
     deleteSessionPastes: vi.fn(),
-    releaseMcpPreparation,
-    prepareProjectMcpSession: vi.fn(async () => ({
-      result: { ok: true as const, missing: [] },
-      release: releaseMcpPreparation,
-    })),
     dropDiffCache: vi.fn(),
   };
 }
@@ -626,8 +628,6 @@ describe("POST /sessions worktree transaction", () => {
     expect(response.json()).toMatchObject({
       session: { worktreeIdentity: "v1:0000000000000001:0000000000000002" },
     });
-    expect(state.prepareProjectMcpSession).toHaveBeenCalledWith("project-1", []);
-    expect(state.releaseMcpPreparation).toHaveBeenCalledOnce();
     const createOptions = sessions.create.mock.calls[0]![0] as {
       plan: Parameters<typeof fingerprintLaunchResources>[0];
       launchResourceFingerprint: string;
@@ -722,7 +722,6 @@ describe("POST /sessions worktree transaction", () => {
     expect(state.tokens.size).toBe(0);
     expect(state.broadcasts).toEqual([]);
     expect(state.receipts).toEqual([]);
-    expect(state.releaseMcpPreparation).toHaveBeenCalledOnce();
     expect(state.deleteWorktree).toHaveBeenCalledWith(
       WORKTREE_PATH,
       "v1:0000000000000001:0000000000000002",
@@ -776,7 +775,6 @@ describe("POST /sessions worktree transaction", () => {
     expect(state.tokens.size).toBe(0);
     expect(state.broadcasts).toEqual([]);
     expect(state.receipts).toEqual([]);
-    expect(state.releaseMcpPreparation).toHaveBeenCalledOnce();
     await fastify.close();
   });
 

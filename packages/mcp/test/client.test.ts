@@ -88,19 +88,6 @@ describe("McpClient", () => {
     ).toHaveProperty("message");
   });
 
-  it("forwards a tool call and flattens the text result", async () => {
-    client = await connectToMockServer();
-    const result = await client.callTool("echo", { message: "hi" });
-    expect(result).toEqual({ content: "mcp echo: hi", isError: false });
-  });
-
-  it("surfaces an MCP tool error", async () => {
-    client = await connectToMockServer();
-    const result = await client.callTool("boom", {});
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain("kaboom");
-  });
-
   it("aborts and closes a transport whose startup never settles", async () => {
     let started = false;
     let closed = false;

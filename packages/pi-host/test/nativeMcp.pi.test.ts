@@ -139,8 +139,6 @@ export default function (pi) {
             stdio("alpha__x", "ALPHA-X-SECRET"),
             { name: "web", id: "id-web", config: { url: http.url, exposure: "direct" } },
           ],
-          blockedTools: ["mcp__beta__echo"],
-          suppressedTools: ["mcp__gamma__echo"],
         }
       : undefined,
   });
@@ -195,12 +193,18 @@ beforeAll(async () => {
     req.on("data", (chunk: Buffer) => (body += chunk.toString()));
     req.on("end", () => {
       const call = JSON.parse(body) as { params: { server: string } };
+      // beta is refused before it runs; alpha__x and gamma are allowed to run
+      // and refused on their result.
+      const { server } = call.params;
       const refuse =
-        call.params.server === "alpha__x" &&
-        authorizeCalls.some((c) => (c.params as { server?: string }).server === "alpha__x");
+        server === "beta" ||
+        ((server === "alpha__x" || server === "gamma") &&
+          authorizeCalls.some((c) => (c.params as { server?: string }).server === server));
       authorizeCalls.push(call);
       res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify(refuse ? { allow: false, reason: "revoked" } : { allow: true }));
+      res.end(
+        JSON.stringify(refuse ? { allow: false, reason: `revoked ${server}` } : { allow: true }),
+      );
     });
   });
   await new Promise<void>((resolve) => bridge.listen(0, "127.0.0.1", resolve));
@@ -240,19 +244,19 @@ describe("spike: Pi native MCP inside the generated bridge extension", () => {
     expect(last).toContain("mcp http echo: two");
   });
 
-  it("refuses the call blocked in tool_call before the server runs it", () => {
+  it("refuses a call the bridge refuses in tool_call before the server runs it", () => {
     const last = toolMessages(h.mock.requests[h.mock.requests.length - 1]!);
-    expect(last).toContain("Blocked by Agent Deck policy.");
+    expect(last).toContain("revoked beta");
     expect(last).not.toContain("BETA-RAN");
   });
 
-  it("keeps the result suppressed in tool_result away from the model", () => {
+  it("keeps a result the bridge refuses in tool_result away from the model", () => {
     expect(JSON.stringify(h.mock.requests)).not.toContain("GAMMA-SECRET");
     const last = toolMessages(h.mock.requests[h.mock.requests.length - 1]!);
     expect(last).toContain("Result withheld by Agent Deck policy.");
   });
 
-  it("asks the bridge before each unblocked call and on its result (PI-03c)", () => {
+  it("asks the bridge before each call and on its result (PI-03c)", () => {
     const alpha = authorizeCalls.filter(
       (c) => (c.params as { toolName?: string }).toolName === "mcp__alpha__echo",
     );
@@ -263,10 +267,10 @@ describe("spike: Pi native MCP inside the generated bridge extension", () => {
       tool: "__mcp_authorize__",
       params: { serverId: "id-alpha", server: "alpha", toolName: "mcp__alpha__echo" },
     });
-    // The static block is the fast path: no round trip for beta.
-    expect(authorizeCalls.some((c) => (c.params as { server?: string }).server === "beta")).toBe(
-      false,
-    );
+    // A call refused before it runs is asked once (no result to check).
+    expect(
+      authorizeCalls.filter((c) => (c.params as { server?: string }).server === "beta"),
+    ).toHaveLength(1);
   });
 
   it("resolves a shared prefix to the right server and withholds a result refused live", () => {
@@ -280,6 +284,7 @@ describe("spike: Pi native MCP inside the generated bridge extension", () => {
     // Allowed at tool_call (it ran), refused at tool_result: never shown.
     expect(JSON.stringify(h.mock.requests)).not.toContain("ALPHA-X-SECRET");
     const last = toolMessages(h.mock.requests[h.mock.requests.length - 1]!);
+    // alpha__x and gamma.
     expect(last.split("Result withheld by Agent Deck policy.").length - 1).toBe(2);
   });
 

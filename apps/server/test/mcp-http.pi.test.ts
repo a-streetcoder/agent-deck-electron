@@ -14,11 +14,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 /**
- * HTTP (Streamable HTTP) MCP through the bridge, end-to-end against real pi: a
- * configured http MCP server's `echo` tool is called through the `mcp` proxy;
- * a real pi session calls it, the call reaches /bridge, the server forwards it
- * over the Streamable HTTP MCP client to the remote server, and the result flows
- * back to the model. Mirrors the stdio MCP test with the http transport.
+ * HTTP (Streamable HTTP) MCP through Pi native, end-to-end against real pi: an
+ * assigned http MCP server's `echo` tool is declared as `mcp__mockhttp__echo`
+ * by the generated bridge extension and called by a real pi session; the
+ * settings screen's probe reports it connected with its tools, and an OAuth
+ * server as needing sign-in. Mirrors mcp-native.pi.test.ts with http.
  */
 
 process.env.AGENT_DECK_TEST = "1";
@@ -26,6 +26,7 @@ process.env.AGENT_DECK_TEST = "1";
 let mock: MockProviderServer;
 let server: AgentDeckServer;
 let mcpHttp: MockHttpMcpServer;
+let oauthMcp: MockHttpMcpServer;
 let projectId: string;
 
 const tmpHome = mkdtempSync(path.join(tmpdir(), "pi-home-"));
@@ -38,16 +39,17 @@ beforeAll(async () => {
       const hasToolResult = body.messages.some((m) => m.role === "tool");
       return hasToolResult
         ? null
-        : {
-            name: "mcp",
-            arguments: { tool: "mockhttp/echo", args: { message: "over http" } },
-          };
+        : { name: "mcp__mockhttp__echo", arguments: { message: "over http" } };
     },
     reply: () => "The MCP tool answered.",
   });
-  // The http MCP server must be listening BEFORE startServer reads the env config.
+  // The http MCP servers must be listening BEFORE startServer reads the env config.
   mcpHttp = await startMockHttpMcpServer();
-  process.env.AGENT_DECK_MCP_SERVERS = JSON.stringify([{ id: "mockhttp", url: mcpHttp.url }]);
+  oauthMcp = await startMockHttpMcpServer({ oauth: true });
+  process.env.AGENT_DECK_MCP_SERVERS = JSON.stringify([
+    { id: "mockhttp", url: mcpHttp.url },
+    { id: "secure", url: oauthMcp.url },
+  ]);
   server = await startServer({ dataDir });
   const added = await fetch(`http://127.0.0.1:${server.port}/projects`, {
     method: "POST",
@@ -58,7 +60,7 @@ beforeAll(async () => {
   const assigned = await fetch(`http://127.0.0.1:${server.port}/projects/${projectId}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ assignedMcpServers: ["mockhttp"] }),
+    body: JSON.stringify({ assignedMcpServers: ["mockhttp", "secure"] }),
   });
   expect(assigned.status).toBe(200);
 });
@@ -67,22 +69,40 @@ afterAll(async () => {
   await server.close();
   await mock.close();
   await mcpHttp.close();
+  await oauthMcp.close();
   delete process.env.AGENT_DECK_MCP_SERVERS;
 });
 
-describe("mcp http: a configured Streamable HTTP server's tool is callable through the bridge", () => {
-  it("registers the http MCP tool and forwards a real pi call to the remote server", async () => {
-    expect(server.bridge.specs().filter((s) => s.name === "mcp")).toHaveLength(1);
-    // GET /mcp reports the http transport, connected, with the echo tool.
-    const mcpList = (await (
-      await fetch(`http://127.0.0.1:${server.port}/mcp?projectId=${projectId}`)
-    ).json()) as {
-      servers: Array<{ id: string; transport: string; connected: boolean; toolNames: string[] }>;
-    };
-    const entry = mcpList.servers.find((s) => s.id === "mockhttp");
-    expect(entry?.transport).toBe("http");
-    expect(entry?.connected).toBe(true);
-    expect(entry?.toolNames).toContain("mockhttp/echo");
+describe("mcp http: an assigned Streamable HTTP server through Pi native", () => {
+  it("probes on request: connected with its tools, or needing sign-in", async () => {
+    const base = `http://127.0.0.1:${server.port}`;
+    type Row = { id: string; transport: string; connected: boolean; toolNames: string[] };
+    const list = async () =>
+      ((await (await fetch(`${base}/mcp?projectId=${projectId}`)).json()) as { servers: Row[] })
+        .servers;
+    // Nothing connects until asked.
+    expect((await list()).find((s) => s.id === "mockhttp")?.connected).toBe(false);
+    for (const id of ["mockhttp", "secure"]) {
+      const probed = await fetch(`${base}/mcp/${id}/refresh?projectId=${projectId}`, {
+        method: "POST",
+      });
+      expect(probed.status).toBe(200);
+    }
+    const rows = await list();
+    expect(rows.find((s) => s.id === "mockhttp")).toMatchObject({
+      transport: "http",
+      connected: true,
+      toolNames: expect.arrayContaining(["mockhttp/echo"]),
+    });
+    expect(rows.find((s) => s.id === "secure")).toMatchObject({
+      connected: false,
+      needsSignIn: true,
+      oauth: true,
+    });
+  });
+
+  it("declares the server's tool natively and forwards a real pi call to it", async () => {
+    expect(server.bridge.specs().some((s) => s.name === "mcp")).toBe(false);
 
     const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
       method: "POST",
@@ -102,6 +122,9 @@ describe("mcp http: a configured Streamable HTTP server's tool is callable throu
     await server.sessions.get(session.id)!.prompt("use the mcp echo tool");
     await server.receipts.waitFor("idle", session.id);
 
+    expect(JSON.stringify(mock.requests.map((r) => r.tools ?? []))).toContain(
+      '"mcp__mockhttp__echo"',
+    );
     const followUp = mock.requests[mock.requests.length - 1]!;
     const toolText = JSON.stringify(followUp.messages.filter((m) => m.role === "tool"));
     expect(toolText).toContain("mcp http echo: over http");

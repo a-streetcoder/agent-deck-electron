@@ -231,15 +231,15 @@ launch-plan precedence. Child capability/resource scoping is unchanged.
 Electron named delegated children also receive their current `mcpServers` assignment
 through the purpose-scoped child bridge, using the parent's effective project MCP
 catalog even when the child runs in another cwd/worktree. Unnamed children and
-agents without that assignment receive no app-managed MCP tools. The bridge exposes
-one `mcp` proxy with list, search, describe, and call operations; discovery and calls
-recheck the session's assigned servers. An authored `tools` allowlist must include
-`mcp`; legacy exact `mcp__<server>__<tool>` entries remain narrowly compatible and
-do not grant other tools on that server. `tools: []` enables no MCP tools. Global MCP pause,
-current agent authorization, and the exact child tool/token allowlist are enforced
-at dispatch; the child never inherits parent supervisor tools. Each run owns its
-bridge token and temporary extension and releases its project MCP connection hold
-on exit. Continuation re-resolves the agent configuration. Direct `mcp:` adapters
+agents without that assignment receive no MCP tools. The child bridge extension
+hosts the granted servers through Pi native MCP (tools `mcp__<server>__<tool>`), and
+its policy hook rechecks each call and result. An authored `tools` allowlist must
+include `mcp` (one `mcp__<server>__*` pattern per granted server); legacy exact
+`mcp__<server>__<tool>` entries remain narrowly compatible and do not grant other
+tools on that server. `tools: []` enables no MCP tools. Global MCP pause, current
+agent authorization, and the exact child tool/token allowlist are enforced at call
+time; the child never inherits parent supervisor tools. Each run owns its bridge
+token and temporary extension. Continuation re-resolves the agent configuration. Direct `mcp:` adapters
 remain a separate `MCP_DIRECT_TOOLS` policy.
 
 Continuation launch shape:

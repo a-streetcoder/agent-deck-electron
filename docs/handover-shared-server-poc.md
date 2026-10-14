@@ -54,6 +54,10 @@ Tests at 218a414: server 1236 pass (2 env-only symlink EPERM failures, see WINDO
 4. **Session move between backends** (roadmap entry 0e89eae).
 5. Push `poc/shared-server` for review when Ale says so (he explicitly asked for nothing to be pushed so far).
 
+## Direction change 2026-10-15
+
+See [handover-direction-2026-10-15.md](handover-direction-2026-10-15.md): the shared server is now the collaboration direction (Syncr dropped), graph engineering is the orchestration direction. Gap 1 above is closed by ADR 0004.
+
 ## Working-tree warning
 
 This checkout (`E:\AI Playground\a-streetcoding\agent-deck-electron`) currently has `poc/shared-server` checked out, and it is mirrored live to the VM by Syncthing. Switching branches here changes the VM's working tree too (the running server only re-reads on restart; `pnpm build:web` rebuilds from whatever is checked out). If you need main, prefer a separate clone or coordinate before switching.

@@ -9,7 +9,7 @@ import { escapeWindowsShellArg, resolveCommandPath } from "./editorLauncher.ts";
  * External terminal resume (TER-01), mirroring the native
  * `openSelectedPiAgentSessionInTerminal` flow: continue THIS session's pi
  * conversation in the user's own terminal, in the session's cwd, via
- * `pi --session <session-file>` — the same reference the server's own resume
+ * `pi --no-mcp --session <session-file>` — the same reference the server's own resume
  * path uses (`meta.piSessionFile`, native's `resumablePiSessionReference`).
  *
  * editorLauncher.ts is the template: an injectable spawn seam, PATH-probe
@@ -83,6 +83,7 @@ export function buildResumeScript(
     ...(leadingArgs.length > 0 ? ["ELECTRON_RUN_AS_NODE=1"] : []),
     shellQuotePosix(piBinary),
     ...leadingArgs.map(shellQuotePosix),
+    "--no-mcp",
     "--session",
     shellQuotePosix(sessionRef),
   ].join(" ");
@@ -134,7 +135,7 @@ export function buildWindowsResumeScript(
     "title Agent Deck",
     ...(leadingArgs.length > 0 ? ["set ELECTRON_RUN_AS_NODE=1"] : []),
     `cd /d ${quoteBatch(cwd)} || exit /b 1`,
-    `${command} --session ${quoteBatch(sessionRef)} || pause`,
+    `${command} --no-mcp --session ${quoteBatch(sessionRef)} || pause`,
     "",
   ].join("\r\n");
 }
@@ -149,7 +150,9 @@ export function planExternalTerminalLaunch(
   resolveCommand: (name: string) => string | null,
 ): ExternalTerminalPlan | null {
   const leadingArgs = input.piLeadingArgs ?? [];
-  const piArgv = [input.piBinary, ...leadingArgs, "--session", input.sessionRef];
+  // Pi 1.2 loads its built-in MCP by default and would connect every server in
+  // <agentDir>/mcp.json, bypassing Agent Deck's assignment: keep it off.
+  const piArgv = [input.piBinary, ...leadingArgs, "--no-mcp", "--session", input.sessionRef];
   if (platform === "win32") {
     const wt = resolveCommand("wt");
     if (wt !== null) {

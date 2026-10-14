@@ -9,11 +9,32 @@ import {
   writeMockProviderExtension,
 } from "@agent-deck/testkit";
 import { expect, it, vi } from "vitest";
+import type * as PiHost from "@agent-deck/pi-host";
 import { startServer } from "../src/index.ts";
+
+// Every generated extension's session and token, so the test can call the
+// bridge as a live child (and replay its token after teardown).
+const bridges = vi.hoisted(() => [] as Array<{ sessionId: string; token: string; child: boolean }>);
+vi.mock("@agent-deck/pi-host", async (importOriginal) => {
+  const original = await importOriginal<typeof PiHost>();
+  return {
+    ...original,
+    writeBridgeExtension: (options: Parameters<typeof original.writeBridgeExtension>[0]) => {
+      bridges.push({
+        sessionId: options.sessionId,
+        token: options.token,
+        child: options.tools.some((tool) => tool.name === "contact_supervisor"),
+      });
+      return original.writeBridgeExtension(options);
+    },
+  };
+});
 
 process.env.AGENT_DECK_TEST = "1";
 
-it("scopes named child MCP calls, continuation, live policy and token lifetime to the parent project", async () => {
+const ECHO = "mcp__scoped_server__echo";
+
+it("scopes named child MCP calls, continuation and live policy to the parent project", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "deck-child-mcp-"));
   const home = path.join(root, "home");
   const agents = path.join(home, ".pi", "agent", "agents");
@@ -25,15 +46,55 @@ it("scopes named child MCP calls, continuation, live policy and token lifetime t
     );
   writeAgent("mcpServers: scoped-server");
   writeFileSync(path.join(agents, "plain.md"), "---\nname: plain\n---\nNo MCP assignment.\n");
+  // Runs once, after Pi received its tool list and before it calls the tool:
+  // a stale generated extension must not bypass current app authorization.
+  let revokeBeforeCall: (() => Promise<void>) | undefined;
+  // Calls the bridge as the live child once (forbidden tools, then the policy hook).
+  let bridgeUrl = "";
+  let childAuthorize: Record<string, unknown> | undefined;
+  let probeChildAccess = true;
+  const postBridge = (body: Record<string, unknown>) =>
+    fetch(bridgeUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  const firstTurn = (body: { messages: Array<{ role: string }> }) => {
+    const lastUser = body.messages.findLastIndex((message) => message.role === "user");
+    return !body.messages.slice(lastUser + 1).some((message) => message.role === "tool");
+  };
   const mock = await startMockProvider({
-    toolCall: (_lastUser, body) => {
-      const lastUser = body.messages.findLastIndex((message) => message.role === "user");
-      if (body.messages.slice(lastUser + 1).some((message) => message.role === "tool")) return null;
-      return {
-        name: "mcp",
-        arguments: { tool: "scoped-server/echo", args: { message: "child-sentinel" } },
-      };
+    beforeResponse: async (_lastUser, body) => {
+      const revoke = revokeBeforeCall;
+      const offered = JSON.stringify(body.tools ?? []).includes(`"${ECHO}"`);
+      if (probeChildAccess && offered && firstTurn(body)) {
+        probeChildAccess = false;
+        const child = bridges.findLast((entry) => entry.child)!;
+        const call = { sessionId: child.sessionId, token: child.token, toolCallId: "probe" };
+        for (const tool of [
+          "mcp__unlisted__echo",
+          "managed_subagent",
+          "__recall__",
+          "__prompt_audit__",
+        ]) {
+          expect((await postBridge({ ...call, tool, params: {} })).status).toBe(403);
+        }
+        childAuthorize = {
+          ...call,
+          tool: "__mcp_authorize__",
+          params: { serverId: "scoped-server", server: "scoped-server", toolName: ECHO },
+        };
+        const allowed = await postBridge(childAuthorize);
+        expect(allowed.status).toBe(200);
+        expect(await allowed.json()).toEqual({ allow: true });
+      }
+      if (revoke && offered && firstTurn(body)) {
+        revokeBeforeCall = undefined;
+        await revoke();
+      }
     },
+    toolCall: (_lastUser, body) =>
+      firstTurn(body) ? { name: ECHO, arguments: { message: "child-sentinel" } } : null,
     reply: () => "Child answer arrives in several streamed deltas.",
   });
   const extension = writeMockProviderExtension(mock.baseUrl);
@@ -45,6 +106,7 @@ it("scopes named child MCP calls, continuation, live policy and token lifetime t
   let server: Awaited<ReturnType<typeof startServer>> | undefined;
   try {
     server = await startServer({ dataDir: path.join(root, "data") });
+    bridgeUrl = `http://127.0.0.1:${server.port}/bridge`;
     const api = async (route: string, body: unknown, method = "POST") => {
       const response = await fetch(`http://127.0.0.1:${server!.port}${route}`, {
         method,
@@ -90,37 +152,6 @@ it("scopes named child MCP calls, continuation, live policy and token lifetime t
       });
       parents.push(session.id);
     }
-    const originalDispatch = server.bridge.dispatch.bind(server.bridge);
-    const dispatch = vi.spyOn(server.bridge, "dispatch");
-    let probedAccess = false;
-    let revokeBeforeDispatch: (() => Promise<void>) | undefined;
-    dispatch.mockImplementation(async (call, auth) => {
-      if (!probedAccess && call.tool === "mcp" && call.params.tool === "scoped-server/echo") {
-        probedAccess = true;
-        for (const tool of [
-          "mcp__unlisted__echo",
-          "managed_subagent",
-          "__recall__",
-          "__prompt_audit__",
-        ]) {
-          const forbidden = await fetch(`http://127.0.0.1:${server!.port}/bridge`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ ...call, token: auth.token, tool }),
-          });
-          expect(forbidden.status).toBe(403);
-        }
-      }
-      const revoke = revokeBeforeDispatch;
-      if (revoke && call.tool === "mcp" && call.params.tool === "scoped-server/echo") {
-        revokeBeforeDispatch = undefined;
-        await revoke();
-        const denied = await originalDispatch(call, auth);
-        expect(denied.isError).toBe(true);
-        return denied;
-      }
-      return originalDispatch(call, auth);
-    });
     const run = async (parent: string, agent?: string, continueId?: string) => {
       const start = mock.requests.length;
       const result = await server!.sessions.runManagedSubagent(
@@ -161,47 +192,35 @@ it("scopes named child MCP calls, continuation, live policy and token lifetime t
     expect(finalized).toBe(true);
     expect(deltas.length).toBeGreaterThan(1);
     expect(deltas.every((seq, index) => index === 0 || seq > deltas[index - 1]!)).toBe(true);
-    expect(first.tools).toContain("mcp");
+    expect(first.tools).toContain(ECHO);
     expect(JSON.stringify(first.requests)).toContain("PROJECT_A: child-sentinel");
     expect(JSON.stringify(first.requests)).not.toContain("PROJECT_B: child-sentinel");
-    const call = dispatch.mock.calls.find(
-      ([call]) => call.tool === "mcp" && call.params.tool === "scoped-server/echo",
-    )!;
-    expect(call).toBeDefined();
-    // The Pi-owned run has exited: its token cannot be reused, even for a tool
-    // that remains registered for another project/session.
-    const stale = await fetch(`http://127.0.0.1:${server.port}/bridge`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...call[0], token: call[1].token }),
-    });
-    expect(stale.status).toBe(403);
+    // The Pi-owned run has exited: its token cannot be reused.
+    expect(childAuthorize).toBeDefined();
+    expect((await postBridge(childAuthorize!)).status).toBe(403);
     const continued = await run(parents[0]!, undefined, first.result.runId);
     expect(continued.result.runId).toBe(first.result.runId);
-    expect(continued.tools).toContain("mcp");
-    expect(
-      dispatch.mock.calls.filter(
-        ([call]) => call.tool === "mcp" && call.params.tool === "scoped-server/echo",
-      ),
-    ).toHaveLength(2);
+    expect(continued.tools).toContain(ECHO);
+    expect(JSON.stringify(continued.requests)).toContain("PROJECT_A: child-sentinel");
     const other = await run(parents[1]!, "worker");
     expect(JSON.stringify(other.requests)).toContain("PROJECT_B: child-sentinel");
     expect(JSON.stringify(other.requests)).not.toContain("PROJECT_A: child-sentinel");
     for (const agent of [undefined, "plain"]) {
-      expect((await run(parents[0]!, agent)).tools).not.toContain("mcp");
+      expect((await run(parents[0]!, agent)).tools).not.toContain(ECHO);
     }
     for (const tools of ["tools: []", "tools: read"]) {
       writeAgent("mcpServers: scoped-server", tools);
-      expect((await run(parents[0]!, undefined, first.result.runId)).tools).not.toContain("mcp");
+      expect((await run(parents[0]!, undefined, first.result.runId)).tools).not.toContain(ECHO);
     }
     writeAgent(
       "mcpServers: scoped-server",
       "tools: read, mcp__scoped_server__echo, managed_subagent, ask_user",
     );
-    expect((await run(parents[0]!, "worker")).tools).toContain("mcp");
+    // A legacy exact grant keeps the server's tool under an authored list.
+    expect((await run(parents[0]!, "worker")).tools).toContain(ECHO);
     // Continuation resolves the current file, not the saved child assignment.
     writeAgent("");
-    expect((await run(parents[0]!, undefined, first.result.runId)).tools).not.toContain("mcp");
+    expect((await run(parents[0]!, undefined, first.result.runId)).tools).not.toContain(ECHO);
     writeAgent("mcpServers: scoped-server\ndisabled: true");
     await expect(
       server.sessions.runManagedSubagent(
@@ -213,11 +232,11 @@ it("scopes named child MCP calls, continuation, live policy and token lifetime t
     ).rejects.toThrow("unknown agent");
     writeAgent("mcpServers: scoped-server");
     await api("/mcp/policy", { enabled: false }, "PATCH");
-    expect((await run(parents[0]!, "worker")).tools).not.toContain("mcp");
+    expect((await run(parents[0]!, "worker")).tools).not.toContain(ECHO);
     await api("/mcp/policy", { enabled: true }, "PATCH");
-    expect((await run(parents[0]!, "worker")).tools).toContain("mcp");
-    // Revoke after Pi has received its catalog, immediately before dispatch.
-    // A stale generated extension must not bypass current app authorization.
+    expect((await run(parents[0]!, "worker")).tools).toContain(ECHO);
+    // Revoke after Pi has received its tool list, immediately before the call:
+    // the policy hook refuses it live.
     for (const revoke of [
       async () => writeAgent(""),
       async () => writeAgent("mcpServers: scoped-server\ndisabled: true"),
@@ -228,22 +247,15 @@ it("scopes named child MCP calls, continuation, live policy and token lifetime t
         await api("/mcp/policy", { enabled: false }, "PATCH");
       },
     ]) {
-      revokeBeforeDispatch = revoke;
+      revokeBeforeCall = revoke;
       const denied = await run(parents[0]!, "worker");
-      expect(denied.tools).toContain("mcp");
-      expect(revokeBeforeDispatch).toBeUndefined();
+      expect(denied.tools).toContain(ECHO);
+      expect(revokeBeforeCall).toBeUndefined();
       expect(JSON.stringify(denied.requests)).not.toContain("PROJECT_A: child-sentinel");
       writeAgent("mcpServers: scoped-server");
       await api(`/projects/${projectIds[0]}`, { assignedAgentNames: ["worker"] }, "PATCH");
       await api("/mcp/policy", { enabled: true }, "PATCH");
     }
-    // No live parent uses scoped-server. Child teardown releases its catalog hold.
-    const catalog = (await (
-      await fetch(`http://127.0.0.1:${server.port}/mcp?projectId=${projectIds[0]}`)
-    ).json()) as { servers: Array<{ id: string; connected: boolean }> };
-    expect(catalog.servers.find((server) => server.id === "scoped-server")?.connected).not.toBe(
-      true,
-    );
   } finally {
     await server?.close();
     await mock.close();

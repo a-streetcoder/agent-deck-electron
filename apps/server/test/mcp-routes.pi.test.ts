@@ -14,9 +14,10 @@ import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 /**
  * MCP config routes (the visible half's backend), end-to-end against real pi:
- * POST /mcp adds a stdio server (writing mcp.json + connecting it), GET /mcp
- * reports it connected with its tools, a session can call the tool, and
- * DELETE /mcp/:id removes it and unregisters the tool.
+ * POST /mcp adds a stdio server (writing mcp.json), an explicit check (POST
+ * /mcp/:id/refresh) or an edit probes it and GET /mcp reports it connected with
+ * its tools, a session calls the tool through Pi native, and DELETE /mcp/:id
+ * removes it.
  */
 
 const tmpHome = mkdtempSync(path.join(tmpdir(), "pi-home-"));
@@ -44,7 +45,7 @@ beforeAll(async () => {
       const hasToolResult = body.messages.some((m) => m.role === "tool");
       return hasToolResult
         ? null
-        : { name: "mcp", arguments: { tool: "mock/echo", args: { message: "via routes" } } };
+        : { name: "mcp__mock__echo", arguments: { message: "via routes" } };
     },
     reply: () => "answered.",
   });
@@ -60,7 +61,7 @@ afterAll(async () => {
 });
 
 describe("mcp config routes", () => {
-  it("adds a server via POST /mcp and lists it connected with its tools", async () => {
+  it("adds a server via POST /mcp and lists it connected with its tools once checked", async () => {
     const launch = mockMcpServerLaunch("mock");
     const res = await api("POST", "/mcp", {
       name: "mock",
@@ -76,14 +77,38 @@ describe("mcp config routes", () => {
       (await api("PATCH", `/projects/${projectId}`, { assignedMcpServers: ["mock"] })).status,
     ).toBe(200);
 
-    const list = (await (
-      await api("GET", `/mcp?projectId=${encodeURIComponent(projectId)}`)
-    ).json()) as {
-      servers: Array<{ id: string; connected: boolean; toolNames: string[] }>;
-    };
-    const mockServer = list.servers.find((s) => s.id === "mock");
-    expect(mockServer?.connected).toBe(true);
-    expect(mockServer?.toolNames).toContain("mock/echo");
+    type Row = { id: string; connected: boolean; toolNames: string[]; error?: string };
+    const scoped = async () =>
+      (
+        (await (await api("GET", `/mcp?projectId=${encodeURIComponent(projectId)}`)).json()) as {
+          servers: Row[];
+        }
+      ).servers.find((s) => s.id === "mock");
+    // No connection is kept: nothing runs until a check.
+    expect((await scoped())?.connected).toBe(false);
+    const checked = await api(
+      "POST",
+      `/mcp/mock/refresh?projectId=${encodeURIComponent(projectId)}`,
+    );
+    expect(checked.status).toBe(200);
+    expect(await checked.json()).toMatchObject({ server: { id: "mock", connected: true } });
+    expect(await scoped()).toMatchObject({
+      connected: true,
+      toolNames: expect.arrayContaining(["mock/echo"]),
+    });
+    // An edit drops the old probe at once and checks the server again where it
+    // is assigned, after answering.
+    expect(
+      (await api("PATCH", "/mcp/mock", { command: "definitely-not-a-command-xyz" })).status,
+    ).toBe(200);
+    expect(await scoped()).toMatchObject({ connected: false, toolNames: [] });
+    await expect.poll(async () => (await scoped())?.error, { timeout: 20_000 }).toBeTruthy();
+    expect(
+      (await api("PATCH", "/mcp/mock", { command: launch.command, args: launch.args })).status,
+    ).toBe(200);
+    await expect.poll(async () => (await scoped())?.connected, { timeout: 20_000 }).toBe(true);
+    // The All Projects view shows no status, so a check needs a project.
+    expect((await api("POST", "/mcp/mock/refresh")).status).toBe(400);
 
     const globalList = (await (await api("GET", "/mcp")).json()) as {
       servers: Array<{ id: string; connected: boolean; toolNames: string[] }>;
@@ -116,7 +141,7 @@ describe("mcp config routes", () => {
     expect(toolText).toContain("mcp stdio echo: via routes");
   });
 
-  it("removes the server via DELETE and unregisters its tool", async () => {
+  it("removes the server via DELETE", async () => {
     expect((await api("DELETE", "/mcp/mock")).status).toBe(200);
     const list = (await (
       await api("GET", `/mcp?projectId=${encodeURIComponent(projectId)}`)
@@ -125,53 +150,5 @@ describe("mcp config routes", () => {
     expect(server.bridge.specs().some((s) => s.name === "mcp")).toBe(false);
     // Deleting an unknown server 404s.
     expect((await api("DELETE", "/mcp/mock")).status).toBe(404);
-  });
-});
-
-describe("mcp oauth routes", () => {
-  const HTTP_ID = "authsrv";
-
-  it("reports per-server auth state and guards the login/callback/logout routes", async () => {
-    // Add an http server. Its connect fails against the dead url — fine: the
-    // config is stored, so httpUrlFor resolves and the OAuth routes are reachable
-    // and its OAuth provider (unauthenticated) exists.
-    const add = await api("POST", "/mcp", { name: HTTP_ID, url: "http://127.0.0.1:1/sse" });
-    expect(add.status).toBe(201);
-    expect(
-      (
-        await api("PATCH", `/projects/${projectId}`, {
-          assignedMcpServers: [HTTP_ID],
-        })
-      ).status,
-    ).toBe(200);
-
-    // A project-scoped list augments each assigned server with its isolated auth state.
-    const list = (await (
-      await api("GET", `/mcp?projectId=${encodeURIComponent(projectId)}`)
-    ).json()) as {
-      servers: Array<{ id: string; transport: string; auth: { status: string } }>;
-    };
-    const httpServer = list.servers.find((s) => s.id === HTTP_ID);
-    expect(httpServer?.transport).toBe("http");
-    expect(httpServer?.auth.status).toBe("unauthenticated");
-
-    // Callback with no code → 400 (schema). With a code but a state never minted →
-    // 400 (CSRF guard rejects the mismatch).
-    const scoped = `projectId=${encodeURIComponent(projectId)}`;
-    expect((await api("POST", `/mcp/${HTTP_ID}/login/callback?${scoped}`, {})).status).toBe(400);
-    expect(
-      (
-        await api("POST", `/mcp/${HTTP_ID}/login/callback?${scoped}`, {
-          code: "x",
-          state: "nope",
-        })
-      ).status,
-    ).toBe(400);
-
-    // login / logout on an unknown server → 404 inside the authenticated project scope.
-    expect((await api("POST", `/mcp/ghost/login?${scoped}`, {})).status).toBe(404);
-    expect((await api("POST", `/mcp/ghost/logout?${scoped}`, {})).status).toBe(404);
-
-    await api("DELETE", `/mcp/${HTTP_ID}`);
   });
 });

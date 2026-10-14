@@ -16,8 +16,7 @@ import type { AgentAvatarStore } from "./agentAvatars.ts";
 import type { ProjectImageStore } from "./projectImages.ts";
 import type { BridgeRegistry } from "./bridge.ts";
 import type { LoopEngine } from "./loopEngine.ts";
-import type { McpManager, McpServerConfig } from "./mcpTools.ts";
-import type { McpOAuthCoordinator } from "./mcpOAuth.ts";
+import type { McpServerConfig, McpServerStatus } from "./mcpTools.ts";
 import type { McpAssignmentStore } from "./mcpAssignments.ts";
 import type { McpPolicyStore } from "./mcpPolicy.ts";
 import type { McpDefinitionStore } from "./mcpDefinitions.ts";
@@ -172,23 +171,9 @@ export interface ServerContext {
   >;
   loopEngine: LoopEngine;
   providerLogin: ProviderLoginManager;
-  mcp: McpManager;
-  mcpOAuth: McpOAuthCoordinator;
   mcpAssignments: McpAssignmentStore;
   mcpPolicy: McpPolicyStore;
   mcpDefinitions: McpDefinitionStore;
-  reloadMcpConfig(projectId?: string): Promise<{ ok: true } | { ok: false; error: string }>;
-  reconcileProjectMcp(
-    projectId: string,
-    extraIds?: readonly string[],
-  ): Promise<{ ok: true; missing: string[] } | { ok: false; error: string }>;
-  prepareProjectMcpSession(
-    projectId: string,
-    serverIds: readonly string[],
-  ): Promise<{
-    result: { ok: true; missing: string[] } | { ok: false; error: string };
-    release(): Promise<void>;
-  }>;
   effectiveMcpConfigs(projectId: string): McpConfigSnapshot;
   /** PI-03c: why a native MCP call or its result is refused right now, if it is. */
   nativeMcpRefusal(
@@ -197,12 +182,15 @@ export interface ServerContext {
   ): string | undefined;
   globalMcpConfigs(): McpConfigSnapshot;
   isMcpEnvOverride(id: string): boolean;
-  oauthKey(scope: string, id: string): string;
-  /** PI-03b/d: AGENT_DECK_NATIVE_MCP=1, sessions use Pi native MCP (and Pi's own OAuth). */
-  nativeMcp(): boolean;
   /** PI-03d: the Pi server name a session uses for an Agent Deck server id, if it has it. */
   nativeMcpNameFor(meta: SessionMeta, serverId: string): string | undefined;
   projectHasEffectiveMcpGrant(projectId: string, serverId: string): boolean;
+  /** The settings screen's last probe of a server in a project, if any. */
+  mcpProbe(projectId: string, serverId: string): McpServerStatus | undefined;
+  /** Probe a server assigned to a visible project; false when it is not (nothing ran). */
+  probeMcp(projectId: string, serverId: string): Promise<boolean>;
+  /** Drop cached probes the predicate matches (edit, delete, pause, reload). */
+  forgetMcpProbes(match: (projectId: string, serverId: string) => boolean): void;
   /** Hard server capability controlled by AGENT_DECK_MEMORY=0. */
   memoryEnabled: boolean;
   /** Live effective parent-agent automation preference (capability && setting). */

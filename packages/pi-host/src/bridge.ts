@@ -87,18 +87,13 @@ export interface BridgeExtensionOptions {
    */
   promptAudit?: boolean;
   /**
-   * SPIKE (ade-cdd5), off unless set: host Pi's native MCP inside this
-   * extension via createMcpExtension with a fixed server list instead of
-   * <agentDir>/mcp.json. Blocked tools are refused in tool_call; suppressed
-   * tools have their result replaced in tool_result. Names are Pi's
-   * normalised `mcp__<server>__<tool>`. Every other `mcp__` call and result is
-   * checked live through the endpoint (tool `__mcp_authorize__`).
+   * Host Pi's native MCP inside this extension via createMcpExtension with a
+   * fixed server list instead of <agentDir>/mcp.json. Every `mcp__` call and
+   * result is checked live through the endpoint (tool `__mcp_authorize__`).
    */
   nativeMcp?: {
     /** `id` is the Agent Deck server id the policy hook sends back. */
     servers: Array<{ name: string; id: string; config: Record<string, unknown> }>;
-    blockedTools?: string[];
-    suppressedTools?: string[];
   };
 }
 
@@ -239,11 +234,9 @@ import { StdioTransport, StreamableHttpTransport } from ${JSON.stringify(piMcpMo
   });
 ${
   nativeMcp
-    ? `  // SPIKE: Pi's own MCP client, fed only the servers we list. updateConfig is
+    ? `  // Pi's own MCP client, fed only the servers we list. updateConfig is
   // a no-op so /mcp over RPC can never rewrite an mcp.json.
   const nativeMcp = ${nativeMcp};
-  const blockedMcp = new Set(nativeMcp.blockedTools ?? []);
-  const suppressedMcp = new Set(nativeMcp.suppressedTools ?? []);
   // Pi's default stdio transport hands the server Pi's whole env (provider keys,
   // tokens). Spawn with the MCP SDK's safe list plus the server's own env, as the
   // proxy did. Values are used as given: Pi's env-reference and !cmd resolution only runs
@@ -320,7 +313,6 @@ ${
     }
   };
   pi.on("tool_call", async (event, ctx) => {
-    if (blockedMcp.has(event.toolName)) return { block: true, reason: "Blocked by Agent Deck policy." };
     if (!isMcpCall(event.toolName)) return;
     const refusal = await mcpRefusal(event, ctx);
     if (refusal) return { block: true, reason: refusal.reason };
@@ -329,8 +321,7 @@ ${
   // policy changed meanwhile or the bridge cannot answer.
   pi.on("tool_result", async (event, ctx) => {
     let text;
-    if (suppressedMcp.has(event.toolName)) text = "Result withheld by Agent Deck policy.";
-    else if (isMcpCall(event.toolName)) {
+    if (isMcpCall(event.toolName)) {
       const refusal = await mcpRefusal(event, ctx);
       if (refusal) {
         text = refusal.failed

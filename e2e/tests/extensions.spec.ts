@@ -222,9 +222,9 @@ test("shows the read-only Agent Deck bridges inventory (memory active)", async (
   await expect(page.getByTestId("bridge-memory")).toBeVisible();
   await expect(page.getByTestId("bridge-state-memory")).toHaveText("active");
   await expect(page.getByTestId("bridge-memory")).toContainText("agent_deck_memory_write");
-  // Deck-agents bridge is always on; MCP is off with no server configured.
+  // Deck-agents bridge is always on; MCP runs through Pi native, not a bridge.
   await expect(page.getByTestId("bridge-state-deck_agents")).toHaveText("active");
-  await expect(page.getByTestId("bridge-state-mcp")).toHaveText("off");
+  await expect(page.getByTestId("bridge-mcp")).toHaveCount(0);
 });
 
 test("shows readable extension load, toggle, and remove failures", async ({ page }) => {

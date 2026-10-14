@@ -1,5 +1,7 @@
 # MCP proxy acceptance
 
+> Historical. The `mcp` proxy described here was removed (PI-03f, ade-apgq): sessions now use Pi native MCP through the generated bridge extension. See the MCP transport section of [ARCHITECTURE.md](agent-guidelines/ARCHITECTURE.md).
+
 Agent Deck exposes assigned MCP servers to Pi through one model-facing tool named `mcp`. The proxy resolves the authenticated session on every operation and applies the current project, named-agent, child, and global MCP policy before returning catalog metadata or calling a server.
 
 ## Model calls

@@ -2,7 +2,7 @@
 
 How agent-deck consumes the shared, Syncr-owned skill engine, the current state of the lift, and
 the contract between the two. Decision + rationale: [ADR-0002](adr/0002-consolidate-skill-engine.md).
-Historical extension request (now shipped): [skill-engine-git-import-request.md](skill-engine-git-import-request.md).
+Historical extension request (now shipped): [skill-engine-git-import-request.md](archive/syncr-requests/skill-engine-git-import-request.md).
 
 The engine ships as **`@a-streetcoder/skill-engine-native`** (private GitHub Packages, Syncr-owned).
 agent-deck consumes it for skill **storage**; it keeps the **reader** (pi's loader) and all

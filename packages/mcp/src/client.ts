@@ -4,15 +4,12 @@ import {
   StdioClientTransport,
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 /**
- * A thin wrapper over an MCP client connection. pi core has no built-in MCP
- * (concepts/pi-runtime-vs-agent-deck.md), so Agent Deck proxies a configured
- * MCP server's tools into pi sessions over the bridge substrate: the server
- * lists an MCP server's tools and forwards each call here. This package stays
- * MCP-focused; apps/server maps these tools onto the bridge.
+ * A thin wrapper over an MCP client connection. Sessions reach MCP through Pi
+ * native; Agent Deck uses this only to probe a server's status and tool list
+ * for the settings screen (connect, list, disconnect).
  */
 
 /** A tool exposed by an MCP server. */
@@ -21,13 +18,6 @@ export interface McpToolInfo {
   description: string;
   /** JSON-Schema object for the tool's arguments (from the MCP server). */
   inputSchema: Record<string, unknown>;
-}
-
-/** The result of forwarding a tool call to the MCP server. */
-export interface McpCallResult {
-  /** Flattened text content returned to the model. */
-  content: string;
-  isError: boolean;
 }
 
 export interface McpRequestOptions {
@@ -62,17 +52,6 @@ export interface McpConnectOptions {
   signal?: AbortSignal;
   /** Bounds the SDK initialize request after transport startup. */
   timeoutMs?: number;
-}
-
-function flattenContent(content: unknown): string {
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((part) =>
-      typeof part === "object" && part !== null && "text" in part
-        ? String((part as { text: unknown }).text)
-        : "",
-    )
-    .join("");
 }
 
 export class McpClient {
@@ -131,24 +110,20 @@ export class McpClient {
       // custom vars would otherwise drop them and the server couldn't launch.
       env: config.env ? { ...getDefaultEnvironment(), ...config.env } : undefined,
       cwd: config.cwd,
+      // Whatever the server prints (a secret, if it prints one) never reaches
+      // the backend's own stderr or log.
+      stderr: "ignore",
     });
     return await McpClient.connect(transport, "agent-deck", options);
   }
 
-  /**
-   * Connect to a remote MCP server over Streamable HTTP. Pass an `authProvider`
-   * (an McpOAuthProvider) for a server behind OAuth: the transport then drives
-   * the SDK handshake, and on an unauthenticated server it throws
-   * UnauthorizedError after calling the provider's redirectToAuthorization — the
-   * caller runs the relay, calls transport.finishAuth(code), and reconnects.
-   */
+  /** Connect to a remote MCP server over Streamable HTTP (no OAuth: Pi signs in). */
   static async connectHttp(
     config: HttpServerConfig,
-    options: McpConnectOptions & { authProvider?: OAuthClientProvider } = {},
+    options: McpConnectOptions = {},
   ): Promise<McpClient> {
     const transport = new StreamableHTTPClientTransport(new URL(config.url), {
       requestInit: config.headers ? { headers: config.headers } : undefined,
-      authProvider: options.authProvider,
     });
     return await McpClient.connect(transport, "agent-deck", options);
   }
@@ -195,23 +170,6 @@ export class McpClient {
         properties: {},
       },
     }));
-  }
-
-  /** Forward a tool call to the MCP server and flatten its result. */
-  async callTool(
-    name: string,
-    args: Record<string, unknown>,
-    options: McpRequestOptions = {},
-  ): Promise<McpCallResult> {
-    const result = await this.client.callTool({ name, arguments: args }, undefined, {
-      signal: options.signal,
-      timeout: options.timeoutMs,
-      maxTotalTimeout: options.timeoutMs,
-    });
-    return {
-      content: flattenContent(result.content),
-      isError: result.isError === true,
-    };
   }
 
   async close(): Promise<void> {

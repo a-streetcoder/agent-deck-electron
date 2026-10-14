@@ -1563,13 +1563,6 @@ ${content}
           "update_session_plan",
         ].includes(name),
     },
-    {
-      id: "mcp",
-      displayName: "MCP",
-      summary: "Lets sessions discover and call assigned MCP servers through one proxy tool.",
-      condition: "When at least one MCP server is connected",
-      match: (name: string): boolean => name === "mcp",
-    },
   ];
   fastify.get("/runtime/bridges", async () => {
     const specs = bridge.specs();
