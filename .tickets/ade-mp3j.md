@@ -1,6 +1,6 @@
 ---
 id: ade-mp3j
-status: open
+status: in_progress
 deps: [ade-5vm8]
 links: []
 created: 2026-10-14T19:54:18Z
