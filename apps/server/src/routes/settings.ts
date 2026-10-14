@@ -629,6 +629,41 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     };
   });
 
+  // The discovery itself, shared with the PRV-01 launch guard (claudeTransport.ts).
+  const discoverModels = async (signal?: AbortSignal) => {
+    const defaults = envDefaults();
+    const home = resourceHome();
+    // Native reconciles NeuralWatt's models.json block BEFORE asking pi for the
+    // catalog (AppViewModel.refreshAvailableModels), so a refresh is what picks
+    // up newly published models — and what removes the block after a sign-out,
+    // since pi would otherwise keep listing models the user cannot call.
+    // Best-effort: it never throws, and with no stored key it does not contact
+    // NeuralWatt at all.
+    const signedInToNeuralWatt = (await listProviders(rootsFor())).some(
+      (provider) => provider.id === "neuralwatt" && provider.signedIn,
+    );
+    await reconcileNeuralWattCatalog(rootsFor(), { hasRealKey: signedInToNeuralWatt });
+    // Match an ordinary no-project launch: environment defaults first, then
+    // enabled global extensions, then provider-registration fallbacks.
+    const extensions = [
+      ...new Set([
+        ...(defaults.extensions ?? []),
+        ...enabledExtensionPaths(),
+        ...(defaults.providerExtensions ?? []),
+      ]),
+    ];
+    const models = await discoverModelCatalog({
+      binPath: resolvePiBinary().path,
+      cwd: defaults.cwd ?? home,
+      env: { ...defaults.env, HOME: home, USERPROFILE: home },
+      extensions,
+      signal,
+    });
+    ctx.discoveredModels = models;
+    return models;
+  };
+  ctx.discoverModels = discoverModels;
+
   // Session-independent model discovery. This runs Pi's exiting --list-models
   // mode with the same enabled global extensions as an ordinary no-project
   // session, plus server-configured provider registration extensions. It never
@@ -648,35 +683,8 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     reply.raw.once("close", onDisconnect);
 
     try {
-      const defaults = envDefaults();
       const home = resourceHome();
-      // Native reconciles NeuralWatt's models.json block BEFORE asking pi for the
-      // catalog (AppViewModel.refreshAvailableModels), so a refresh is what picks
-      // up newly published models — and what removes the block after a sign-out,
-      // since pi would otherwise keep listing models the user cannot call.
-      // Best-effort: it never throws, and with no stored key it does not contact
-      // NeuralWatt at all.
-      const signedInToNeuralWatt = (await listProviders(rootsFor())).some(
-        (provider) => provider.id === "neuralwatt" && provider.signedIn,
-      );
-      await reconcileNeuralWattCatalog(rootsFor(), { hasRealKey: signedInToNeuralWatt });
-      // Match an ordinary no-project launch: environment defaults first, then
-      // enabled global extensions, then provider-registration fallbacks.
-      const extensions = [
-        ...new Set([
-          ...(defaults.extensions ?? []),
-          ...enabledExtensionPaths(),
-          ...(defaults.providerExtensions ?? []),
-        ]),
-      ];
-      const models = await discoverModelCatalog({
-        binPath: resolvePiBinary().path,
-        cwd: defaults.cwd ?? home,
-        env: { ...defaults.env, HOME: home, USERPROFILE: home },
-        extensions,
-        signal: controller.signal,
-      });
-      ctx.discoveredModels = models;
+      const models = await discoverModels(controller.signal);
       const disabled = new Set(settings.get().disabledModels);
       const fast = new Set(settings.get().openAIFastModels);
       return {

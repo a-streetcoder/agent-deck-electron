@@ -25,7 +25,39 @@ export const ANTHROPIC_NEEDS_API_KEY =
   "Claude through the Anthropic sign-in is not used. Add an Anthropic API key under Settings > Providers, or pick the Claude model without the API badge.";
 const BRIDGE = "claude-bridge";
 
-type Ctx = Pick<ServerContext, "rootsFor" | "userAgentDirs" | "settings" | "discoveredModels">;
+type Ctx = Pick<
+  ServerContext,
+  "rootsFor" | "userAgentDirs" | "settings" | "discoveredModels" | "discoverModels"
+>;
+
+/** Lazy discovery: one in-flight run shared by concurrent launches, and at most
+ * one attempt per window whatever the outcome (no Claude Code means no bridge). */
+const DISCOVERY_RETRY_MS = 5 * 60_000;
+const discovery = new WeakMap<Ctx, { inFlight?: Promise<void>; attemptedAt?: number }>();
+
+/** claude-bridge models come from extension discovery, which otherwise runs
+ * only when someone opens Models; a launch that needs a bridge twin runs it. */
+export async function ensureBridgeCatalog(ctx: Ctx): Promise<void> {
+  if (!ctx.discoverModels) return;
+  if (ctx.discoveredModels?.some((model) => model.provider === BRIDGE)) return;
+  const state = discovery.get(ctx) ?? {};
+  discovery.set(ctx, state);
+  if (!state.inFlight) {
+    if (state.attemptedAt !== undefined && Date.now() - state.attemptedAt < DISCOVERY_RETRY_MS)
+      return;
+    state.attemptedAt = Date.now();
+    state.inFlight = ctx
+      .discoverModels()
+      .then(
+        () => undefined,
+        () => undefined, // best effort: the guard then refuses with the 409
+      )
+      .finally(() => {
+        state.inFlight = undefined;
+      });
+  }
+  await state.inFlight;
+}
 
 const refusal = () => Object.assign(new Error(ANTHROPIC_NEEDS_API_KEY), { statusCode: 409 });
 
@@ -137,6 +169,8 @@ export async function claudeLaunchModel(
     provider = model.slice(0, slash);
     model = model.slice(slash + 1);
   }
+  if (provider && model && !refused.has(provider)) return undefined;
+  await ensureBridgeCatalog(ctx);
   const available = await ownerCatalog(ctx, owner);
   if (!model) {
     // ponytail: Pi's own fallback ranks anthropic early, so pin the first Claude
@@ -151,7 +185,6 @@ export async function claudeLaunchModel(
       available.find((entry) => entry.id === model);
     return match ? { provider: match.provider, model: match.id } : undefined;
   }
-  if (!refused.has(provider)) return undefined;
   const choice = claudeChoice(provider, model, refused, available);
   return { provider: choice.provider, model: choice.modelId };
 }

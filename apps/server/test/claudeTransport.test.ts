@@ -8,10 +8,14 @@ import { claudeChoice } from "../src/claudeTransport.ts";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 // The extension-discovered catalog (claude-bridge), without spawning Pi.
-const discovered = vi.hoisted(() => ({ models: [] as Array<{ provider: string; id: string }> }));
+const discovered = vi.hoisted(() => ({
+  models: [] as Array<{ provider: string; id: string }>,
+  calls: 0,
+}));
 vi.mock("@agent-deck/pi-host", async (importOriginal) => ({
   ...(await importOriginal<typeof PiHost>()),
   discoverModelCatalog: async () =>
+    ++discovered.calls &&
     discovered.models.map((model) => ({
       ...model,
       contextWindow: 1000,
@@ -130,6 +134,7 @@ describe("PRV-01 anthropic needs an API key", () => {
 });
 
 describe("PRV-01 launch and set_model choices", () => {
+  let launchedTwin = "";
   const discover = async (models: Array<{ provider: string; id: string }>) => {
     discovered.models = models;
     const response = await fetch(endpoint("/runtime/models/discover"), {
@@ -140,22 +145,35 @@ describe("PRV-01 launch and set_model choices", () => {
     expect(response.status).toBe(200);
   };
   // Capture the plan a launch would spawn with, without spawning Pi.
-  const launchPlan = async () => {
+  const launchPlans = async (count: number) => {
     const create = vi.spyOn(server.sessions, "create").mockImplementation(() => {
       throw new Error("not spawned in this test");
     });
     try {
-      const response = await fetch(endpoint("/sessions"), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ cwd: dataDir, startImmediately: true }),
-      });
-      const plan = create.mock.calls[0]?.[0].plan as { provider?: string; model?: string };
-      return { status: response.status, body: (await response.json()) as unknown, plan };
+      const responses = await Promise.all(
+        Array.from({ length: count }, () =>
+          fetch(endpoint("/sessions"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ cwd: dataDir, startImmediately: true }),
+          }),
+        ),
+      );
+      const plans = create.mock.calls.map(
+        (call) => call[0].plan as { provider?: string; model?: string },
+      );
+      return await Promise.all(
+        responses.map(async (response, index) => ({
+          status: response.status,
+          body: (await response.json()) as unknown,
+          plan: plans[index],
+        })),
+      );
     } finally {
       create.mockRestore();
     }
   };
+  const launchPlan = async () => (await launchPlans(1))[0]!;
 
   it("launches a Pi-default anthropic model on its claude-bridge twin", async () => {
     writeAuth(API_KEY);
@@ -168,9 +186,22 @@ describe("PRV-01 launch and set_model choices", () => {
     await discover([{ provider: "claude-bridge", id: modelId }]);
     const launched = await launchPlan();
     expect(launched.plan).toMatchObject({ provider: "claude-bridge", model: modelId });
+    launchedTwin = modelId;
+  });
+
+  it("runs the discovery once when the bridge catalog is missing (after a restart)", async () => {
+    const modelId = launchedTwin;
+    await discover([]); // the list a restart leaves: no claude-bridge entry
+    discovered.models = [{ provider: "claude-bridge", id: modelId }];
+    const before = discovered.calls;
+    const [first, second] = await launchPlans(2);
+    expect(discovered.calls - before).toBe(1);
+    expect(first!.plan).toMatchObject({ provider: "claude-bridge", model: modelId });
+    expect(second!.plan).toMatchObject({ provider: "claude-bridge", model: modelId });
   });
 
   it("refuses the launch with the stable 409 when no bridge twin exists", async () => {
+    // Within the retry window a list without the twin is not rediscovered.
     await discover([]);
     const launched = await launchPlan();
     expect(launched.status).toBe(409);
@@ -181,7 +212,8 @@ describe("PRV-01 launch and set_model choices", () => {
   it("leaves an API-key owner's anthropic default alone", async () => {
     writeAuth(API_KEY);
     const launched = await launchPlan();
-    expect(launched.plan.provider).not.toBe("claude-bridge");
+    expect(launched.plan).toBeDefined();
+    expect(launched.plan?.provider).not.toBe("claude-bridge");
   });
 
   it("maps a set_model choice onto the bridge twin or refuses it", () => {
