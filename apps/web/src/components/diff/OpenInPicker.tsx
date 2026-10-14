@@ -64,6 +64,9 @@ const EDITOR_ICONS: Partial<Record<EditorId, Icon>> = {
   webstorm: WebStormIcon,
 };
 
+/** SRV-09: the editor would open on the shared server, not on the user's machine. */
+export const SHARED_SERVER_EDITOR_TITLE = "Not available on a shared server";
+
 export function editorLabel(id: EditorId): string {
   return EDITORS.find((editor) => editor.id === id)?.label ?? id;
 }
@@ -179,6 +182,7 @@ export function OpenInPicker({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const sharedServer = useAppStore((state) => state.me !== null);
 
   // The composer pickers' dismiss idiom (pickers.tsx): outside click / Escape.
   useEffect(() => {
@@ -202,6 +206,23 @@ export function OpenInPicker({
   const buttonClass =
     "flex items-center rounded p-0.5 text-text-muted transition-colors " +
     "hover:bg-hover hover:text-text-primary";
+
+  if (sharedServer) {
+    return (
+      <div className={cn("relative flex shrink-0 items-center", className)}>
+        <ControlButton
+          type="button"
+          disabled
+          className={cn(buttonClass, "opacity-50")}
+          title={SHARED_SERVER_EDITOR_TITLE}
+          aria-label={SHARED_SERVER_EDITOR_TITLE}
+          data-testid="open-in-editor"
+        >
+          <EditorGlyph id={preferred} className="h-3.5 w-3.5" />
+        </ControlButton>
+      </div>
+    );
+  }
 
   return (
     <div

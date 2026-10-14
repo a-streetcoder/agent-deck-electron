@@ -131,6 +131,22 @@ describe("trusted proxy on the HTTP surface", () => {
   });
 });
 
+describe("SRV-09 host launchers on a shared server", () => {
+  it("refuses the doctor terminal launchers with 409", async () => {
+    for (const route of ["/runtime/doctor/update-pi", "/runtime/doctor/fix"]) {
+      const refused = await fetch(endpoint(route), {
+        method: "POST",
+        headers: { ...ale, "content-type": "application/json" },
+        body: JSON.stringify({ checkId: "pi" }),
+      });
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toEqual({
+        error: "Not available on a shared server: use the in-app terminal",
+      });
+    }
+  });
+});
+
 describe("GET /fs/dirs", () => {
   it("browses directories inside the configured root only", async () => {
     const browseRoot = mkdtempSync(path.join(tmpdir(), "deck-browse-root-"));

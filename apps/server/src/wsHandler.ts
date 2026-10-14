@@ -52,6 +52,8 @@ export function setupWebSocket(deps: {
   sessionImages: SessionImageStore;
   sessionPastes: SessionPasteStore;
   sessionAuthors?: SessionAuthorStore;
+  /** SRV-09: trusted proxy on, host launchers refuse. */
+  sharedServer?: boolean;
   /** Remote-server POC: browser origin reachable through the trusted proxy. */
   publicOrigin?: string;
   /** Remote-server POC: when set, every upgrade must carry a valid Access assertion. */
@@ -75,6 +77,7 @@ export function setupWebSocket(deps: {
     sessionImages: deps.sessionImages,
     sessionPastes: deps.sessionPastes,
     sessionAuthors: deps.sessionAuthors,
+    sharedServer: deps.sharedServer,
   });
 
   // Browsers may open cross-origin WebSockets to localhost services; only

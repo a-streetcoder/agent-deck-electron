@@ -45,6 +45,8 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
   onOpenInEditor?: (path: string) => void;
   /** Tooltip/aria label for the hover action (names the remembered editor). */
   openInEditorLabel?: string;
+  /** SRV-09: shown but not clickable (shared server). */
+  openInEditorDisabled?: boolean;
 }) {
   const {
     files,
@@ -53,6 +55,7 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
     selectedPath = null,
     onOpenInEditor,
     openInEditorLabel = "Open in editor",
+    openInEditorDisabled = false,
   } = props;
   const treeNodes = useMemo(() => buildChangedFilesTree(files), [files]);
   const directoryPathsKey = useMemo(() => collectDirectoryPaths(treeNodes).join("\0"), [treeNodes]);
@@ -173,7 +176,8 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
           {onOpenInEditor && (
             <ControlButton
               type="button"
-              className="hidden shrink-0 rounded p-0.5 text-text-muted hover:text-text-primary group-focus-within:flex group-hover:flex"
+              disabled={openInEditorDisabled}
+              className="hidden shrink-0 rounded p-0.5 text-text-muted hover:text-text-primary disabled:opacity-50 group-focus-within:flex group-hover:flex"
               title={openInEditorLabel}
               aria-label={openInEditorLabel}
               data-testid="diff-tree-open"

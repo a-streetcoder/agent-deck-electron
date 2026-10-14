@@ -30,6 +30,13 @@ export interface TrustedProxyConfig {
   jwksUrl?: string;
 }
 
+/** SRV-09: host launchers would spawn on the headless shared server, not on the user's
+ * machine, so every launcher entry point refuses with one of these messages. */
+export const SHARED_SERVER_REFUSAL = {
+  terminal: "Not available on a shared server: use the in-app terminal",
+  editor: "Not available on a shared server: open the file from your own machine",
+} as const;
+
 export const CF_ACCESS_HEADER = "cf-access-jwt-assertion";
 export const CF_ACCESS_COOKIE = "CF_Authorization";
 

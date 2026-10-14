@@ -137,6 +137,8 @@ export interface ServerContext {
   sessionAuthors?: SessionAuthorStore;
   /** Remote-server POC: session-owner git identity (gitIdentity.ts); absent without a trusted proxy. */
   gitIdentities?: GitIdentityMap;
+  /** SRV-09: AGENT_DECK_TRUSTED_PROXY is set; host launchers (terminal, editor) refuse. */
+  sharedServer?: boolean;
   index: SessionIndex;
   projects: ProjectIndex;
   settings: SettingsStore;

@@ -1,6 +1,6 @@
 ---
 id: ade-rpkm
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-14T13:42:14Z
@@ -20,3 +20,9 @@ GUARDRAILS: checkout mirrored live to the VM by Syncthing; never git checkout/sw
 
 rpcHandler test: with trusted proxy on, terminal_open_external and editor_open reply ok:false with the message and the launcher spawn is never called; route test for one settings POST returning 409; web test: TerminalDrawer with me set renders no external button, OpenInPicker disabled; with me null everything renders as before; docs/remote-server-poc.md lists the refused actions in the Known gaps or desktop section
 
+
+## Notes
+
+**2026-10-14T13:49:16Z**
+
+2026-10-14 done. Ponytail: accepted (one refusal constant, one boolean threaded like sessionAuthors, two web conditionals). Known limits recorded by the developer: web gates on me !== null; editors_list still probes the VM; other host spawns outside the four entry points are not guarded.

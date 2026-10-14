@@ -46,7 +46,7 @@ import {
   type DiagnosticWarning,
 } from "../configurationWarnings.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
-import { trustedProxyConfigFromEnv } from "../trustedProxy.ts";
+import { SHARED_SERVER_REFUSAL, trustedProxyConfigFromEnv } from "../trustedProxy.ts";
 import {
   createExternalCommandLauncher,
   findDoctorFixCommand,
@@ -238,6 +238,9 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     if (rejectCrossOrigin(request as unknown as { headers: Record<string, unknown> })) {
       return reply.status(403).send({ error: "cross-origin requests are not allowed" });
     }
+    if (ctx.sharedServer) {
+      return reply.status(409).send({ error: SHARED_SERVER_REFUSAL.terminal });
+    }
     const { checkId, projectId } = (request.body ?? {}) as {
       checkId?: unknown;
       projectId?: unknown;
@@ -267,6 +270,9 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
   fastify.post("/runtime/doctor/update-pi", async (request, reply) => {
     if (rejectCrossOrigin(request as unknown as { headers: Record<string, unknown> })) {
       return reply.status(403).send({ error: "cross-origin requests are not allowed" });
+    }
+    if (ctx.sharedServer) {
+      return reply.status(409).send({ error: SHARED_SERVER_REFUSAL.terminal });
     }
     try {
       await (ctx.fixTerminal ?? defaultFixTerminal()).runPiUpdate();

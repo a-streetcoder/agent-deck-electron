@@ -385,3 +385,8 @@ Electron.
 - Session git identity is attribution, not authorization: Pi and its tools run as the service
   user and can still commit as anyone (`git -c user.name=...`, editing the env), and
   `Co-authored-by:` lines reflect who prompted, not who wrote which change.
+- Host launchers are refused on a shared server, because they would open on the headless VM
+  rather than on the user's machine (ade-rpkm): `terminal_open_external` and `editor_open`
+  reply `ok:false`, and `POST /runtime/doctor/fix` and `POST /runtime/doctor/update-pi`
+  answer 409. The web UI hides "Continue in external terminal" and shows the "Open in editor"
+  controls disabled. Use the in-app terminal instead.

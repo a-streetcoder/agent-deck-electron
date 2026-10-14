@@ -1316,6 +1316,7 @@ async function initServer(
     sessionImages,
     sessionPastes,
     sessionAuthors,
+    sharedServer: trustedProxy !== null,
     publicOrigin: trustedProxy?.publicOrigin,
     accessVerifier,
   });
@@ -1384,6 +1385,7 @@ async function initServer(
     sessionPastes,
     sessionAuthors,
     gitIdentities,
+    sharedServer: trustedProxy !== null,
     index,
     projects,
     settings,

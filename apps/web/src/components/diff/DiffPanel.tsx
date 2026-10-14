@@ -21,7 +21,12 @@ import { fetchBranchDiffFiles, fetchFileDiff, mergeWorktreeSession } from "../..
 import { useAppStore } from "../../state/store.ts";
 import { ChangedFilesTree } from "./ChangedFilesTree.tsx";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel.tsx";
-import { OpenInPicker, editorLabel, useOpenInEditor } from "./OpenInPicker.tsx";
+import {
+  OpenInPicker,
+  SHARED_SERVER_EDITOR_TITLE,
+  editorLabel,
+  useOpenInEditor,
+} from "./OpenInPicker.tsx";
 
 /** Monotonic ids for pending review comments (never rendered — anchor is
  * side+line — so a plain counter is enough and avoids secure-context reliance
@@ -453,6 +458,7 @@ export function DiffPanel() {
   // affordances (file-header picker, tree-row hover action) are hover-revealed
   // so the resting panel layout — and the visual baseline — stay unchanged.
   const editorPicker = useOpenInEditor();
+  const sharedServer = useAppStore((state) => state.me !== null);
 
   // Slice 12: review comments for the current session + the jump-to-diff
   // request a pending composer card raises. The panel is the capture surface
@@ -760,7 +766,10 @@ export function DiffPanel() {
             selectedPath={selectedPath}
             {...(editorPicker.available.length > 0 && editorPicker.preferred !== null
               ? {
-                  openInEditorLabel: `Open in ${editorLabel(editorPicker.preferred)}`,
+                  openInEditorLabel: sharedServer
+                    ? SHARED_SERVER_EDITOR_TITLE
+                    : `Open in ${editorLabel(editorPicker.preferred)}`,
+                  openInEditorDisabled: sharedServer,
                   onOpenInEditor: (path: string) => editorPicker.open(path, undefined),
                 }
               : {})}

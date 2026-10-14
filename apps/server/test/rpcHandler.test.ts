@@ -1768,14 +1768,19 @@ describe("createRpcConnection script/dev-server ops (Slice 15a)", () => {
 });
 
 describe("createRpcConnection external terminal (TER-01)", () => {
-  const build = (manager: SessionManager, open: (input: unknown) => Promise<void>) => {
+  const build = (
+    manager: SessionManager,
+    open: (input: unknown) => Promise<void>,
+    extra: { sharedServer?: boolean; editors?: EditorLauncher } = {},
+  ) => {
     const openCalls: unknown[] = [];
     const frames: Frame[] = [];
     const conn = createRpcConnection({
+      ...extra,
       sessions: manager,
       terminals: makeTerminalGateway().gateway,
       diffs: makeDiffGateway().gateway,
-      editors: makeEditorLauncher().launcher,
+      editors: extra.editors ?? makeEditorLauncher().launcher,
       files: makeFileService().service,
       scripts: makeScriptGateway().gateway,
       checkpoints: makeCheckpointService().service,
@@ -1825,6 +1830,39 @@ describe("createRpcConnection external terminal (TER-01)", () => {
         error: "No supported terminal application was found on this machine.",
       },
     ]);
+  });
+
+  it("SRV-09: on a shared server the terminal and editor launchers refuse without spawning", async () => {
+    const { session } = makeSession("s1");
+    const editors = makeEditorLauncher();
+    const { conn, frames, openCalls } = build(
+      makeManager({ s1: session }),
+      () => Promise.resolve(),
+      {
+        sharedServer: true,
+        editors: editors.launcher,
+      },
+    );
+    await conn.handleMessage(frame(1, { type: "terminal_open_external", sessionId: "s1" }));
+    await conn.handleMessage(
+      frame(2, { type: "editor_open", sessionId: "s1", path: "src/a.ts", editor: "vscode" }),
+    );
+    expect(frames).toEqual([
+      {
+        kind: "reply",
+        id: 1,
+        ok: false,
+        error: "Not available on a shared server: use the in-app terminal",
+      },
+      {
+        kind: "reply",
+        id: 2,
+        ok: false,
+        error: "Not available on a shared server: open the file from your own machine",
+      },
+    ]);
+    expect(openCalls).toEqual([]);
+    expect(editors.openCalls).toEqual([]);
   });
 });
 

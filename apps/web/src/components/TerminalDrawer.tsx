@@ -78,6 +78,8 @@ export function TerminalDrawer() {
   const setTerminalOpen = useAppStore((state) => state.setTerminalOpen);
   const sessionId = useAppStore((state) => state.session?.id ?? null);
   const connection = useAppStore((state) => state.connection);
+  // SRV-09: on a shared server an external terminal would open on the server, not here.
+  const sharedServer = useAppStore((state) => state.me !== null);
   const pushToast = useAppStore((state) => state.pushToast);
   const addElementContext = useAppStore((state) => state.addElementContext);
   // COM-01: the live xterm instance + whether it has a selection, for the
@@ -372,23 +374,25 @@ export function TerminalDrawer() {
           >
             <MessageSquarePlus className="h-3.5 w-3.5" />
           </ControlButton>
-          <ControlButton
-            type="button"
-            className="rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
-            title="Continue in external terminal"
-            aria-label="Continue in external terminal"
-            data-testid="terminal-open-external"
-            onClick={() => {
-              openSessionInExternalTerminal(sessionId).catch((error: unknown) => {
-                pushToast({
-                  kind: "error",
-                  message: error instanceof Error ? error.message : String(error),
+          {!sharedServer && (
+            <ControlButton
+              type="button"
+              className="rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"
+              title="Continue in external terminal"
+              aria-label="Continue in external terminal"
+              data-testid="terminal-open-external"
+              onClick={() => {
+                openSessionInExternalTerminal(sessionId).catch((error: unknown) => {
+                  pushToast({
+                    kind: "error",
+                    message: error instanceof Error ? error.message : String(error),
+                  });
                 });
-              });
-            }}
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-          </ControlButton>
+              }}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+            </ControlButton>
+          )}
           <ControlButton
             type="button"
             className="rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text-primary"

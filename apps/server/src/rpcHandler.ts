@@ -21,7 +21,7 @@ import type { SessionImageStore } from "./sessionImages.ts";
 import type { IncomingMessage } from "node:http";
 import type { SessionPasteStore } from "./sessionPastes.ts";
 import type { SessionAuthorStore } from "./sessionAuthors.ts";
-import { requestUser, type AuthenticatedUser } from "./trustedProxy.ts";
+import { requestUser, SHARED_SERVER_REFUSAL, type AuthenticatedUser } from "./trustedProxy.ts";
 import type { CheckpointServiceShape } from "./services/checkpoints.ts";
 import type { FileService } from "./services/files.ts";
 import type { ScriptEvent } from "./services/scriptRunner.ts";
@@ -89,6 +89,8 @@ export function createRpcConnection(deps: {
   sessionAuthors?: SessionAuthorStore;
   /** Verified identity of this connection's user (trusted proxy); absent on loopback. */
   user?: AuthenticatedUser;
+  /** SRV-09: behind the trusted proxy, host launchers (external terminal, editor) refuse. */
+  sharedServer?: boolean;
   send: (frame: RpcServerFrame) => void;
   /** Socket send-buffer depth in bytes (`ws` bufferedAmount); 0 when absent. */
   bufferedAmount?: () => number;
@@ -434,6 +436,10 @@ export function createRpcConnection(deps: {
     // Everything data-bearing (cwd, pi session file) is server-side meta; the
     // launcher composes argv per platform and never shell-interpolates it.
     if (request.type === "terminal_open_external") {
+      if (deps.sharedServer) {
+        replyError(SHARED_SERVER_REFUSAL.terminal);
+        return;
+      }
       const session = sessions.get(request.sessionId);
       if (!session) {
         replyError("unknown session");
@@ -597,6 +603,10 @@ export function createRpcConnection(deps: {
       return;
     }
     if (request.type === "editor_open") {
+      if (deps.sharedServer) {
+        replyError(SHARED_SERVER_REFUSAL.editor);
+        return;
+      }
       const meta = sessions.get(request.sessionId)?.meta ?? deps.drafts?.find(request.sessionId);
       if (!meta) {
         replyError("unknown session");
@@ -976,6 +986,7 @@ export function setupRpcEndpoint(deps: {
   sessionImages: SessionImageStore;
   sessionPastes: SessionPasteStore;
   sessionAuthors?: SessionAuthorStore;
+  sharedServer?: boolean;
 }): RpcEndpoint {
   const {
     sessions,
@@ -1025,6 +1036,7 @@ export function setupRpcEndpoint(deps: {
       sessionImages,
       sessionPastes,
       sessionAuthors: deps.sessionAuthors,
+      sharedServer: deps.sharedServer,
       user: upgradeRequest ? requestUser(upgradeRequest) : undefined,
       send: (frame) => sendTo(socket, frame),
       // Terminal push backpressure reads the real socket send-buffer depth.
