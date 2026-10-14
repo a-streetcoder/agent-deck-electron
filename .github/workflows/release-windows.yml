@@ -21,6 +21,9 @@ jobs:
   build:
     name: Sign and publish (x64)
     runs-on: windows-latest
+    # The OIDC subject is repo:<owner>/<repo>:environment:release for every ref,
+    # so one federated credential covers all v* tags and manual dispatches.
+    environment: release
     env:
       # .npmrc reads GITHUB_TOKEN to fetch the private @a-streetcoder skill engine.
       GITHUB_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}

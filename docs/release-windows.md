@@ -97,9 +97,15 @@ Publish the draft by hand after checking it.
 
 It expects:
 
-- Repository **variables** `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`: a
-  service principal with a federated credential for this repository and the "Artifact Signing
-  Certificate Profile Signer" role on `codemeter-signing`.
+- Repository **variables** `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (set
+  2026-10-14): the Entra app registration `agent-deck-release-signing` (single tenant, no
+  secret) with a federated credential for this repository, issuer
+  `https://token.actions.githubusercontent.com`, subject
+  `repo:a-streetcoder/agent-deck-electron:environment:release`, audience
+  `api://AzureADTokenExchange`, and the "Artifact Signing Certificate Profile Signer" role on
+  `codemeter-signing`. The job runs in the GitHub environment `release` so that one subject
+  covers every `v*` tag and manual dispatch (a tag-type credential would need one entry per
+  tag); GitHub creates the environment on the first run.
 - The built-in `GITHUB_TOKEN` (the workflow asks for `contents: write` and `id-token: write`);
   optional secret `PACKAGES_READ_TOKEN` as in the other workflows, for the private package.
 
