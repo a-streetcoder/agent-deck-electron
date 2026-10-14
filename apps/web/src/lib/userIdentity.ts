@@ -21,3 +21,16 @@ export function userInitials(user: UserIdentityLike): string {
     words.length >= 2 ? `${words[0]![0]}${words[1]![0]}` : (words[0] ?? "?").slice(0, 2);
   return letters.toUpperCase();
 }
+
+/**
+ * SRV-14: a session always runs on its owner's Pi credentials, whoever prompts
+ * it. Returns "runs on <owner> credentials" when the viewer is not the owner;
+ * null on loopback (no `me`), legacy sessions (no createdBy) or own sessions.
+ */
+export function credentialsOwnerLabel(
+  me: UserIdentityLike | null | undefined,
+  createdBy: UserIdentityLike | null | undefined,
+): string | null {
+  if (!me || !createdBy || me.id === createdBy.id) return null;
+  return `runs on ${userDisplayName(createdBy)} credentials`;
+}

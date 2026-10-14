@@ -24,6 +24,9 @@ it("SRV-13: warns a user with no provider and opens Providers", () => {
   expect(screen.getByTestId("provider-missing-banner").textContent).toContain(
     "You have not connected a model provider yet.",
   );
+  expect(screen.getByTestId("provider-missing-banner").textContent).toContain(
+    "start a session, or work in a session shared with you.",
+  );
   fireEvent.click(screen.getByRole("button", { name: "Open Providers" }));
   expect(useAppStore.getState().view).toBe("providers");
 });

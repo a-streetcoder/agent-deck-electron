@@ -14,7 +14,7 @@ export function ProviderMissingBanner() {
     >
       <span>
         You have not connected a model provider yet. Connect one under Settings &gt; Providers to
-        start a session.
+        start a session, or work in a session shared with you.
       </span>
       <Button size="sm" variant="secondary" onClick={() => setView("providers")}>
         Open Providers
