@@ -23,6 +23,7 @@ Server (`apps/server`):
 | `AGENT_DECK_PROJECT_ROOT`           | `/home/deck`                                   | Root that `GET /fs/dirs` may browse (default: the server user's home).                                                                                                                          |
 | `AGENT_DECK_CF_ACCESS_JWKS_URL`     | _(unset)_                                      | Override of the JWKS URL. Tests and staging only.                                                                                                                                               |
 | `AGENT_DECK_DESKTOP_RECOVERY_TOKEN` | _(any secret)_                                 | Pre-existing. Set the same value on the VM and in the desktop launcher so the shell's "reveal" calls are accepted.                                                                              |
+| `AGENT_DECK_OPERATOR_EMAIL`         | `operator@example.com`                         | The Access email whose sessions keep using the shared `~/.pi/agent` (see [Credentials](#credentials)). Unset: every user, the operator included, gets an own agent dir.                         |
 
 Desktop (`apps/desktop/main.js`):
 
@@ -355,6 +356,55 @@ Electron.
   request without an Origin (cloudflared, curl, the desktop main process) passes and is then
   authenticated by the Access assertion. Untrusted origins get 403 `untrusted_origin`.
 
+## Credentials
+
+Each signed-in user has their own Pi provider sign-ins (OAuth subscriptions and API keys),
+stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade-n41e):
+
+- **Layout.** `<dataDir>/users/<first 16 hex of sha256(lowercased email)>/agent`, mode 0700,
+  with a private `auth.json` (0600, created as `{}`). The path carries no identity; find a
+  user's with `printf '%s' user@example.com | sha256sum | cut -c1-16`. Every other
+  Pi file the user needs is a symlink to the shared `~/.pi/agent`, from a fixed list (revisit it
+  on every Pi upgrade, PI-01): `settings.json`, `models.json`, `models-store.json`,
+  `trust.json`, `mcp.json`, `keybindings.json`, `claude-bridge.json`, and the directories `bin`,
+  `npm`, `git`, `sessions`, `extensions`, `skills`, `prompts`, `themes`, `agents`,
+  `agent-library`, `loops`. Missing shared directories are created; a missing shared file stays
+  a dangling link that Pi's own write creates. `oauth.json` is never linked, and `auth.json` is
+  written before any link, because Pi copies `oauth.json` and `settings.json` API keys into a
+  missing `auth.json`. Not linked: `.env` (Agent Deck layers the shared one at spawn anyway),
+  `AGENTS.md`, `SYSTEM.md`, `APPEND_SYSTEM.md`.
+- **Sessions.** A session whose owner (`createdBy`) is set spawns Pi with
+  `PI_CODING_AGENT_DIR=<owner dir>`; resumes, forks, branches, Loop parents (owned by whoever
+  started the Loop), subagents and helpers keep it. Prompting someone else's session spends the
+  session OWNER's subscription.
+- **Providers screen.** `GET /runtime/providers`, sign-in and sign-out act on the requesting
+  user's dir. A sign-in in progress belongs to whoever started it: polling, answering or
+  cancelling it as anyone else answers 404. Responses carry status only, never a credential
+  value. One-shot helpers (commit message, release notes, skill summary) run on the
+  requester's own dir.
+- **Draft model discovery is scoped to the draft OWNER**, not to whoever is looking: a draft
+  lists, and accepts, the models its owner's credentials unlock, because those are the
+  credentials the session will spawn with.
+- **Operator.** `AGENT_DECK_OPERATOR_EMAIL` maps the operator to the shared `~/.pi/agent`, so the
+  existing sign-ins stay where they are with no file move. Sessions without an owner (created
+  before identities existed, or on a loopback server), Doctor (it reads
+  `~/.pi/agent/auth.json`) and the Pi CLI over ssh also use the shared dir, so they run on the
+  operator's credentials: accepted. Keep provider keys out of the shared `~/.pi/agent/.env` and
+  the systemd unit, because Pi falls back to environment keys for a user with no stored
+  credential (`PUT /runtime/env` already refuses them on a shared server).
+- **Not isolation.** All Pi processes run as one Unix user, so any user's agent can read another
+  user's `auth.json` (OAuth refresh tokens included) or `/proc/<pid>/environ`. This separates
+  storage and billing between co-workers who trust each other (ADR 0003), nothing more. The
+  file RPC (`file_read`/`file_write`, on a session or draft with any cwd) and the in-app terminal
+  run as the same Unix user too, so either can read or replace any user's `auth.json`. The real
+  fix is a Unix account or container per person (a future ticket), not more checks here.
+  Agent Deck does refuse a user dir whose `users`, `<hash>` or `agent` component, or whose
+  `auth.json`, is a symlink or not a regular entry, so a planted alias cannot redirect a
+  sign-in or a spawn.
+- **Limits.** The linked files are shared: one user's settings, model or MCP change applies to
+  everyone. Pi locks `settings.json` and `trust.json` beside the link (`realpath: false`), so two
+  users writing them at the same time are not locked against each other.
+
 ## Security model
 
 - **Trust is loopback-only.** The server believes `cf-access-jwt-assertion` only when the TCP
@@ -390,12 +440,11 @@ Electron.
   reply `ok:false`, and `POST /runtime/doctor/fix` and `POST /runtime/doctor/update-pi`
   answer 409. The web UI hides "Continue in external terminal" and shows the "Open in editor"
   controls disabled. Use the in-app terminal instead.
-- Provider credentials are shared on a shared server (ade-4lga, interim until per-user
-  sign-in in ade-n41e): there is one Pi `auth.json` and one global `.env`, so any user's
-  sign-in, sign-out or provider key would apply to everyone. `POST /runtime/providers/:id/login`
-  and `/logout` answer 409, and `PUT` and `DELETE /runtime/env` (both scopes) answer 409 for a provider
-  credential env name (the pi-ai list, e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`).
-  `EXA_API_KEY` stays writable because web search is shared by design. The Providers screen
-  shows Connect and Sign out disabled with a notice. Ambient credential names outside the
-  pi-ai list also stay writable by design: `AWS_*` for Bedrock and
-  `GOOGLE_APPLICATION_CREDENTIALS` for Vertex.
+- Provider sign-ins are per user (ade-n41e, see [Credentials](#credentials)), but the global
+  `.env` is still one file for everyone (ade-4lga): `PUT` and `DELETE /runtime/env` (both scopes)
+  answer 409 for a provider credential env name (the pi-ai list, e.g. `ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`); add keys under Providers instead. `EXA_API_KEY` stays writable because web
+  search is shared by design. Ambient credential names outside the pi-ai list also stay
+  writable by design: `AWS_*` for Bedrock and `GOOGLE_APPLICATION_CREDENTIALS` for Vertex.
+- Per-user credentials are storage, not isolation: every user's agent can read every
+  `auth.json`. Sessions without an owner, Doctor and the Pi CLI use the operator's.

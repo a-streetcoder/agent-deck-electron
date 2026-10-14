@@ -24,6 +24,7 @@ import { ReceiptBus, type ReceiptName } from "../src/receipts.ts";
 import type { ServerRuntime } from "../src/runtime.ts";
 import { SubagentRunStore } from "../src/subagentRunStore.ts";
 import { GIT_IDENTITIES_FILE, GitIdentityMap } from "../src/gitIdentity.ts";
+import type { UserAgentDirs } from "../src/userAgentDirs.ts";
 import {
   PiHost,
   PiHostLive,
@@ -2793,6 +2794,69 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
     } finally {
       await runtime.dispose();
       rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("spawns Pi with the owner's own agent dir, and the shared one without an owner", async () => {
+    const { runtime, spawned } = makeFakeRuntime();
+    // userAgentDirs is the 25th positional constructor argument. A stub keeps this
+    // a wiring test (the dir logic is userAgentDirs.test.ts, which needs symlinks).
+    const args: unknown[] = [runtime, new ReceiptBus(false)];
+    const resolved: string[] = [];
+    const dir = mkdtempSync(path.join(tmpdir(), "deck-sm-agent-dir-"));
+    args[24] = {
+      resolve: (user: { id: string }) => (resolved.push(user.id), `/data/users/${user.id}/agent`),
+    } as unknown as UserAgentDirs;
+    const manager = new SessionManager(...(args as ConstructorParameters<typeof SessionManager>));
+    const meta = (createdBy?: SessionMeta["createdBy"]): SessionMeta => ({
+      id: randomUUID(),
+      cwd: process.cwd(),
+      createdAt: new Date().toISOString(),
+      ...(createdBy ? { createdBy } : {}),
+    });
+    try {
+      await manager.resume(meta({ id: "o@example.com" }), { kind: "parent" }).catch(() => {});
+      await manager.resume(meta(), { kind: "parent" }).catch(() => {});
+      expect(spawned[0]!.spawn.env).toMatchObject({
+        PI_CODING_AGENT_DIR: "/data/users/o@example.com/agent",
+      });
+      expect(Object.keys(spawned[1]!.spawn.env ?? {})).not.toContain("PI_CODING_AGENT_DIR");
+      expect(resolved).toEqual(["o@example.com"]);
+      // A fork keeps the source owner, so it spawns on the same credentials.
+      const source = path.join(dir, "source.jsonl");
+      writeFileSync(source, "");
+      await manager
+        .fork(meta({ id: "o@example.com" }), source, path.join(dir, "fork.jsonl"))
+        .catch(() => {});
+      expect(spawned[2]!.meta.createdBy).toEqual({ id: "o@example.com" });
+      expect(spawned[2]!.spawn.env).toMatchObject({
+        PI_CODING_AGENT_DIR: "/data/users/o@example.com/agent",
+      });
+    } finally {
+      await runtime.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("runs a one-shot helper on the requester's own agent dir (review3 R3)", async () => {
+    const envs: Array<Record<string, string | undefined> | undefined> = [];
+    const piHost: PiHostShape = {
+      spawn: (options) => (envs.push(options.env), Effect.die(new Error("stop at spawn"))),
+    };
+    const runtime = ManagedRuntime.make(Layer.succeed(PiHost, piHost)) as unknown as ServerRuntime;
+    const args: unknown[] = [runtime, new ReceiptBus(false)];
+    args[24] = {
+      resolve: (user: { id: string }) => `/data/users/${user.id}/agent`,
+    } as unknown as UserAgentDirs;
+    const manager = new SessionManager(...(args as ConstructorParameters<typeof SessionManager>));
+    const opts = { systemPrompt: "s", userPrompt: "u", cwd: process.cwd(), env: { A: "1" } };
+    try {
+      await manager.runHelper(opts, { id: "b@example.com" }).catch(() => {});
+      await manager.runHelper(opts).catch(() => {});
+      expect(envs[0]).toEqual({ A: "1", PI_CODING_AGENT_DIR: "/data/users/b@example.com/agent" });
+      expect(envs[1]).toEqual({ A: "1" });
+    } finally {
+      await runtime.dispose();
     }
   });
 

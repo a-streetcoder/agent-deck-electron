@@ -6,6 +6,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -18,6 +19,7 @@ import WebSocket from "ws";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 import { SessionAuthorIndex, SessionIndex } from "../src/persistence.ts";
 import { SessionAuthorStore } from "../src/sessionAuthors.ts";
+import { userAgentDir } from "../src/userAgentDirs.ts";
 
 const TEAM = "team.cloudflareaccess.test";
 const AUD = "aud-remote";
@@ -46,6 +48,7 @@ let server: AgentDeckServer;
 const endpoint = (pathname: string) => `http://127.0.0.1:${server.port}${pathname}`;
 const ale = { "cf-access-jwt-assertion": assertionFor("ale@example.com", "Ale") };
 const AUTHORED_SESSION = randomUUID();
+const loginAuthPaths: string[] = [];
 const authorRowIds = (): string[] =>
   new SessionAuthorIndex(dataDir).list().map((record) => record.id);
 
@@ -81,7 +84,10 @@ beforeAll(async () => {
       { id: "deleted-while-offline", turns: [turn] },
     ]),
   );
-  server = await startServer({ dataDir });
+  server = await startServer({
+    dataDir,
+    providerLoginFn: async (authPath) => void loginAuthPaths.push(authPath),
+  });
 });
 afterAll(async () => {
   await server.close();
@@ -155,14 +161,8 @@ describe("SRV-09 host launchers on a shared server", () => {
   });
 });
 
-describe("SRV-10 shared provider credentials on a shared server", () => {
+describe("SRV-10 shared provider keys on a shared server", () => {
   const agentDir = () => path.join(fakeHome, ".pi", "agent");
-  const post = (route: string, body: unknown) =>
-    fetch(endpoint(route), {
-      method: "POST",
-      headers: { ...ale, "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
   const putEnv = (key: string) =>
     fetch(endpoint("/runtime/env"), {
       method: "PUT",
@@ -175,25 +175,6 @@ describe("SRV-10 shared provider credentials on a shared server", () => {
       headers: { ...ale, "content-type": "application/json" },
       body: JSON.stringify({ scope: "global", key }),
     });
-
-  it("refuses provider login and logout with 409 and leaves auth.json alone", async () => {
-    mkdirSync(agentDir(), { recursive: true });
-    const authFile = path.join(agentDir(), "auth.json");
-    const auth = JSON.stringify({ anthropic: { type: "api_key", key: "operator" } });
-    writeFileSync(authFile, auth);
-    for (const [route, body] of [
-      ["/runtime/providers/anthropic/login", { authType: "api_key" }],
-      ["/runtime/providers/anthropic/logout", {}],
-    ] as const) {
-      const refused = await post(route, body);
-      expect(refused.status).toBe(409);
-      expect(await refused.json()).toEqual({
-        error:
-          "Not available on a shared server: provider sign-ins are shared by everyone here; per-user sign-in is coming",
-      });
-    }
-    expect(readFileSync(authFile, "utf8")).toBe(auth);
-  });
 
   it("refuses a provider key in the env but still writes EXA_API_KEY", async () => {
     const envFile = path.join(agentDir(), ".env");
@@ -225,6 +206,82 @@ describe("SRV-10 shared provider credentials on a shared server", () => {
     expect(readFileSync(envFile, "utf8")).toBe(seeded);
     expect((await deleteEnv("EXA_API_KEY")).status).toBe(200);
     expect(readFileSync(envFile, "utf8")).not.toContain("EXA_API_KEY");
+  });
+});
+
+// Windows without Developer Mode refuses symlinks, which user agent dirs need;
+// the shared server is Linux, where this always runs.
+const canSymlink = (() => {
+  const probe = mkdtempSync(path.join(tmpdir(), "deck-symlink-probe-"));
+  try {
+    symlinkSync(probe, path.join(probe, "link"), "dir");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
+if (!canSymlink)
+  console.warn("remoteServerIdentity.test: symlinks need privileges; SRV-11 skipped");
+
+describe.skipIf(!canSymlink)("SRV-11 per-user provider credentials on a shared server", () => {
+  const andrea = { "cf-access-jwt-assertion": assertionFor("andrea@example.com") };
+  const sharedAuth = () => path.join(fakeHome, ".pi", "agent", "auth.json");
+  const userAuth = (email: string) =>
+    path.join(userAgentDir(realpathSync(dataDir), email), "auth.json");
+  const providers = async (headers: Record<string, string>) =>
+    (
+      (await (await fetch(endpoint("/runtime/providers"), { headers })).json()) as {
+        providers: Array<{ id: string; signedIn: boolean; supportsAPIKey: boolean }>;
+      }
+    ).providers;
+  const post = (route: string, headers: Record<string, string>, body: unknown) =>
+    fetch(endpoint(route), {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  it("lists, signs in and signs out against each user's own auth.json", async () => {
+    mkdirSync(path.dirname(sharedAuth()), { recursive: true });
+    const operator = JSON.stringify({ anthropic: { type: "api_key", key: "operator" } });
+    writeFileSync(sharedAuth(), operator);
+    // First contact creates each user's dir with an empty auth.json: no
+    // fallback to the operator's sign-in.
+    expect((await providers(ale)).find((p) => p.id === "anthropic")?.signedIn).toBe(false);
+    expect(readFileSync(userAuth("ale@example.com"), "utf8")).toBe("{}");
+    const own = JSON.stringify({ anthropic: { type: "api_key", key: "ale-own" } });
+    writeFileSync(userAuth("ale@example.com"), own);
+    expect((await providers(ale)).find((p) => p.id === "anthropic")?.signedIn).toBe(true);
+    expect((await providers(andrea)).find((p) => p.id === "anthropic")?.signedIn).toBe(false);
+    writeFileSync(userAuth("andrea@example.com"), own);
+
+    const provider = (await providers(ale)).find((p) => p.supportsAPIKey)!;
+    for (const headers of [ale, andrea]) {
+      const route = `/runtime/providers/${provider.id}/login`;
+      expect((await post(route, headers, { authType: "api_key" })).status).toBe(201);
+    }
+    expect(loginAuthPaths).toEqual([userAuth("ale@example.com"), userAuth("andrea@example.com")]);
+
+    expect((await post("/runtime/providers/anthropic/logout", ale, {})).status).toBe(200);
+    expect(JSON.parse(readFileSync(userAuth("ale@example.com"), "utf8"))).toEqual({});
+    expect(readFileSync(userAuth("andrea@example.com"), "utf8")).toBe(own);
+    expect(readFileSync(sharedAuth(), "utf8")).toBe(operator);
+  });
+
+  it("lets only the identity that started a login follow it (review3 R4)", async () => {
+    const provider = (await providers(ale)).find((p) => p.supportsAPIKey)!;
+    const started = await post(`/runtime/providers/${provider.id}/login`, ale, {
+      authType: "api_key",
+    });
+    const { loginId } = (await started.json()) as { loginId: string };
+    const route = `/runtime/providers/login/${loginId}`;
+    expect((await fetch(endpoint(route), { headers: andrea })).status).toBe(404);
+    expect((await post(`${route}/respond`, andrea, { value: "x" })).status).toBe(404);
+    expect((await post(`${route}/cancel`, andrea, {})).status).toBe(404);
+    expect((await fetch(endpoint(route), { headers: ale })).status).toBe(200);
+    expect((await post(`${route}/cancel`, ale, {})).status).toBe(200);
   });
 });
 

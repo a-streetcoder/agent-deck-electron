@@ -29,6 +29,7 @@ import type { SubagentRunStore } from "./subagentRunStore.ts";
 import type { ServerRuntime } from "./runtime.ts";
 import { SessionMutationClaims } from "./sessionMutationClaims.ts";
 import { gitIdentityEnv, type GitIdentityMap } from "./gitIdentity.ts";
+import { userAgentDirEnv, type UserAgentDirs } from "./userAgentDirs.ts";
 import { normalizeSessionError } from "./sessionFailure.ts";
 import type { LaunchResourceConfigV1, ResolvedLaunchResources } from "./launchResources.ts";
 import type { PiSpawnOptions } from "./services/piHost.ts";
@@ -719,6 +720,8 @@ export class SessionManager {
     private readonly subagentsEnabled: () => boolean = () => true,
     /** Remote-server POC: owner git identity for the Pi env (gitIdentity.ts). */
     private readonly gitIdentities?: GitIdentityMap,
+    /** SRV-11: the session owner's own Pi agent dir (userAgentDirs.ts). */
+    private readonly userAgentDirs?: UserAgentDirs,
   ) {}
 
   /** Reconfigure all live deadlines. Existing parked placeholders remain cold. */
@@ -1226,6 +1229,9 @@ export class SessionManager {
           // prompt authors cannot change it, and re-derived from meta on every
           // resume. Attribution, not authorization: Pi can still override it.
           ...gitIdentityEnv(meta.createdBy, this.gitIdentities),
+          // SRV-11: the OWNER's credentials (own agent dir), re-derived on every
+          // resume. Storage separation, not isolation (userAgentDirs.ts).
+          ...userAgentDirEnv(meta.createdBy, this.userAgentDirs),
         },
         tempDirs,
         publishMeta,
@@ -1742,9 +1748,12 @@ export class SessionManager {
    * Run a one-shot pi helper (native commit-message / title generation): an
    * isolated `--no-session --no-tools` launch that answers a single prompt and
    * exits. Returns the final assistant text; throws on timeout / early exit.
+   * SRV-11: `requester` is whoever asked; the helper runs on their own agent
+   * dir (credentials), never on the operator's for another user.
    */
-  async runHelper(opts: RunHelperOptions): Promise<string> {
-    return await runPromiseUnwrapped(this.runtime, runOneShotHelper(opts));
+  async runHelper(opts: RunHelperOptions, requester?: UserIdentity): Promise<string> {
+    const env = { ...opts.env, ...userAgentDirEnv(requester, this.userAgentDirs) };
+    return await runPromiseUnwrapped(this.runtime, runOneShotHelper({ ...opts, env }));
   }
 
   list(): SessionMeta[] {
@@ -1802,6 +1811,8 @@ export class SessionManager {
       // A simple full-file duplicate retains identical canonical ancestry, so
       // its latest-turn prompt evidence remains valid (unlike history rewrites).
       finalSystemPromptAudit: source.finalSystemPromptAudit,
+      // SRV-11: a fork keeps the source owner, and so its credentials.
+      ...(source.createdBy ? { createdBy: source.createdBy } : {}),
       ...(source.worktreeOwnerSessionId
         ? { worktreeOwnerSessionId: source.worktreeOwnerSessionId }
         : source.worktreePath

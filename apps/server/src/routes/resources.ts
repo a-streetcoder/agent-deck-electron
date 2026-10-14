@@ -48,6 +48,7 @@ import { z } from "zod";
 import { curateProjectAgents } from "../agentCuration.ts";
 import { AgentAvatarStoreError } from "../agentAvatars.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
+import { requestUser } from "../trustedProxy.ts";
 import { InjectedCommandError } from "../injectedCommands.ts";
 import { RESOURCE_NAME } from "./shared.ts";
 
@@ -478,22 +479,25 @@ export function registerResourceRoutes(ctx: ServerContext): void {
     }
     const defaults = envDefaults();
     const attempt = (async () => {
-      const raw = await sessions.runHelper({
-        systemPrompt: SKILL_SUMMARY_SYSTEM_PROMPT,
-        userPrompt: `Summarise this SKILL.md so a developer can decide whether the skill is worth importing.
+      const raw = await sessions.runHelper(
+        {
+          systemPrompt: SKILL_SUMMARY_SYSTEM_PROMPT,
+          userPrompt: `Summarise this SKILL.md so a developer can decide whether the skill is worth importing.
 
 SKILL.md:
 ---
 ${content}
 ---`,
-        cwd: resourceHome(),
-        provider: defaults.provider,
-        model: defaults.model,
-        extensions: defaults.providerExtensions,
-        // PRJ-07: the .env files ride under the defaults like every pi spawn
-        env: { ...runtimeEnvFiles(rootsFor(projectId)), ...defaults.env },
-        timeoutMs: 30_000,
-      });
+          cwd: resourceHome(),
+          provider: defaults.provider,
+          model: defaults.model,
+          extensions: defaults.providerExtensions,
+          // PRJ-07: the .env files ride under the defaults like every pi spawn
+          env: { ...runtimeEnvFiles(rootsFor(projectId)), ...defaults.env },
+          timeoutMs: 30_000,
+        },
+        requestUser(request.raw),
+      );
       const summary = sanitizeSummary(raw);
       if (!summary) throw new Error("The model returned an unusable summary.");
       return summary;

@@ -12,6 +12,7 @@ import { extensionBridgeConflict } from "@agent-deck/domain";
 import {
   addResourceWatchPaths,
   appendSystemPromptPath,
+  piAgentHome,
   projectWatchDirs,
   readMcpServerCatalog,
   resolveCodexPluginSkillRefs,
@@ -24,6 +25,7 @@ import {
   watchResources,
   ProviderLoginManager,
   SessionWorktreeStore,
+  type ProviderLoginFn,
   type ResourceRoots,
 } from "@agent-deck/resources";
 import { hasEffectiveEnvValue, writeBridgeExtension } from "@agent-deck/pi-host";
@@ -104,6 +106,7 @@ import { forkSessionAttachmentStores } from "./sessionAttachmentLifecycle.ts";
 import { SessionPasteStore } from "./sessionPastes.ts";
 import { SessionAuthorStore } from "./sessionAuthors.ts";
 import { GitIdentityMap } from "./gitIdentity.ts";
+import { UserAgentDirs } from "./userAgentDirs.ts";
 import {
   authenticateProxiedRequest,
   CloudflareAccessVerifier,
@@ -209,6 +212,8 @@ export interface StartServerOptions {
   composerDraftStore?: ComposerDraftStore;
   /** Device-local OAuth persistence seam for credential lifecycle tests. */
   mcpOAuthStore?: McpOAuthStore;
+  /** Provider sign-in seam: tests assert which auth.json a login targets. */
+  providerLoginFn?: ProviderLoginFn;
 }
 
 export async function startServer(options: StartServerOptions = {}): Promise<AgentDeckServer> {
@@ -262,6 +267,15 @@ async function initServer(
     : undefined;
   sessionAuthors?.retainSessions(new Set(index.list().map((session) => session.id)));
   const gitIdentities = trustedProxy ? new GitIdentityMap(dataDir) : undefined;
+  // SRV-11: each signed-in user's own Pi agent dir (credentials); the operator keeps ~/.pi/agent.
+  // `rootsFor` is declared below; the lambda only runs after startup.
+  const userAgentDirs = trustedProxy
+    ? new UserAgentDirs(
+        dataDir,
+        () => piAgentHome(rootsFor()),
+        process.env.AGENT_DECK_OPERATOR_EMAIL?.trim() || undefined,
+      )
+    : undefined;
   // App-managed tool bridge (memory/mcp/subagents register here). The endpoint
   // is only known after listen(), so the factory reads it lazily and returns no
   // extension until both a tool is registered and the address is bound.
@@ -690,6 +704,7 @@ async function initServer(
     planEvents,
     () => settings.get().subagentsEnabled,
     gitIdentities,
+    userAgentDirs,
   );
   // Loop run engine (native single-agent loop). Each run's agent executor is
   // built per-run, bound to a parent session in the project cwd.
@@ -698,7 +713,7 @@ async function initServer(
     warn: (message, error) => fastify.log.warn({ err: error }, message),
   });
   // Interactive provider OAuth login relay (native PiProviderLoginService).
-  const providerLogin = new ProviderLoginManager();
+  const providerLogin = new ProviderLoginManager(options.providerLoginFn);
   const projects = new ProjectIndex(dataDir);
   const mcpAssignments =
     options.mcpAssignmentStore ?? new FileMcpAssignmentStore(settings, projects);
@@ -1385,6 +1400,7 @@ async function initServer(
     sessionPastes,
     sessionAuthors,
     gitIdentities,
+    userAgentDirs,
     sharedServer: trustedProxy !== null,
     index,
     projects,

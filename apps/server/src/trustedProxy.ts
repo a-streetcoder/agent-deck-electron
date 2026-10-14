@@ -35,9 +35,6 @@ export interface TrustedProxyConfig {
 export const SHARED_SERVER_REFUSAL = {
   terminal: "Not available on a shared server: use the in-app terminal",
   editor: "Not available on a shared server: open the file from your own machine",
-  /** SRV-10 interim: one Pi auth.json serves everyone; SRV-11 drops this with per-user sign-in. */
-  providerSignIn:
-    "Not available on a shared server: provider sign-ins are shared by everyone here; per-user sign-in is coming",
   /** SRV-10: a provider key in a shared .env would bill every user to its owner. */
   providerKey:
     "Not available on a shared server: provider keys are personal, add them under Providers",

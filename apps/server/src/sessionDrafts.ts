@@ -1,4 +1,9 @@
-import type { SessionMeta, ServerMessage, ThinkingLevel } from "@agent-deck/contracts";
+import type {
+  SessionMeta,
+  ServerMessage,
+  ThinkingLevel,
+  UserIdentity,
+} from "@agent-deck/contracts";
 import type { LaunchPlan } from "@agent-deck/pi-host";
 import type { SessionIndex } from "./persistence.ts";
 import type { ManagedSession, SessionManager } from "./SessionManager.ts";
@@ -17,7 +22,8 @@ export function createSessionDraftGateway(deps: {
   sessions: SessionManager;
   broadcast(message: ServerMessage): void;
   launch(draft: SessionMeta): Promise<ManagedSession>;
-  validateModel?(provider: string, modelId: string): Promise<void>;
+  /** `owner` is the draft's createdBy (SRV-11: models its own credentials unlock). */
+  validateModel?(provider: string, modelId: string, owner?: UserIdentity): Promise<void>;
 }): SessionDraftGateway {
   const pending = new Map<string, Promise<ManagedSession>>();
   const find = (id: string) => deps.index.find((row) => row.id === id && row.lifecycle === "draft");
@@ -61,7 +67,7 @@ export function createSessionDraftGateway(deps: {
       return operation;
     },
     async setModel(id, provider, modelId) {
-      await deps.validateModel?.(provider, modelId);
+      await deps.validateModel?.(provider, modelId, find(id)?.createdBy);
       update(id, (draft) => ({
         ...draft,
         launchPlan: { ...(draft.launchPlan as LaunchPlan), provider, model: modelId },

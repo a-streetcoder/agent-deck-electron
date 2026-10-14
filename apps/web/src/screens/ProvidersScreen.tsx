@@ -27,9 +27,6 @@ interface ProviderEntry {
 
 type AuthType = "api_key" | "oauth";
 
-/** SRV-10: one Pi auth.json serves every user of a shared server (per-user sign-in is SRV-11). */
-const SHARED_SERVER_TITLE = "Not available on a shared server";
-
 export function ProvidersScreen({
   onProviderConnected,
 }: { onProviderConnected?: () => void } = {}) {
@@ -129,8 +126,7 @@ export function ProvidersScreen({
             data-testid="providers-shared-notice"
             className="mb-3 px-2 text-caption text-text-muted"
           >
-            Provider sign-ins on this shared server are used by everyone, so connecting and signing
-            out are turned off here until per-user sign-in arrives.
+            These sign-ins are yours only and apply to the sessions you create on this server.
           </p>
         ) : null}
         {!loaded ? (
@@ -142,7 +138,6 @@ export function ProvidersScreen({
           onSelect={selectProvider}
           onSignOut={(provider) => void signOutProvider(provider)}
           disconnectingId={disconnectingId}
-          sharedServer={sharedServer}
         />
         <ProviderGroup
           title="API key"
@@ -150,7 +145,6 @@ export function ProvidersScreen({
           onSelect={selectProvider}
           onSignOut={(provider) => void signOutProvider(provider)}
           disconnectingId={disconnectingId}
-          sharedServer={sharedServer}
         />
         {loaded && visible.length === 0 ? <AppEmptyState heading="No matching providers." /> : null}
       </div>
@@ -226,14 +220,12 @@ function ProviderGroup({
   onSelect,
   onSignOut,
   disconnectingId,
-  sharedServer,
 }: {
   title: string;
   providers: ProviderEntry[];
   onSelect: (provider: ProviderEntry) => void;
   onSignOut: (provider: ProviderEntry) => void;
   disconnectingId: string | null;
-  sharedServer: boolean;
 }) {
   if (providers.length === 0) return null;
   return (
@@ -249,8 +241,7 @@ function ProviderGroup({
               data-provider-id={provider.id}
               data-configured={provider.configured ? "true" : "false"}
               className="flex min-w-0 flex-1 items-center gap-3 rounded-xl text-left"
-              disabled={sharedServer || disconnectingId !== null}
-              title={sharedServer ? SHARED_SERVER_TITLE : undefined}
+              disabled={disconnectingId !== null}
               onClick={() => onSelect(provider)}
             >
               <ProviderLogo providerId={provider.id} size={20} className="shrink-0" />
@@ -271,12 +262,8 @@ function ProviderGroup({
                 variant="destructiveOutline"
                 leadingIcon={<LogOut size={12} aria-hidden />}
                 aria-label={`Sign out of ${provider.name}`}
-                title={
-                  sharedServer
-                    ? SHARED_SERVER_TITLE
-                    : `Sign out of ${provider.name} and remove its stored credentials`
-                }
-                disabled={sharedServer || disconnectingId !== null}
+                title={`Sign out of ${provider.name} and remove its stored credentials`}
+                disabled={disconnectingId !== null}
                 onClick={() => onSignOut(provider)}
               >
                 {disconnectingId === provider.id ? "Signing out…" : "Sign out"}

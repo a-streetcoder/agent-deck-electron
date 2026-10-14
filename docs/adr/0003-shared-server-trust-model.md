@@ -46,6 +46,12 @@ runs that host:
    subscription across people may breach the provider's terms of service; we accept that risk for
    this two-person team, knowingly. It does not extend to any wider audience, where per-user
    provider credentials are a prerequisite.
+   _Amended 2026-10-14 (ade-n41e):_ each user now signs in to their own providers, stored in a
+   per-user Pi agent dir, and a session runs on its OWNER's credentials, so prompting someone
+   else's session spends the owner's subscription. The operator's sign-ins stay in the shared
+   dir and also serve sessions without an owner. This is storage and billing separation, not
+   isolation: under the one Unix user any agent can read every user's `auth.json`, OAuth
+   refresh tokens included.
 5. **A "Linux target" for distribution may mean this headless server deploy**, not a desktop
    package. Register rows DST-05 and DST-06 are re-scoped in the DST epic, not here.
 

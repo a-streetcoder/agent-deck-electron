@@ -8,6 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import type { IncomingMessage } from "node:http";
 import nodePath from "node:path";
 import {
   discoverModelCatalog,
@@ -46,7 +47,8 @@ import {
   type DiagnosticWarning,
 } from "../configurationWarnings.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
-import { SHARED_SERVER_REFUSAL, trustedProxyConfigFromEnv } from "../trustedProxy.ts";
+import { requestUser, SHARED_SERVER_REFUSAL, trustedProxyConfigFromEnv } from "../trustedProxy.ts";
+import { userRoots } from "../userAgentDirs.ts";
 import {
   createExternalCommandLauncher,
   findDoctorFixCommand,
@@ -338,20 +340,29 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
   // providers pi knows about, plus each one's sign-in status read from the
   // global ~/.pi/agent/auth.json. Interactive OAuth sign-in is a follow-up; this
   // covers the read side + logout (disconnect a stored credential).
-  fastify.get("/runtime/providers", async () => ({ providers: await listProviders(rootsFor()) }));
+  // SRV-11: on a shared server every provider route reads and writes the
+  // REQUESTING user's own agent dir (userAgentDirs.ts), never the operator's.
+  // Status only: no credential value is ever returned.
+  const providerRootsFor = (request: { raw: IncomingMessage }) =>
+    userRoots(
+      rootsFor(),
+      requestUser(request.raw),
+      ctx.sharedServer ? ctx.userAgentDirs : undefined,
+    );
+
+  fastify.get("/runtime/providers", async (request) => ({
+    providers: await listProviders(providerRootsFor(request)),
+  }));
 
   // Disconnect a stored provider credential (native logout). Only a known
   // provider id is accepted, so arbitrary keys can't be poked into auth.json.
   fastify.post("/runtime/providers/:id/logout", async (request, reply) => {
-    // SRV-10 interim (SRV-11 removes it): one shared auth.json serves every user.
-    if (ctx.sharedServer) {
-      return reply.status(409).send({ error: SHARED_SERVER_REFUSAL.providerSignIn });
-    }
     const { id } = request.params as { id: string };
-    const provider = (await listProviders(rootsFor())).find((entry) => entry.id === id);
+    const roots = providerRootsFor(request);
+    const provider = (await listProviders(roots)).find((entry) => entry.id === id);
     if (!provider) return reply.status(404).send({ error: `unknown provider: ${id}` });
     try {
-      await logoutProvider(rootsFor(), id);
+      await logoutProvider(roots, id);
     } catch (error) {
       return reply.status(500).send({ error: String(error) });
     }
@@ -363,26 +374,33 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
   // session that relays pi's AuthStorage.login callbacks (auth-url / device-code
   // / prompt / select / progress) to the client and threads responses back.
   fastify.post("/runtime/providers/:id/login", async (request, reply) => {
-    // SRV-10 interim (SRV-11 removes it): one shared auth.json serves every user.
-    if (ctx.sharedServer) {
-      return reply.status(409).send({ error: SHARED_SERVER_REFUSAL.providerSignIn });
-    }
     const { id } = request.params as { id: string };
     const parsed = z.object({ authType: z.enum(["api_key", "oauth"]) }).safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
-    const provider = (await listProviders(rootsFor())).find((entry) => entry.id === id);
+    const roots = providerRootsFor(request);
+    const provider = (await listProviders(roots)).find((entry) => entry.id === id);
     if (!provider) return reply.status(404).send({ error: `unknown provider: ${id}` });
     const supported =
       parsed.data.authType === "oauth" ? provider.supportsOAuth : provider.supportsAPIKey;
     if (!supported) return reply.status(400).send({ error: "authentication method unavailable" });
-    const loginId = providerLogin.start(rootsFor(), id, parsed.data.authType);
+    const loginId = providerLogin.start(
+      roots,
+      id,
+      parsed.data.authType,
+      requestUser(request.raw)?.id,
+    );
     return reply.status(201).send({ loginId });
   });
 
   fastify.get("/runtime/providers/login/:loginId", async (request, reply) => {
     const { loginId } = request.params as { loginId: string };
     const since = Number((request.query as { since?: string }).since ?? 0);
-    const result = providerLogin.poll(loginId, Number.isFinite(since) ? since : 0);
+    // SRV-11 review3 R4: only the identity that started a login can follow it.
+    const result = providerLogin.poll(
+      loginId,
+      Number.isFinite(since) ? since : 0,
+      requestUser(request.raw)?.id,
+    );
     if (!result) return reply.status(404).send({ error: "unknown login session" });
     // A finished login changes auth.json — nudge the Providers list to refresh.
     if (result.status === "done") broadcast({ type: "resources_changed" });
@@ -393,13 +411,21 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     const { loginId } = request.params as { loginId: string };
     const parsed = z.object({ value: z.string().optional() }).safeParse(request.body ?? {});
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
-    const ok = providerLogin.respond(loginId, parsed.data.value);
+    const requesterId = requestUser(request.raw)?.id;
+    if (!providerLogin.owns(loginId, requesterId)) {
+      return reply.status(404).send({ error: "unknown login session" });
+    }
+    const ok = providerLogin.respond(loginId, parsed.data.value, requesterId);
     return { ok };
   });
 
-  fastify.post("/runtime/providers/login/:loginId/cancel", async (request) => {
+  fastify.post("/runtime/providers/login/:loginId/cancel", async (request, reply) => {
     const { loginId } = request.params as { loginId: string };
-    providerLogin.cancel(loginId);
+    const requesterId = requestUser(request.raw)?.id;
+    if (!providerLogin.owns(loginId, requesterId)) {
+      return reply.status(404).send({ error: "unknown login session" });
+    }
+    providerLogin.cancel(loginId, requesterId);
     return { ok: true };
   });
 

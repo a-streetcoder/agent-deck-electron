@@ -14,6 +14,7 @@ import {
   nextReleaseVersions,
 } from "../git.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
+import { requestUser } from "../trustedProxy.ts";
 import { runtimeEnvFiles } from "@agent-deck/resources";
 
 // Commit-message generator prompt (native PiAgentShipService.commitMessageSystemPrompt).
@@ -123,15 +124,18 @@ export function registerGitRoutes(ctx: ServerContext): void {
     if (!status) return reply.status(400).send({ error: "There are no changes to describe." });
     const defaults = envDefaults();
     try {
-      const message = await sessions.runHelper({
-        systemPrompt: COMMIT_MESSAGE_SYSTEM_PROMPT,
-        userPrompt: `Generate a git commit message for these changes.\n\nGit status:\n${status}\n\nDiff:\n${diff}`,
-        cwd: project.path,
-        provider: defaults.provider,
-        model: defaults.model,
-        extensions: defaults.providerExtensions,
-        env: { ...runtimeEnvFiles(rootsFor(project.id)), ...defaults.env },
-      });
+      const message = await sessions.runHelper(
+        {
+          systemPrompt: COMMIT_MESSAGE_SYSTEM_PROMPT,
+          userPrompt: `Generate a git commit message for these changes.\n\nGit status:\n${status}\n\nDiff:\n${diff}`,
+          cwd: project.path,
+          provider: defaults.provider,
+          model: defaults.model,
+          extensions: defaults.providerExtensions,
+          env: { ...runtimeEnvFiles(rootsFor(project.id)), ...defaults.env },
+        },
+        requestUser(request.raw),
+      );
       const trimmed = message.trim();
       if (!trimmed)
         return reply.status(502).send({ error: "The model returned an empty message." });
@@ -187,15 +191,18 @@ export function registerGitRoutes(ctx: ServerContext): void {
     }
     const defaults = envDefaults();
     try {
-      const notes = await sessions.runHelper({
-        systemPrompt: RELEASE_NOTES_SYSTEM_PROMPT,
-        userPrompt: `These are the commit subjects added since the previous release — everything new in ${parsed.data.version}. Write the changelog from them:\n\n${subjects.map((s) => `- ${s}`).join("\n")}`,
-        cwd: project.path,
-        provider: defaults.provider,
-        model: defaults.model,
-        extensions: defaults.providerExtensions,
-        env: { ...runtimeEnvFiles(rootsFor(project.id)), ...defaults.env },
-      });
+      const notes = await sessions.runHelper(
+        {
+          systemPrompt: RELEASE_NOTES_SYSTEM_PROMPT,
+          userPrompt: `These are the commit subjects added since the previous release — everything new in ${parsed.data.version}. Write the changelog from them:\n\n${subjects.map((s) => `- ${s}`).join("\n")}`,
+          cwd: project.path,
+          provider: defaults.provider,
+          model: defaults.model,
+          extensions: defaults.providerExtensions,
+          env: { ...runtimeEnvFiles(rootsFor(project.id)), ...defaults.env },
+        },
+        requestUser(request.raw),
+      );
       const trimmed = notes.trim().replace(/^```[a-z]*\n?|\n?```$/g, "");
       return { notes: trimmed || "Performance and stability improvements." };
     } catch (error) {

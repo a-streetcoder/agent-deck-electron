@@ -23,6 +23,8 @@ export interface ResourceRoots {
   home: string;
   /** Current project root, when a project is selected. */
   projectPath?: string;
+  /** Pi agent dir override (shared server: the requesting user's own dir, SRV-11). */
+  agentDir?: string;
 }
 
 export function defaultRoots(projectPath?: string): ResourceRoots {
@@ -30,7 +32,7 @@ export function defaultRoots(projectPath?: string): ResourceRoots {
 }
 
 export function piAgentHome(roots: ResourceRoots): string {
-  return path.join(roots.home, ".pi", "agent");
+  return roots.agentDir ?? path.join(roots.home, ".pi", "agent");
 }
 
 /**

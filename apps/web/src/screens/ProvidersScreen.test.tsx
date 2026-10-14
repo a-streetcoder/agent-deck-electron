@@ -55,18 +55,18 @@ afterEach(() => {
   useAppStore.setState({ me: null });
 });
 
-describe("SRV-10 shared server", () => {
-  it("disables Connect and Sign out and shows the notice when signed in", async () => {
+describe("SRV-11 shared server", () => {
+  it("keeps Connect and Sign out enabled and says the sign-ins are per user", async () => {
     vi.mocked(fetch).mockResolvedValue(jsonResponse({ providers: [connected] }));
     useAppStore.setState({ me: { id: "ale@example.com", email: "ale@example.com" } });
     render(<ProvidersScreen />);
     const signOut = await screen.findByRole("button", { name: "Sign out of Provider A" });
-    expect(signOut).toHaveProperty("disabled", true);
-    expect(signOut.getAttribute("title")).toBe("Not available on a shared server");
+    expect(signOut).toHaveProperty("disabled", false);
     const connect = document.querySelector<HTMLButtonElement>('[data-provider-id="provider-a"]');
-    expect(connect?.disabled).toBe(true);
-    expect(connect?.getAttribute("title")).toBe("Not available on a shared server");
-    expect(screen.getByTestId("providers-shared-notice")).toBeTruthy();
+    expect(connect?.disabled).toBe(false);
+    expect(screen.getByTestId("providers-shared-notice").textContent).toBe(
+      "These sign-ins are yours only and apply to the sessions you create on this server.",
+    );
   });
 
   it("keeps the controls enabled without a signed-in user", async () => {

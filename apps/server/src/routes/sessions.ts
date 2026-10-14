@@ -16,6 +16,7 @@ import type { IncomingMessage } from "node:http";
 import { createSessionDraftGateway } from "../sessionDrafts.ts";
 import { requestUser } from "../trustedProxy.ts";
 import { coAuthorTrailers, gitIdentityEnv, withTrailers } from "../gitIdentity.ts";
+import { userRoots } from "../userAgentDirs.ts";
 import { listProjectFiles, piAgentHome } from "@agent-deck/resources";
 import { z } from "zod";
 import {
@@ -202,7 +203,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const draft = ctx.sessionDrafts?.find(id);
     if (draft) {
       const plan = draft.launchPlan as LaunchPlan;
-      const models = await draftModels();
+      const models = await draftModels(draft.createdBy);
       return {
         state: {
           model:
@@ -259,9 +260,15 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     }
   });
 
-  async function draftModels() {
+  // SRV-11: a draft lists the models its OWNER's credentials unlock (the owner's
+  // agent dir), since that is what the session will spawn with. models.json
+  // stays the shared operator config.
+  async function draftModels(owner: UserIdentity | undefined) {
     const runtime = await ModelRuntime.create({
-      authPath: nodePath.join(piAgentHome(ctx.rootsFor()), "auth.json"),
+      authPath: nodePath.join(
+        piAgentHome(userRoots(ctx.rootsFor(), owner, ctx.userAgentDirs)),
+        "auth.json",
+      ),
       modelsPath: nodePath.join(piAgentHome(ctx.rootsFor()), "models.json"),
       allowModelNetwork: false,
     });
@@ -284,7 +291,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   fastify.get("/sessions/:id/models", async (request, reply) => {
     const { id } = request.params as { id: string };
     const draft = ctx.sessionDrafts?.find(id);
-    if (draft) return { models: await draftModels() };
+    if (draft) return { models: await draftModels(draft.createdBy) };
     const session = sessions.get(id);
     if (!session) return reply.status(404).send({ error: "unknown session" });
     try {
@@ -1848,8 +1855,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     index,
     sessions,
     broadcast,
-    validateModel: async (provider, modelId) => {
-      const models = await draftModels();
+    validateModel: async (provider, modelId, owner) => {
+      const models = await draftModels(owner);
       if (!models.some((model) => model.provider === provider && model.id === modelId))
         throw new Error(`unknown model: ${provider}/${modelId}`);
     },

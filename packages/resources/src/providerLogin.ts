@@ -36,6 +36,8 @@ interface LoginState {
   status: LoginStatus;
   abort: AbortController;
   finishedAt?: number;
+  /** Identity that started it (shared server); undefined on loopback. */
+  ownerId?: string;
 }
 
 const MAX_RETAINED = 20;
@@ -45,11 +47,13 @@ export class ProviderLoginManager {
   private readonly sessions = new Map<string, LoginState>();
   constructor(private readonly loginFn: ProviderLoginFn = realLoginFn) {}
 
-  start(roots: ResourceRoots, providerId: string, authType: AuthType): string {
+  /** `ownerId` binds the login to its initiator: poll, respond and cancel from
+   * any other identity see it as unknown (shared server, SRV-11 review3 R4). */
+  start(roots: ResourceRoots, providerId: string, authType: AuthType, ownerId?: string): string {
     this.evictOld();
     const loginId = randomUUID();
     const abort = new AbortController();
-    const state: LoginState = { events: [], pending: null, status: "running", abort };
+    const state: LoginState = { events: [], pending: null, status: "running", abort, ownerId };
     this.sessions.set(loginId, state);
 
     const interaction: AuthInteraction = {
@@ -113,8 +117,18 @@ export class ProviderLoginManager {
     return loginId;
   }
 
-  poll(loginId: string, since: number) {
+  /** True when the login exists and `requesterId` started it. */
+  owns(loginId: string, requesterId?: string): boolean {
+    return this.owned(loginId, requesterId) !== undefined;
+  }
+
+  private owned(loginId: string, requesterId: string | undefined): LoginState | undefined {
     const state = this.sessions.get(loginId);
+    return state && state.ownerId === requesterId ? state : undefined;
+  }
+
+  poll(loginId: string, since: number, requesterId?: string) {
+    const state = this.owned(loginId, requesterId);
     if (!state) return undefined;
     return {
       events: state.events.slice(Math.max(0, since)),
@@ -123,8 +137,8 @@ export class ProviderLoginManager {
     };
   }
 
-  respond(loginId: string, value: string | undefined): boolean {
-    const state = this.sessions.get(loginId);
+  respond(loginId: string, value: string | undefined, requesterId?: string): boolean {
+    const state = this.owned(loginId, requesterId);
     if (!state?.pending) return false;
     const pending = state.pending;
     state.pending = null;
@@ -132,8 +146,8 @@ export class ProviderLoginManager {
     return true;
   }
 
-  cancel(loginId: string): void {
-    const state = this.sessions.get(loginId);
+  cancel(loginId: string, requesterId?: string): void {
+    const state = this.owned(loginId, requesterId);
     if (!state) return;
     state.abort.abort();
     if (state.pending) {

@@ -49,6 +49,7 @@ import {
 import { SessionCreationError } from "../SessionManager.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
 import { finalizeExtensions } from "./shared.ts";
+import { requestUser } from "../trustedProxy.ts";
 
 export function canonicalCheckoutLockKey(
   candidate: string,
@@ -765,6 +766,7 @@ export function registerLoopRoutes(
     // first persisted metadata snapshot.
     const loopReviewRunId = worktree ? randomUUID() : undefined;
     let parent: ReturnType<typeof sessions.create> | undefined;
+    const runner = requestUser(request.raw);
     let run: ReturnType<typeof loopEngine.start> | undefined;
     let announcementAttempted = false;
     let stopSnapshotTracking: (() => void) | undefined;
@@ -774,6 +776,11 @@ export function registerLoopRoutes(
         projectId: body.projectId,
         ...(worktree ? { worktree, loopReviewRunId } : {}),
         env: { ...defaults.env, ...body.env },
+        // SRV-11: the Loop runs on the requester's own credentials; its maker and
+        // subagent children inherit the parent's spawn env.
+        ...(runner
+          ? { createdBy: { id: runner.id, ...(runner.name ? { name: runner.name } : {}) } }
+          : {}),
         plan: {
           kind: "parent",
           provider: body.provider ?? defaults.provider,
