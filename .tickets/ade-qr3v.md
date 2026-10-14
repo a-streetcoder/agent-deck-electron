@@ -1,6 +1,6 @@
 ---
 id: ade-qr3v
-status: open
+status: in_progress
 deps: [ade-nocm]
 links: []
 created: 2026-10-14T00:08:56Z

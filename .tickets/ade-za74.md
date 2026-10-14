@@ -20,3 +20,9 @@ GUARDRAILS (this checkout is mirrored live to the VM by Syncthing and is the ser
 
 Get-AuthenticodeSignature on the installer, app exe and uninstaller reports Valid with the STREETCODING LTD subject; the workflow runs green on a tag and publishes a draft GitHub release with the installer and latest.yml; an installed previous version updates to the new one on this machine; docs/release-windows.md and WINDOWS.md updated; the register rows DST-03 and DST-04 are closed with the evidence.
 
+
+## Notes
+
+**2026-10-14T07:25:33Z**
+
+Owner decision 2026-10-14: certificateProfileName is codemeter-profile (the Basic tier allows one PublicTrust profile; agentdeck-profile was refused). Read docs/release-windows.md for the account details.

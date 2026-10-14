@@ -1,6 +1,6 @@
 ---
 id: ade-3wuu
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-10-14T00:09:01Z

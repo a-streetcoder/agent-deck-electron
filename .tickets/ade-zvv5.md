@@ -1,6 +1,6 @@
 ---
 id: ade-zvv5
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-10-14T07:24:20Z
