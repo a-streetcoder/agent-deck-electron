@@ -1,6 +1,6 @@
 ---
 id: ade-qr3v
-status: in_progress
+status: closed
 deps: [ade-nocm]
 links: []
 created: 2026-10-14T00:08:56Z
@@ -20,3 +20,9 @@ GUARDRAILS (this checkout is mirrored live to the VM by Syncthing and is the ser
 
 Every roadmap row is marked done/open with a file or commit reference; no dead links; Loops multi-engine and S19 status stated from evidence, not inference; format check passes.
 
+
+## Notes
+
+**2026-10-14T07:35:38Z**
+
+2026-10-14 merged from wt/ade-qr3v. Evidence-based reconcile; prettier check green. Not changed (out of scope): CHANGELOG.md and docs/effect-migration-plan.md still mention docs/parity-audit.md. Ticket statuses in Track 4/5 are a snapshot; .tickets/ is the source.
