@@ -1,6 +1,6 @@
 ---
 id: ade-kaqr
-status: open
+status: closed
 deps: [ade-7zpu, ade-apgq]
 links: []
 created: 2026-10-14T18:16:29Z
@@ -42,3 +42,7 @@ Written per sub-ticket after the design pass. Epic acceptance: one stdio and one
 **2026-10-14T20:02:24Z**
 
 2026-10-14 GO after the spike (ade-cdd5, merged cf1e54a). Memory measurement on the VM: 7.8 GB total, 6.4 GB available with the server idle (Pi processes are parked when idle, so no Pi RSS at rest); the only configured MCP server today is cloudflare-docs over streamable HTTP, which costs no child process, and no stdio server is configured, so the per-session stdio process cost is zero for the current setup. Budget rule for PI-03b: a stdio server costs one node process (typically 50-100 MB) per live Pi session that has it assigned; with two users and a handful of live sessions, up to three or four stdio servers fit; add a doc note and revisit if assignments grow. Sub-tickets ade-5vm8 -> ade-mp3j/ade-whg8/ade-j6e5 -> ade-apgq await the exact word approved.
+
+**2026-10-14T23:27:44Z**
+
+2026-10-15 epic complete: PI-03a..f merged; native MCP through the generated extension is the only transport, live policy via __mcp_authorize__, per-user mcp-auth.json with the /mcp login paste flow, names persisted on the session meta, proxy stack removed (-5,672 lines). Pending owner checks on the VM: one MCP OAuth sign-in through the tunnel (cloudflare-docs needs none; add an OAuth server to test), mcp-auth.json 0600 after it.
