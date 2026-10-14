@@ -81,8 +81,8 @@ export async function retryInSlots(
  * none or it expired. `run(args, timeoutMs, signal)` resolves stdout or
  * rejects. The token is a credential: never log it or hand it to a page.
  */
-export async function cloudflaredToken(run, origin) {
-  const value = (await run(["access", "token", `-app=${origin}`], 15_000)).trim();
+export async function cloudflaredToken(run, origin, signal) {
+  const value = (await run(["access", "token", `-app=${origin}`], 15_000, signal)).trim();
   if (!/^[\w-]+\.[\w-]+\.[\w-]+$/.test(value)) {
     throw new Error("cloudflared access token did not print a token");
   }
@@ -95,7 +95,7 @@ export async function cloudflaredToken(run, origin) {
  */
 export async function cloudflaredLogin(run, origin, signal) {
   await run(["access", "login", origin], 300_000, signal);
-  return cloudflaredToken(run, origin);
+  return cloudflaredToken(run, origin, signal);
 }
 
 /**
@@ -121,6 +121,8 @@ export function createRemoteSignIn({ login, attach }) {
     const { signal } = controller;
     running = login(signal)
       .then((token) => {
+        // A cancel that lands after login resolved must still win (REV-01).
+        if (signal.aborted) throw new Error("Sign-in cancelled.");
         attach(token);
         done = true;
         return { ok: true };

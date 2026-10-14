@@ -124,7 +124,7 @@ test("cloudflared token reads the cache only; login runs the browser flow then r
   const calls = [];
   const fake = (outputs) => async (args, _timeout, signal) => {
     calls.push(args[1]);
-    if (args[1] === "login") calls.push(signal);
+    if (signal) calls.push(signal);
     const next = outputs.shift();
     if (next instanceof Error) throw next;
     return next;
@@ -143,7 +143,29 @@ test("cloudflared token reads the cache only; login runs the browser flow then r
   calls.length = 0;
   const signal = new AbortController().signal;
   assert.equal(await cloudflaredLogin(fake(["", "x.y.z"]), origin, signal), "x.y.z");
-  assert.deepEqual(calls, ["login", signal, "token"]);
+  assert.deepEqual(calls, ["login", signal, "token", signal], "the token read is cancellable too");
+});
+
+test("remote sign-in: a cancel after browser approval but before the token read never attaches", async () => {
+  const attached = [];
+  let resolveToken;
+  let tokenSignal;
+  const run = (args, _timeout, signal) => {
+    if (args[1] === "login") return Promise.resolve("");
+    tokenSignal = signal;
+    return new Promise((resolve) => (resolveToken = resolve));
+  };
+  const handle = createRemoteSignIn({
+    login: (signal) => cloudflaredLogin(run, "https://deck.example.com", signal),
+    attach: (token) => attached.push(token),
+  });
+  const started = handle("start");
+  while (!resolveToken) await new Promise((resolve) => setTimeout(resolve, 0));
+  await handle("cancel");
+  assert.equal(tokenSignal.aborted, true, "the token read sees the cancel");
+  resolveToken("x.y.z"); // the token read finished anyway (raced the kill)
+  assert.deepEqual(await started, { ok: false, error: "Sign-in cancelled." });
+  assert.deepEqual(attached, []);
 });
 
 test("remote sign-in: start, join, fail with text, retry, cancel, and never return the token", async () => {

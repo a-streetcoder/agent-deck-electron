@@ -117,6 +117,11 @@ function flushDraftsBeforeQuit() {
   mainWindow.webContents.send("drafts:flush", { token });
 }
 
+// The local sign-in page (ade-zvv5) has no composer and never answers the
+// draft flush, so Close and Quit from it skip the handshake (REV-01).
+const onSignInPage = () =>
+  remoteSignIn !== null || Boolean(mainWindow?.webContents.getURL().startsWith("file:"));
+
 ipcMain.on("drafts:flushed", (event, payload) => {
   if (
     !mainWindow ||
@@ -519,7 +524,7 @@ function createWindow() {
     mainWindow = null;
   });
   mainWindow.on("close", (event) => {
-    if (draftsFlushedForQuit || mainWindow.webContents.isCrashed()) return;
+    if (draftsFlushedForQuit || mainWindow.webContents.isCrashed() || onSignInPage()) return;
     event.preventDefault();
     flushDraftsBeforeQuit();
   });
@@ -845,6 +850,9 @@ ipcMain.handle("loops:revealArtifacts", async (event, rawRunId) => {
 });
 
 ipcMain.handle("skills:trashRecovery", async (event, rawToken) => {
+  // REV-01: in remote mode the recovery path lives on the server host; trashing
+  // it here would hit whatever local directory shares that path.
+  if (remoteServer) throw new Error("Move to Trash is not available for a remote server.");
   const token = typeof rawToken === "string" ? rawToken : "";
   if (
     !mainWindow ||
@@ -1360,7 +1368,8 @@ app.on("before-quit", (event) => {
     mainWindow &&
     !mainWindow.isDestroyed() &&
     !mainWindow.webContents.isCrashed() &&
-    !draftsFlushedForQuit
+    !draftsFlushedForQuit &&
+    !onSignInPage()
   ) {
     event.preventDefault();
     flushDraftsBeforeQuit();
@@ -1370,5 +1379,7 @@ app.on("before-quit", (event) => {
 });
 
 app.on("will-quit", () => {
+  // Kill a pending `cloudflared access login` so it does not outlive the app.
+  void remoteSignIn?.("cancel");
   stopServer();
 });
