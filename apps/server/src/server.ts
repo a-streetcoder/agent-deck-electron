@@ -1019,22 +1019,27 @@ async function initServer(
     return meta ? mcpAllowlistForSession(meta).includes(serverId) : false;
   };
   // PI-03c: the live answer to a native MCP call (the bridge's __mcp_authorize__).
-  const nativeMcpRefusalFor = (sessionId: string, server: string, tool: string) => {
+  // PI-03c: the live answer to a native MCP call (the bridge's __mcp_authorize__),
+  // for the Agent Deck id the extension embedded at spawn.
+  const nativeMcpRefusalFor = (
+    sessionId: string,
+    call: { serverId: string; server: string; toolName: string },
+  ) => {
     const child = childMcpAssignments.get(sessionId);
-    const meta = child ? undefined : sessions.get(sessionId)?.meta;
-    const projectId = child?.projectId ?? meta?.projectId;
+    const projectId = child ? child.projectId : sessions.get(sessionId)?.meta.projectId;
     const project = projects.find((candidate) => candidate.id === projectId);
-    const serverIds = child?.serverIds ?? (meta ? mcpAllowlistForSession(meta) : []);
     return nativeMcpRefusal({
       enabled: mcpPolicy.enabled(),
       projectVisible: !!project && !project.hidden,
-      configs: project
-        ? effectiveMcpConfigs(project.id).configs.filter((config) => serverIds.includes(config.id))
-        : [],
-      assigned: (id) => mcpServerAllowedForSession(sessionId, id),
-      ...(child?.toolAllowlist ? { toolAllowlist: child.toolAllowlist } : {}),
-      server,
-      tool,
+      config: project
+        ? effectiveMcpConfigs(project.id).configs.find((config) => config.id === call.serverId)
+        : undefined,
+      assigned: mcpServerAllowedForSession(sessionId, call.serverId),
+      ...(child?.toolAllowlist
+        ? { legacyGrant: { tools: child.toolAllowlist, serverIds: child.serverIds } }
+        : {}),
+      server: call.server,
+      toolName: call.toolName,
     });
   };
   const mcp: McpManager = new McpManager(bridge, {

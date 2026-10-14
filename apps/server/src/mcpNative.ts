@@ -1,10 +1,12 @@
+import { createHash } from "node:crypto";
 import { configToolAllowed, toolApprovalBlock, type McpServerConfig } from "./mcpTools.ts";
 
 /** The per-session server list handed to Pi native MCP through the generated
  * bridge extension (PI-03b). `idMap` maps each Pi server name back to its
  * Agent Deck id. */
 export interface NativeMcpList {
-  servers: Array<{ name: string; config: Record<string, unknown> }>;
+  /** `id` is the Agent Deck id, sent back by the policy hook (PI-03c). */
+  servers: Array<{ name: string; id: string; config: Record<string, unknown> }>;
   blockedTools: string[];
   idMap: Map<string, string>;
 }
@@ -92,6 +94,7 @@ export function nativeMcpList(configs: McpServerConfig[], toolAllowlist?: string
     };
     servers.push({
       name,
+      id: config.id,
       config:
         "url" in config
           ? { type: "http", url: config.url, headers: config.headers, ...common }
@@ -112,54 +115,74 @@ export function nativeMcpList(configs: McpServerConfig[], toolAllowlist?: string
 
 const sanitise = (s: string): string => s.replace(/[^A-Za-z0-9_]/g, "_");
 
+/** Pi's resource tools (core/mcp-servers.js); they carry the server as `input.server`. */
+export const NATIVE_MCP_RESOURCE_TOOLS = new Set([
+  "list_mcp_resources",
+  "list_mcp_resource_templates",
+  "read_mcp_resource",
+]);
+
+// The names Pi can give a raw tool (extensions/mcp/tools.js createMcpToolName):
+// plain, or hashed when over 64 characters or when two raw names sanitise alike.
+const piToolNames = (server: string, raw: string): string[] => {
+  const plain = piToolName(server, raw);
+  const hash = createHash("sha256").update(`${server}\0${raw}`).digest("hex").slice(0, 8);
+  return [plain, `${plain.slice(0, 55)}_${hash}`];
+};
+
 /**
  * PI-03c: why a native MCP call may not run, from live state; undefined allows
  * it. The generated extension asks before each call and again on its result
  * (the result is withheld on refusal: the side effect already happened, as with
- * the proxy). `configs` is the list the Pi names are mapped back over (a child's
- * grant as at spawn, a main session's live assignment), `assigned` the live
- * assignment check, `server` the Pi server name and `tool` the Pi-sanitised
- * identifier after `mcp__<server>__`.
+ * the proxy). `config` is the live config of the server id embedded at spawn
+ * (undefined once it left the catalog), `assigned` whether that id is still
+ * assigned, `server` its Pi name and `toolName` the full Pi tool name.
+ * `legacyGrant` is a child's exact-tool allowlist with its granted server ids.
  */
 export function nativeMcpRefusal(input: {
   enabled: boolean;
   projectVisible: boolean;
-  configs: McpServerConfig[];
-  assigned: (id: string) => boolean;
-  toolAllowlist?: string[];
+  config: McpServerConfig | undefined;
+  assigned: boolean;
+  legacyGrant?: { tools: string[]; serverIds: string[] };
   server: string;
-  tool: string;
+  toolName: string;
 }): string | undefined {
-  const piName = piToolName(input.server, input.tool);
-  if (!input.enabled) return `MCP is turned off in Agent Deck, so "${piName}" cannot run.`;
+  const { config, server, toolName } = input;
+  if (!input.enabled) return `MCP is turned off in Agent Deck, so "${toolName}" cannot run.`;
   if (!input.projectVisible)
-    return `This session's project is gone or hidden, so "${piName}" cannot run.`;
-  const id = nativeMcpList(input.configs, input.toolAllowlist).idMap.get(input.server);
-  const config = input.configs.find((candidate) => candidate.id === id);
-  if (!config || !input.assigned(config.id))
-    return `MCP server "${input.server}" is no longer assigned to this session.`;
-  if (input.toolAllowlist) {
-    // Legacy grants name `mcp__<sanitised id>__<tool>`; compare sanitised, and
+    return `This session's project is gone or hidden, so "${toolName}" cannot run.`;
+  if (!config || !input.assigned)
+    return `MCP server "${server}" is no longer assigned to this session.`;
+  const resource = NATIVE_MCP_RESOURCE_TOOLS.has(toolName);
+  if (input.legacyGrant) {
+    // Legacy grants name `mcp__<sanitised id>__<tool>` and never resources;
     // refuse when two granted ids share that alias (the grant is ambiguous).
-    const alias = sanitise(config.id);
+    const prefix = `mcp__${sanitise(config.id)}__`;
     const granted =
-      input.configs.filter((candidate) => sanitise(candidate.id) === alias).length === 1 &&
-      input.toolAllowlist.some((t) => sanitise(t) === `mcp__${alias}__${input.tool}`);
-    if (!granted) return `"${piName}" is not in this agent's tool list.`;
+      !resource &&
+      input.legacyGrant.serverIds.filter((id) => `mcp__${sanitise(id)}__` === prefix).length ===
+        1 &&
+      input.legacyGrant.tools.some(
+        (t) =>
+          t.startsWith(prefix) && piToolNames(server, t.slice(prefix.length)).includes(toolName),
+      );
+    if (!granted) return `"${toolName}" is not in this agent's tool list.`;
   }
-  // Settings name raw tools; Pi only shows the sanitised one, so every raw name
-  // that sanitises to it must be allowed (fails closed on a collision).
+  if (resource) return undefined;
+  // Settings name raw tools; match each against the names Pi would give it.
+  // A tool no setting names gets the server's defaults.
   const raws = [
     ...(config.enabledTools ?? []),
     ...(config.disabledTools ?? []),
     ...Object.keys(config.toolApproval ?? {}),
-  ].filter((t) => sanitise(t) === input.tool);
-  for (const raw of raws.length ? raws : [input.tool]) {
+  ].filter((t) => piToolNames(server, t).includes(toolName));
+  for (const raw of raws.length ? raws : [toolName]) {
     if (configToolAllowed(config, raw)) continue;
     const block = toolApprovalBlock(config, raw);
     return block
-      ? `"${piName}": ${block}`
-      : `"${piName}" is turned off for "${config.id}" in Agent Deck.`;
+      ? `"${toolName}": ${block}`
+      : `"${toolName}" is turned off for "${config.id}" in Agent Deck.`;
   }
   return undefined;
 }

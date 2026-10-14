@@ -51,6 +51,9 @@ process.env.AGENT_DECK_MCP_SERVERS = JSON.stringify([
   server("alpha.one", "ALPHA"),
   server("beta"),
   server("gamma", "GAMMA"),
+  // Pi names twin_one and twin_one_2: an unassigned twin.one must not pass as twin_one.
+  server("twin.one", "TWIN-DOT"),
+  server("twin_one", "TWIN-UNDERSCORE"),
 ]);
 
 let mock: MockProviderServer;
@@ -162,6 +165,13 @@ describe("native MCP", () => {
   });
 
   it("refuses a call to a server unassigned after the session started (PI-03c)", async () => {
+    const assign = (ids: string[]) =>
+      fetch(`http://127.0.0.1:${deck.port}/projects/${projectId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ assignedMcpServers: ids }),
+      });
+    expect((await assign(["alpha.one", "beta", "twin.one", "twin_one"])).status).toBe(200);
     const created = await fetch(`http://127.0.0.1:${deck.port}/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -175,15 +185,12 @@ describe("native MCP", () => {
     });
     expect(created.status).toBe(201);
     const sessionId = ((await created.json()) as { session: { id: string } }).session.id;
-    // beta stays in this Pi process's list; the live policy hook refuses it.
-    const unassigned = await fetch(`http://127.0.0.1:${deck.port}/projects/${projectId}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ assignedMcpServers: ["alpha.one"] }),
-    });
-    expect(unassigned.status).toBe(200);
+    // beta and twin.one stay in this Pi process's list; the live policy hook refuses them.
+    expect((await assign(["alpha.one", "twin_one"])).status).toBe(200);
     plan = [
       { name: "mcp__beta__echo", arguments: { message: "three" } },
+      { name: "mcp__twin_one__echo", arguments: { message: "dot" } },
+      { name: "mcp__twin_one_2__echo", arguments: { message: "underscore" } },
       { name: "mcp__alpha_one__echo", arguments: { message: "four" } },
     ];
     const start = mock.requests.length;
@@ -194,6 +201,9 @@ describe("native MCP", () => {
     const results = toolText(requests);
     expect(results).toContain('MCP server \\"beta\\" is no longer assigned to this session.');
     expect(results).not.toContain("echo: three");
+    expect(results).toContain('MCP server \\"twin_one\\" is no longer assigned to this session.');
+    expect(results).not.toContain("TWIN-DOT");
+    expect(results).toContain("TWIN-UNDERSCORE: underscore");
     expect(results).toContain("ALPHA: four");
   });
 });

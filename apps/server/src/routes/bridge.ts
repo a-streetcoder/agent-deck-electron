@@ -21,8 +21,11 @@ const promptAuditParams = z
     sequence: z.number().int().positive().safe(),
   })
   .strict();
-// The native MCP policy hook's question; `input` and `toolName` ride along unused.
-const mcpAuthorizeParams = z.object({ server: z.string(), tool: z.string() });
+// The native MCP policy hook's question: the spawn-time Agent Deck id, its Pi
+// name and the full Pi tool name.
+const mcpAuthorizeParams = z
+  .object({ serverId: z.string(), server: z.string(), toolName: z.string() })
+  .strict();
 
 /** How long a blocking supervisor request waits for an answer before giving up. */
 const SUPERVISOR_TIMEOUT_MS = 110_000;
@@ -369,7 +372,7 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     if (parsed.data.tool === "__mcp_authorize__") {
       const call = mcpAuthorizeParams.safeParse(parsed.data.params);
       if (!call.success) return reply.code(400).send({ error: "invalid MCP authorization" });
-      const reason = ctx.nativeMcpRefusal(parsed.data.sessionId, call.data.server, call.data.tool);
+      const reason = ctx.nativeMcpRefusal(parsed.data.sessionId, call.data);
       return reason ? { allow: false, reason } : { allow: true };
     }
     // Latest-per-turn prompt audit. This callback is generated only for a parent

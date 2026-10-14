@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { nativeMcpList, nativeMcpRefusal } from "../src/mcpNative.ts";
 import { mcpEntryToConfig, type McpServerConfig } from "../src/mcpTools.ts";
@@ -134,62 +135,95 @@ describe("nativeMcpList", () => {
 });
 
 describe("nativeMcpRefusal", () => {
+  const docs = stdio("docs.v2");
   const live = (over: Partial<Parameters<typeof nativeMcpRefusal>[0]> = {}) =>
     nativeMcpRefusal({
       enabled: true,
       projectVisible: true,
-      configs: [stdio("docs.v2"), stdio("other")],
-      assigned: () => true,
+      config: docs,
+      assigned: true,
       server: "docs_v2",
-      tool: "search",
+      toolName: "mcp__docs_v2__search",
       ...over,
     });
+  // Pi's hashed name (extensions/mcp/tools.js createMcpToolName).
+  const hashed = (server: string, raw: string) =>
+    `mcp__${server}__${raw}`.replace(/[^A-Za-z0-9_]/g, "_").slice(0, 55) +
+    "_" +
+    createHash("sha256").update(`${server}\u0000${raw}`).digest("hex").slice(0, 8);
 
-  it("allows an assigned server's tool", () => {
+  it("allows an assigned server's tool and resource tools", () => {
     expect(live()).toBeUndefined();
+    expect(live({ toolName: "read_mcp_resource" })).toBeUndefined();
   });
 
-  it("refuses on global disable, hidden project, and an unassigned server", () => {
+  it("refuses on global disable, hidden project, an unassigned or removed server", () => {
     expect(live({ enabled: false })).toMatch(/turned off/);
     expect(live({ projectVisible: false })).toMatch(/gone or hidden/);
-    expect(live({ assigned: (id) => id !== "docs.v2" })).toMatch(/no longer assigned/);
-    expect(live({ server: "gamma" })).toMatch(/no longer assigned/);
-    // Pi names `a-b` and `a_b` are distinct servers: no sanitised fallback.
-    expect(live({ configs: [stdio("a-b")], server: "a_b" })).toMatch(/no longer assigned/);
+    expect(live({ assigned: false })).toMatch(/no longer assigned/);
+    expect(live({ config: undefined })).toMatch(/no longer assigned/);
+    expect(live({ assigned: false, toolName: "list_mcp_resources" })).toMatch(/no longer assigned/);
   });
 
-  it("refuses prompt/writes approval modes and disabled tools by their sanitised name", () => {
-    const configs = [
-      stdio("docs.v2", {
-        toolApproval: { "get-page": "prompt" },
-        disabledTools: ["drop.all"],
-      }),
-    ];
-    expect(live({ configs, tool: "get_page" })).toMatch(
+  it("checks the spawn-time id, so a revoked twin is not mapped onto its namesake", () => {
+    // docs.one and docs_one get Pi names docs_one and docs_one_2; docs.one is
+    // then unassigned while its connection is still open.
+    const configs = [stdio("docs.one"), stdio("docs_one")];
+    const spawned = nativeMcpList(configs).servers;
+    const stillAssigned = ["docs_one"];
+    const call = (name: string) => {
+      const entry = spawned.find((s) => s.name === name)!;
+      return live({
+        config: configs.find((c) => c.id === entry.id),
+        assigned: stillAssigned.includes(entry.id),
+        server: entry.name,
+        toolName: `mcp__${entry.name}__search`,
+      });
+    };
+    expect(call("docs_one")).toMatch(/no longer assigned/);
+    expect(call("docs_one_2")).toBeUndefined();
+  });
+
+  it("refuses prompt/writes approval modes and disabled tools, hashed names included", () => {
+    const config = stdio("docs.v2", {
+      toolApproval: {
+        "get-page": "prompt",
+        "a-very-long-tool-name-that-pi-hashes-because-it-is-long": "writes",
+      },
+      disabledTools: ["drop.all"],
+    });
+    expect(live({ config, toolName: "mcp__docs_v2__get_page" })).toMatch(
       /"mcp__docs_v2__get_page": .*approval mode "prompt"/,
     );
-    expect(live({ configs, tool: "drop_all" })).toMatch(/turned off for "docs.v2"/);
-    expect(live({ configs, tool: "search" })).toBeUndefined();
-    expect(live({ configs: [stdio("docs.v2", { defaultToolApproval: "writes" })] })).toMatch(
+    // Pi hashes on a sanitising collision (get-page next to get_page) ...
+    expect(live({ config, toolName: hashed("docs_v2", "get-page") })).toMatch(/"prompt"/);
+    // ... and over 64 characters.
+    expect(
+      live({
+        config,
+        toolName: hashed("docs_v2", "a-very-long-tool-name-that-pi-hashes-because-it-is-long"),
+      }),
+    ).toMatch(/"writes"/);
+    expect(live({ config, toolName: "mcp__docs_v2__drop_all" })).toMatch(
+      /turned off for "docs.v2"/,
+    );
+    expect(live({ config })).toBeUndefined();
+    expect(live({ config: stdio("docs.v2", { defaultToolApproval: "writes" }) })).toMatch(
       /approval mode "writes"/,
     );
   });
 
   it("holds a child to its legacy grant, compared on sanitised names", () => {
-    const toolAllowlist = ["mcp__docs_v2__get-page"];
-    expect(live({ toolAllowlist, tool: "get_page" })).toBeUndefined();
-    expect(live({ toolAllowlist, tool: "search" })).toMatch(/not in this agent's tool list/);
+    const legacyGrant = { tools: ["mcp__docs_v2__get-page"], serverIds: ["docs.v2"] };
+    expect(live({ legacyGrant, toolName: "mcp__docs_v2__get_page" })).toBeUndefined();
+    expect(live({ legacyGrant })).toMatch(/not in this agent's tool list/);
+    expect(live({ legacyGrant, toolName: "read_mcp_resource" })).toMatch(/not in this agent's/);
     // Two granted ids sharing the legacy alias make the grant ambiguous.
     expect(
-      live({ toolAllowlist, configs: [stdio("docs.v2"), stdio("docs_v2")], tool: "get_page" }),
+      live({
+        legacyGrant: { ...legacyGrant, serverIds: ["docs.v2", "docs_v2"] },
+        toolName: "mcp__docs_v2__get_page",
+      }),
     ).toMatch(/not in this agent's tool list/);
-  });
-
-  it("refuses the result phase once the server was unassigned mid-call", () => {
-    let assigned = true;
-    const call = () => live({ assigned: () => assigned });
-    expect(call()).toBeUndefined();
-    assigned = false;
-    expect(call()).toMatch(/no longer assigned/);
   });
 });

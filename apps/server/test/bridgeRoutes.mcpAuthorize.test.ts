@@ -12,8 +12,10 @@ function harness() {
   const fastify = Fastify();
   fastifies.push(fastify);
   // A child granted `docs` only; the live policy is stubbed per server.
-  const nativeMcpRefusal = vi.fn((_sessionId: string, server: string) =>
-    server === "docs" ? undefined : `MCP server "${server}" is no longer assigned to this session.`,
+  const nativeMcpRefusal = vi.fn((_sessionId: string, call: { serverId: string }) =>
+    call.serverId === "docs"
+      ? undefined
+      : `MCP server "${call.serverId}" is no longer assigned to this session.`,
   );
   const dispatch = vi.fn();
   registerBridgeRoutes({
@@ -46,7 +48,7 @@ function harness() {
         token,
         tool: "__mcp_authorize__",
         toolCallId: "call-1",
-        params: { toolName: `mcp__${server}__search`, server, tool: "search", input: {} },
+        params: { serverId: server, server, toolName: `mcp__${server}__search` },
       },
     });
   return { authorize, nativeMcpRefusal, dispatch };
@@ -71,7 +73,11 @@ describe("__mcp_authorize__ bridge callback", () => {
       allow: false,
       reason: 'MCP server "gamma" is no longer assigned to this session.',
     });
-    expect(h.nativeMcpRefusal).toHaveBeenLastCalledWith("child", "gamma", "search");
+    expect(h.nativeMcpRefusal).toHaveBeenLastCalledWith("child", {
+      serverId: "gamma",
+      server: "gamma",
+      toolName: "mcp__gamma__search",
+    });
     expect(h.dispatch).not.toHaveBeenCalled();
   });
 });
