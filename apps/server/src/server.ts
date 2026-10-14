@@ -1287,6 +1287,7 @@ async function initServer(
     },
   });
   const {
+    isTrustedOrigin,
     closeAdmission: closeWebSocketAdmission,
     drain: drainWebSocketOperations,
     close: closeWebSockets,
@@ -1319,6 +1320,24 @@ async function initServer(
     if (message.type === "resources_changed") sessions.queueResourceRefresh();
   };
   broadcastDiff = wsBroadcastDiff;
+
+  // Browser-CSRF guard: a hostile page (or in-app browser content) can fire
+  // requests at this server, but browsers stamp them with its Origin. Every
+  // state-changing route and the server folder listing apply the WebSocket
+  // upgrade's own origin rule; non-browser clients send no Origin and pass.
+  // That includes the desktop main process: Electron 43's
+  // session.defaultSession.fetch (controlPlaneFetch) sends no Origin on POST,
+  // while the renderer's fetches and WebSocket carry the page's own origin.
+  const mutatingMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+  fastify.addHook("onRequest", async (request, reply) => {
+    const guarded = mutatingMethods.has(request.method) || request.routeOptions.url === "/fs/dirs";
+    if (guarded && !isTrustedOrigin(request.headers.origin, request.headers.host)) {
+      return reply.status(403).send({
+        code: "untrusted_origin",
+        error: "Request origin is not allowed.",
+      });
+    }
+  });
 
   // Resource watcher: any change under the resource catalogs re-broadcasts so the UI refreshes.
   const resourceWatcher = watchResources({ home: resourceHome() }, () => {

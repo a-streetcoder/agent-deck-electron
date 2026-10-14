@@ -28,6 +28,8 @@ export interface WebSocketLayer {
   drain: () => Promise<void>;
   /** Force-close the `/rpc` socket server after dispatched work drains. */
   close: () => void;
+  /** The upgrade's origin rule, shared with the REST guard in server.ts. */
+  isTrustedOrigin: (origin: string | undefined, host: string | undefined) => boolean;
 }
 
 /**
@@ -136,6 +138,7 @@ export function setupWebSocket(deps: {
   });
 
   return {
+    isTrustedOrigin,
     broadcast: rpc.broadcast,
     broadcastDiff: rpc.broadcastDiff,
     closeAdmission: () => {

@@ -1,6 +1,6 @@
 ---
 id: ade-63d3
-status: open
+status: closed
 deps: [ade-brgd]
 links: []
 created: 2026-10-14T00:08:57Z
@@ -20,3 +20,9 @@ GUARDRAILS (this checkout is mirrored live to the VM by Syncthing and is the ser
 
 Route tests: cross-origin POST is 403, same-origin and no-Origin pass, AGENT_DECK_PUBLIC_ORIGIN passes; WS and REST share one origin predicate; e2e mcp and sessions specs still green; the commit applies cleanly on main (verified with git cherry-pick --no-commit in a detached worktree, then aborted).
 
+
+## Notes
+
+**2026-10-14T00:41:11Z**
+
+Verified: Electron 43 main-process session.defaultSession.fetch sends no Origin (passes); renderer fetch/WS carry the page origin. Patch applies cleanly on main (git apply --check in a detached worktree).
