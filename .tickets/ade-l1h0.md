@@ -1,6 +1,6 @@
 ---
 id: ade-l1h0
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-10-14T23:39:29Z
@@ -30,3 +30,7 @@ The evidence document with at least three goals times three structures, raw run 
 **2026-10-14T23:43:20Z**
 
 Held until the owner is back: the runs spend the owner's subscription and the ticket requires the model and iteration budget to be agreed first.
+
+**2026-10-14T23:46:28Z**
+
+2026-10-15 owner go: 'burn now', bridge Claude (Opus 5 via claude-bridge), iteration cap 3, run alongside A1 (answers D4 item 3). Runs on the VM in an isolated second server (own port and data dir, loopback, no trusted proxy, operator credentials) against a throwaway clone; the live unit and the Syncthing replica are not touched.
