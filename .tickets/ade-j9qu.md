@@ -1,6 +1,6 @@
 ---
 id: ade-j9qu
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-14T08:22:43Z
@@ -21,3 +21,9 @@ GUARDRAILS: work ONLY in the git worktree given in the dispatch; never touch the
 
 DiffPanel component test: branch mode refetches when agentStatus goes running -> idle with unchanged HEAD files; sessionAuthors test for rollback; rpcHandler test that a failed prompt leaves no unclaimed author turn; existing diff, rpcHandler and sessionAuthors tests green; typecheck, eslint, prettier clean on changed files.
 
+
+## Notes
+
+**2026-10-14T08:29:30Z**
+
+2026-10-14 merged from wt/rev-02. unstage is author-scoped (owner decision on the developer's edge case). Not covered: steer/follow_up failure paths have no dedicated test; same user sending identical text twice with one failure drops their newest record (credit still correct).
