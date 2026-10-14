@@ -1,6 +1,6 @@
 ---
 id: ade-mug8
-status: in_progress
+status: closed
 deps: [ade-vdes]
 links: []
 created: 2026-10-14T19:21:19Z
@@ -43,3 +43,7 @@ Written after the design pass.
 **2026-10-14T21:12:26Z**
 
 2026-10-14 APPROVED by the owner (one-word approval after the shrunk scope). Final scope, no server change: (1) in a session whose createdBy is not the viewer, the session header model control and the model dropdown show "runs on <owner name> credentials" next to the model name (owner name from the session meta createdBy name, falling back to the email local part); the picker lists only the owner models, as today; (2) the SRV-13 ProviderMissingBanner text gains ", or work in a session shared with you" (only on the shared server, where `me` is set). Acceptance: web tests for the label (shown when viewer id differs from createdBy id, hidden when they match or createdBy is missing) and for the banner wording; eslint, prettier and web tsc pass.
+
+**2026-10-14T21:19:44Z**
+
+2026-10-14 merged (wt/ade-mug8, 3536a70 + review fix). Contrarian: no blocking issue; GPT review (review5): two should-fix, both applied (label max-w-[24ch]; ModelChip wiring tests). Also applied: possessive wording, ProviderMissingBanner hidden inside a session owned by someone else. Tests: userIdentity 3, ProviderMissingBanner 3, pickers 9 (15/15); eslint, prettier, web tsc clean. Residual gap (documented, not fixed): a shared-server session without createdBy (pre-SRV-11, Doctor) runs on the operator dir and shows no label because the web does not know who the operator is; follow-up if it matters. Not yet deployed to the VM: ships with the next build.
