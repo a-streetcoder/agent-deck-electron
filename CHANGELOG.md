@@ -4,9 +4,9 @@ History of Agent Deck's Electron implementation for macOS, Windows, and Linux,
 rebuilt from the native macOS product on an **Effect** substrate with
 **t3code**-inspired features, all on the **pi** engine.
 
-Detailed per-slice records: [`docs/effect-migration-plan.md`](./docs/effect-migration-plan.md).
+Detailed per-slice records (historical): [`docs/archive/effect-migration-plan.md`](./docs/archive/effect-migration-plan.md).
 Remaining backlog + cuts: [`docs/roadmap.md`](./docs/roadmap.md).
-Parity gaps vs the macOS app: [`docs/parity-audit.md`](./docs/parity-audit.md).
+Parity registers (closed): [`docs/native-functional-parity-2026-07-24-andrea.md`](./docs/native-functional-parity-2026-07-24-andrea.md). Direction: [`VISION.md`](./VISION.md).
 
 ---
 
@@ -141,7 +141,7 @@ t3code's UI/features onto the pi engine, preserving Agent Deck's own features.
 ### Phase 12 — Parity audit (S23)
 
 - Feature-by-feature audit vs the macOS app + the adopted t3code set →
-  [`docs/parity-audit.md`](./docs/parity-audit.md). Verdict: **has-blockers**
+  `docs/parity-audit.md` (since replaced by the parity registers). Verdict: **has-blockers**
   (Loops advertises 6 run structures but only single-agent runs); 110 gaps
   cataloged into 11 fix-slices.
 

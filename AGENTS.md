@@ -18,3 +18,13 @@ For detailed guidance, read the relevant guide before editing that area:
 ## Way of working
 
 This repository is worked with [NAH](https://github.com/almoretti/martech-ai-skills-and-tools) (Not Another Harness; plugin `nah`, marketplace `martech-ai`). An architect session plans the work and writes `tk` tickets; a developer agent implements one ticket at a time; a different-vendor model (GPT) reviews the full diff before merge; the plan and the ticket tree go ahead only when the owner replies with the exact word `approved`. Tickets are markdown files in `.tickets/` at the repository root and are committed. If you are handed a ticket id, read it with `tk show <id>` (or open `.tickets/<id>.md`) and treat it as the source of truth. The full loop is in [`plugins/nah/skills/nah/PROTOCOL.md`](https://github.com/almoretti/martech-ai-skills-and-tools/blob/main/plugins/nah/skills/nah/PROTOCOL.md).
+
+## Documentation
+
+Direction lives in `VISION.md` and `VISION_ORCHESTRATION.md`; decisions in `docs/adr/`;
+sequencing in `docs/roadmap.md`; reference and runbooks at `docs/` root
+(`pi-rpc-launch-flags.md`, `skill-store-contract.md`, `sync-seams.md`, `remote-server-poc.md`,
+`release-windows.md`); contributor guides in `docs/agent-guidelines/`. A plan, acceptance record,
+request letter or handover moves to `docs/archive/` in the commit that closes it. Ticket-level
+notes belong in the ticket, not in `ARCHITECTURE.md`. When a vision file and an ADR disagree, the
+ADR wins; fix the vision file in the same change.
