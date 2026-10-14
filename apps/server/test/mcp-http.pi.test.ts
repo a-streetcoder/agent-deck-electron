@@ -26,7 +26,7 @@ process.env.AGENT_DECK_TEST = "1";
 let mock: MockProviderServer;
 let server: AgentDeckServer;
 let mcpHttp: MockHttpMcpServer;
-let mcpOAuth: MockHttpMcpServer;
+let oauthMcp: MockHttpMcpServer;
 let projectId: string;
 
 const tmpHome = mkdtempSync(path.join(tmpdir(), "pi-home-"));
@@ -45,10 +45,10 @@ beforeAll(async () => {
   });
   // The http MCP servers must be listening BEFORE startServer reads the env config.
   mcpHttp = await startMockHttpMcpServer();
-  mcpOAuth = await startMockHttpMcpServer({ oauth: true });
+  oauthMcp = await startMockHttpMcpServer({ oauth: true });
   process.env.AGENT_DECK_MCP_SERVERS = JSON.stringify([
     { id: "mockhttp", url: mcpHttp.url },
-    { id: "secure", url: mcpOAuth.url },
+    { id: "secure", url: oauthMcp.url },
   ]);
   server = await startServer({ dataDir });
   const added = await fetch(`http://127.0.0.1:${server.port}/projects`, {
@@ -69,7 +69,7 @@ afterAll(async () => {
   await server.close();
   await mock.close();
   await mcpHttp.close();
-  await mcpOAuth.close();
+  await oauthMcp.close();
   delete process.env.AGENT_DECK_MCP_SERVERS;
 });
 
