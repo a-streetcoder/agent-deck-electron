@@ -1,6 +1,6 @@
 ---
 id: ade-za74
-status: open
+status: in_progress
 deps: [ade-lfpv, ade-nocm]
 links: []
 created: 2026-10-14T00:09:00Z
