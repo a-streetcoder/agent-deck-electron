@@ -77,26 +77,77 @@ export async function retryInSlots(
 
 /**
  * Per-user Cloudflare Access token through cloudflared's non-browser flow
- * (ade-1vjx): `access token` prints the cached token; when there is none or it
- * expired, `access login` opens the SYSTEM browser (where passkeys work) and
- * caches a fresh one. `run(args, timeoutMs)` resolves stdout or rejects. The
- * token is a credential: never log it.
+ * (ade-1vjx): `access token` prints the cached token, or fails when there is
+ * none or it expired. `run(args, timeoutMs, signal)` resolves stdout or
+ * rejects. The token is a credential: never log it or hand it to a page.
  */
-export async function cloudflaredAccessToken(run, origin) {
-  const token = async () => {
-    const value = (await run(["access", "token", `-app=${origin}`], 15_000)).trim();
-    if (!/^[\w-]+\.[\w-]+\.[\w-]+$/.test(value)) {
-      throw new Error("cloudflared access token did not print a token");
-    }
-    return value;
-  };
-  try {
-    return await token();
-  } catch {
-    // No cached token, or it expired: log in through the system browser.
+export async function cloudflaredToken(run, origin) {
+  const value = (await run(["access", "token", `-app=${origin}`], 15_000)).trim();
+  if (!/^[\w-]+\.[\w-]+\.[\w-]+$/.test(value)) {
+    throw new Error("cloudflared access token did not print a token");
   }
-  await run(["access", "login", origin], 300_000);
-  return token();
+  return value;
+}
+
+/**
+ * `access login` opens the SYSTEM browser (where passkeys work) and caches a
+ * fresh token, then reads it back. `signal` aborts the waiting login.
+ */
+export async function cloudflaredLogin(run, origin, signal) {
+  await run(["access", "login", origin], 300_000, signal);
+  return cloudflaredToken(run, origin);
+}
+
+/**
+ * State behind the sign-in page's one IPC channel (ade-zvv5). `handle("start")`
+ * runs `login(signal)` once at a time (a second click joins the running one),
+ * hands the token to `attach` and answers `{ ok: true }`; a failure or
+ * `handle("cancel")` answers `{ ok: false, error }` with readable text so the
+ * page can offer a retry. The token itself never leaves main.
+ */
+export function createRemoteSignIn({ login, attach }) {
+  let running = null;
+  let controller = null;
+  let done = false;
+  return function handle(action) {
+    if (action === "cancel") {
+      controller?.abort();
+      return Promise.resolve({ ok: true });
+    }
+    if (action !== "start") return Promise.resolve({ ok: false, error: "Unknown action." });
+    if (done) return Promise.resolve({ ok: true });
+    if (running) return running;
+    controller = new AbortController();
+    const { signal } = controller;
+    running = login(signal)
+      .then((token) => {
+        attach(token);
+        done = true;
+        return { ok: true };
+      })
+      .catch((error) => ({ ok: false, error: signInErrorText(error, signal.aborted) }))
+      .finally(() => {
+        running = null;
+        controller = null;
+      });
+    return running;
+  };
+}
+
+/**
+ * Readable text for a failed login: cancel and timeout get their own words,
+ * otherwise the last line cloudflared wrote to stderr (stdout, which carries
+ * the token, is never used), capped so a page stays a page.
+ */
+export function signInErrorText(error, aborted = false) {
+  if (aborted) return "Sign-in cancelled.";
+  if (error?.killed) return "Timed out waiting for the browser approval.";
+  const lines = String(error?.stderr ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const text = lines.at(-1) || error?.message || String(error);
+  return text.length > 300 ? `${text.slice(0, 300)}...` : text;
 }
 
 /**

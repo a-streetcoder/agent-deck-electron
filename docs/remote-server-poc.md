@@ -281,14 +281,18 @@ Electron.
 - **Token lifetime**: `exp - iat` = 168 h (the Access session length), `type: app`, `aud` =
   the application AUD the server verifies.
 - **Code (opt-in)**: with `AGENT_DECK_CLOUDFLARED` set to the cloudflared path, remote-mode
-  `bootstrap()` in `apps/desktop/main.js` runs `access token` (and `access login` only when no
-  valid token is cached, `cloudflaredAccessToken` in `remote-server.js`), then adds
-  `cf-access-token` to every `https://` and `wss://` request to the remote host via
-  `session.defaultSession.webRequest.onBeforeSendHeaders`. That covers renderer fetches, the
-  `/rpc` WebSocket upgrade and `controlPlaneFetch`. Unset keeps the in-window login. The
-  launcher `win\Agent Deck Remote (cloudflare).cmd` has the line ready to uncomment.
+  `bootstrap()` in `apps/desktop/main.js` runs `access token` (`cloudflaredToken` in
+  `remote-server.js`), then adds `cf-access-token` to every `https://` and `wss://` request to
+  the remote host via `session.defaultSession.webRequest.onBeforeSendHeaders`. That covers
+  renderer fetches, the `/rpc` WebSocket upgrade and `controlPlaneFetch`. With no valid cached
+  token (ade-zvv5) the window opens at once on `apps/desktop/sign-in.html` ("Sign in with your
+  browser", team domain shown); only the click runs `access login` (`cloudflaredLogin`, through
+  the `remote-sign-in` IPC), the page waits with Cancel, and on success main attaches the header
+  and loads the app in the same window. A cancel or a cloudflared error stays on the page with
+  the error text and "Try again". The token never reaches the page. Unset keeps the in-window
+  login. The launcher `win\Agent Deck Remote (cloudflare).cmd` sets it.
 - **Renewal**: the token is read once per launch. An expired token fails `access token`, so the
-  next launch runs `access login` again (system browser). Mid-run expiry is not handled: Access
+  next launch shows the sign-in page again (system browser on click). Mid-run expiry is not handled: Access
   would redirect the window to its login. Restart the app. No exchange endpoint is needed, so
   the server-minted token design in
   [handover-shared-server-poc.md](handover-shared-server-poc.md) stays shelved.

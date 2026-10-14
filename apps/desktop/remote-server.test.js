@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   allowRemoteShellNavigation,
-  cloudflaredAccessToken,
+  cloudflaredLogin,
+  cloudflaredToken,
+  createRemoteSignIn,
   isControlPlanePage,
   remoteServerOrigin,
   retryInSlots,
+  signInErrorText,
 } from "./remote-server.js";
 
 test("remote server origin accepts only credential-free https URLs", () => {
@@ -116,23 +119,72 @@ test("remote health retry accepts a server that becomes healthy within 30 s", as
   assert.equal(clock, 30_000, "no wait after the last attempt");
 });
 
-test("cloudflared token: cached token first, system-browser login only when missing", async () => {
+test("cloudflared token reads the cache only; login runs the browser flow then reads it", async () => {
   const origin = "https://deck.example.com";
   const calls = [];
-  const fake = (outputs) => async (args) => {
+  const fake = (outputs) => async (args, _timeout, signal) => {
     calls.push(args[1]);
+    if (args[1] === "login") calls.push(signal);
     const next = outputs.shift();
     if (next instanceof Error) throw next;
     return next;
   };
-  assert.equal(await cloudflaredAccessToken(fake(["a.b.c\n"]), origin), "a.b.c");
+  assert.equal(await cloudflaredToken(fake(["a.b.c\n"]), origin), "a.b.c");
   assert.deepEqual(calls, ["token"]);
 
   calls.length = 0;
   const noToken = new Error("Unable to find token");
-  assert.equal(await cloudflaredAccessToken(fake([noToken, "", "x.y.z"]), origin), "x.y.z");
-  assert.deepEqual(calls, ["token", "login", "token"]);
+  await assert.rejects(cloudflaredToken(fake([noToken]), origin), noToken);
+  assert.deepEqual(calls, ["token"], "token() never opens a browser");
 
   calls.length = 0;
-  await assert.rejects(cloudflaredAccessToken(fake([noToken, "", "not a token"]), origin));
+  await assert.rejects(cloudflaredToken(fake(["not a token"]), origin), /did not print a token/);
+
+  calls.length = 0;
+  const signal = new AbortController().signal;
+  assert.equal(await cloudflaredLogin(fake(["", "x.y.z"]), origin, signal), "x.y.z");
+  assert.deepEqual(calls, ["login", signal, "token"]);
+});
+
+test("remote sign-in: start, join, fail with text, retry, cancel, and never return the token", async () => {
+  const attached = [];
+  let pending = [];
+  const login = (signal) =>
+    new Promise((resolve, reject) => {
+      pending.push({ resolve, reject });
+      signal.addEventListener("abort", () => reject(new Error("aborted")));
+    });
+  const handle = createRemoteSignIn({ login, attach: (token) => attached.push(token) });
+
+  // A failure answers readable cloudflared text, not the token or stdout.
+  const first = handle("start");
+  assert.equal(handle("start"), first, "a second click joins the running login");
+  pending[0].reject(Object.assign(new Error("Command failed"), { stderr: "info\nlogin failed\n" }));
+  assert.deepEqual(await first, { ok: false, error: "login failed" });
+  assert.deepEqual(attached, []);
+
+  // Cancel aborts the running login and leaves a retry.
+  pending = [];
+  const cancelled = handle("start");
+  assert.deepEqual(await handle("cancel"), { ok: true });
+  assert.deepEqual(await cancelled, { ok: false, error: "Sign-in cancelled." });
+
+  // Retry succeeds: the token goes to attach, the page gets only { ok: true }.
+  pending = [];
+  const retried = handle("start");
+  pending[0].resolve("x.y.z");
+  assert.deepEqual(await retried, { ok: true });
+  assert.deepEqual(attached, ["x.y.z"]);
+  assert.deepEqual(await handle("start"), { ok: true }, "no second login after success");
+  assert.equal(pending.length, 1);
+  assert.equal((await handle("bogus")).ok, false);
+});
+
+test("sign-in error text: timeout, message fallback, and a length cap", () => {
+  assert.equal(
+    signInErrorText({ killed: true, stderr: "x" }),
+    "Timed out waiting for the browser approval.",
+  );
+  assert.equal(signInErrorText(new Error("spawn ENOENT")), "spawn ENOENT");
+  assert.equal(signInErrorText({ stderr: "e".repeat(400) }).length, 303);
 });

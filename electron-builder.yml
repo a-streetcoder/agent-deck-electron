@@ -10,6 +10,7 @@ files:
   - apps/desktop/*.js
   - "!apps/desktop/*.test.js"
   - apps/desktop/preload.cjs
+  - apps/desktop/sign-in.html
   - apps/web/dist/**
   - dist/server/**
   - package.json

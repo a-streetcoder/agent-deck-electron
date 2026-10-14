@@ -22,7 +22,9 @@ import {
 } from "./preview-guard.js";
 import {
   allowRemoteShellNavigation,
-  cloudflaredAccessToken,
+  cloudflaredLogin,
+  cloudflaredToken,
+  createRemoteSignIn,
   isControlPlanePage,
   remoteServerOrigin,
   retryInSlots,
@@ -88,6 +90,9 @@ let serverPort = null;
 // sets it to that https origin and spawns no server.
 let controlPlaneOrigin = null;
 let remoteServer = null;
+// ade-zvv5: set while a cloudflared launch has no cached token; the window then
+// opens on sign-in.html and this handles its "remote-sign-in" IPC.
+let remoteSignIn = null;
 let mainWindow = null;
 let draftsFlushedForQuit = false;
 let draftFlushRequest = null;
@@ -429,7 +434,17 @@ function createWindow() {
   // AGENT_DECK_RENDERER_URL points at the Vite dev server (HMR) when set;
   // otherwise load the server-served production build same-origin.
   const rendererUrl = process.env.AGENT_DECK_RENDERER_URL || `${controlPlaneOrigin}/`;
-  void mainWindow.loadURL(rendererUrl);
+  if (remoteSignIn) {
+    // No cached cloudflared token: show the local sign-in page first; the
+    // remoteSignIn attach callback loads the app once the browser login succeeds.
+    void mainWindow.loadFile(path.join(__dirname, "sign-in.html"), {
+      query: {
+        teamDomain: process.env.AGENT_DECK_CF_ACCESS_TEAM_DOMAIN || new URL(remoteServer).host,
+      },
+    });
+  } else {
+    void mainWindow.loadURL(rendererUrl);
+  }
 
   if (remoteServer) {
     // Attached to a remote server: the window may only travel the Access login
@@ -727,6 +742,19 @@ ipcMain.handle("resources:revealFile", async (event, request) => {
   const file = await validatedResourceFile(event, request);
   shell.showItemInFolder(file);
   return true;
+});
+
+// ade-zvv5: only the local sign-in page in the main window may start or cancel
+// the cloudflared login. The answer is { ok, error? }; the token stays here.
+ipcMain.handle("remote-sign-in", (event, action) => {
+  if (
+    !remoteSignIn ||
+    event.sender !== mainWindow?.webContents ||
+    !event.senderFrame?.url.startsWith("file:")
+  ) {
+    return { ok: false, error: "Sign-in is not available." };
+  }
+  return remoteSignIn(action);
 });
 
 /** Native folder chooser (the NSOpenPanel equivalent) for the project flow. */
@@ -1121,19 +1149,39 @@ async function bootstrap() {
       // login inside the window. Unset keeps the in-window login.
       const cloudflared = process.env.AGENT_DECK_CLOUDFLARED;
       if (cloudflared) {
-        const run = (args, timeout) =>
-          execFileAsync(cloudflared, args, { timeout, windowsHide: true }).then((r) => r.stdout);
-        const accessToken = await cloudflaredAccessToken(run, remoteServer);
+        const run = (args, timeout, signal) =>
+          execFileAsync(cloudflared, args, { timeout, signal, windowsHide: true }).then(
+            (r) => r.stdout,
+          );
         const { host } = new URL(remoteServer);
         // ponytail: token fixed for the run; mid-run expiry (168 h) needs an app restart.
-        session.defaultSession.webRequest.onBeforeSendHeaders(
-          { urls: [`https://${host}/*`, `wss://${host}/*`] },
-          (details, callback) =>
-            callback({
-              requestHeaders: { ...details.requestHeaders, "cf-access-token": accessToken },
-            }),
-        );
-        startupTrace("cloudflared access token attached");
+        const attach = (accessToken) => {
+          session.defaultSession.webRequest.onBeforeSendHeaders(
+            { urls: [`https://${host}/*`, `wss://${host}/*`] },
+            (details, callback) =>
+              callback({
+                requestHeaders: { ...details.requestHeaders, "cf-access-token": accessToken },
+              }),
+          );
+          startupTrace("cloudflared access token attached");
+        };
+        try {
+          attach(await cloudflaredToken(run, remoteServer));
+        } catch {
+          // No cached token, or it expired: the window opens on sign-in.html and
+          // `access login` (system browser) runs only when its button is clicked.
+          startupTrace("cloudflared sign-in page required");
+          remoteSignIn = createRemoteSignIn({
+            login: (signal) => cloudflaredLogin(run, remoteServer, signal),
+            attach: (accessToken) => {
+              attach(accessToken);
+              remoteSignIn = null;
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                void mainWindow.loadURL(process.env.AGENT_DECK_RENDERER_URL || `${remoteServer}/`);
+              }
+            },
+          });
+        }
       }
     } else {
       const configuredPort = externalServerPort();

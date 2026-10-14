@@ -59,6 +59,12 @@ contextBridge.exposeInMainWorld("agentDeck", {
   /** Open/reveal a backend-catalog-validated agent or prompt file. */
   openResourceFile: (request) => ipcRenderer.invoke("resources:openFile", request),
   revealResourceFile: (request) => ipcRenderer.invoke("resources:revealFile", request),
+  /**
+   * Local sign-in page only (ade-zvv5): "start" runs the cloudflared browser
+   * login, "cancel" aborts it. Resolves { ok, error? }, never the token.
+   * @param {"start" | "cancel"} action
+   */
+  remoteSignIn: (action) => ipcRenderer.invoke("remote-sign-in", action),
   /** Open an allow-listed http(s) URL in the user's default browser. */
   openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
   /** Flush device-local drafts before main closes the renderer/backend. */
