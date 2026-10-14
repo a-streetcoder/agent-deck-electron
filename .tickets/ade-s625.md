@@ -1,7 +1,7 @@
 ---
 id: ade-s625
 status: open
-deps: [ade-brgd, ade-63d3, ade-fr91, ade-1vjx, ade-gfs4, ade-fdjz, ade-nocm, ade-qr3v, ade-dnvi]
+deps: [ade-brgd, ade-63d3, ade-fr91, ade-1vjx, ade-gfs4, ade-fdjz, ade-nocm, ade-qr3v, ade-dnvi, ade-w87w]
 links: []
 created: 2026-10-14T00:09:01Z
 type: task
