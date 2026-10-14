@@ -1,6 +1,6 @@
 ---
 id: ade-wz4d
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-14T08:22:43Z
@@ -21,3 +21,9 @@ GUARDRAILS (this checkout is mirrored live to the VM by Syncthing and is the ser
 
 From the sign-in page, Close and Quit exit at once with no draft dialog and no lingering cloudflared process; cancelling after browser approval but before the token read never attaches the token (unit test); skills:trashRecovery in remote mode rejects with an error and trashes nothing (unit test or code path proof); desktop tests, eslint and prettier green on changed files.
 
+
+## Notes
+
+**2026-10-14T08:27:57Z**
+
+2026-10-14 validated in the real app (isolated profile, no cached token): start login -> window.close(): app exited, cloudflared gone; start login -> quit: same. Unit test covers the late-cancel race. Ponytail: accepted. Known: killing cloudflared leaves the browser tab open; the bootstrap token read before the window has no signal (out of scope).
