@@ -38,3 +38,7 @@ Developer 2026-10-14, commit 4a731bf on wt/ade-bood (worktree E:/agent-deck-wt/a
 **2026-10-14T19:44:45Z**
 
 2026-10-14 architect review: accepted (one 80-line migration module, auth files rewritten in place at startup, paste field shown at once on a shared server, Doctor probe parameterised). Merged into poc/shared-server. Owner check still open: an Anthropic OAuth sign-in from the browser through the tunnel using the copy-code paste flow. The worktree commit carries an Opus 5.5 co-author line written by the developer model; left as is.
+
+**2026-10-14T22:09:19Z**
+
+2026-10-14 owner live check: Anthropic OAuth sign-in from the browser through the tunnel with the paste flow succeeded (owner report: 'test the sign in in the browser and works').
