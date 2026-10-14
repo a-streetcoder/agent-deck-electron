@@ -16,3 +16,9 @@ Mostly operator steps, done before any Electron login work since Andrea can use 
 
 session-authors.json on the VM shows two distinct author ids in one session; /me for Andrea returns his email; a written list of observed problems exists with a ticket id or explicit wont-fix for each.
 
+
+## Notes
+
+**2026-10-14T13:26:37Z**
+
+2026-10-14: Andrea's GitHub email added to the Access policy 'Streetcoding Collective' on the deck.moretti.cc application via the Cloudflare API (include now lists two emails; exclude/require unchanged). Remaining: Andrea signs in from her machine (GitHub IdP must have that email verified) and the two-user browser session checklist.
