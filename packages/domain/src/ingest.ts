@@ -48,6 +48,9 @@ export interface IngestState {
   /** Count of canonical Pi message entries observed, used for durable retry pairing on resume. */
   messageCount: number;
   openProviderRetry?: ProviderRetryCell;
+  /** Pi's open `/mcp login` paste box. Pi settles it itself when its loopback
+   * callback wins or the sign-in ends, and RPC mode sends no event for that. */
+  mcpSignInInput?: { server: string; requestId: string };
 }
 
 export function createIngestState(): IngestState {
@@ -673,12 +676,25 @@ export function ingestPiEvent(state: IngestState, event: PiInboundEvent): Domain
           notify.notifyType === "error" || notify.notifyType === "warning"
             ? notify.notifyType
             : "info";
-        return [
+        const events: DomainEvent[] = [
           {
             type: "cell_open",
             cell: { kind: "notice", id: `notice-${notify.id}`, message: notify.message, level },
           },
         ];
+        // The sign-in's closing notify (Pi's loginCommand: success, cancel, or
+        // the failure as an error) also closes its paste box.
+        const open = state.mcpSignInInput;
+        if (
+          open &&
+          (notify.message.startsWith(`Signed in to MCP server "${open.server}"`) ||
+            notify.message === "Sign-in cancelled." ||
+            level === "error")
+        ) {
+          state.mcpSignInInput = undefined;
+          events.push({ type: "question_answered", cellId: `question-${open.requestId}` });
+        }
+        return events;
       }
       if (!isAnswerableUiRequest(event.method)) return [];
       // The union has many variants; extract the display fields structurally.
@@ -691,6 +707,9 @@ export function ingestPiEvent(state: IngestState, event: PiInboundEvent): Domain
         placeholder?: string;
         prefill?: string;
       };
+      const signIn = /^Waiting for sign-in to "(.+?)"\./.exec(request.title ?? "");
+      if (request.method === "input" && signIn)
+        state.mcpSignInInput = { server: signIn[1]!, requestId: request.id };
       const cell: TranscriptCell = {
         kind: "question",
         id: `question-${request.id}`,

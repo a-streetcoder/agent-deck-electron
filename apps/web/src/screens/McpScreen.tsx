@@ -20,7 +20,7 @@ import { openExternal, revealResourceFile } from "@/lib/native";
 import { derivedMcpServerName, parseMcpConfigPaste } from "@agent-deck/domain";
 import { useAppStore } from "../state/store.ts";
 import { McpImportPanel } from "./McpImportPanel.tsx";
-import { updateProject } from "../state/wsBridge.ts";
+import { switchToSession, updateProject } from "../state/wsBridge.ts";
 
 /**
  * MCP screen (native Runtime → MCP): the configured MCP servers whose tools are
@@ -98,6 +98,8 @@ interface McpServer extends McpServerSettings {
   tools?: { name: string; description?: string }[];
   error?: string;
   auth?: McpAuth;
+  /** Pi can sign in to it: HTTP without a fixed Authorization header. */
+  oauth?: boolean;
   source?: "global" | "project" | "environment";
   provenance?: McpDefinitionProvenance;
   editable?: boolean;
@@ -336,6 +338,7 @@ function parseCallback(input: string, fallbackState: string): { code: string; st
 export function McpScreen() {
   const setError = useAppStore((state) => state.setError);
   const pushToast = useAppStore((state) => state.pushToast);
+  const setView = useAppStore((state) => state.setView);
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const projects = useAppStore((state) => state.projects);
   const sessionProjectId = useAppStore((state) => state.session?.projectId);
@@ -1222,8 +1225,11 @@ export function McpScreen() {
       if (!response.ok) throw new Error(await response.text());
       pushToast({
         kind: "success",
-        message: `Sign-in to ${id} started in "${signInSession.title ?? "session"}". Open that session, follow the link, then paste the address the browser lands on (the 127.0.0.1 page will not load).`,
+        message: `Sign-in requested in "${signInSession.title ?? "session"}": follow the link there, then paste the address the browser lands on if the 127.0.0.1 page does not load.`,
       });
+      // The link and the paste box appear in that session's transcript.
+      setView("chat");
+      await switchToSession(signInSession);
     } catch (err) {
       setError(String(err));
     }
@@ -1835,7 +1841,7 @@ export function McpScreen() {
             // Native MCP: Pi owns the tokens, so the proxy's auth state does not apply.
             const auth = nativeMcp ? undefined : authPresentation(server, assignedHere);
             const nativeSignIn =
-              nativeMcp && currentProjectId !== null && assignedHere && server.transport === "http";
+              nativeMcp && currentProjectId !== null && assignedHere && server.oauth === true;
             return (
               <div key={server.id}>
                 <div

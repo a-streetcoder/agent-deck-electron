@@ -373,6 +373,11 @@ export function registerMcpRoutes(ctx: ServerContext): void {
           error: status?.error,
           editable,
           auth: transport === "http" ? mcpOAuth.state(authId) : { status: "none" as const },
+          // Pi offers OAuth only to an HTTP server without an Authorization header
+          // (bearerTokenEnvVar is already one here).
+          oauth:
+            "url" in config &&
+            !Object.keys(config.headers ?? {}).some((key) => key.toLowerCase() === "authorization"),
           ...(editable ? definitionFields(entry) : {}),
         };
       }),
@@ -591,6 +596,13 @@ export function registerMcpRoutes(ctx: ServerContext): void {
       return reply.code(403).send({ error: "sign in from one of your own sessions" });
     const name = ctx.nativeMcpNameFor(session.meta, id);
     if (!name) return reply.code(404).send({ error: "this session does not use that MCP server" });
+    // Resume a parked session first (getState spawns Pi if needed), so a session
+    // that cannot start answers here instead of after the detached prompt.
+    try {
+      await session.getState();
+    } catch (error) {
+      return reply.code(502).send({ error: `The session could not start: ${String(error)}` });
+    }
     // Not awaited: Pi answers an extension-command prompt only once the command
     // ends, i.e. after the user pasted the redirect URL, far past the RPC
     // timeout. A timeout is not recorded as a session failure.

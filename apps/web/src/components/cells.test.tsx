@@ -816,4 +816,22 @@ describe("notice cell (extension notify, PI-03d)", () => {
     expect(openExternal).toHaveBeenCalledWith(url);
     expect(screen.getByTestId("notice-cell").textContent).toContain('MCP server "docs"');
   });
+
+  it("keeps trailing punctuation out of the link", () => {
+    render(
+      <CellView
+        cell={{
+          kind: "notice",
+          id: "notice-2",
+          message: 'Open "https://a.example/x?y=1". (see https://b.example/doc)',
+          level: "warning",
+        }}
+      />,
+    );
+    const hrefs = screen.getAllByRole("link").map((link) => link.getAttribute("href"));
+    expect(hrefs).toEqual(["https://a.example/x?y=1", "https://b.example/doc"]);
+    expect(screen.getByTestId("notice-cell").textContent).toBe(
+      'Open "https://a.example/x?y=1". (see https://b.example/doc)',
+    );
+  });
 });

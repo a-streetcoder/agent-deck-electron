@@ -19,8 +19,12 @@ describe("POST /mcp/:id/native-login", () => {
         setRequestUser(request.raw, { id: "user-a", email: "a@example.test" });
       });
     const prompts: Array<[string, string]> = [];
-    const session = (id: string, owner: string) => ({
-      meta: { id, projectId: "p1", createdBy: { id: owner } },
+    const session = (id: string, owner?: string, resumes = true) => ({
+      meta: { id, projectId: "p1", ...(owner ? { createdBy: { id: owner } } : {}) },
+      getState: async () => {
+        if (!resumes) throw new Error("pi exited during startup");
+        return {};
+      },
       prompt: async (text: string) => {
         prompts.push([id, text]);
       },
@@ -28,6 +32,8 @@ describe("POST /mcp/:id/native-login", () => {
     const live = new Map([
       ["s-a", session("s-a", "user-a")],
       ["s-b", session("s-b", "user-b")],
+      ["s-legacy", session("s-legacy")],
+      ["s-broken", session("s-broken", "user-a", false)],
     ]);
     registerMcpRoutes({
       fastify,
@@ -62,9 +68,19 @@ describe("POST /mcp/:id/native-login", () => {
     expect([...h.prompts, ...off.prompts]).toEqual([]);
   });
 
+  it("answers 502 when the session cannot start, without sending the command", async () => {
+    const { post, prompts } = harness();
+    const response = await post("my.docs", "s-broken");
+    expect(response.statusCode).toBe(502);
+    expect(response.json<{ error: string }>().error).toContain("pi exited during startup");
+    expect(prompts).toEqual([]);
+  });
+
   it("on a shared server, refuses another user's session (its Pi stores tokens in the owner's dir)", async () => {
     const { post, prompts } = harness({ shared: true });
     expect((await post("my.docs", "s-b")).statusCode).toBe(403);
+    // A legacy session without an owner runs on the operator's shared dir.
+    expect((await post("my.docs", "s-legacy")).statusCode).toBe(403);
     expect((await post("my.docs", "s-a")).statusCode).toBe(202);
     expect(prompts).toEqual([["s-a", "/mcp login my_docs"]]);
   });

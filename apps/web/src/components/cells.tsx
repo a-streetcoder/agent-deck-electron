@@ -163,23 +163,26 @@ function NoticeCellView({ cell }: { cell: NoticeCell }) {
       role={cell.level === "error" ? "alert" : "status"}
       className={`whitespace-pre-wrap break-all rounded-lg border px-3 py-2 text-body text-text-secondary ${tone}`}
     >
-      {cell.message.split(/(https?:\/\/\S+)/).map((part, i) =>
-        i % 2 === 1 ? (
-          <a
-            key={i}
-            href={part}
-            className="text-accent underline"
-            onClick={(event) => {
-              event.preventDefault();
-              void openExternal(part);
-            }}
-          >
-            {part}
-          </a>
-        ) : (
-          part
-        ),
-      )}
+      {cell.message.split(/(https?:\/\/\S+)/).map((part, i) => {
+        if (i % 2 === 0) return part;
+        // Sentence punctuation after a URL is not part of it.
+        const url = part.replace(/[)\].,;:!?"'>]+$/, "");
+        return (
+          <span key={i}>
+            <a
+              href={url}
+              className="text-accent underline"
+              onClick={(event) => {
+                event.preventDefault();
+                void openExternal(url);
+              }}
+            >
+              {url}
+            </a>
+            {part.slice(url.length)}
+          </span>
+        );
+      })}
     </div>
   );
 }

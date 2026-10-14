@@ -771,6 +771,49 @@ describe("createRpcConnection", () => {
     }
   });
 
+  it("on a shared server only the session owner can run /mcp (PI-03d)", async () => {
+    const { session, ops } = makeSession("s1");
+    Object.assign(session.meta, { createdBy: { id: "ale@example.com" } });
+    const connect = (id: string) => {
+      const frames: Frame[] = [];
+      const conn = createRpcConnection({
+        sessions: makeManager({ s1: session }),
+        terminals: makeTerminalGateway().gateway,
+        diffs: makeDiffGateway().gateway,
+        editors: makeEditorLauncher().launcher,
+        files: makeFileService().service,
+        scripts: makeScriptGateway().gateway,
+        checkpoints: makeCheckpointService().service,
+        rollback: makeRollbackGateway().gateway,
+        user: { id, email: id },
+        send: (frame) => frames.push(frame),
+      });
+      return { conn, frames };
+    };
+    const viewer = connect("andrea@example.com");
+    await viewer.conn.handleMessage(
+      frame(1, { type: "prompt", sessionId: "s1", message: " /mcp login docs" }),
+    );
+    await viewer.conn.handleMessage(
+      frame(2, { type: "follow_up", sessionId: "s1", message: "/mcp logout docs" }),
+    );
+    // Other slash commands and text that merely starts with "/mcp" stay open.
+    await viewer.conn.handleMessage(
+      frame(3, { type: "prompt", sessionId: "s1", message: "/mcpx hi" }),
+    );
+    expect(viewer.frames.map((f) => (f as { ok?: boolean }).ok)).toEqual([false, false, true]);
+    expect(JSON.stringify(viewer.frames[0])).toContain("Only the session owner can run /mcp");
+    const owner = connect("ale@example.com");
+    await owner.conn.handleMessage(
+      frame(4, { type: "prompt", sessionId: "s1", message: "/mcp login docs" }),
+    );
+    expect(owner.frames).toEqual([{ kind: "reply", id: 4, ok: true }]);
+    expect(ops.prompt.mock.calls.map((call) => (call as unknown[])[0])).toEqual([
+      "/mcpx hi",
+      "/mcp login docs",
+    ]);
+  });
+
   it("a failed attachment stage leaves an earlier queued author turn intact", async () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "deck-rpc-authors-"));
     try {

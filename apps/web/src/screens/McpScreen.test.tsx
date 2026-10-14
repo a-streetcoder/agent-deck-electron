@@ -3,7 +3,13 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "../state/store.ts";
+import { switchToSession } from "../state/wsBridge.ts";
 import { McpScreen } from "./McpScreen.tsx";
+
+vi.mock("../state/wsBridge.ts", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  switchToSession: vi.fn(async () => {}),
+}));
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -2409,8 +2415,12 @@ describe("MCP project picker", () => {
         return Promise.resolve(
           jsonResponse({
             nativeMcp: true,
-            assignedServerIds: ["oauth"],
-            servers: [http("oauth", { auth: { status: "unauthenticated" } })],
+            assignedServerIds: ["oauth", "keyed"],
+            servers: [
+              http("oauth", { oauth: true, auth: { status: "unauthenticated" } }),
+              // A fixed Authorization header: Pi offers no OAuth for it.
+              http("keyed", { oauth: false }),
+            ],
           }),
         );
       if (url === "/mcp/oauth/native-login" && init?.method === "POST") {
@@ -2429,9 +2439,16 @@ describe("MCP project picker", () => {
     await waitFor(() =>
       expect(posts).toEqual([["/mcp/oauth/native-login", { sessionId: "live" }]]),
     );
+    expect(screen.queryByTestId("mcp-native-login-keyed")).toBeNull();
     await waitFor(() =>
-      expect(useAppStore.getState().toasts.at(-1)?.message).toContain('started in "Work"'),
+      expect(useAppStore.getState().toasts.at(-1)?.message).toContain(
+        'Sign-in requested in "Work"',
+      ),
     );
+    // Opens the session, where the link and the paste box appear.
+    expect(vi.mocked(switchToSession)).toHaveBeenCalledWith(live);
+    expect(useAppStore.getState().view).toBe("chat");
+    act(() => useAppStore.setState({ view: "mcp" }));
 
     // No live session in the project: say so instead of posting.
     act(() => useAppStore.setState({ sessions: [] }));
