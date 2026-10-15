@@ -93,7 +93,10 @@ test("a missing token or an Access 401/302 answers signInRequired with no body",
     status: 401,
     signInRequired: true,
   });
-  assert.match((await noCloudflared.signIn()).error, /AGENT_DECK_CLOUDFLARED/);
+  assert.equal(
+    (await noCloudflared.signIn()).error,
+    "cloudflared is not available. Download it in Settings > Team server.",
+  );
 
   for (const status of [401, 302]) {
     const { run, calls: runs } = fakeRun();

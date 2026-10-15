@@ -82,11 +82,43 @@ export interface TeamServerState {
   restartRequired: boolean;
 }
 
+// --- SRV-16c: cloudflared ---
+/** The cloudflared Electron main resolved, and where it came from. */
+export interface CloudflaredStatus {
+  path: string;
+  /** The stored setting, AGENT_DECK_CLOUDFLARED, PATH, or a known install folder. */
+  source: "setting" | "env" | "path" | "known";
+  /** `cloudflared --version`, null when the probe failed. */
+  version: string | null;
+  /** E.g. AGENT_DECK_CLOUDFLARED points at a missing file (the next source was used). */
+  warning: string | null;
+}
+
+export interface CloudflaredInfo {
+  /** The pinned version a download fetches; null when none exists for this machine. */
+  downloadVersion: string | null;
+  warning: string | null;
+}
+
+export interface CloudflaredProgress {
+  received: number;
+  total: number | null;
+}
+// --- end SRV-16c ---
+
 export interface TeamServerBridge {
   get(): Promise<TeamServerState>;
   set(input: {
     serverUrl: string | null;
   }): Promise<({ ok: true } & TeamServerState) | { ok: false; error: string }>;
+  // --- SRV-16c: cloudflared (non-null = sign-in can run) ---
+  cloudflared?(): Promise<CloudflaredStatus | null>;
+  cloudflaredInfo?(): Promise<CloudflaredInfo>;
+  downloadCloudflared?(): Promise<
+    { ok: true; path: string; version: string } | { ok: false; error: string }
+  >;
+  onCloudflaredProgress?(handler: (progress: CloudflaredProgress) => void): () => void;
+  // --- end SRV-16c ---
 }
 
 export interface AgentDeckBridge {

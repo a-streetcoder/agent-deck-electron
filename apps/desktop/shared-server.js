@@ -6,6 +6,7 @@
  * only a status and a parsed JSON body.
  */
 import { Buffer } from "node:buffer";
+import { CLOUDFLARED_MISSING } from "./cloudflared-resolver.js";
 import { cloudflaredLogin, cloudflaredToken, signInErrorText } from "./remote-server.js";
 
 /** The only requests a renderer may ask for, as "METHOD /path". */
@@ -59,9 +60,8 @@ const redactParsed = (value, secret) => {
 };
 
 /**
- * `run(args, timeoutMs, signal)` runs cloudflared (null when
- * AGENT_DECK_CLOUDFLARED is unset: every request then needs a sign-in that
- * explains the missing setting). `fetchImpl` is Node's fetch in main.
+ * `run(args, timeoutMs, signal)` runs cloudflared (null when none is found:
+ * every request then needs a sign-in that points to the download in Settings). `fetchImpl` is Node's fetch in main.
  */
 export function createSharedServerClient({ origin, run, fetchImpl = fetch, timeoutMs = 120_000 }) {
   const host = new URL(origin).host;
@@ -237,8 +237,7 @@ export function createSharedServerClient({ origin, run, fetchImpl = fetch, timeo
     if (!run) {
       return Promise.resolve({
         ok: false,
-        error:
-          "Set AGENT_DECK_CLOUDFLARED to the cloudflared path to sign in to the shared server.",
+        error: CLOUDFLARED_MISSING,
       });
     }
     controller = new AbortController();

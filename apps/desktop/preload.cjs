@@ -95,6 +95,20 @@ contextBridge.exposeInMainWorld("agentDeck", {
     : {
         get: () => ipcRenderer.invoke("team-server:get"),
         set: (input) => ipcRenderer.invoke("team-server:set", input),
+        // --- SRV-16c: cloudflared ---
+        /** { path, source, version, warning } or null when no cloudflared is found. */
+        cloudflared: () => ipcRenderer.invoke("team-server:cloudflared"),
+        /** { downloadVersion, warning }: the pinned version a download fetches (or null). */
+        cloudflaredInfo: () => ipcRenderer.invoke("team-server:cloudflared-info"),
+        /** Verified download; resolves { ok, path, version } or { ok: false, error }. */
+        downloadCloudflared: () => ipcRenderer.invoke("team-server:cloudflared-download"),
+        /** Byte progress { received, total } of a running download; returns unsubscribe. */
+        onCloudflaredProgress: (handler) => {
+          const listener = (_event, progress) => handler(progress);
+          ipcRenderer.on("team-server:cloudflared-progress", listener);
+          return () => ipcRenderer.removeListener("team-server:cloudflared-progress", listener);
+        },
+        // --- end SRV-16c ---
       },
   /** Open an allow-listed http(s) URL in the user's default browser. */
   openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
