@@ -1,6 +1,6 @@
 ---
 id: ade-zluq
-status: open
+status: in_progress
 deps: [ade-wruf]
 links: []
 created: 2026-10-15T08:01:14Z

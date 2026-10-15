@@ -1,6 +1,6 @@
 ---
 id: ade-wruf
-status: in_progress
+status: closed
 deps: [ade-c5j7]
 links: []
 created: 2026-10-15T08:01:14Z
@@ -38,3 +38,7 @@ Domain tests for sessionActivity (turn open + not live = idle; parked = idle; op
 **2026-10-15T09:12:17Z**
 
 2026-10-15 fix round 0c79814 (waiting list unfiltered, activity kept across REST replies and decorated on rename/pin/attention/draft replies, server-side open-human map fed by appends with reseed on writer.acquired, deep link read before the boot resume with unknown-id toast, Copy link on the shared server only, docs and forkedFrom normaliser, aria-label). GPT review36 of cf04aa2: pin reply covered; remaining sent as the final round: catalog response may restore a stale activity over a newer push (generation-aware merge), message-level fork of a plain fork inherits forkedFrom.
+
+**2026-10-15T09:16:21Z**
+
+2026-10-15 merged as 442f843 (cf04aa2 + 0c79814 + 610c8e8: generation-aware activity merge on catalog responses, message forks drop the inherited forkedFrom). Post-merge: server/web/domain/contracts tsc clean; server activity/fork/event routes 11, web SessionsPanel/ActivityList/deepLink 23. Follow-ups: checkpoint rollback still offered on another member's session (same harm as Fork/Re-run); provider auto-retry gap briefly shows idle; Copy link hidden until /me returns; a deep link in an already-open tab is not handled.
