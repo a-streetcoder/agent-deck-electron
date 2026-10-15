@@ -149,7 +149,13 @@ const CHILD_MEMORY_TOOL_NAMES = new Set([
   "agent_deck_memory_mark_stale",
 ]);
 /** The bridge tools that start a child pi, withheld when delegation is off. */
-const DELEGATION_TOOL_NAMES = new Set(["managed_subagent", "managed_parallel"]);
+const DELEGATION_TOOL_NAMES = new Set([
+  "managed_subagent",
+  "managed_parallel",
+  "spawn_subagent",
+  "await_subagents",
+  "cancel_subagent",
+]);
 
 /**
  * The child subagent's supervisor tool. Exposed ONLY through the per-child bridge
@@ -1036,7 +1042,7 @@ async function initServer(
 
   // Native subagents, supervisor listing, and the session activity plan: the
   // Deck-agent bridge tools every parent session gets.
-  registerDeckBridgeTools(bridge, sessions);
+  registerDeckBridgeTools(bridge, sessions, eventLog);
   registerSupervisorListBridgeTool(bridge, supervisor);
 
   // Resource scanning follows the Pi subprocess HOME override so scanners,
