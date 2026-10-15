@@ -881,9 +881,7 @@ export function registerLoopRoutes(
             thinking: thinking as ThinkingLevel | undefined,
             defaultExpectedOutcome,
             ...(defaultTools ? { defaultTools } : {}),
-            ...(checkerShell
-              ? { checkerShell: { validationCommand: loop.validationCommand } }
-              : {}),
+            ...(checkerShell ? { checkerShell } : {}),
           });
         },
         cancel: () => sessions.destroy(parent!.meta.id),

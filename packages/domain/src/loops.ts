@@ -463,7 +463,7 @@ export interface LoopRunIteration {
   evaluatorOutput?: string;
   goalDecision?: LoopGoalDecision;
   /** How the evaluator's goal decision was parsed; `missing` falls back to CONTINUE. */
-  verdictParse?: LoopVerdictParse;
+  goalVerdictParse?: LoopVerdictParse;
   pipelineStageOutputs?: LoopPipelineStageOutput[];
   parallelBranchOutputs?: LoopParallelBranchOutput[];
   /** Discovery/Triage agent's durable Markdown classification report. */

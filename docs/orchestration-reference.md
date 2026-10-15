@@ -42,29 +42,44 @@ narrow it.
 
 In `makerChecker` the order is maker, validation, checker, evaluator. The validation command
 runs before the checker decides, and its result (passed or failed, classification, exit code,
-command, last 2,000 characters of stdout and stderr) is part of the checker's prompt. A checker
-`FAIL` still ends the run as `agentFailed` (the checker may fail on scope), but the iteration
-keeps `validationPassed` and `validationEvidence` next to `checkerDecision`, and the timeline
-says "checker FAIL although validation passed" when they disagree.
+command, and the last 2,000 characters of the last 16 KiB of stdout and stderr) is part of the
+checker's prompt. A validation `spawnError` or `timeout` ends the run as `toolFailed` before any
+checker or evaluator call.
+
+A checker `FAIL` against a passed validation does not end the run. The evaluator is skipped (the
+checker keeps its veto on success), the checker's report becomes the next maker's feedback, and
+the timeline says "checker FAIL although validation passed; evaluator skipped, next iteration";
+on the last iteration the run ends `notAchieved` (`maxIterationsReached`). This diverges from the
+native app, where a checker `FAIL` is terminal: one wrong judge costs an iteration, not the run. A
+checker `FAIL` with no validation configured, or after a failed validation, still ends the run as
+`agentFailed`.
 
 Besides its read-only tools the checker has `checker_shell` (`apps/server/src/checkerShell.ts`, a
-Pi extension generated per launch). It runs, in the loop's working directory, only:
+Pi extension written per launch). It runs only `git status`, `git diff`, `git log` and `git show`
+in the loop's working directory, without a shell, with options from an exact allowlist (no
+abbreviations): `status --porcelain --short -s --branch`; `diff --stat --numstat --name-only
+--name-status --cached -U<n> --unified=<n>`; `log --oneline -n <k> --max-count=<k> --stat
+--name-only --format=oneline|short|medium`; `show --stat --name-only --format=…`; plus plain
+revisions and repository-relative paths (no absolute paths, no `..`). Git runs with every
+`GIT_*` variable removed, `GIT_CONFIG_NOSYSTEM=1`, an empty global config, empty hooks and
+attributes files, `--no-pager --no-optional-locks`, `core.fsmonitor=false`, `diff.external=`,
+`log.showSignature=false`, and `--no-ext-diff --no-textconv` on `diff`, `log` and `show`. It is
+refused when the repository config defines `filter.*`, `diff.*` or `merge.*` entries, or a
+`.gitattributes` file (or `info/attributes`) mentions `filter=`, `diff=`, `merge=` or `textconv`.
+Every other command or option is refused before it executes, and the refusal is the tool's error
+result. It does not run the validation command: the engine's result is already in the prompt.
+Timeouts (30 s) and cancellation kill the git process tree (`processTree.ts`, shared with the
+engine's validation run) and wait for it to exit.
 
-- the loop's configured validation command, exact text, through the platform shell;
-- `git status`, `git diff`, `git log` or `git show` with plain arguments, without a shell, with
-  `--no-pager`, `core.fsmonitor=false` and, except for `status`, `--no-ext-diff --no-textconv`.
-  Arguments with shell characters or spaces inside one argument, and `--output`, `--ext-diff`,
-  `--textconv`, `--exec`, `--upload-pack` and `--receive-pack`, are refused.
-
-Anything else is refused before it executes, and the refusal is the tool's error result. Git
-filters and attributes configured in the repository still apply to `status` and `diff`.
-
-Decision lines (checker and evaluator) are read by `parseVerdict`: the exact first non-empty line
-is `strict`; otherwise the first of the next three lines that is a decision token once markdown
-emphasis (`*`, `_`, `` ` ``, `#`, `>`) and trailing punctuation are trimmed is `lenient`; else
-`missing`. Iterations record `verdictParse` (evaluator) and `checkerVerdictParse`. A missing
-evaluator verdict continues as before (`CONTINUE`); a missing checker verdict still fails the
-run. Both a lenient read and a missing verdict add a timeline note.
+Decision lines (checker and evaluator) are read by `parseVerdict`. The exact first non-empty line
+is `strict`. Otherwise, on the first non-empty line or one of the next three, with markdown
+emphasis removed, `lenient` accepts in order: the token alone (trailing punctuation trimmed);
+`Verdict:` or `Decision:` followed by the token; an upper-case token starting the line followed by
+a separator (`SUCCESS - …`); and, on the first line only, an upper-case token ending it right after
+a sentence terminator (`…report the decision.SUCCESS`). A token inside or at the end of a sentence
+(`not yet a SUCCESS`) is `missing`. Iterations record `goalVerdictParse` (evaluator) and
+`checkerVerdictParse`. A missing verdict, from either role, is read as `CONTINUE`, and both a
+lenient read and a missing verdict add a timeline note.
 
 ### Delegation cancellation
 

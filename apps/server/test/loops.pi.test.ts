@@ -91,14 +91,14 @@ beforeAll(async () => {
       const toolResults = body.messages.filter((message) => message.role === "tool").length;
       if (system.includes("# Agent: Plain Maker") && toolResults === 0)
         return { name: "write", arguments: { path: "d6-made.txt", content: "made by maker\n" } };
-      // D7: the checker runs the validation itself, then tries a write it must not get.
+      // D7: the checker inspects scope with git, then tries a write it must not get.
       if (system.includes("# Agent: Shell Checker") && toolResults < 2)
         return {
           name: "checker_shell",
           arguments: {
             command:
               toolResults === 0
-                ? `node -e "process.stdout.write('d7-validated')"`
+                ? "git status --short --branch"
                 : `node -e "require('fs').writeFileSync('d7-escape.txt', 'x')"`,
           },
         };
@@ -191,26 +191,43 @@ async function putLoop(
 
 async function startRun(
   name: string,
-  overrides: { goal?: string; launchContext?: string; launchContextScope?: string } = {},
+  overrides: {
+    goal?: string;
+    launchContext?: string;
+    launchContextScope?: string;
+    projectId?: string;
+  } = {},
 ): Promise<string> {
   const catalog = (await (await fetch(`${base}/loops`)).json()) as {
     loops: Array<{ id: string; name: string }>;
   };
   const loop = catalog.loops.find((candidate) => candidate.name === name);
   if (!loop) throw new Error(`missing real-Pi Loop fixture: ${name}`);
-  const res = await fetch(`${base}/loops/${encodeURIComponent(loop.id)}/run`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      projectId,
-      provider: MOCK_PROVIDER_ID,
-      model: MOCK_MODEL_ID,
-      extensions: process.env.AGENT_DECK_PROVIDER_EXTENSIONS?.split(path.delimiter).filter(Boolean),
-      env: { HOME: tmpHome, USERPROFILE: tmpHome, PI_SKIP_VERSION_CHECK: "1" },
-      currentCheckoutConfirmed: true,
-      ...overrides,
-    }),
-  });
+  const post = () =>
+    fetch(`${base}/loops/${encodeURIComponent(loop.id)}/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId,
+        provider: MOCK_PROVIDER_ID,
+        model: MOCK_MODEL_ID,
+        extensions: process.env.AGENT_DECK_PROVIDER_EXTENSIONS?.split(path.delimiter).filter(
+          Boolean,
+        ),
+        env: { HOME: tmpHome, USERPROFILE: tmpHome, PI_SKIP_VERSION_CHECK: "1" },
+        currentCheckoutConfirmed: true,
+        ...overrides,
+      }),
+    });
+  // A previous run releases the checkout lock only after its parent session is
+  // destroyed (settled().finally in routes/loops.ts), after it reads terminal.
+  let res = await post();
+  for (let attempt = 0; res.status === 409 && attempt < 50; attempt += 1) {
+    const body = (await res.json()) as { code?: string };
+    if (body.code !== "loop_checkout_busy") break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    res = await post();
+  }
   expect(res.status).toBe(201);
   const { run } = (await res.json()) as { run: LoopRun };
   return run.id;
@@ -495,8 +512,17 @@ describe("loop run engine (real pi)", () => {
     );
   });
 
-  it("lets the checker run the validation command and refuses anything else (D7)", async () => {
-    const validationCommand = `node -e "process.stdout.write('d7-validated')"`;
+  it("gives the checker read-only git in a writing checkout and refuses anything else (D7)", async () => {
+    // A git checkout the maker could write to (currentCheckout), registered as its own project.
+    const gitProject = realpathSync(mkdtempSync(path.join(tmpdir(), "pi-loops-d7-")));
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: gitProject });
+    const created = (await (
+      await fetch(`${base}/projects`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: gitProject }),
+      })
+    ).json()) as { project: { id: string } };
     const put = await fetch(`${base}/loops`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
@@ -506,32 +532,37 @@ describe("loop run engine (real pi)", () => {
         structure: "makerChecker",
         makerName: "Maker",
         checkerName: "Shell Checker",
-        checkerRubric: "Run the validation yourself.",
-        validationCommand,
+        checkerRubric: "Inspect the scope with git.",
+        validationCommand: `node -e "process.stdout.write('d7-validated')"`,
         maxIterations: 1,
+        writeTarget: "currentCheckout",
       }),
     });
     expect(put.ok).toBe(true);
     const requestStart = mock.requests.length;
-    const run = await waitTerminal(await startRun("shell-checker-loop"));
+    const run = await waitTerminal(
+      await startRun("shell-checker-loop", { projectId: created.project.id }),
+    );
     expect(run.status).toBe("completed");
     expect(run.iterations[0]).toMatchObject({ checkerDecision: "APPROVE", validationPassed: true });
     const checkerRequests = mock.requests
       .slice(requestStart)
       .filter((item) => JSON.stringify(item.messages[0]).includes("# Agent: Shell Checker"));
-    // The engine's own validation result is in the checker's prompt.
-    expect(JSON.stringify(checkerRequests[0]!.messages.at(-1))).toContain(
+    // The engine's own validation result, output included, is in the checker's prompt.
+    const checkerPrompt = JSON.stringify(checkerRequests[0]!.messages.at(-1));
+    expect(checkerPrompt).toContain(
       "Validation (already run by Agent Deck, before your review): passed",
     );
+    expect(checkerPrompt).toContain("d7-validated");
     const toolMessages = checkerRequests
       .at(-1)!
       .messages.filter((message) => message.role === "tool")
       .map((message) => JSON.stringify(message.content));
     expect(toolMessages).toHaveLength(2);
     expect(toolMessages[0]).toContain("exit 0");
-    expect(toolMessages[0]).toContain("d7-validated");
-    expect(toolMessages[1]).toContain("checker_shell runs only the loop's validation command");
-    expect(existsSync(path.join(project, "d7-escape.txt"))).toBe(false);
+    expect(toolMessages[0]).toContain("## No commits yet on main");
+    expect(toolMessages[1]).toContain("checker_shell refused: it runs only git status");
+    expect(existsSync(path.join(gitProject, "d7-escape.txt"))).toBe(false);
   });
 
   it("streams real Pi Pipeline stages in strict order before evaluator finalization", async () => {

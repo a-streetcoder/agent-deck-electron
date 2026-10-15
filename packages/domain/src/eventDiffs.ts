@@ -301,7 +301,7 @@ export interface PublicLoopIterationSummary {
   checkerDecision?: LoopRunIteration["checkerDecision"];
   checkerVerdictParse?: LoopRunIteration["checkerVerdictParse"];
   goalDecision?: LoopRunIteration["goalDecision"];
-  verdictParse?: LoopRunIteration["verdictParse"];
+  goalVerdictParse?: LoopRunIteration["goalVerdictParse"];
   validationPassed: boolean | null;
   /** Outcome only: never the command, working directory or stdio. */
   validation?: {
@@ -428,7 +428,7 @@ function toPublicIteration(
       "checkerDecision",
       "checkerVerdictParse",
       "goalDecision",
-      "verdictParse",
+      "goalVerdictParse",
     ]),
     validationPassed: iteration.validationPassed,
     ...(validation

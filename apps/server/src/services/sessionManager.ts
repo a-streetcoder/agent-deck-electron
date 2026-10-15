@@ -2053,8 +2053,8 @@ export interface ChildLaunchOverrides {
   defaultExpectedOutcome?: SubagentExpectedOutcome;
   /** Tool list used when the named agent has no `tools:` frontmatter (loop triage). */
   defaultTools?: string[];
-  /** Loop checker: add `checker_shell` (validation command + read-only git) to a readOnly child. */
-  checkerShell?: { validationCommand?: string };
+  /** Loop checker: add `checker_shell` (read-only git, checkerShell.ts) to a readOnly child. */
+  checkerShell?: boolean;
 }
 
 export interface ChildRunOptions {
@@ -2493,10 +2493,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
 
         const checkerShell =
           toolPolicy === "readOnly" && overrides?.checkerShell
-            ? writeCheckerShellExtension(promptDir, {
-                cwd: childCwd,
-                validationCommand: overrides.checkerShell.validationCommand,
-              })
+            ? writeCheckerShellExtension(promptDir, { cwd: childCwd })
             : undefined;
         const childTools =
           runOptions?.worktree && !resolved

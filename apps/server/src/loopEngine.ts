@@ -45,9 +45,14 @@ import {
   type PublicViewOptions,
 } from "@agent-deck/domain";
 import { z } from "zod";
+import { killProcessTree } from "./processTree.ts";
 
 export interface ValidationResult extends LoopValidationResult {
   evidence: string;
+  /** Last VALIDATION_OUTPUT_LIMIT characters of each stream (stdout/stderr keep the head).
+   * In memory only: stripped before the result is stored on the iteration. */
+  stdoutTail?: string;
+  stderrTail?: string;
 }
 interface LegacyValidationResult {
   passed: boolean;
@@ -60,6 +65,9 @@ function appendBounded(current: string, chunk: Buffer): string {
   return next.length > VALIDATION_OUTPUT_LIMIT
     ? `${next.slice(0, VALIDATION_OUTPUT_LIMIT)}\n… output truncated …`
     : next;
+}
+function appendTail(current: string, chunk: Buffer): string {
+  return (current + chunk.toString("utf8")).slice(-VALIDATION_OUTPUT_LIMIT);
 }
 
 /** Shell validation with separate bounded streams and awaited process-tree termination. */
@@ -91,6 +99,8 @@ export async function runValidationCommand(
   return await new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
+    let stdoutTail = "";
+    let stderrTail = "";
     let classification: ValidationResult["classification"] = "completed";
     let settled = false;
     let child: ReturnType<typeof spawn>;
@@ -135,6 +145,8 @@ export async function runValidationCommand(
         durationMs: Date.now() - started,
         stdout,
         stderr,
+        stdoutTail,
+        stderrTail,
         stdoutPath,
         stderrPath,
         classification,
@@ -143,27 +155,7 @@ export async function runValidationCommand(
       });
     };
     const terminate = (): void => {
-      if (!child.pid) return;
-      try {
-        if (process.platform === "win32") {
-          const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
-            windowsHide: true,
-            stdio: "ignore",
-          });
-          killer.once("error", () => {});
-        } else {
-          process.kill(-child.pid, "SIGTERM");
-          setTimeout(() => {
-            try {
-              process.kill(-child.pid!, "SIGKILL");
-            } catch {
-              // Already exited.
-            }
-          }, 2_000).unref();
-        }
-      } catch {
-        // Already exited.
-      }
+      if (child.pid) killProcessTree(child.pid, spawn);
     };
     const abort = (): void => {
       classification = "cancelled";
@@ -180,9 +172,11 @@ export async function runValidationCommand(
       });
       child.stdout?.on("data", (chunk: Buffer) => {
         stdout = appendBounded(stdout, chunk);
+        stdoutTail = appendTail(stdoutTail, chunk);
       });
       child.stderr?.on("data", (chunk: Buffer) => {
         stderr = appendBounded(stderr, chunk);
+        stderrTail = appendTail(stderrTail, chunk);
       });
       timer = setTimeout(() => {
         classification = "timeout";
@@ -230,8 +224,8 @@ export type ExecuteLoopRole = (request: {
  * Makers and pipeline stages writing to a checkout edit directly; checkers,
  * evaluators, triage, branches and artifact-only loops stay report-only.
  * Triage without `tools:` reads only; an explicit `tools:` list may let it edit.
- * The checker also gets `checker_shell`: the loop's validation command and
- * read-only git, nothing else (checkerShell.ts). */
+ * The checker also gets `checker_shell`: allowlisted read-only git, nothing
+ * else (checkerShell.ts); the validation result is already in its prompt. */
 export function loopRoleLaunchDefaults(
   phase: Parameters<ExecuteLoopRole>[0]["phase"],
   writeTarget: LoopDefinition["writeTarget"],
@@ -580,10 +574,14 @@ function unconfiguredValidation(cwd: string): ValidationResult {
 
 const MAX_VERDICT_PREAMBLE_LINES = 3;
 
-/** Read a role's decision line. The exact first non-empty line is `strict`;
- * otherwise the first line that is a decision token once markdown emphasis and
- * trailing punctuation are trimmed, after at most three preamble lines, is
- * `lenient`. Anything else is `missing` and the caller applies its fallback. */
+/** Read a role's decision line. The exact first non-empty line is `strict`.
+ * Otherwise, on the first non-empty line or one of the next three (markdown
+ * emphasis removed), `lenient` accepts in order: the token alone with trailing
+ * punctuation; `Verdict:`/`Decision:` followed by the token; an upper-case token
+ * that starts the line followed by a separator; and, on the first line only, an
+ * upper-case token that ends it right after a sentence terminator (a judge that
+ * glues the decision to its preamble, "…report the decision.SUCCESS"). A token
+ * inside or at the end of a sentence is never a verdict: `missing`. */
 export function parseVerdict<T extends string>(
   text: string,
   allowed: ReadonlySet<T>,
@@ -595,19 +593,30 @@ export function parseVerdict<T extends string>(
     .slice(0, MAX_VERDICT_PREAMBLE_LINES + 1);
   const first = lines[0]?.toUpperCase();
   if (first && allowed.has(first as T)) return { decision: first as T, parse: "strict" };
-  for (const line of lines) {
-    const token = line
-      .replace(/^[\s>#*_`~]+/, "")
-      .replace(/[\s*_`~.,:;!?]+$/, "")
-      .toUpperCase();
-    if (allowed.has(token as T)) return { decision: token as T, parse: "lenient" };
+  const tokens = [...allowed].sort((a, b) => b.length - a.length).join("|");
+  const label = new RegExp(`^(?:verdict|decision)\\s*[:=—-]\\s*(${tokens})\\b`, "i");
+  const leading = new RegExp(`^(${tokens})\\b[\\s:—-]`);
+  const glued = new RegExp(`[.!?]\\s*(${tokens})$`);
+  for (const [index, raw] of lines.entries()) {
+    const line = raw
+      .replace(/[*`]/g, "")
+      .replace(/^[\s>#_~]+/, "")
+      .trim();
+    const trimmed = line.replace(/[\s_~.,:;!?]+$/, "");
+    const alone = trimmed.toUpperCase();
+    const match = allowed.has(alone as T)
+      ? alone
+      : (line.match(label)?.[1]?.toUpperCase() ??
+        line.match(leading)?.[1] ??
+        (index === 0 ? trimmed.match(glued)?.[1] : undefined));
+    if (match) return { decision: match as T, parse: "lenient" };
   }
   return { parse: "missing" };
 }
 
 const TAIL_CHARS = 2_000;
 const tail = (value: string): string =>
-  value.length > TAIL_CHARS ? `â€¦${value.slice(-TAIL_CHARS)}` : value;
+  value.length > TAIL_CHARS ? `...${value.slice(-TAIL_CHARS)}` : value;
 
 /** Validation evidence handed to the checker before it decides. */
 function checkerValidationEvidence(validation: ValidationResult, configured: boolean): string {
@@ -615,8 +624,12 @@ function checkerValidationEvidence(validation: ValidationResult, configured: boo
   return [
     `Validation (already run by Agent Deck, before your review): ${validation.passed ? "passed" : "failed"} (${validation.classification}, exit ${validation.exitCode ?? "unavailable"})`,
     `Command: ${validation.command}`,
-    validation.stdout.trim() ? `stdout tail:\n${tail(validation.stdout.trim())}` : "",
-    validation.stderr.trim() ? `stderr tail:\n${tail(validation.stderr.trim())}` : "",
+    ...(["stdout", "stderr"] as const).map((stream) => {
+      const text = (
+        (stream === "stdout" ? validation.stdoutTail : validation.stderrTail) || validation[stream]
+      ).trim();
+      return text ? `${stream} tail:\n${tail(text)}` : "";
+    }),
   ]
     .filter(Boolean)
     .join("\n");
@@ -1497,7 +1510,7 @@ export class LoopEngine {
   /** Evaluator decision; a missing verdict continues, and the timeline says so. */
   private goalVerdict(iteration: LoopRunIteration, output: string): LoopGoalDecision {
     const { decision, parse } = parseVerdict(output, GOAL_DECISIONS);
-    iteration.verdictParse = parse;
+    iteration.goalVerdictParse = parse;
     if (parse !== "strict") {
       iteration.timeline.push({
         id: randomUUID(),
@@ -1827,7 +1840,8 @@ export class LoopEngine {
                 typeof result === "boolean" ? (result ? "passed" : "failed") : result.evidence,
             }
           : result;
-      iteration.validationResult = normalized;
+      const { stdoutTail: _stdoutTail, stderrTail: _stderrTail, ...stored } = normalized;
+      iteration.validationResult = stored;
       for (const [stream, filePath] of [
         ["stdout", normalized.stdoutPath],
         ["stderr", normalized.stderrPath],
@@ -2385,6 +2399,13 @@ export class LoopEngine {
         if (this.stopped(run, signal)) return;
         iteration.validationPassed = loop.validationCommand ? validation.passed : null;
         iteration.validationEvidence = validation.evidence;
+        // A broken validation tool ends the run before any judge is spent on it.
+        if (validation.classification === "spawnError" || validation.classification === "timeout") {
+          iteration.endedAt = this.now();
+          this.changed(run);
+          this.finalize(run, "failed", "toolFailed");
+          return;
+        }
 
         const checkerPrompt = [
           `Goal: ${loop.goal}`,
@@ -2411,7 +2432,7 @@ export class LoopEngine {
         );
         if (this.stopped(run, signal)) return;
         this.persistArtifact(run, iteration, "checker", iteration.checkerOutput);
-        const { decision: checkerDecision, parse: checkerParse } = parseVerdict(
+        const { decision: parsedChecker, parse: checkerParse } = parseVerdict(
           iteration.checkerOutput,
           CHECKER_DECISIONS,
         );
@@ -2423,29 +2444,30 @@ export class LoopEngine {
             roleName: loop.checkerName ?? "Checker",
             note:
               checkerParse === "missing"
-                ? "checker verdict missing; run failed"
-                : `checker verdict ${checkerDecision} read after a preamble or emphasis`,
+                ? "checker verdict missing; treated as CONTINUE"
+                : `checker verdict ${parsedChecker} read after a preamble or emphasis`,
             timestamp: this.now(),
           });
         }
-        if (!checkerDecision) {
-          iteration.endedAt = this.now();
-          this.changed(run);
-          this.finalize(run, "failed", "agentFailed");
-          return;
-        }
+        const checkerDecision = parsedChecker ?? "CONTINUE";
         iteration.checkerDecision = checkerDecision;
         if (checkerDecision === "FAIL") {
-          // Honoured (the checker may fail on scope), but a passed validation is
-          // kept beside it on the iteration and named in the timeline.
+          // Diverges from native: against a passed validation one judge's FAIL
+          // costs an iteration, not the run. The evaluator is skipped (the
+          // checker keeps its veto on success) and the FAIL becomes feedback;
+          // the last iteration ends notAchieved through the loop exit below.
           if (loop.validationCommand && validation.passed) {
             iteration.timeline.push({
               id: randomUUID(),
               phase: "checker",
               roleName: loop.checkerName ?? "Checker",
-              note: "checker FAIL although validation passed",
+              note: "checker FAIL although validation passed; evaluator skipped, next iteration",
               timestamp: this.now(),
             });
+            iteration.endedAt = this.now();
+            this.changed(run);
+            feedback = [iteration.checkerOutput, validation.evidence].join("\n\n");
+            continue;
           }
           iteration.endedAt = this.now();
           this.changed(run);
@@ -2484,10 +2506,6 @@ export class LoopEngine {
         this.changed(run);
         if (goalDecision === "FAIL") {
           this.finalize(run, "failed", "agentFailed");
-          return;
-        }
-        if (validation.classification === "spawnError" || validation.classification === "timeout") {
-          this.finalize(run, "failed", "toolFailed");
           return;
         }
         if (goalDecision === "SUCCESS" && validation.passed) {
