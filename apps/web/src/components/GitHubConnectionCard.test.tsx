@@ -102,6 +102,75 @@ describe("GitHubConnectionCard (SRV-06)", () => {
     expect(screen.getByRole("button", { name: "Connect" })).toBeTruthy();
   });
 
+  it("ignores a late poll answer after Cancel and keeps a newer flow's timer", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let answerOld!: (response: Response) => void;
+    const polled: string[] = [];
+    let started = 0;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/runtime/github") return json(disconnected);
+      if (method === "POST") {
+        started += 1;
+        return json(
+          {
+            id: `f${started}`,
+            userCode: `CODE-${started}`,
+            verificationUri: "https://x",
+            interval: 1,
+          },
+          201,
+        );
+      }
+      polled.push(url);
+      if (url.endsWith("/f1")) return new Promise<Response>((resolve) => (answerOld = resolve));
+      return json({ status: "pending", interval: 1 });
+    });
+    render(<GitHubConnectionCard />);
+    fireEvent.click(await screen.findByRole("button", { name: "Connect" }));
+    await screen.findByText("CODE-1");
+    await act(async () => void (await vi.advanceTimersByTimeAsync(1000)));
+    expect(polled).toEqual(["/runtime/github/connect/f1"]);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Connect" }));
+    await screen.findByText("CODE-2");
+    // The old flow answers late, with "pending": nothing reschedules for f1.
+    await act(async () => answerOld(json({ status: "pending", interval: 1 })));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(3000)));
+    expect(polled.filter((url) => url.endsWith("/f1"))).toHaveLength(1);
+    expect(polled.filter((url) => url.endsWith("/f2")).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("CODE-2")).toBeTruthy();
+  });
+
+  it("keeps polling after a transient network error", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let polls = 0;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/runtime/github") return json(polls >= 2 ? connected : disconnected);
+      if (init?.method === "POST") {
+        return json(
+          { id: "f1", userCode: "NET-1", verificationUri: "https://x", interval: 1 },
+          201,
+        );
+      }
+      polls += 1;
+      if (polls === 1) throw new TypeError("Failed to fetch");
+      return json({ status: "done", login: "ale-gh" });
+    });
+    render(<GitHubConnectionCard />);
+    fireEvent.click(await screen.findByRole("button", { name: "Connect" }));
+    await screen.findByText("NET-1");
+    await act(async () => void (await vi.advanceTimersByTimeAsync(1000)));
+    expect(screen.getByText("NET-1")).toBeTruthy();
+    await act(async () => void (await vi.advanceTimersByTimeAsync(1000)));
+    expect(await screen.findByText("@ale-gh")).toBeTruthy();
+    expect(screen.getByTestId("github-disconnect-note").textContent).toContain(
+      "Running sessions and open terminals keep it until they restart",
+    );
+  });
+
   it("disconnects", async () => {
     routes({
       "GET /runtime/github": [connected, disconnected],

@@ -649,7 +649,7 @@ describe("SRV-06 GitHub connection on a shared server", () => {
     tokenAnswers.push(
       { error: "authorization_pending" },
       { error: "slow_down", interval: 0 },
-      { access_token: TOKEN, token_type: "bearer", scope: "repo,read:user" },
+      { access_token: TOKEN, token_type: "bearer", scope: "repo,workflow" },
     );
     expect(await (await poll(id, ale)).json()).toEqual({ status: "pending", interval: 0 });
     expect(await (await poll(id, ale)).json()).toEqual({ status: "pending", interval: 0 });
@@ -662,7 +662,7 @@ describe("SRV-06 GitHub connection on a shared server", () => {
       connection: {
         login: "ale-gh",
         avatarUrl: "https://avatars.example/ale",
-        scopes: ["repo", "read:user"],
+        scopes: ["repo", "workflow"],
       },
     });
     expect(JSON.stringify(connected)).not.toContain(TOKEN);
@@ -676,6 +676,65 @@ describe("SRV-06 GitHub connection on a shared server", () => {
     expect(removed.status).toBe(200);
     expect(existsSync(githubFile())).toBe(false);
     expect(await status(ale)).toMatchObject({ connection: null });
+  });
+
+  it("runs issue changes and the issues account as the requester's connection", async () => {
+    // gh stand-in that runs everywhere: node itself, with a --require hook that
+    // logs argv and GH_TOKEN and exits before node reads its "script" argv.
+    const stubDir = mkdtempSync(path.join(tmpdir(), "deck-gh-stub-"));
+    const log = path.join(stubDir, "calls.log");
+    const stub = path.join(stubDir, "gh-stub.cjs");
+    writeFileSync(
+      stub,
+      `require("fs").appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv: process.argv.slice(1), token: process.env.GH_TOKEN ?? null }) + "\\n"); process.exit(0);`,
+    );
+    const projectDir = mkdtempSync(path.join(tmpdir(), "deck-gh-project-"));
+    const created = await fetch(endpoint("/projects"), {
+      method: "POST",
+      headers: { ...ale, "content-type": "application/json" },
+      body: JSON.stringify({ path: projectDir }),
+    });
+    const { project } = (await created.json()) as { project: { id: string } };
+    mkdirSync(path.dirname(githubFile()), { recursive: true });
+    writeFileSync(githubFile(), JSON.stringify({ token: TOKEN, login: "ale-gh" }));
+    const saved = { bin: process.env.AGENT_DECK_GH_BIN, opts: process.env.NODE_OPTIONS };
+    process.env.AGENT_DECK_GH_BIN = process.execPath;
+    process.env.NODE_OPTIONS = `--require "${stub.replace(/\\/g, "/")}"`;
+    try {
+      for (const headers of [ale, andrea]) {
+        const reopened = await fetch(endpoint(`/projects/${project.id}/issues/9/reopen`), {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: "{}",
+        });
+        expect(reopened.status).toBe(200);
+      }
+      const calls = readFileSync(log, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { argv: string[]; token: string | null });
+      // Node absolutises its "script" argument: compare the basename.
+      expect(calls.map((call) => [path.basename(call.argv[0]!), ...call.argv.slice(1)])).toEqual([
+        ["issue", "reopen", "9"],
+        ["issue", "reopen", "9"],
+      ]);
+      expect(calls[0]!.token).toBe(TOKEN);
+      expect(calls[1]!.token).not.toBe(TOKEN);
+      expect(await (await fetch(endpoint("/issues/connection"), { headers: ale })).json()).toEqual({
+        connected: true,
+        login: "ale-gh",
+        profileUrl: "https://github.com/ale-gh",
+      });
+    } finally {
+      for (const [key, value] of [
+        ["AGENT_DECK_GH_BIN", saved.bin],
+        ["NODE_OPTIONS", saved.opts],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(githubFile(), { force: true });
+    }
   });
 
   it("reports an expired code", async () => {

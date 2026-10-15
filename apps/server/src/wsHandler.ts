@@ -1,7 +1,7 @@
 import type { SessionDraftGateway } from "./sessionDrafts.ts";
 import type { IncomingMessage } from "node:http";
 import { RPC_WS_PATH } from "@agent-deck/contracts";
-import type { DiffPush, ServerMessage, SessionMeta } from "@agent-deck/contracts";
+import type { DiffPush, ServerMessage, UserIdentity } from "@agent-deck/contracts";
 import type { FastifyInstance } from "fastify";
 import type { DiffGateway } from "./diffGateway.ts";
 import type { EditorLauncher } from "./editorLauncher.ts";
@@ -55,8 +55,8 @@ export function setupWebSocket(deps: {
   sessionAuthors?: SessionAuthorStore;
   /** A1 event log producers (turn.prompted). */
   events?: EventProducers;
-  /** SRV-06: owner env layered over the in-app terminal's env (GitHub token). */
-  terminalEnv?: (meta: SessionMeta) => Record<string, string>;
+  /** SRV-06: the REQUESTER's env layered over the in-app terminal's (GitHub token). */
+  terminalEnv?: (user: UserIdentity | undefined) => Record<string, string>;
   /** SRV-09: trusted proxy on, host launchers refuse. */
   sharedServer?: boolean;
   /** Remote-server POC: browser origin reachable through the trusted proxy. */

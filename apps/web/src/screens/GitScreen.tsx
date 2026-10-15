@@ -126,6 +126,26 @@ function GitProjectScreen({
   // SRV-06: pushes from this screen use the viewer's GitHub connection.
   const sharedServer = useAppStore((state) => state.me !== null);
   const { status: github } = useGitHubStatus(sharedServer);
+  // Whether this project's push remote uses the GitHub connection at all
+  // (SSH host aliases, explicit pushurls and other hosts do not); null: no remote.
+  const [pushRemoteGitHub, setPushRemoteGitHub] = useState<boolean | null | undefined>(undefined);
+  useEffect(() => {
+    if (!sharedServer || !currentProjectId) return;
+    let live = true;
+    void fetch(`/projects/${encodeURIComponent(currentProjectId)}/git/push-remote`)
+      .then(async (response) =>
+        response.ok ? ((await response.json()) as { github?: unknown }) : {},
+      )
+      .then((body) => {
+        if (live && (typeof body.github === "boolean" || body.github === null)) {
+          setPushRemoteGitHub(body.github);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [sharedServer, currentProjectId]);
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const gitActionRequest = useAppStore((state) => state.gitActionRequest);
   const clearGitActionRequest = useAppStore((state) => state.clearGitActionRequest);
@@ -1046,9 +1066,11 @@ function GitProjectScreen({
                   className="text-right text-caption text-text-muted"
                   data-testid="git-push-identity"
                 >
-                  {github.connection
-                    ? `Pushing as @${github.connection.login} (your GitHub connection).`
-                    : "Pushing as the server default. Connect GitHub under Settings > Providers to push as you."}
+                  {pushRemoteGitHub === false
+                    ? "This remote pushes with the server key, not your GitHub connection."
+                    : github.connection
+                      ? `GitHub HTTPS pushes use @${github.connection.login || "your connected account"}.`
+                      : "Pushing as the server default. Connect GitHub under Settings > Providers to push as you."}
                 </p>
               ) : null}
             </div>

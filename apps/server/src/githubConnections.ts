@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { UserIdentity } from "@agent-deck/contracts";
 import { ensureUserDir, type UserAgentDirs } from "./userAgentDirs.ts";
@@ -24,7 +24,10 @@ export const GITHUB_FILE = "github.json";
 const DEVICE_CODE_URL = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const USER_URL = "https://api.github.com/user";
-const SCOPES = "repo read:user";
+// `workflow`: GitHub refuses pushes that touch .github/workflows without it.
+// GET /user needs no scope. An OAuth App token (not a GitHub App one, which
+// expires after 8 h) carries these scopes until revoked; any agent can read it.
+const SCOPES = "repo workflow";
 
 export interface GitHubStatus {
   login: string;
@@ -85,15 +88,29 @@ export class GitHubConnections {
     return path.join(ensureUserDir(this.dataDir, user.id), GITHUB_FILE);
   }
 
+  /**
+   * The user's connection; `undefined` only when there is none. A symlinked
+   * user dir or github.json, or a non-regular file, THROWS (fails closed, like
+   * SRV-11's auth.json) rather than silently pushing as the server default.
+   */
   read(user: UserIdentity): GitHubConnection | undefined {
+    const file = this.file(user); // throws on a dir alias
+    let stat;
+    try {
+      stat = lstatSync(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error(`[github] refusing ${file}: not a regular file`);
+    }
     let raw: unknown;
     try {
-      raw = JSON.parse(readFileSync(this.file(user), "utf8"));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        // Never the content: it holds the token.
-        console.warn(`[github] ignoring an unreadable ${GITHUB_FILE}`);
-      }
+      raw = JSON.parse(readFileSync(file, "utf8"));
+    } catch {
+      // Never the content: it holds the token.
+      console.warn(`[github] ignoring an unreadable ${GITHUB_FILE}`);
       return undefined;
     }
     const value = (raw ?? {}) as Partial<GitHubConnection>;
@@ -114,7 +131,9 @@ export class GitHubConnections {
     return status;
   }
 
+  /** Forget the token, and cancel this user's flows so none writes one again. */
   remove(user: UserIdentity): void {
+    for (const [id, flow] of this.flows) if (flow.userId === user.id) this.flows.delete(id);
     rmSync(this.file(user), { force: true });
   }
 
@@ -195,7 +214,17 @@ export class GitHubConnections {
       });
       if (typeof body.access_token === "string" && body.access_token) {
         const token = body.access_token;
-        const account = await this.account(token);
+        let account = { login: "", avatarUrl: "" };
+        let lookupFailed = false;
+        try {
+          account = await this.account(token);
+        } catch (error) {
+          // The token is issued (the device code is spent): keep it, say so.
+          console.warn(`[github] account lookup failed: ${(error as Error).message}`);
+          lookupFailed = true;
+        }
+        // Disconnected while this poll was in flight: write nothing.
+        if (this.flows.get(id) !== flow) return undefined;
         this.write(flow.user, {
           token,
           login: account.login,
@@ -203,6 +232,13 @@ export class GitHubConnections {
           scopes: typeof body.scope === "string" ? body.scope.split(/[,\s]+/).filter(Boolean) : [],
           connectedAt: new Date().toISOString(),
         });
+        if (lookupFailed) {
+          return this.finish(flow, {
+            status: "error",
+            error:
+              "GitHub is connected, but the account could not be read. Disconnect and connect again if pushes fail.",
+          });
+        }
         return this.finish(flow, { status: "done", login: account.login });
       }
       switch (body.error) {
@@ -296,27 +332,46 @@ function githubError(body: Record<string, unknown>, fallback: string): string {
 export const GITHUB_CREDENTIAL_HELPER =
   '!f() { test "$1" = get && printf \'username=x-access-token\\npassword=%s\\n\' "$GH_TOKEN"; }; f';
 
-/** The owner's GitHub env (GH_TOKEN for gh, a credential helper for git); empty without one. */
+/**
+ * The GitHub env for `user` (GH_TOKEN for gh, a credential helper for git);
+ * empty without one. GIT_CONFIG_* entries start after any GIT_CONFIG_COUNT in
+ * `base` (the env they are layered over), so existing entries survive.
+ */
 export function githubEnv(
-  owner: UserIdentity | undefined,
+  user: UserIdentity | undefined,
   connections: GitHubConnections | undefined,
+  base: Record<string, string | undefined> = process.env,
 ): Record<string, string> {
-  const token = owner && connections?.read(owner)?.token;
+  const token = user && connections?.read(user)?.token;
   if (!token) return {};
   const config: Array<[string, string]> = [
     ["credential.https://github.com.helper", ""],
     ["credential.https://github.com.helper", GITHUB_CREDENTIAL_HELPER],
-    // SSH remotes push over HTTPS so the owner's token, not the server's key, is used.
-    ["url.https://github.com/.pushInsteadOf", "git@github.com:"],
-    ["url.https://github.com/.pushInsteadOf", "ssh://git@github.com/"],
+    // github.com SSH URLs go over HTTPS so the token, not the server's key, is
+    // used. insteadOf, not pushInsteadOf: git ignores pushInsteadOf for an
+    // explicit remote.<name>.pushurl but applies insteadOf to it (fetches move
+    // to HTTPS with the same token too). Not covered: SSH host aliases.
+    ["url.https://github.com/.insteadOf", "git@github.com:"],
+    ["url.https://github.com/.insteadOf", "ssh://git@github.com/"],
   ];
+  const existing = Number(base.GIT_CONFIG_COUNT);
+  const start = Number.isInteger(existing) && existing > 0 ? existing : 0;
   const env: Record<string, string> = {
     GH_TOKEN: token,
-    GIT_CONFIG_COUNT: String(config.length),
+    GIT_CONFIG_COUNT: String(start + config.length),
   };
   config.forEach(([key, value], index) => {
-    env[`GIT_CONFIG_KEY_${index}`] = key;
-    env[`GIT_CONFIG_VALUE_${index}`] = value;
+    env[`GIT_CONFIG_KEY_${start + index}`] = key;
+    env[`GIT_CONFIG_VALUE_${start + index}`] = value;
   });
   return env;
+}
+
+/**
+ * Whether a push to `url` uses the GitHub connection: github.com over HTTPS
+ * (no embedded credentials) or the two SSH forms rewritten above. SSH host
+ * aliases and other hosts push with the server's own key or credentials.
+ */
+export function pushUsesGitHubToken(url: string): boolean {
+  return /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)/i.test(url);
 }

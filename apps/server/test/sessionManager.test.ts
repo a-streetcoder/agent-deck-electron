@@ -2868,6 +2868,12 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
     const { runtime, spawned } = makeFakeRuntime();
     // githubConnections is the 27th positional constructor argument.
     const args: unknown[] = [runtime, new ReceiptBus(false)];
+    // envFileLayer (19th) carries an inherited non-GitHub git setting.
+    args[18] = () => ({
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "http.proxy",
+      GIT_CONFIG_VALUE_0: "http://proxy.example:3128",
+    });
     args[26] = {
       read: (user: { id: string }) =>
         user.id === "c@example.com" ? { token: "gho_connected" } : undefined,
@@ -2885,13 +2891,16 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
       await manager.resume(meta(), { kind: "parent" }).catch(() => {});
       expect(spawned[0]!.spawn.env).toMatchObject({
         GH_TOKEN: "gho_connected",
-        GIT_CONFIG_KEY_1: "credential.https://github.com.helper",
-        GIT_CONFIG_VALUE_1: GITHUB_CREDENTIAL_HELPER,
+        GIT_CONFIG_COUNT: "5",
+        GIT_CONFIG_KEY_0: "http.proxy",
+        GIT_CONFIG_VALUE_0: "http://proxy.example:3128",
+        GIT_CONFIG_KEY_2: "credential.https://github.com.helper",
+        GIT_CONFIG_VALUE_2: GITHUB_CREDENTIAL_HELPER,
       });
       for (const unconnected of [spawned[1]!, spawned[2]!]) {
         const keys = Object.keys(unconnected.spawn.env ?? {});
         expect(keys).not.toContain("GH_TOKEN");
-        expect(keys).not.toContain("GIT_CONFIG_COUNT");
+        expect(unconnected.spawn.env?.GIT_CONFIG_COUNT).toBe("1");
       }
     } finally {
       await runtime.dispose();

@@ -1310,12 +1310,12 @@ export class SessionManager {
         if (activityPublicationEnabled) this.onMetaChange(changed);
         else this.onParkingMetaChange(changed);
       };
+      const layered = { ...this.envFileLayer(meta.projectId), ...env };
       const params = this.buildSpawnParams(
         meta,
         plan,
         {
-          ...this.envFileLayer(meta.projectId),
-          ...env,
+          ...layered,
           // SRV-04: the session OWNER's git identity, fixed at spawn so later
           // prompt authors cannot change it, and re-derived from meta on every
           // resume. Attribution, not authorization: Pi can still override it.
@@ -1325,7 +1325,8 @@ export class SessionManager {
           ...userAgentDirEnv(meta.createdBy, this.userAgentDirs),
           // SRV-06: pushes and PRs as the OWNER (GH_TOKEN + a github.com git
           // credential helper); no connection leaves the server default.
-          ...githubEnv(meta.createdBy, this.githubConnections),
+          // Pi spawns with process.env under this, so both count for GIT_CONFIG_*.
+          ...githubEnv(meta.createdBy, this.githubConnections, { ...process.env, ...layered }),
         },
         tempDirs,
         publishMeta,

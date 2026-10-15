@@ -68,10 +68,19 @@ it("selects locally without a session and commits/pushes the selected project", 
 
 it("says which GitHub identity a push uses on a shared server (SRV-06)", async () => {
   let github: unknown = { available: true, configured: true, connection: null };
+  let pushRemote: unknown = { github: true };
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) =>
-      Response.json(url === "/settings" ? settings : url === "/runtime/github" ? github : dirty),
+      Response.json(
+        url === "/settings"
+          ? settings
+          : url === "/runtime/github"
+            ? github
+            : url.endsWith("/git/push-remote")
+              ? pushRemote
+              : dirty,
+      ),
     ),
   );
   useAppStore.setState({ me: { id: "ale@example.com", email: "ale@example.com" } });
@@ -89,8 +98,17 @@ it("says which GitHub identity a push uses on a shared server (SRV-06)", async (
     };
     render(<GitScreen />);
     select("b");
-    expect((await screen.findByTestId("git-push-identity")).textContent).toContain(
-      "Pushing as @ale-gh",
+    expect((await screen.findByTestId("git-push-identity")).textContent).toBe(
+      "GitHub HTTPS pushes use @ale-gh.",
+    );
+    cleanup();
+    pushRemote = { github: false };
+    render(<GitScreen />);
+    select("b");
+    await waitFor(() =>
+      expect(screen.getByTestId("git-push-identity").textContent).toBe(
+        "This remote pushes with the server key, not your GitHub connection.",
+      ),
     );
   } finally {
     useAppStore.setState({ me: null });

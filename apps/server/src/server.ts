@@ -1538,7 +1538,7 @@ async function initServer(
     sessionAuthors,
     events,
     sharedServer: trustedProxy !== null,
-    terminalEnv: (meta) => githubEnv(meta.createdBy, githubConnections),
+    terminalEnv: (user) => githubEnv(user, githubConnections),
     publicOrigin: trustedProxy?.publicOrigin,
     accessVerifier,
   });

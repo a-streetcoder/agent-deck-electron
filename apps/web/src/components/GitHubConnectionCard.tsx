@@ -16,6 +16,7 @@ export interface GitHubConnectionStatus {
 }
 
 type Flow = { id: string; userCode: string; verificationUri: string; interval: number };
+type Run = { id: string; abort: AbortController; timer?: ReturnType<typeof setTimeout> };
 type PollResult =
   | { status: "pending"; interval: number }
   | { status: "done"; login: string }
@@ -55,35 +56,54 @@ export function GitHubConnectionCard() {
   const [flow, setFlow] = useState<Flow | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The ONE live flow. Cancel, unmount or a new Connect replaces it; every
+  // async step re-checks it, so a late response from an old flow is ignored
+  // and can never reschedule or clear a newer flow's timer.
+  const active = useRef<Run | null>(null);
 
-  const stop = useCallback(() => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
-    setFlow(null);
+  const halt = useCallback(() => {
+    const run = active.current;
+    active.current = null;
+    if (!run) return;
+    if (run.timer) clearTimeout(run.timer);
+    run.abort.abort();
   }, []);
-  useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
+  const stop = useCallback(() => {
+    halt();
+    setFlow(null);
+  }, [halt]);
+  useEffect(() => halt, [halt]);
 
   const poll = useCallback(
-    (current: Flow, seconds: number) => {
-      timer.current = setTimeout(
+    (run: Run, seconds: number) => {
+      run.timer = setTimeout(
         async () => {
-          let result: PollResult;
+          if (active.current !== run) return;
+          let response: Response;
+          let result: PollResult | null = null;
           try {
-            const response = await fetch(
-              `/runtime/github/connect/${encodeURIComponent(current.id)}`,
-            );
-            if (!response.ok) throw new Error(await errorText(response));
-            result = (await response.json()) as PollResult;
-          } catch (error) {
-            stop();
-            setMessage(error instanceof Error ? error.message : String(error));
+            response = await fetch(`/runtime/github/connect/${encodeURIComponent(run.id)}`, {
+              signal: run.abort.signal,
+            });
+            if (response.ok) result = (await response.json()) as PollResult;
+          } catch {
+            // Transient network error: keep polling until the server says otherwise.
+            if (active.current === run) poll(run, seconds);
             return;
           }
-          if (result.status === "pending") return poll(current, result.interval);
+          if (active.current !== run) return;
+          if (!result) {
+            const error = await errorText(response);
+            if (active.current !== run) return;
+            stop();
+            setMessage(error);
+            return;
+          }
+          if (result.status === "pending") return poll(run, result.interval);
           stop();
-          if (result.status === "done") await reload();
-          else setMessage(result.error);
+          if (result.status !== "done") setMessage(result.error);
+          // "error" may still have stored a token (account lookup failed): show it.
+          if (result.status === "done" || result.status === "error") await reload();
         },
         Math.max(seconds, 1) * 1000,
       );
@@ -94,12 +114,15 @@ export function GitHubConnectionCard() {
   const connect = async (): Promise<void> => {
     setBusy(true);
     setMessage(null);
+    halt();
     try {
       const response = await fetch("/runtime/github/connect", { method: "POST" });
       if (!response.ok) throw new Error(await errorText(response));
       const started = (await response.json()) as Flow;
+      const run: Run = { id: started.id, abort: new AbortController() };
+      active.current = run;
       setFlow(started);
-      poll(started, started.interval);
+      poll(run, started.interval);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -133,7 +156,13 @@ export function GitHubConnectionCard() {
               <img src={connection.avatarUrl} alt="" className="size-6 shrink-0 rounded-full" />
             ) : null}
             <span className="min-w-0 flex-1 truncate text-label text-text-primary">
-              Connected as <span className="font-medium">@{connection.login}</span>
+              {connection.login ? (
+                <>
+                  Connected as <span className="font-medium">@{connection.login}</span>
+                </>
+              ) : (
+                "Connected (account unknown)"
+              )}
             </span>
             <Button
               type="button"
@@ -176,8 +205,9 @@ export function GitHubConnectionCard() {
         ) : (
           <div className="flex items-center gap-3">
             <span className="flex-1 text-caption text-text-muted">
-              Connect GitHub so the pushes and pull requests of the sessions you create are made as
-              you. Without it they use the server default.
+              Connect GitHub so pushes and pull requests over HTTPS are made as you: from the
+              sessions you create, your terminals and the Git screen. Without it they use the server
+              default.
             </span>
             <Button
               type="button"
@@ -190,6 +220,12 @@ export function GitHubConnectionCard() {
             </Button>
           </div>
         )}
+        {connection ? (
+          <p className="pt-1 text-caption text-text-muted" data-testid="github-disconnect-note">
+            Disconnect forgets the token on this server. Running sessions and open terminals keep it
+            until they restart; revoke it on github.com under Settings &gt; Applications.
+          </p>
+        ) : null}
         {message ? (
           <p className="pt-1 text-caption text-danger" role="alert">
             {message}
