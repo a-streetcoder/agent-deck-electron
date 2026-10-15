@@ -62,21 +62,25 @@ export class SupervisorLog {
     return request;
   }
 
-  /** Mark a pending blocking request answered with the response. No-op if unknown. */
-  markAnswered(id: string, response: string): void {
+  /** Mark a pending blocking request answered with the response; returns it, or
+   * undefined (no-op) when unknown. */
+  markAnswered(id: string, response: string): SupervisorRequest | undefined {
     const request = this.entries.find((e) => e.id === id);
-    if (!request) return;
+    if (!request) return undefined;
     request.status = "answered";
     request.response = response;
+    return request;
   }
 
   /** Mark a pending request cancelled (timed out / subagent ended). No-op if
-   * unknown or already answered. */
-  markCancelled(id: string, reason: string): void {
+   * unknown or already settled (returns undefined then, else the request). */
+  markCancelled(id: string, reason: string): SupervisorRequest | undefined {
     const request = this.entries.find((e) => e.id === id);
-    if (!request || request.status === "answered") return;
+    if (!request || request.status === "answered" || request.status === "cancelled")
+      return undefined;
     request.status = "cancelled";
     request.response = reason;
+    return request;
   }
 
   /** All recorded requests, optionally filtered to one parent session. */

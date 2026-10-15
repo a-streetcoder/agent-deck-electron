@@ -1,5 +1,7 @@
 import { copyFileSync } from "node:fs";
 import type { SessionMeta } from "@agent-deck/contracts";
+import type { EventActor } from "@agent-deck/domain";
+import { userActor, type EventProducers } from "./eventProducers.ts";
 import { gitRestoreCheckpoint } from "./git.ts";
 import type { ReceiptBus } from "./receipts.ts";
 import type { ManagedSession, SessionManager } from "./SessionManager.ts";
@@ -59,6 +61,8 @@ export interface CheckpointRollbackDeps {
    * launch plan), so rollback reuses the one correct relaunch, not a copy.
    */
   readonly reopen: (meta: SessionMeta) => Promise<ManagedSession>;
+  /** A1 event log producers. */
+  readonly events?: EventProducers;
 }
 
 export interface CheckpointRollbackResult {
@@ -78,14 +82,19 @@ export interface CheckpointRollbackResult {
 }
 
 export interface CheckpointRollbackGateway {
-  rollback(params: { sessionId: string; turnIndex: number }): Promise<CheckpointRollbackResult>;
+  rollback(params: {
+    sessionId: string;
+    turnIndex: number;
+    /** Who asked (A1 event log); the RPC handler passes the connection's user. */
+    actor?: EventActor;
+  }): Promise<CheckpointRollbackResult>;
 }
 
 export function makeCheckpointRollback(deps: CheckpointRollbackDeps): CheckpointRollbackGateway {
-  const { sessions, checkpoints, receipts, reopen } = deps;
+  const { sessions, checkpoints, receipts, reopen, events } = deps;
 
   return {
-    async rollback({ sessionId, turnIndex }) {
+    async rollback({ sessionId, turnIndex, actor = userActor() }) {
       const session = sessions.get(sessionId);
       if (!session) throw new Error("unknown session");
       const meta = session.meta;
@@ -155,7 +164,7 @@ export function makeCheckpointRollback(deps: CheckpointRollbackDeps): Checkpoint
       // 1. Metadata: capture a safety checkpoint of the CURRENT state (undo
       // point) and truncate the future. Throws if turnIndex is unknown — before
       // anything is stopped or mutated, so the session stays live.
-      await checkpoints.prepareRollback(
+      const { target, safety } = await checkpoints.prepareRollback(
         {
           sessionId,
           cwd,
@@ -163,7 +172,10 @@ export function makeCheckpointRollback(deps: CheckpointRollbackDeps): Checkpoint
           label: meta.title ? `Before rollback — ${meta.title}` : "Before rollback",
           turnIndex,
         },
-        async ({ target }) => {
+        async ({ target, safety }) => {
+          // The metadata step has committed: the safety checkpoint exists even if
+          // the restore below fails.
+          if (safety) events?.checkpointCreated(sessionId, safety, actor);
           // 2. Stop the live session (kills pi cleanly). From here the session
           // is out of the manager; the reopen below brings it back.
           await sessions.destroy(sessionId);
@@ -212,6 +224,7 @@ export function makeCheckpointRollback(deps: CheckpointRollbackDeps): Checkpoint
           receipts.emit("checkpoint_rolled_back", sessionId);
         },
       );
+      events?.checkpointRolledBack(sessionId, target, safety, actor);
       const restoredCells = userCells(reopened ?? undefined);
       // Prefix check: every restored user text must match the live transcript
       // position-for-position, or the correlation is ambiguous → no rerun.

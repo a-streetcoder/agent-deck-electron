@@ -14,6 +14,7 @@ import {
   markHiddenFromModel,
   normalizeAgentOutput,
   reduceTranscript,
+  turnRefsFromEntries,
   type AskUserAnswer,
   type AskUserCell,
   type DomainEvent,
@@ -24,6 +25,7 @@ import {
   type SubagentCell,
   type SubagentExpectedOutcome,
   type TranscriptState,
+  type TurnRefs,
 } from "@agent-deck/domain";
 import {
   buildLaunchArgs,
@@ -211,6 +213,13 @@ export type HelperContext = ModelSelection & {
   env?: Record<string, string | undefined>;
 };
 
+/** A delegated child's identity for its turn event (it has no session index row). */
+export interface ChildTurnInfo {
+  readonly subagentRunId: string;
+  readonly childSessionId: string;
+  readonly agentName?: string;
+}
+
 /** Everything one session's build needs from its manager (the class facade). */
 export interface SpawnSessionParams {
   readonly meta: SessionMeta;
@@ -290,6 +299,12 @@ export interface SpawnSessionParams {
    * catch); it is fire-and-forget so it never perturbs the idle receipt timing.
    */
   readonly captureCheckpoint?: (label: string) => Effect.Effect<void>;
+  /**
+   * A1 event log: a finished turn's Pi entry references, from the idle
+   * reconcile (where entry ids are stable) and from each delegated child's
+   * settle. Synchronous and must not throw into the turn.
+   */
+  readonly onTurnCompleted?: (turn: TurnRefs, child?: ChildTurnInfo) => void;
   /**
    * This runtime REPLACES one that was idle (the resource-refresh park +
    * relaunch), so seeding from history restores the authoritative-idle edge the
@@ -1250,18 +1265,34 @@ export const makeManagedSessionRuntime = (
         if (domainEvent.type === "agent_status" && domainEvent.status === "idle") {
           authoritativeIdle = true;
           receipts.emit("idle", meta.id);
-          if (pendingUserTurn && !turnAwaitingProviderRetry) {
+          // A user turn ends here; a startup/resume idle or a retry pause does not.
+          const turnEnded = pendingUserTurn && !turnAwaitingProviderRetry;
+          if (turnEnded) {
             if (!currentTurnFailedOrCancelled && meta.status !== "failed") markNeedsAttention();
             pendingUserTurn = false;
             currentTurnFailedOrCancelled = false;
           }
+          const reportTurn = turnEnded ? params.onTurnCompleted : undefined;
           const reconcileImages = Effect.gen(function* () {
-            if (!params.reconcileImages) {
+            if (!params.reconcileImages && !reportTurn) {
               params.expirePendingImages?.();
               return;
             }
             const entryData = yield* handle.getEntries;
-            const users = activeEntryChain(entryData).flatMap((entry) => {
+            const chain = activeEntryChain(entryData);
+            if (reportTurn) {
+              try {
+                const turn = turnRefsFromEntries(chain);
+                if (turn) reportTurn(turn);
+              } catch {
+                // The event log is not authoritative: never cost the reconcile below.
+              }
+            }
+            if (!params.reconcileImages) {
+              params.expirePendingImages?.();
+              return;
+            }
+            const users = chain.flatMap((entry) => {
               if (entry.type !== "message" || entry.message.role !== "user") return [];
               const textEvent = ingestPiEvent(createIngestState(), {
                 type: "message_end",
@@ -2541,6 +2572,23 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
           );
           yield* child.prompt(buildSubagentTaskPrompt(task, declaredReads, isContinuation));
           yield* Fiber.join(collector);
+          // A1: children never reach the parent's idle reconcile, so their turn is
+          // reported here, while the child Pi is still alive to answer get_entries.
+          if (lifecycle.settled && params.onTurnCompleted) {
+            const report = params.onTurnCompleted;
+            yield* child.getEntries.pipe(
+              Effect.map((data) => {
+                const turn = turnRefsFromEntries(activeEntryChain(data));
+                if (turn)
+                  report(turn, {
+                    subagentRunId: runId,
+                    childSessionId,
+                    ...(agentName ? { agentName } : {}),
+                  });
+              }),
+              Effect.catchAllCause(() => Effect.void),
+            );
+          }
           if (!lifecycle.settled)
             return yield* Effect.fail(new Error("subagent exited before finishing"));
           if (lifecycle.error) return yield* Effect.fail(new Error(lifecycle.error));

@@ -12,6 +12,7 @@ import type {
   SubagentCell,
   TranscriptState,
   ChildTranscriptSnapshot,
+  TurnRefs,
 } from "@agent-deck/domain";
 import {
   buildLaunchArgs,
@@ -42,6 +43,7 @@ import {
   type ChildBridgeFactory,
   type ChildMemoryRecall,
   type ChildToolPolicy,
+  type ChildTurnInfo,
   type ChildLaunchOverrides,
   type ChildRunOptions,
   type ChildRunResult,
@@ -730,6 +732,12 @@ export class SessionManager {
     private readonly gitIdentities?: GitIdentityMap,
     /** SRV-11: the session owner's own Pi agent dir (userAgentDirs.ts). */
     private readonly userAgentDirs?: UserAgentDirs,
+    /** A1 event log: a finished parent or child turn (server.ts wires the producer). */
+    private readonly onTurnCompleted?: (
+      meta: SessionMeta,
+      turn: TurnRefs,
+      child?: ChildTurnInfo,
+    ) => void,
   ) {}
 
   /** Reconfigure all live deadlines. Existing parked placeholders remain cold. */
@@ -1480,6 +1488,17 @@ export class SessionManager {
                   // Best-effort: a capture failure must never surface.
                 }
               }),
+          }
+        : {}),
+      ...(this.onTurnCompleted !== undefined
+        ? {
+            onTurnCompleted: (turn: TurnRefs, child?: ChildTurnInfo) => {
+              try {
+                this.onTurnCompleted?.(meta, turn, child);
+              } catch {
+                // The event log is not authoritative: never cost the turn.
+              }
+            },
           }
         : {}),
     };

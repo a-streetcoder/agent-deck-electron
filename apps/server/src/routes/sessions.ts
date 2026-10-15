@@ -14,6 +14,7 @@ import type { LaunchPlan } from "@agent-deck/pi-host";
 import type { IncomingMessage } from "node:http";
 import { createSessionDraftGateway } from "../sessionDrafts.ts";
 import { requestUser } from "../trustedProxy.ts";
+import { userActor } from "../eventProducers.ts";
 import { coAuthorTrailers, gitIdentityEnv, withTrailers } from "../gitIdentity.ts";
 import { API_KEY_ONLY_PROVIDERS, listProjectFiles } from "@agent-deck/resources";
 import {
@@ -874,6 +875,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       }
       sessions.removeLoopSessionSnapshot(id);
       index.remove(id);
+      ctx.events?.sessionRemoved(meta, userActor(requestUser(request.raw)));
       try {
         ctx.composerDrafts?.delete(id);
       } catch {
@@ -1595,6 +1597,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     try {
       const session = await sessions.fork(source, meta.piSessionFile, copyTo, envDefaults().env);
       index.upsert(session.meta);
+      ctx.events?.sessionCreated(session.meta, userActor(requestUser(request.raw)), meta.id);
       return reply.status(201).send({ session: session.meta });
     } catch (error) {
       return reply.status(500).send({ error: String(error) });
@@ -1961,10 +1964,11 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const body = parsed.data;
     const createdBy = sessionCreator(request.raw);
     try {
-      if (body.startImmediately)
-        return reply
-          .status(201)
-          .send({ session: (await launchSession(body, undefined, createdBy)).meta });
+      if (body.startImmediately) {
+        const { meta } = await launchSession(body, undefined, createdBy);
+        ctx.events?.sessionCreated(meta, userActor(createdBy));
+        return reply.status(201).send({ session: meta });
+      }
       const defaults = envDefaults();
       const project = body.projectId
         ? projects.find((item) => item.id === body.projectId)
@@ -1988,6 +1992,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         launchResourceFingerprint: resolved.fingerprint,
       };
       index.upsert(draft);
+      ctx.events?.sessionCreated(draft, userActor(createdBy));
       if (body.env) draftEnvironment.set(draft.id, body.env);
       broadcast({ type: "session_meta", session: draft });
       return reply.status(201).send({ session: draft });

@@ -130,6 +130,7 @@ import {
 import { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import { SubagentRunStore } from "./subagentRunStore.ts";
 import { createEventLog, disabledEventLog, type EventLog } from "./eventLog.ts";
+import { createEventProducers } from "./eventProducers.ts";
 import { resolveTrustedDataDir } from "./trustedDataDir.ts";
 import { SupervisorLog } from "./supervisor.ts";
 import { createTerminalGateway } from "./terminalGateway.ts";
@@ -289,6 +290,7 @@ async function initServer(
     eventLog = disabledEventLog();
   }
   startupCleanups.push(() => eventLog.close());
+  const events = createEventProducers(eventLog);
   const receipts = new ReceiptBus(process.env.AGENT_DECK_TEST === "1");
   const index = new SessionIndex(dataDir);
   projectOfSession = (sessionId) =>
@@ -446,7 +448,10 @@ async function initServer(
   // dir, so built directly here (not a runtime layer) — see services/checkpoints.ts.
   const checkpoints = makeCheckpointService({ dataDir });
   // SUB-14: durable plan history, kept off the meta broadcast path.
-  const planEvents = makePlanEventService({ dataDir });
+  const planEvents = makePlanEventService({
+    dataDir,
+    onRecorded: (event, op) => events.planChanged(event.sessionId, op, event),
+  });
   const loopSnapshots = new LoopSessionSnapshotStore(dataDir, (message, error) =>
     fastify.log.warn({ err: error }, message),
   );
@@ -696,12 +701,13 @@ async function initServer(
     // receipt timing. Best-effort — a capture failure is swallowed by the
     // facade; the receipt lets tests synchronize on the capture attempt.
     async (meta, label) => {
-      await checkpoints.capture({
+      const record = await checkpoints.capture({
         sessionId: meta.id,
         cwd: meta.worktreePath ?? meta.cwd,
         sessionFile: meta.piSessionFile,
         label,
       });
+      if (record) events.checkpointCreated(meta.id, record);
       receipts.emit("checkpoint_captured", meta.id);
     },
     loopSnapshots,
@@ -775,6 +781,16 @@ async function initServer(
     () => settings.get().subagentsEnabled,
     gitIdentities,
     userAgentDirs,
+    (meta, turn, child) =>
+      events.turnCompleted(
+        meta,
+        turn,
+        child && {
+          ...child,
+          parentSessionId: meta.id,
+          ...(meta.projectId ? { projectId: meta.projectId } : {}),
+        },
+      ),
   );
   // Loop run engine (native single-agent loop). Each run's agent executor is
   // built per-run, bound to a parent session in the project cwd.
@@ -1324,6 +1340,7 @@ async function initServer(
   // ended session EXACTLY as the POST /sessions/:id/resume route does (same
   // env-derived fallback plan), so rollback reuses the one correct resume() path.
   const rollback = makeCheckpointRollback({
+    events,
     sessions,
     checkpoints,
     receipts,
@@ -1368,6 +1385,7 @@ async function initServer(
     sessionImages,
     sessionPastes,
     sessionAuthors,
+    events,
     sharedServer: trustedProxy !== null,
     publicOrigin: trustedProxy?.publicOrigin,
     accessVerifier,
@@ -1432,6 +1450,7 @@ async function initServer(
     fastify,
     sessions,
     planEvents,
+    events,
     sessionImages,
     agentAvatars,
     projectImages,
