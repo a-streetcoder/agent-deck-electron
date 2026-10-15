@@ -129,7 +129,7 @@ import {
 } from "./trustedProxy.ts";
 import { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import { SubagentRunStore } from "./subagentRunStore.ts";
-import { createEventLog } from "./eventLog.ts";
+import { createEventLog, disabledEventLog, type EventLog } from "./eventLog.ts";
 import { resolveTrustedDataDir } from "./trustedDataDir.ts";
 import { SupervisorLog } from "./supervisor.ts";
 import { createTerminalGateway } from "./terminalGateway.ts";
@@ -236,9 +236,18 @@ export async function startServer(options: StartServerOptions = {}): Promise<Age
   // server's lifetime (disposed last in close(), so scoped services from later
   // slices get their finalizers after the HTTP/WS surface is gone).
   const effectRuntime = makeServerRuntime();
+  // Synchronous resources initServer opened before it failed (close() never exists then).
+  const startupCleanups: Array<() => void> = [];
   try {
-    return await initServer(options, effectRuntime);
+    return await initServer(options, effectRuntime, startupCleanups);
   } catch (error) {
+    for (const cleanup of startupCleanups) {
+      try {
+        cleanup();
+      } catch {
+        // The startup error below is the one that matters.
+      }
+    }
     // Startup failed after the runtime existed (e.g. fastify.listen rejecting
     // with EADDRINUSE): run the runtime's finalizers so scoped services
     // (Slice 4+, e.g. pi subprocesses) never leak on the error path.
@@ -257,6 +266,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Age
 async function initServer(
   options: StartServerOptions,
   effectRuntime: ServerRuntime,
+  startupCleanups: Array<() => void>,
 ): Promise<AgentDeckServer> {
   const requestedDataDir = options.dataDir ?? defaultDataDir();
   // Establish and validate the trusted app-data directory before any persistence or native
@@ -267,10 +277,22 @@ async function initServer(
   // session exit removes them, this clears what a crash left.
   sweepStaleBridgeExtensions();
   // A1 event log: opened before the stores, whose constructors already write on load.
-  const eventLog = createEventLog(dataDir);
-  console.info(`[events] log ${eventLog.logId} writable=${eventLog.writable}`);
+  // Not authoritative until A1d, so a log that cannot open must not stop the server.
+  // projectOf is late-bound: the session index is created just below.
+  let projectOfSession = (_sessionId: string): string | null => null;
+  let eventLog: EventLog;
+  try {
+    eventLog = createEventLog(dataDir, { projectOf: (sessionId) => projectOfSession(sessionId) });
+    console.info(`[events] log ${eventLog.logId} writable=${eventLog.writable}`);
+  } catch (error) {
+    console.warn("[events] event log disabled: could not open it", error);
+    eventLog = disabledEventLog();
+  }
+  startupCleanups.push(() => eventLog.close());
   const receipts = new ReceiptBus(process.env.AGENT_DECK_TEST === "1");
   const index = new SessionIndex(dataDir);
+  projectOfSession = (sessionId) =>
+    index.find((session) => session.id === sessionId)?.projectId ?? null;
   const composerDrafts = options.composerDraftStore ?? new FileComposerDraftStore(dataDir);
   const settings = new SettingsStore(dataDir);
   const mcpPolicy = options.mcpPolicyStore ?? new FileMcpPolicyStore(settings);

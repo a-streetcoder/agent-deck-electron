@@ -4,7 +4,10 @@
 import { z } from "zod";
 
 export const EVENT_ENVELOPE_VERSION = 1;
-/** One serialized event (one JSONL line, without its newline) never exceeds this. */
+/**
+ * One serialized event (one JSONL line, without its newline) never exceeds this.
+ * Producers cap their own string fields; serializeEvent is only the last resort.
+ */
 export const MAX_EVENT_BYTES = 512_000;
 
 export const NODE_REF_TYPES = [
@@ -23,8 +26,15 @@ export const NODE_REF_TYPES = [
 
 export type NodeRefType = (typeof NODE_REF_TYPES)[number];
 
+/** A node reference as a producer writes it: only the types this build knows. */
 export interface NodeRef {
   type: NodeRefType;
+  id: string;
+}
+
+/** A node reference as read back: a newer build may have written a type this one does not know. */
+export interface StoredNodeRef {
+  type: string;
   id: string;
 }
 
@@ -45,12 +55,12 @@ export interface EventEnvelope {
   logId: string;
   /** Namespaced, e.g. "subagent.run.finished". Readers skip kinds they do not know. */
   kind: string;
-  /** Resolved by the writer from sessionId; null = project-less or app-level. */
+  /** Explicit on the draft, else resolved by the writer from sessionId; null = project-less. */
   projectId: string | null;
   sessionId?: string;
-  subject: NodeRef;
+  subject: StoredNodeRef;
   /** Tree edge for A2; only on *.created / *.started / *.opened. */
-  parent?: NodeRef;
+  parent?: StoredNodeRef;
   causationId?: string;
   actor: EventActor;
   origin?: "reconcile";
@@ -59,15 +69,22 @@ export interface EventEnvelope {
 }
 
 /** What a producer hands to the writer; the writer fills the rest. */
-export type EventDraft = Omit<EventEnvelope, "v" | "id" | "seq" | "ts" | "logId" | "projectId"> & {
+export type EventDraft = Omit<
+  EventEnvelope,
+  "v" | "id" | "seq" | "ts" | "logId" | "projectId" | "subject" | "parent"
+> & {
   /** Producer-generated (randomUUID) so a retry dedupes; the writer generates one if absent. */
   id?: string;
+  /** Set when the event belongs to a project but has no session; otherwise resolved from sessionId. */
+  projectId?: string | null;
+  subject: NodeRef;
+  parent?: NodeRef;
 };
 
 const ref = z.string().min(1).max(500);
-const nodeRefSchema = z.object({ type: z.enum(NODE_REF_TYPES), id: ref });
+const storedNodeRefSchema = z.object({ type: z.string().min(1).max(100), id: ref });
 
-const eventEnvelopeSchema = z.object({
+const storedEnvelopeSchema = z.object({
   v: z.literal(EVENT_ENVELOPE_VERSION),
   id: ref,
   seq: z.number().int().positive(),
@@ -79,8 +96,8 @@ const eventEnvelopeSchema = z.object({
     .regex(/^[a-z][A-Za-z0-9]*(?:\.[a-z][A-Za-z0-9]*)+$/, "kind must be namespaced"),
   projectId: ref.nullable(),
   sessionId: ref.optional(),
-  subject: nodeRefSchema,
-  parent: nodeRefSchema.optional(),
+  subject: storedNodeRefSchema,
+  parent: storedNodeRefSchema.optional(),
   causationId: ref.optional(),
   actor: z.discriminatedUnion("type", [
     z.object({ type: z.literal("user"), id: ref.optional(), name: ref.optional() }),
@@ -91,19 +108,44 @@ const eventEnvelopeSchema = z.object({
   payload: z.unknown(),
 });
 
+const knownNodeRef = (node: StoredNodeRef | undefined): boolean =>
+  node === undefined || (NODE_REF_TYPES as readonly string[]).includes(node.type);
+
+// The node-type enum is closed on write only, so lines from a newer build stay readable.
+const writeEnvelopeSchema = storedEnvelopeSchema.refine(
+  (event) => knownNodeRef(event.subject) && knownNodeRef(event.parent),
+  "unknown node type",
+);
+
+const withPayload = (data: z.infer<typeof storedEnvelopeSchema>): EventEnvelope =>
+  ({ ...data, payload: data.payload ?? null }) as EventEnvelope;
+
+/** Strict check for the writer: closed node-type enum. */
 export function validateEnvelope(value: unknown): EventEnvelope | null {
-  const result = eventEnvelopeSchema.safeParse(value);
-  return result.success
-    ? ({ ...result.data, payload: result.data.payload ?? null } as EventEnvelope)
-    : null;
+  const result = writeEnvelopeSchema.safeParse(value);
+  return result.success ? withPayload(result.data) : null;
 }
 
-/** One JSONL line to an envelope, or null when it is not JSON or not a valid envelope. */
+/** One JSONL line to an envelope, or null when it is not JSON or not a v1 envelope. */
 export function parseEventLine(line: string): EventEnvelope | null {
   try {
-    return validateEnvelope(JSON.parse(line));
+    const result = storedEnvelopeSchema.safeParse(JSON.parse(line));
+    return result.success ? withPayload(result.data) : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * The seq of any JSON line with a positive integer seq, without the schema: cursor
+ * recovery must count lines a newer build wrote, or seq numbers would be reused.
+ */
+export function seqOfLine(line: string): number | undefined {
+  try {
+    const seq = (JSON.parse(line) as { seq?: unknown } | null)?.seq;
+    return typeof seq === "number" && Number.isInteger(seq) && seq > 0 ? seq : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -121,40 +163,14 @@ export function splitJsonl(text: string): { lines: string[]; rest: string } {
   return { lines, rest: text.slice(end + 1) };
 }
 
-const utf8Bytes = (value: string): number => new TextEncoder().encode(value).byteLength;
-
-/** Retain the newest UTF-8 suffix of at most maxBytes without cutting a code point. */
-export function utf8Suffix(value: string, maxBytes: number): string {
-  if (maxBytes <= 0) return "";
-  const bytes = new TextEncoder().encode(value);
-  if (bytes.length <= maxBytes) return value;
-  let start = bytes.length - maxBytes;
-  // Skip UTF-8 continuation bytes so the suffix starts on a code point boundary.
-  while (start < bytes.length && ((bytes[start] ?? 0) & 0xc0) === 0x80) start += 1;
-  return new TextDecoder().decode(bytes.subarray(start));
-}
-
 /**
- * Cap one event at MAX_EVENT_BYTES: an oversized payload is replaced by
- * { truncated, originalBytes, tail } where tail is the newest suffix of its JSON.
- * Envelope fields are length-capped by the schema, so only the payload can overflow.
+ * Serialize one event as its JSONL line (without the newline). Over MAX_EVENT_BYTES
+ * the payload is replaced by { truncated: true, originalBytes }, keeping every
+ * identifying envelope field. Throws on an unserializable payload (BigInt, cycle).
  */
-export function capEventSize(event: EventEnvelope): EventEnvelope {
-  if (utf8Bytes(JSON.stringify(event)) <= MAX_EVENT_BYTES) return event;
-  const json = JSON.stringify(event.payload ?? null);
-  const originalBytes = utf8Bytes(json);
-  const build = (budget: number): EventEnvelope => ({
-    ...event,
-    payload: { truncated: true, originalBytes, tail: utf8Suffix(json, budget) },
-  });
-  const overhead = utf8Bytes(JSON.stringify(build(0)));
-  let budget = MAX_EVENT_BYTES - overhead;
-  for (;;) {
-    const capped = build(budget);
-    const size = utf8Bytes(JSON.stringify(capped));
-    if (size <= MAX_EVENT_BYTES || budget <= 0) return capped;
-    // JSON escaping grows the tail (up to 6x): shrink the budget by the observed ratio.
-    const ratio = (MAX_EVENT_BYTES - overhead) / (size - overhead);
-    budget = Math.min(budget - 1, Math.floor(budget * ratio));
-  }
+export function serializeEvent(event: EventEnvelope): string {
+  const text = JSON.stringify(event);
+  const originalBytes = new TextEncoder().encode(text).byteLength;
+  if (originalBytes <= MAX_EVENT_BYTES) return text;
+  return JSON.stringify({ ...event, payload: { truncated: true, originalBytes } });
 }

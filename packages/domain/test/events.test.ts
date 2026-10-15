@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  capEventSize,
   MAX_EVENT_BYTES,
   parseEventLine,
+  seqOfLine,
+  serializeEvent,
   splitJsonl,
-  utf8Suffix,
+  validateEnvelope,
   type EventEnvelope,
 } from "../src/events.ts";
 
@@ -25,16 +26,15 @@ const envelope = (overrides: Partial<EventEnvelope> = {}): EventEnvelope => ({
   ...overrides,
 });
 
-const bytes = (value: unknown): number =>
-  new TextEncoder().encode(JSON.stringify(value)).byteLength;
+const line = (value: unknown): string => JSON.stringify(value);
 
 describe("parseEventLine", () => {
   it("round-trips a full envelope", () => {
     const event = envelope();
-    expect(parseEventLine(JSON.stringify(event))).toEqual(event);
+    expect(parseEventLine(line(event))).toEqual(event);
     const minimal = envelope({ sessionId: undefined, parent: undefined, causationId: undefined });
-    expect(parseEventLine(JSON.stringify({ ...minimal, actor: { type: "system" } }))).toEqual({
-      ...JSON.parse(JSON.stringify(minimal)),
+    expect(parseEventLine(line({ ...minimal, actor: { type: "system" } }))).toEqual({
+      ...JSON.parse(line(minimal)),
       actor: { type: "system" },
     });
   });
@@ -43,18 +43,34 @@ describe("parseEventLine", () => {
     expect(parseEventLine("")).toBeNull();
     expect(parseEventLine('{"v":1,"id":')).toBeNull();
     expect(parseEventLine("[]")).toBeNull();
-    expect(parseEventLine(JSON.stringify({ ...envelope(), v: 2 }))).toBeNull();
-    expect(parseEventLine(JSON.stringify({ ...envelope(), seq: 0 }))).toBeNull();
-    expect(parseEventLine(JSON.stringify({ ...envelope(), seq: 1.5 }))).toBeNull();
-    expect(parseEventLine(JSON.stringify({ ...envelope(), kind: "finished" }))).toBeNull();
-    expect(parseEventLine(JSON.stringify({ ...envelope(), ts: "yesterday" }))).toBeNull();
-    expect(
-      parseEventLine(JSON.stringify({ ...envelope(), subject: { type: "graph", id: "x" } })),
-    ).toBeNull();
-    expect(parseEventLine(JSON.stringify({ ...envelope(), actor: { type: "agent" } }))).toBeNull();
-    expect(parseEventLine(JSON.stringify({ ...envelope(), origin: "import" }))).toBeNull();
+    expect(parseEventLine(line({ ...envelope(), v: 2 }))).toBeNull();
+    expect(parseEventLine(line({ ...envelope(), seq: 0 }))).toBeNull();
+    expect(parseEventLine(line({ ...envelope(), seq: 1.5 }))).toBeNull();
+    expect(parseEventLine(line({ ...envelope(), kind: "finished" }))).toBeNull();
+    expect(parseEventLine(line({ ...envelope(), ts: "yesterday" }))).toBeNull();
+    expect(parseEventLine(line({ ...envelope(), actor: { type: "agent" } }))).toBeNull();
+    expect(parseEventLine(line({ ...envelope(), origin: "import" }))).toBeNull();
     const { projectId: _projectId, ...withoutProject } = envelope();
-    expect(parseEventLine(JSON.stringify(withoutProject))).toBeNull();
+    expect(parseEventLine(line(withoutProject))).toBeNull();
+  });
+
+  it("reads node types from a newer build but refuses to write them", () => {
+    const newer = envelope({ subject: { type: "graphNode", id: "n1" } });
+    expect(parseEventLine(line(newer))).toEqual(newer);
+    expect(validateEnvelope(newer)).toBeNull();
+    expect(validateEnvelope(envelope({ parent: { type: "graphNode", id: "n1" } }))).toBeNull();
+    expect(validateEnvelope(envelope())).toEqual(envelope());
+  });
+});
+
+describe("seqOfLine", () => {
+  it("recovers the seq from any JSON line, schema or not", () => {
+    expect(seqOfLine(line({ v: 2, seq: 50, shape: "newer" }))).toBe(50);
+    expect(seqOfLine(line(envelope()))).toBe(7);
+    expect(seqOfLine(line({ seq: 0 }))).toBeUndefined();
+    expect(seqOfLine(line({ seq: "5" }))).toBeUndefined();
+    expect(seqOfLine("null")).toBeUndefined();
+    expect(seqOfLine('{"seq":')).toBeUndefined();
   });
 });
 
@@ -70,30 +86,22 @@ describe("splitJsonl", () => {
   });
 });
 
-describe("event size cap", () => {
-  it("keeps the newest UTF-8 suffix on a code point boundary", () => {
-    expect(utf8Suffix("abc", 10)).toBe("abc");
-    expect(utf8Suffix("abc", 0)).toBe("");
-    // "é" is 2 bytes, the emoji 4: a 3-byte budget cannot start inside the emoji.
-    expect(utf8Suffix("é😀", 3)).toBe("");
-    expect(utf8Suffix("é😀", 4)).toBe("😀");
-    expect(utf8Suffix("xé", 2)).toBe("é");
+describe("serializeEvent", () => {
+  it("keeps small events and replaces an oversized payload with a marker", () => {
+    const small = envelope();
+    expect(serializeEvent(small)).toBe(line(small));
+
+    const big = envelope({ payload: { text: "é".repeat(MAX_EVENT_BYTES) } });
+    const text = serializeEvent(big);
+    expect(new TextEncoder().encode(text).byteLength).toBeLessThanOrEqual(MAX_EVENT_BYTES);
+    const parsed = parseEventLine(text);
+    expect(parsed).toEqual({
+      ...big,
+      payload: { truncated: true, originalBytes: new TextEncoder().encode(line(big)).byteLength },
+    });
   });
 
-  it("leaves small events untouched and caps oversized payloads at MAX_EVENT_BYTES", () => {
-    const small = envelope();
-    expect(capEventSize(small)).toBe(small);
-
-    // Quotes double under JSON escaping, so the first budget guess overshoots.
-    const text = `${'"'.repeat(MAX_EVENT_BYTES)}END`;
-    const capped = capEventSize(envelope({ payload: { text } }));
-    expect(bytes(capped)).toBeLessThanOrEqual(MAX_EVENT_BYTES);
-    expect(bytes(capped)).toBeGreaterThan(MAX_EVENT_BYTES - 1_000);
-    const payload = capped.payload as { truncated: boolean; originalBytes: number; tail: string };
-    expect(payload.truncated).toBe(true);
-    expect(payload.originalBytes).toBe(bytes({ text }));
-    expect(payload.tail.endsWith('END"}')).toBe(true);
-    expect(parseEventLine(JSON.stringify(capped))).toEqual(capped);
-    expect({ ...capped, payload: null }).toEqual({ ...envelope(), payload: null });
+  it("throws on an unserializable payload", () => {
+    expect(() => serializeEvent(envelope({ payload: { n: 1n } }))).toThrow();
   });
 });
