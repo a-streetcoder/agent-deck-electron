@@ -20,3 +20,9 @@ GUARDRAILS: worktree E:/agent-deck-wt/<ticket> on wt/<ticket>; never git checkou
 ## Acceptance Criteria
 
 Renderer tests: output at or under the caps and always well-formed; since round trip (uptoSeq); unknown or ambiguous member -> error; log disabled path. Real-Pi test: an agent lists sessions and reads a session whose createdBy is another user and receives the summary with refs. docs/remote-server-poc.md and docs/orchestration-reference.md updated. tsc, eslint, prettier clean.
+
+## Notes
+
+**2026-10-15T09:28:35Z**
+
+2026-10-15 implemented as c3623cb (sessionTools.ts: list_sessions/read_session, stateless since/uptoSeq, caps 12,000/16,000, authoredText lines with a data header, Pi-file head by entry id, refs, Pi-file fallback for pre-log sessions, sessionTurns fold; not delegation-gated). Developer notes: whole Pi file read and whole log scan per call (ponytail), active-branch traversal only, member match case-insensitive. Contrarian + GPT review38 running.
