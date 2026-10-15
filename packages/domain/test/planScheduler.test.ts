@@ -6,6 +6,7 @@ import {
   planDepths,
   propagateBlocked,
   readyFrontier,
+  retryPlanItemUpdates,
   validatePlanGraph,
 } from "../src/planScheduler.ts";
 import { applyPlanUpdates, type PlanItemStatus, type SessionPlanItem } from "../src/transcript.ts";
@@ -80,6 +81,26 @@ describe("propagateBlocked", () => {
       running: "in_progress",
     });
     expect(next[5]).toBe(plan[5]);
+  });
+});
+
+describe("retryPlanItemUpdates (A10)", () => {
+  it("reopens a blocked item and its blocked dependants only", () => {
+    const plan = [
+      item("a", "done"),
+      item("b", "blocked", ["a"]),
+      item("c", "blocked", ["b"]),
+      item("d", "blocked", ["c"]),
+      item("other", "blocked"),
+      item("after", "done", ["b"]),
+    ];
+    expect(retryPlanItemUpdates(plan, "b")).toEqual([
+      { id: "b", status: "todo" },
+      { id: "c", status: "todo" },
+      { id: "d", status: "todo" },
+    ]);
+    expect(retryPlanItemUpdates(plan, "a")).toEqual([]);
+    expect(retryPlanItemUpdates(plan, "missing")).toEqual([]);
   });
 });
 

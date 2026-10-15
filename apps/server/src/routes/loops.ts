@@ -498,8 +498,14 @@ export function registerLoopRoutes(
 
   // Run a supported Loop through a transient parent session. Maker+Checker
   // roles receive phase-specific capabilities; durable truth lives in run state.
-  fastify.post("/loops/:id/run", async (request, reply) => {
-    const id = (request.params as { id: string }).id;
+  // The run logic, shared with the retry route: it acts as the request's caller (their
+  // identity, their provider credentials), so a retry is never an anonymous re-request.
+  const runLoop = async (
+    id: string,
+    rawBody: unknown,
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<FastifyReply> => {
     const parsed = z
       .object({
         projectId: z.string().optional(),
@@ -520,7 +526,7 @@ export function registerLoopRoutes(
         env: z.record(z.string()).optional(),
         currentCheckoutConfirmed: z.boolean().optional(),
       })
-      .safeParse(request.body ?? {});
+      .safeParse(rawBody ?? {});
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const body = parsed.data;
     if (!body.projectId) {
@@ -989,7 +995,10 @@ export function registerLoopRoutes(
     ctx.events.sessionCreated(parent.meta, userActor(runner));
     recordLoopAction(request, run, "start");
     return reply.status(201).send({ run, worktree });
-  });
+  };
+  fastify.post("/loops/:id/run", async (request, reply) =>
+    runLoop((request.params as { id: string }).id, request.body, request, reply),
+  );
 
   fastify.get("/loops/runs", async () => ({ runs: loopEngine.list() }));
 
@@ -1404,7 +1413,12 @@ export function registerLoopRoutes(
 
   fastify.post("/loops/runs/:id/retry", async (request, reply) => {
     const parsed = z
-      .object({ currentCheckoutConfirmed: z.boolean().optional() })
+      .object({
+        currentCheckoutConfirmed: z.boolean().optional(),
+        // A10: the Run tree's Retry from node retries a failed run once; a run that
+        // already has a retry is dealt with (the tree may not show the retry's session).
+        fromNode: z.boolean().optional(),
+      })
       .safeParse(request.body ?? {});
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const previous = loopEngine.get((request.params as { id: string }).id);
@@ -1421,15 +1435,22 @@ export function registerLoopRoutes(
     if (!previous.projectId || !previous.catalogId) {
       return reply.status(409).send({ error: "The original project is unavailable." });
     }
-    const response = await fastify.inject({
-      method: "POST",
-      url: `/loops/${encodeURIComponent(previous.catalogId)}/run`,
-      payload: {
+    if (parsed.data.fromNode && loopEngine.list().some((run) => run.retryOf === previous.id)) {
+      return reply.status(409).send({
+        code: "loop_already_retried",
+        error: "This Loop run was already retried.",
+      });
+    }
+    // The caller's own request runs it: their identity and credentials, as for a new run.
+    return runLoop(
+      previous.catalogId,
+      {
         projectId: previous.projectId,
         retryOf: previous.id,
         currentCheckoutConfirmed: parsed.data.currentCheckoutConfirmed,
       },
-    });
-    return reply.status(response.statusCode).send(response.json());
+      request,
+      reply,
+    );
   });
 }

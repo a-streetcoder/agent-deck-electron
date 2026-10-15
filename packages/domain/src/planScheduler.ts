@@ -5,7 +5,7 @@
 // or `skipped`. A skipped dependency is SATISFIED (checklist semantics: the step is not
 // needed), not blocking. A `blocked` dependency (a failed or rejected run) blocks its
 // dependants. A plan without dependsOn is a flat checklist: every todo item is ready.
-import type { SessionPlanItem } from "./transcript.ts";
+import type { SessionPlanItem, SessionPlanUpdate } from "./transcript.ts";
 
 const satisfied = (status: string | undefined): boolean =>
   status === "done" || status === "skipped";
@@ -132,4 +132,32 @@ export function planDepths(items: readonly SessionPlanItem[]): Map<string, numbe
   };
   for (const item of items) depth(item.id, new Set());
   return depths;
+}
+
+/**
+ * A10 retry from node: a blocked item and its blocked dependants (transitively) back to
+ * `todo`, so the dispatcher's next pass re-dispatches them in dependency order. Notes are
+ * kept: the dispatcher hands a retried item the reason its last attempt was blocked.
+ * Empty when the item is not blocked.
+ */
+export function retryPlanItemUpdates(
+  items: readonly SessionPlanItem[],
+  itemId: string,
+): SessionPlanUpdate[] {
+  if (items.find((item) => item.id === itemId)?.status !== "blocked") return [];
+  const again = new Set([itemId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const item of items) {
+      if (again.has(item.id) || item.status !== "blocked") continue;
+      if ((item.dependsOn ?? []).some((id) => again.has(id))) {
+        again.add(item.id);
+        changed = true;
+      }
+    }
+  }
+  return items
+    .filter((item) => again.has(item.id))
+    .map((item) => ({ id: item.id, status: "todo" }));
 }

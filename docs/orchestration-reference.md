@@ -299,9 +299,12 @@ events are `system` and caused by the event that triggered the pass.
 
 Only live intent dispatches: a session whose own agent set or updated the plan in this process.
 Restores, forks, reopens and restarts settle but spawn nothing, and a run the user stopped
-revokes it until the agent touches the plan again. The parent is not prompted when items finish:
-it reads the plan on its next turn. The plan panel groups a plan with dependencies by depth and
-shows each item's agents, verdict note and a Show run link (a toast when the card is hidden).
+revokes it until the agent touches the plan again. A person's Retry from node (A10) is live
+intent for what it names only: the retried item and the dependants it reopens may be
+dispatched and verified again, the rest of the plan stays as the Stop left it, and a later
+Stop revokes the retry too (the latest human act wins). The parent is not prompted when
+items finish: it reads the plan on its next turn. The plan panel groups a plan with
+dependencies by depth and shows each item's agents, verdict note and a Show run link (a toast when the card is hidden).
 
 Not covered: a verifier of an isolated item runs in the session's checkout and sees the
 worktree only through the listed files; reassigning a running item does not cancel its run (the
@@ -474,6 +477,80 @@ desktop notification). A loop approval has no session, and Electron main only no
 session the backend lists as needing attention (`attention:notify` requires a session id and
 revalidates it), so a loop approval is announced in-app only. A desktop notification for it
 needs a project-level attention source in `apps/desktop/main.js`: an owner decision.
+
+### Node-level retry (A10)
+
+Checkpoints attach to nodes: `checkpoint.created` carries `node`, the node the checkpoint
+belongs to (additive; the checkpoint store is unchanged). Only turns have checkpoints (the
+per-turn capture at the idle boundary), so `node` is the turn today; a safety checkpoint taken
+by a rollback has none. A log written before A10 is read with the checkpoint's `parent` turn
+instead. Loop children and dispatched plan runs are Pi child processes outside that capture:
+they have no checkpoints of their own.
+
+`affectedRegion(tree, failedNodeId)` (`packages/domain/src/affectedRegion.ts`) marks the A2
+tree in log order (the fold position of each node's first and terminal event, never the
+clock; a placeholder ends at the event that closed it):
+
+- **trusted**: not the failed node, not inside it, not one of its ancestors, and terminal
+  before the failed node's first event;
+- **affected**: everything else (the node, its subtree, its ancestors, and whatever began or
+  was still running when it began; a parallel sibling counts as affected);
+- **recovery frontier**: the trusted node owning the latest trusted checkpoint that a later
+  rollback did not truncate, and only when no trusted node ended after that checkpoint
+  (restoring it must not drop trusted work). After a rollback, its target counts as taken at
+  the rollback.
+
+`failedVerifications(tree)` lists the failures nothing has dealt with yet:
+
+- a run its verifier rejected (A7, not a verifier run). Outside a plan it re-runs the turn
+  above it, unless a later rollback cut that turn off (a checkpoint taken before the turn
+  was restored after it began); with no turn above it there is nothing to offer;
+- a blocked plan item, while the latest `plan.changed` still has it blocked: on its run's
+  node, or on the plan node when it was blocked before a run launched (the dispatch itself
+  failed; such an item has no region and nothing to restore). A dependant blocked by a
+  blocked item is retried with that item;
+- the first checker `FAIL` iteration of a loop run `canRetryLoopRun` accepts, unless a run in
+  view is its retry (`retryOf`).
+
+Each failure says whether its work wrote to the session's checkout. Only then is the frontier
+offered as a recovery point: a turn and a non-isolated plan item did; an isolated plan item
+(its own worktree) and a loop (its own session and checkout) did not, so restoring the
+parent's checkout would discard its later turns for nothing.
+
+The Run tree labels rows Trusted, Affected or Recovery point while a failure is in view and
+puts one action, "Retry from node", on the failed node (one per item on the plan node). The
+confirm says which checkpoint is restored and how many later turns are dropped, and for a
+turn that only the first dropped prompt is sent again and whether its attachments are lost.
+Before anything destructive it checks that the next step can run (no turn running, no
+subagent or loop run working, checked again after the confirm closes; for a plan item a dry
+run of the retry), then restores the frontier through the existing `checkpoint_rollback`, then
+re-runs the region:
+
+| Failed node                         | Re-run                                                                                                           |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| a rejected run in a turn            | the first prompt the rollback dropped, sent again (the Checkpoints panel's rerun); needs a frontier              |
+| a blocked plan item (run or no run) | `POST /sessions/:id/plan/items/:itemId/retry`: the item and its blocked dependants back to `todo`, then dispatch |
+| a checker `FAIL` loop iteration     | `POST /loops/runs/:id/retry` with `fromNode: true` (the whole run from its definition snapshot), never a restore |
+
+The rollback itself (`checkpointRollback`, so the Checkpoints panel too) refuses while the
+session runs a turn or has detached subagents running.
+
+The plan route takes the plan `generation` and item `runId` the person saw (null: none) and
+answers 409 `plan_retry_stale` when another member replaced the plan or the item ran again
+meanwhile; `?dryRun=1` only answers whether the retry would run. When the dispatcher accepts
+it, `plan.item.retried {itemId, itemIds}` is logged with the person as actor and causes the
+dispatcher's writes; a refused retry logs nothing, and one that cannot be logged changes
+nothing (409 `plan_retry_not_recorded`). A retried item's task carries the reason its last
+attempt was blocked (its note), so a deterministic failure is not repeated blind. The loop
+retry runs the caller's own request (identity and credentials), no internal re-request, and
+with `fromNode` refuses (409 `loop_already_retried`) a run that already has a retry.
+
+Not covered: only one prompt is re-sent, so turns between the frontier and the failed one
+are not replayed, and attachments are not; a checkpoint pruned by retention (no event) can
+still be named as the frontier, and the rollback then fails with its own error; a plan item
+without a frontier re-runs on the files as they are; a loop retry re-runs the whole run, not
+one node of it; the dry run and the retry are two requests, so a change between them is
+caught only by the retry's own check, after the restore.
 
 ## Collaboration
 

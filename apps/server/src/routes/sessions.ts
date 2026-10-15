@@ -582,6 +582,56 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     return { events: ctx.planEvents.list(id) };
   });
 
+  // A10 retry from node: a person re-runs a blocked plan item and the dependants it
+  // blocked. The click is the live intent the dispatcher waits for, for those items only,
+  // logged with its actor once the dispatcher accepts it. The body names the plan
+  // generation and run the person saw: stale intent is refused. `?dryRun=1` only says
+  // whether it would run: the Run tree asks before it restores the frontier checkpoint.
+  fastify.post("/sessions/:id/plan/items/:itemId/retry", async (request, reply) => {
+    const { id, itemId } = request.params as { id: string; itemId: string };
+    const dryRun = (request.query as { dryRun?: string } | undefined)?.dryRun === "1";
+    const seen = z
+      .object({
+        generation: z.string().max(500).nullable().optional(),
+        runId: z.string().max(500).nullable().optional(),
+      })
+      .safeParse(request.body ?? {});
+    if (!seen.success) return reply.status(400).send({ error: seen.error.message });
+    const session = sessions.get(id);
+    const dispatcher = ctx.planDispatcher;
+    if (!session || !dispatcher) return reply.status(404).send({ error: "unknown session" });
+    const refused = (outcome: "notBlocked" | "stale") =>
+      reply.status(409).send(
+        outcome === "stale"
+          ? {
+              code: "plan_retry_stale",
+              error: "The plan changed since you looked at it; nothing was retried.",
+            }
+          : { code: "plan_item_not_blocked", error: "Only a blocked plan item can be retried." },
+      );
+    if (dryRun) {
+      const itemIds = dispatcher.checkRetry(id, itemId, seen.data);
+      return typeof itemIds === "string" ? refused(itemIds) : { itemIds };
+    }
+    let itemIds: string[] = [];
+    const outcome = await dispatcher.retry(id, itemId, seen.data, (named) => {
+      itemIds = named;
+      return ctx.events.planItemRetried(
+        id,
+        { itemId, itemIds: named },
+        userActor(requestUser(request.raw)),
+      );
+    });
+    if (outcome === "notBlocked" || outcome === "stale") return refused(outcome);
+    if (outcome === "unrecorded") {
+      return reply.status(409).send({
+        code: "plan_retry_not_recorded",
+        error: "The retry could not be recorded in the event log, so nothing was dispatched.",
+      });
+    }
+    return { itemIds };
+  });
+
   // Rename: updates pi's session name (when live) and the persisted title.
   fastify.patch("/sessions/:id", async (request, reply) => {
     const parsed = z.object({ title: z.string().trim().min(1).max(200) }).safeParse(request.body);

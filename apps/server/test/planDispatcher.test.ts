@@ -444,3 +444,115 @@ describe("plan dispatcher", () => {
     dispatcher.close();
   });
 });
+
+describe("A10 retry from node", () => {
+  /** A person's retry as the route makes it: logs the intent as `cause` once accepted. */
+  const retryAs = (
+    dispatcher: ReturnType<typeof createPlanDispatcher>,
+    itemId: string,
+    cause: string,
+    seen: Parameters<ReturnType<typeof createPlanDispatcher>["retry"]>[2] = {},
+  ) => {
+    const named: string[][] = [];
+    const outcome = dispatcher.retry("s1", itemId, seen, (itemIds) => {
+      named.push(itemIds);
+      return cause;
+    });
+    return { outcome, named };
+  };
+
+  it("a rejected item and its dependant run again, the item told why it was rejected", async () => {
+    const w = world([todo("a", { verifiedBy: "reviewer" }), todo("b", { dependsOn: ["a"] })]);
+    const dispatcher = createPlanDispatcher(w.deps);
+    w.agentPlan();
+    await w.settle();
+    w.finish("run-1");
+    await w.settle();
+    w.answer(w.spawned.find((s) => s.verifier)!.runId, "REJECT: tests missing");
+    await w.settle();
+    expect(w.status()).toEqual({ a: "blocked", b: "blocked" });
+
+    // b alone cannot run while a is still blocked: the pass blocks it again.
+    expect(await retryAs(dispatcher, "b", "retry-b").outcome).toBe("retried");
+    expect(w.status()).toEqual({ a: "blocked", b: "blocked" });
+
+    const retry = retryAs(dispatcher, "a", "retry-a");
+    expect(await retry.outcome).toBe("retried");
+    expect(retry.named).toEqual([["a", "b"]]);
+    expect(w.status()).toEqual({ a: "in_progress", b: "todo" });
+    // The rejection reason travels with the retried task, so it does not repeat blind.
+    expect(w.spawned.at(-1)?.task).toBe(
+      "Build a\n\nA previous attempt at this item was blocked: REJECT: tests missing",
+    );
+    expect(w.recorded.at(-1)).toMatchObject({ itemId: "a", causationId: "retry-a" });
+    expect(w.causes).toContain("retry-a");
+
+    w.finish(w.spawned.at(-1)!.runId);
+    await w.settle();
+    w.answer(w.spawned.filter((s) => s.verifier).at(-1)!.runId, "APPROVE");
+    await w.settle();
+    expect(w.status()).toEqual({ a: "done", b: "in_progress" });
+    // Nothing blocked is left to retry, and a refusal records nothing.
+    const again = retryAs(dispatcher, "a", "again");
+    expect(await again.outcome).toBe("notBlocked");
+    expect(again.named).toEqual([]);
+    dispatcher.close();
+  });
+
+  it("after a Stop, the click re-arms only what it named; a later Stop revokes it again", async () => {
+    const w = world([todo("a"), todo("b", { dependsOn: ["a"] }), todo("c")]);
+    const dispatcher = createPlanDispatcher(w.deps);
+    w.agentPlan();
+    await w.settle();
+    w.finish("run-1", "stopped");
+    await w.settle();
+    expect(w.status()).toEqual({ a: "blocked", b: "blocked", c: "todo" });
+    // A pass of its own (a freed slot, a restore) still dispatches nothing.
+    await dispatcher.evaluate("s1");
+    expect(w.spawned).toHaveLength(1);
+
+    expect(await retryAs(dispatcher, "a", "retry-1").outcome).toBe("retried");
+    w.finish("run-2");
+    await w.settle();
+    w.finish("run-3");
+    await w.settle();
+    // a and b ran; c, which the click did not name, stays as the Stop left it.
+    expect(w.status()).toEqual({ a: "done", b: "done", c: "todo" });
+    expect(w.spawned.map((s) => s.task.split("\n")[0])).toEqual(["Build a", "Build a", "Build b"]);
+
+    // The latest human act wins: a Stop of a retried run revokes the retry too.
+    const w2 = world([todo("a"), todo("b", { dependsOn: ["a"] })]);
+    const second = createPlanDispatcher(w2.deps);
+    w2.agentPlan();
+    await w2.settle();
+    w2.finish("run-1", "stopped");
+    await w2.settle();
+    await retryAs(second, "a", "retry-2").outcome;
+    w2.finish("run-2", "stopped");
+    await w2.settle();
+    await second.evaluate("s1");
+    expect(w2.status()).toEqual({ a: "blocked", b: "blocked" });
+    expect(w2.spawned).toHaveLength(2);
+    dispatcher.close();
+    second.close();
+  });
+
+  it("refuses stale intent: the plan generation or the item's run moved on", async () => {
+    const w = world([todo("a")]);
+    const dispatcher = createPlanDispatcher(w.deps);
+    w.agentPlan();
+    await w.settle();
+    w.finish("run-1", "failed");
+    await w.settle();
+    expect(dispatcher.checkRetry("s1", "a", { generation: "gen-1", runId: "run-1" })).toEqual([
+      "a",
+    ]);
+    for (const seen of [{ generation: "gen-0" }, { runId: "run-0" }, { generation: null }]) {
+      const stale = retryAs(dispatcher, "a", "stale", seen);
+      expect(await stale.outcome).toBe("stale");
+      expect(stale.named).toEqual([]);
+    }
+    expect(w.status()).toEqual({ a: "blocked" });
+    dispatcher.close();
+  });
+});

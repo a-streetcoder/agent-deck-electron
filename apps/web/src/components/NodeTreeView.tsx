@@ -1,14 +1,18 @@
 import { ControlButton } from "@/design-system/components/NativeControls";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  affectedRegion,
   eventLabel,
+  failedVerifications,
   humanKindLabel,
   memoryToolCardLabel,
   openHumanNodes,
   projectNodeTree,
   PROMPT_LABEL_MAX_CHARS,
+  type AffectedRegion,
   type AssistantCell,
   type EventEnvelope,
+  type FailedVerification,
   type ExecutionNode,
   type NodeStatus,
   type ToolCell,
@@ -18,7 +22,7 @@ import {
 import { toolPresentation } from "@/components/transcript/toolPresentation";
 import { useAppStore } from "../state/store.ts";
 import type { ProjectEventPage } from "../state/projectLog.ts";
-import { switchToSession } from "../state/wsBridge.ts";
+import { rollbackToCheckpoint, sendPrompt, switchToSession } from "../state/wsBridge.ts";
 import { actorLabel, formatEventTime } from "./ActivityList.tsx";
 import { VerdictChip } from "./VerdictChip.tsx";
 
@@ -171,18 +175,155 @@ function duplicateRows(nodes: ReadonlyMap<string, ExecutionNode>): ReadonlySet<s
 
 const NO_HIDDEN: ReadonlySet<string> = new Set();
 
+/** A10: one failed verification, its marked region and the checkpoint it may restore. */
+interface Failure {
+  /** Unique in the view: a plan node can carry several items blocked before their run. */
+  id: string;
+  failure: FailedVerification;
+  region?: AffectedRegion;
+  /**
+   * The frontier checkpoint, when the failed work wrote to the open session's checkout
+   * (rollback acts on that one): its label, and the turns that began after it (dropped).
+   */
+  restore?: { turnIndex: number; label: string; dropped: ExecutionNode[] };
+}
+
+/** A10: the marking of every failed verification in view, and the one action. */
+interface Marks {
+  mark: ReadonlyMap<string, "trusted" | "affected" | "frontier">;
+  /** By node key. */
+  failures: ReadonlyMap<string, Failure[]>;
+  /** A turn is running or a retry is in flight: nothing restores now. */
+  busy: boolean;
+  /** A subagent or loop run is still working: a restore would rewrite files under it. */
+  liveWork: boolean;
+  onRetry: (id: string) => void;
+}
+
+const NO_MARKS: Marks = {
+  mark: new Map(),
+  failures: new Map(),
+  busy: false,
+  liveWork: false,
+  onRetry: () => {},
+};
+
+const MARK_LABEL = { trusted: "Trusted", affected: "Affected", frontier: "Recovery point" };
+
+const RERUN_TEXT: Record<FailedVerification["retry"]["kind"], string> = {
+  turn: "send the turn's prompt again",
+  planItem: "re-dispatch the plan item and the items it blocked",
+  loopRun: "retry the loop run from its saved definition (it may write to its checkout again)",
+};
+
+/** Why the action cannot run now, or undefined when it can. */
+function retryBlocker(entry: Failure, state: Pick<Marks, "busy" | "liveWork">): string | undefined {
+  if (entry.failure.retry.kind === "turn" && !entry.restore)
+    return "No checkpoint before this node to restore.";
+  if (state.busy) return "Wait for the running turn to finish.";
+  if (entry.restore && state.liveWork)
+    return "Wait for the running subagents and loops to finish before restoring files.";
+  return undefined;
+}
+
+/** A subagent or loop run in the tree is still working. */
+const liveWorkIn = (tree: { nodes: ReadonlyMap<string, ExecutionNode> } | null): boolean =>
+  [...(tree?.nodes.values() ?? [])].some(
+    (node) =>
+      !node.placeholder &&
+      (node.ref.type === "subagentRun" || node.ref.type === "loopRun") &&
+      (node.status === "running" || node.status === "pending"),
+  );
+
+/** What the confirm says: what is restored and dropped, then what runs again. */
+function confirmText(entry: Failure, joins: Joins): string {
+  const { retry } = entry.failure;
+  const restore = entry.restore;
+  if (!restore) return `Retry from node: ${RERUN_TEXT[retry.kind]}; no checkpoint is restored.`;
+  const turns = restore.dropped.length;
+  const dropped = `${turns} later turn${turns === 1 ? "" : "s"} and the file changes after it are discarded`;
+  let rerun = RERUN_TEXT[retry.kind];
+  if (retry.kind === "turn") {
+    const first = restore.dropped[0];
+    const user = first?.entryIds?.map((id) => joins.users.get(id)).find((cell) => cell);
+    rerun = "send the first dropped prompt again";
+    if (turns > 1) rerun += ` (only that one: the ${turns - 1} after it are not replayed)`;
+    if (user && hasAttachments(user)) rerun += "; its attachments are not re-sent";
+  }
+  return `Retry from node: restore the checkpoint "${restore.label}" (${dropped}), then ${rerun}.`;
+}
+
+const planRetryUrl = (retry: Extract<FailedVerification["retry"], { kind: "planItem" }>) =>
+  `/sessions/${encodeURIComponent(retry.sessionId)}/plan/items/${encodeURIComponent(retry.itemId)}/retry`;
+
+async function refusal(response: Response): Promise<Error> {
+  const body = (await response.json().catch(() => ({}))) as { error?: string };
+  return new Error(body.error ?? `Retry failed (${response.status}).`);
+}
+
+/**
+ * A10 "Retry from node": restore the frontier checkpoint through the existing rollback
+ * (the RPC the Checkpoints panel uses), then re-run the affected region: a turn's prompt
+ * again (the first prompt the rollback dropped, as the panel's rerun), a plan item through
+ * the dispatcher (the click is the live intent, logged with its actor), a loop through the
+ * existing loop retry. Resolves to the success message.
+ */
+async function retryFromNode(sessionId: string, entry: Failure): Promise<string> {
+  const { retry } = entry.failure;
+  const json = { "content-type": "application/json" };
+  // The plan as the person saw it: the server refuses the retry if it moved on.
+  const seen =
+    retry.kind === "planItem"
+      ? JSON.stringify({ generation: retry.generation ?? null, runId: retry.runId ?? null })
+      : "";
+  // Before anything destructive: the step after the restore must be able to run.
+  if (entry.restore && retry.kind === "planItem") {
+    const check = await fetch(`${planRetryUrl(retry)}?dryRun=1`, {
+      method: "POST",
+      headers: json,
+      body: seen,
+    });
+    if (!check.ok) throw await refusal(check);
+  }
+  let rolled: Awaited<ReturnType<typeof rollbackToCheckpoint>> | undefined;
+  if (entry.restore) rolled = await rollbackToCheckpoint(entry.restore.turnIndex);
+  if (retry.kind === "turn") {
+    if (!rolled?.nextPrompt) {
+      return "Restored the checkpoint; there was no later prompt to send again.";
+    }
+    await sendPrompt(sessionId, rolled.nextPrompt);
+    return rolled.nextPromptHadAttachments
+      ? "Restored the checkpoint and sent the prompt again, without its attachments."
+      : "Restored the checkpoint and sent the turn's prompt again.";
+  }
+  const response =
+    retry.kind === "planItem"
+      ? await fetch(planRetryUrl(retry), { method: "POST", headers: json, body: seen })
+      : await fetch(`/loops/runs/${encodeURIComponent(retry.runId)}/retry`, {
+          method: "POST",
+          headers: json,
+          body: JSON.stringify({ currentCheckoutConfirmed: true, fromNode: true }),
+        });
+  if (!response.ok) throw await refusal(response);
+  return retry.kind === "planItem" ? "Plan item queued to run again." : "Loop run retried.";
+}
+
 const NodeRow = memo(function NodeRow({
   node,
   joins,
   hidden = NO_HIDDEN,
+  marks = NO_MARKS,
 }: {
   node: ExecutionNode;
   joins: Joins;
   hidden?: ReadonlySet<string>;
+  marks?: Marks;
 }) {
   const tool = node.ref.type === "toolCall";
   const leaves = turnLeaves(node, joins);
   const outcome = humanOutcome(node);
+  const mark = marks.mark.get(node.key);
+  const failures = marks.failures.get(node.key) ?? [];
   const summary = (
     <span className="flex min-w-0 items-baseline gap-1.5">
       {CHIP_TYPES.has(node.ref.type) ? (
@@ -204,6 +345,37 @@ const NodeRow = memo(function NodeRow({
         {tool ? toolLabel(node, joins) : node.label}
       </span>
       {node.subagentRun?.verdict ? <VerdictChip verdict={node.subagentRun.verdict} /> : null}
+      {mark ? (
+        <span className="shrink-0 text-micro text-text-muted" data-testid="tree-node-mark">
+          {MARK_LABEL[mark]}
+        </span>
+      ) : null}
+      {failures.map((entry) => {
+        const blocker = retryBlocker(entry, marks);
+        const { retry } = entry.failure;
+        // On the plan node (an item blocked before its run): say which item.
+        const item =
+          retry.kind === "planItem" && node.ref.type === "plan"
+            ? ` ${retry.title ?? retry.itemId}`
+            : "";
+        return (
+          <ControlButton
+            key={entry.id}
+            className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-accent enabled:hover:underline disabled:text-text-muted"
+            data-testid="retry-from-node"
+            disabled={blocker !== undefined}
+            title={blocker ?? `Retry from node: ${RERUN_TEXT[retry.kind]}`}
+            onClick={(event) => {
+              // Inside a <summary>: the click must not fold the row.
+              event.preventDefault();
+              event.stopPropagation();
+              marks.onRetry(entry.id);
+            }}
+          >
+            Retry from node{item}
+          </ControlButton>
+        );
+      })}
       {tool ? null : (
         <>
           <span className="shrink-0 text-text-muted">{actorLabel(node.actor)}</span>
@@ -226,6 +398,7 @@ const NodeRow = memo(function NodeRow({
       data-testid="tree-node"
       data-type={node.ref.type}
       data-status={node.status}
+      {...(mark ? { "data-mark": mark } : {})}
     >
       {nested ? (
         <details open>
@@ -243,7 +416,7 @@ const NodeRow = memo(function NodeRow({
             {node.children
               .filter((child) => !hidden.has(child.key))
               .map((child) => (
-                <NodeRow key={child.key} node={child} joins={joins} hidden={hidden} />
+                <NodeRow key={child.key} node={child} joins={joins} hidden={hidden} marks={marks} />
               ))}
           </ul>
         </details>
@@ -347,6 +520,87 @@ export function NodeTreeView() {
   // A8: open human nodes first; they also stay in place below.
   const waiting = useMemo(() => (tree ? openHumanNodes(tree) : []), [tree]);
   const hidden = useMemo(() => (tree ? duplicateRows(tree.nodes) : NO_HIDDEN), [tree]);
+  const running = useAppStore((state) => state.transcript.agentStatus === "running");
+  const [retrying, setRetrying] = useState(false);
+  const failures = useMemo(() => {
+    const out: Failure[] = [];
+    if (!tree) return out;
+    for (const failure of failedVerifications(tree)) {
+      const region = failure.ran ? affectedRegion(tree, failure.key) : undefined;
+      const frontier = failure.restores ? region?.frontier : undefined;
+      const checkpoint = frontier ? tree.nodes.get(frontier.checkpointKey) : undefined;
+      const retry = failure.retry;
+      // The session's own turns that began after the checkpoint: the rollback drops them.
+      const dropped = (tree.roots[0]?.children ?? []).filter(
+        (node) =>
+          node.ref.type === "turn" &&
+          node.sessionId === sessionId &&
+          checkpoint?.endEvent !== undefined &&
+          node.firstEvent > checkpoint.endEvent,
+      );
+      out.push({
+        id: `${failure.key}#${retry.kind === "planItem" ? retry.itemId : ""}`,
+        failure,
+        ...(region ? { region } : {}),
+        ...(frontier && checkpoint && frontier.sessionId === sessionId
+          ? { restore: { turnIndex: frontier.turnIndex, label: checkpoint.label, dropped } }
+          : {}),
+      });
+    }
+    return out;
+  }, [tree, sessionId]);
+  // The latest state, for the re-check once the confirm closes.
+  const latest = useRef({ tree, retrying });
+  latest.current = { tree, retrying };
+  const onRetry = useCallback(
+    (id: string) => {
+      const entry = failures.find((candidate) => candidate.id === id);
+      if (!entry || !sessionId) return;
+      if (!window.confirm(confirmText(entry, joins))) return;
+      // The dialog may have stayed open while a turn or a run started: check again.
+      const now = latest.current;
+      const blocker = retryBlocker(entry, {
+        busy: now.retrying || useAppStore.getState().transcript.agentStatus === "running",
+        liveWork: liveWorkIn(now.tree),
+      });
+      if (blocker) {
+        useAppStore.getState().pushToast({ kind: "error", message: blocker });
+        return;
+      }
+      setRetrying(true);
+      void retryFromNode(sessionId, entry)
+        .then((message) => useAppStore.getState().pushToast({ kind: "success", message }))
+        .catch((error: unknown) =>
+          useAppStore.getState().pushToast({
+            kind: "error",
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        )
+        .finally(() => setRetrying(false));
+    },
+    [failures, sessionId, joins],
+  );
+  const marks = useMemo<Marks>(() => {
+    const mark = new Map<string, "trusted" | "affected" | "frontier">();
+    const byNode = new Map<string, Failure[]>();
+    for (const entry of failures)
+      byNode.set(entry.failure.key, [...(byNode.get(entry.failure.key) ?? []), entry]);
+    const regions = failures.flatMap((entry) => (entry.region ? [entry.region] : []));
+    // Affected by any failure wins over trusted by another; a frontier shows only where a
+    // restore is offered.
+    for (const region of regions) for (const key of region.trusted) mark.set(key, "trusted");
+    for (const region of regions) for (const key of region.affected) mark.set(key, "affected");
+    for (const entry of failures) {
+      if (entry.restore && entry.region?.frontier) mark.set(entry.region.frontier.key, "frontier");
+    }
+    return {
+      mark,
+      failures: byNode,
+      busy: running || retrying,
+      liveWork: liveWorkIn(tree),
+      onRetry,
+    };
+  }, [tree, failures, running, retrying, onRetry]);
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2" data-testid="node-tree">
       {waiting.length > 0 ? (
@@ -356,7 +610,7 @@ export function NodeTreeView() {
           aria-label="Waiting on a person"
         >
           {waiting.map((node) => (
-            <NodeRow key={node.key} node={node} joins={joins} />
+            <NodeRow key={node.key} node={node} joins={joins} marks={marks} />
           ))}
         </ul>
       ) : null}
@@ -365,7 +619,7 @@ export function NodeTreeView() {
           {root.children
             .filter((node) => !hidden.has(node.key))
             .map((node) => (
-              <NodeRow key={node.key} node={node} joins={joins} hidden={hidden} />
+              <NodeRow key={node.key} node={node} joins={joins} hidden={hidden} marks={marks} />
             ))}
           {forks.map((fork) => {
             const meta = sessions.find((candidate) => candidate.id === fork.sessionId);
