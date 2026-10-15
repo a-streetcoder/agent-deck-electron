@@ -26,3 +26,7 @@ Domain tests for sessionActivity (turn open + not live = idle; parked = idle; op
 **2026-10-15T08:18:57Z**
 
 2026-10-15 from the SRV-15a contrarian: (1) per-message Fork and Re-run buttons (cells.tsx ~610-678) show on every member's session and resume/destroy the source runtime on the owner's credentials: hide them for non-owners (only the plain fork is offered on another member's session) or correct the docs; (2) a plain fork has no provenance card, so the Activity list and the session cannot say 'Bob forked Alice's session' although session.created carries actor=Bob and parent=source: add the provenance line; (3) the tooltip should also say that uncommitted edits in a deleted fork are swept into the owner's merge auto-commit.
+
+**2026-10-15T08:58:13Z**
+
+2026-10-15 implemented as cf04aa2 (sessionActivity in domain, activity on /sessions and session_meta pushes, idle-edge re-push, member chips shared with ActivityList, ?session= deep link after the first subscription, Copy link, Fork/Re-run hidden for non-owners, forkedFrom on plain forks with provenance and Activity row). Architect decisions on the developer's questions: parked stays  (legible, never running); agent/system Activity rows count for the owner of their session. Contrarian + GPT review36 running.
