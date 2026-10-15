@@ -20,3 +20,9 @@ GUARDRAILS: worktree E:/agent-deck-wt/<ticket> on wt/<ticket>; never git checkou
 ## Acceptance Criteria
 
 Server tests: forker's createdBy, PI_CODING_AGENT_DIR and GH_TOKEN env in the spawn params for both fork paths; 409 for a model outside the forker's catalog; 409 for Loop review and 'Loop ·' sessions; authors survive the fork; no-identity (desktop) fork keeps today's behaviour. Web test for the shared-checkout notice. Docs: remote-server-poc.md fork paragraph, ADR 0003 decision 4 amendment dated 2026-10-15. tsc, eslint, prettier clean.
+
+## Notes
+
+**2026-10-15T08:18:57Z**
+
+2026-10-15 contrarian on 04903a0: credential handover clean, merges cleanly against 71b4f95. BLOCKER: claude-bridge forks refused after each restart (ownerModels fetches bridge models only on an empty catalog) -> ensureBridgeCatalog first and new-session leniency. Fix before close: :max suffix, raw JSON 409 in the banner (responseErrorMessage), Fork button on Loop sessions, message-level fork reads the last model not the one at the fork point and lacks the PRV-01 swap, agent --model patterns wrongly refused, merge-blocking message wording. Follow-ups: per-message Fork/Re-run buttons show on every session (destroy the source runtime) -> hide for non-owners or correct the docs (ade-wruf); Bob's uncommitted work swept into Alice's merge auto-commit (co-author lines only from her session); Activity cannot yet say 'Bob forked Alice's session' (plain fork has no provenance card; ade-wruf); Loop forks refused also on the desktop (a fix: the copy was a fake Loop session), owner may want a 'continue this Loop conversation' path later.

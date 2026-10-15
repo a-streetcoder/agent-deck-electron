@@ -20,3 +20,9 @@ GUARDRAILS: worktree E:/agent-deck-wt/<ticket> on wt/<ticket>; never git checkou
 ## Acceptance Criteria
 
 Domain tests for sessionActivity (turn open + not live = idle; parked = idle; open human node = needsInput; failed; running). Server test: status present on the sessions payload. Web tests: status dots, the member chip filter (hidden with one owner, filters both lists), the deep link and Copy link. tsc, eslint, prettier clean.
+
+## Notes
+
+**2026-10-15T08:18:57Z**
+
+2026-10-15 from the SRV-15a contrarian: (1) per-message Fork and Re-run buttons (cells.tsx ~610-678) show on every member's session and resume/destroy the source runtime on the owner's credentials: hide them for non-owners (only the plain fork is offered on another member's session) or correct the docs; (2) a plain fork has no provenance card, so the Activity list and the session cannot say 'Bob forked Alice's session' although session.created carries actor=Bob and parent=source: add the provenance line; (3) the tooltip should also say that uncommitted edits in a deleted fork are swept into the owner's merge auto-commit.
