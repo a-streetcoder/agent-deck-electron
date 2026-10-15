@@ -32,3 +32,7 @@ node --test for the store (validation, override precedence, change resets the cl
 **2026-10-15T22:11:35Z**
 
 2026-10-15 GPT review (review53): remote-attach page could persist a hostile address (fixed: team-server IPC refused and preload capability hidden in remote mode), view.team-server missing from KEYBINDING_COMMANDS (fixed + palette test), ShareProjectControl hint (added per project row). Fix round landed as dc56801; contrarian still running.
+
+**2026-10-15T22:13:10Z**
+
+2026-10-15 contrarian: blocker (remote page could set the address) already fixed in dc56801; drop the per-row hint (contradicts 'empty URL = plain local'); validation gaps (trailing dot, labels, port 0); gate should not throw; preserve unknown keys on save; docs env table. Round 2 sent. 16b addendum written on ade-hndc (seamless origin via reload, Access team pinning against phishing).
