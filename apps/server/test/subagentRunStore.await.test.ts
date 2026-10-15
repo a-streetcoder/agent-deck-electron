@@ -1,9 +1,9 @@
-import type { EventEnvelope, PublicSubagentRun } from "@agent-deck/domain";
+import type { EventEnvelope } from "@agent-deck/domain";
 import { describe, expect, it } from "vitest";
-import { awaitSubagentRuns } from "../src/bridgeTools.ts";
 import type { EventSubscriber } from "../src/eventLog.ts";
+import { awaitSubagentRuns, type SubagentRunRecord } from "../src/subagentRunStore.ts";
 
-const run = (id: string, status: PublicSubagentRun["status"]): PublicSubagentRun => ({
+const run = (id: string, status: SubagentRunRecord["status"]): SubagentRunRecord => ({
   id,
   parentSessionId: "parent",
   task: "task",
@@ -22,7 +22,7 @@ const finished = (id: string): EventEnvelope =>
   }) as EventEnvelope;
 
 /** A stub log and store that record the order of subscribe and read calls. */
-function stub(initial: Record<string, PublicSubagentRun>) {
+function stub(initial: Record<string, SubagentRunRecord>) {
   const calls: string[] = [];
   const store = { ...initial };
   const subscribers = new Set<EventSubscriber>();
@@ -67,7 +67,6 @@ describe("awaitSubagentRuns", () => {
         durationMs: 42,
         model: "mock",
         tokens: { input: 3, output: 5 },
-        artifacts: [],
       },
     ]);
     expect(log.subscriberCount()).toBe(0);

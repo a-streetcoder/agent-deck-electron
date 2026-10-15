@@ -32,19 +32,25 @@ Pi process, worktree (`worktree: true`, fresh children only) and policy, exactly
 `managed_subagent` child. `await_subagents({runIds, timeoutMs?})` subscribes to the
 event log first and then reads the store, so a `subagent.run.finished` landing in
 between is not missed; an in-process settle also wakes it when the log is read-only.
-It returns `{results, timedOut}`, one structured result per id (`id`, `status`, the
-4,000-character `summary` head with `summaryBytes`, `error`, `tokens`, `durationMs`,
-`model`, `artifacts` (empty until runs record any), `checkpointRef` omitted while runs
-record none); on timeout (default 120 s, maximum 240 s, under the bridge fetch's 300 s
+It returns `{results, timedOut}`, one structured result per id, built from the
+caller's private run record (the owning parent gets the full summary and error with
+real paths; the event log keeps the capped, redacted public view): `id`, `status`,
+`summary`, `error`, `tokens`, `durationMs`, `model`; ids the session did not start are
+`not_found`. On timeout (default 120 s, clamped to 240 s, under the bridge fetch's 300 s
 headers timeout) unfinished runs report their current status. `cancel_subagent` aborts
-the child's delegation signal, waits for its scope finalizer, and returns the run's
-status (`stopped`, or the final status of a finished run). `managed_subagent` is spawn
-plus an in-process await of the same child, so its tool result is unchanged.
+the child's delegation signal, waits for its scope finalizer, and returns `{status}`
+(`stopped`, or the final status of a finished run); a run still active afterwards
+(a `managed_parallel` child, or one owned by another server process) or an unknown id
+returns `{ok: false, reason}`. `managed_subagent` is spawn plus an in-process await of
+the same child, so its tool result is unchanged.
 
 Orphans: a parent abort (composer Stop) cancels every child of that parent still
-running, awaited or not; a child spawned in an earlier turn keeps running until it
-finishes, is cancelled, or the parent stops. At most 8 spawned children (the
-`managed_parallel` maximum) run per parent at once; spawn refuses the ninth.
+running or still launching, awaited or not, including children spawned in earlier
+turns; otherwise a spawned child keeps running after the turn until it finishes or is
+cancelled. At most 8 spawned children (the `managed_parallel` maximum) run per parent at
+once; spawn refuses the ninth. A running spawned child keeps its idle parent from
+parking or refreshing resources; when the last one ends, the idle-parking deadline and
+any deferred resource refresh are armed again.
 
 ### Managed child provider settlement
 

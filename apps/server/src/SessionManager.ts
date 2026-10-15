@@ -12,7 +12,6 @@ import type {
   SubagentCell,
   TranscriptState,
   ChildTranscriptSnapshot,
-  PublicSubagentRun,
 } from "@agent-deck/domain";
 import {
   buildLaunchArgs,
@@ -26,7 +25,7 @@ import { Effect, Exit, Scope } from "effect";
 import { runPromiseUnwrapped, runSyncUnwrapped } from "./effectRun.ts";
 import type { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import type { ReceiptBus } from "./receipts.ts";
-import type { SubagentRunStore } from "./subagentRunStore.ts";
+import type { SubagentRunRecord, SubagentRunStore } from "./subagentRunStore.ts";
 import type { ServerRuntime } from "./runtime.ts";
 import { SessionMutationClaims } from "./sessionMutationClaims.ts";
 import { gitIdentityEnv, type GitIdentityMap } from "./gitIdentity.ts";
@@ -173,6 +172,8 @@ export interface SessionBusView {
 export class ManagedSession {
   /** A4: this parent's managed children by run id, from record commit until the run settles. */
   readonly spawnedSubagents = new Map<string, SpawnedSubagent>();
+  /** A4: children still launching (no committed record yet); a Stop cancels them too. */
+  readonly launchingSubagents = new Set<AbortController>();
   /** A4: spawn_subagent children in flight (launching or running), bounded per parent. */
   detachedSubagents = 0;
   private ingestionStarted = false;
@@ -343,6 +344,14 @@ export class ManagedSession {
       }
       throw error;
     }
+  }
+
+  /** A4: an idle-deadline park returns early while a spawned child runs and nothing
+   * re-arms it; the child's end does, unless a deadline is already pending. */
+  rearmIdleParking(): void {
+    const config = this.parkingConfig;
+    if (!config || this.parkingTimer || this.lifecycle !== "live") return;
+    this.configureIdleParking(config.timeoutMs, config.resume, config.onParked);
   }
 
   async parkForResourceRefresh(onParked: (meta: SessionMeta) => void): Promise<boolean> {
@@ -520,6 +529,7 @@ export class ManagedSession {
     // A4 orphans: a parent abort (composer Stop) cancels every child still running,
     // including spawn_subagent children no tool call is awaiting.
     for (const child of this.spawnedSubagents.values()) child.controller.abort();
+    for (const controller of this.launchingSubagents) controller.abort();
     // Abort of a parked session is already satisfied and must not warm Pi.
     if (this.lifecycle === "parked") return;
     const session = await this.piSession();
@@ -1777,6 +1787,8 @@ export class SessionManager {
     let accept!: (runId: string) => void;
     const accepted = new Promise<string>((resolve) => (accept = resolve));
     if (options.detached) parent.detachedSubagents += 1;
+    // Tracked before the async launch, so a Stop before the commit still cancels it.
+    parent.launchingSubagents.add(controller);
     entry.done = this.launchManagedSubagent(
       parentSessionId,
       parent,
@@ -1785,6 +1797,7 @@ export class SessionManager {
       controller.signal,
       (runId) => {
         acceptedId = runId;
+        parent.launchingSubagents.delete(controller);
         parent.spawnedSubagents.set(runId, entry);
         // A detached child outlives its spawning call: from its commit on, only
         // cancelSubagent, a parent abort or parent teardown stop it.
@@ -1794,19 +1807,34 @@ export class SessionManager {
     );
     const settle = (): void => {
       options.signal?.removeEventListener("abort", forward);
+      parent.launchingSubagents.delete(controller);
       if (acceptedId && parent.spawnedSubagents.get(acceptedId) === entry) {
         parent.spawnedSubagents.delete(acceptedId);
       }
-      if (options.detached) parent.detachedSubagents -= 1;
+      if (options.detached) {
+        parent.detachedSubagents -= 1;
+        this.resumeIdleWork(parentSessionId, parent);
+      }
     };
     entry.done.then(settle, settle);
     const runId = await Promise.race([accepted, entry.done.then((result) => result.runId)]);
     return { runId, done: entry.done };
   }
 
-  /** A4: the parent-visible public record of one of its runs (no capability fields). */
-  subagentRunView(parentSessionId: string, runId: string): PublicSubagentRun | undefined {
-    const run = this.subagentRuns?.publicRun(runId);
+  /** A4: a parent detached from its last child may park or refresh again; the idle
+   * edge that normally triggers both passed while the child was running. */
+  private resumeIdleWork(parentSessionId: string, parent: ManagedSession): void {
+    if (parent.detachedSubagents > 0 || this.sessions.get(parentSessionId) !== parent) return;
+    parent.rearmIdleParking();
+    if (!this.resourceRefreshDirty.has(parentSessionId) || !parent.resourceRefreshEligible) return;
+    this.resourceRefreshIdleSubscriptions.get(parentSessionId)?.();
+    this.resourceRefreshIdleSubscriptions.delete(parentSessionId);
+    this.armResourceRefresh(parent);
+  }
+
+  /** A4: the OWNING parent's private record of one of its runs (full summary, real paths). */
+  subagentRunRecord(parentSessionId: string, runId: string): SubagentRunRecord | undefined {
+    const run = this.subagentRuns?.get(runId);
     return run?.parentSessionId === parentSessionId ? run : undefined;
   }
 
@@ -1826,7 +1854,7 @@ export class SessionManager {
       child.controller.abort();
       await child.done.catch(() => undefined);
     }
-    return this.subagentRunView(parentSessionId, runId)?.status;
+    return this.subagentRunRecord(parentSessionId, runId)?.status;
   }
 
   /** Continuations are validated and claimed entirely before runChildAgent can

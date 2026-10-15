@@ -57,6 +57,9 @@ describe("GET /runtime/bridges", () => {
       expect.arrayContaining([
         "managed_subagent",
         "managed_parallel",
+        "spawn_subagent",
+        "await_subagents",
+        "cancel_subagent",
         "list_supervisor_requests",
         "answer_supervisor_request",
       ]),

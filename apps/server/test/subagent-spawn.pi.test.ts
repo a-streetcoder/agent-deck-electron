@@ -11,8 +11,7 @@ import {
 } from "@agent-deck/testkit";
 import { expect, it, vi } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
-import type { StructuredSubagentResult } from "../src/bridgeTools.ts";
-import type { SubagentRunRecord } from "../src/subagentRunStore.ts";
+import type { StructuredSubagentResult, SubagentRunRecord } from "../src/subagentRunStore.ts";
 
 /**
  * A4 against real Pi: spawn_subagent returns a run id while the child works,
@@ -21,6 +20,10 @@ import type { SubagentRunRecord } from "../src/subagentRunStore.ts";
  */
 
 process.env.AGENT_DECK_TEST = "1";
+
+/** A real absolute path and a long tail: the owning parent gets both back unredacted, uncut. */
+const PATH_PROBE = path.join(tmpdir(), "spawn-worktree", "src", "report.ts");
+const LONG_TAIL = "x".repeat(4_500);
 
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
 
@@ -91,7 +94,9 @@ const storedRuns = (dataDir: string): SubagentRunRecord[] =>
     }
   ).runs;
 
-const loggedEvents = (dataDir: string): { kind: string; subject: { id: string } }[] => {
+const loggedEvents = (
+  dataDir: string,
+): { kind: string; subject: { id: string }; payload: { result?: { summary?: string } } }[] => {
   const dir = path.join(dataDir, "events");
   return readdirSync(dir)
     .filter((name) => name.endsWith(".jsonl"))
@@ -135,7 +140,7 @@ it("spawns two children, cancels one, and awaits both with structured results", 
         }
       },
       reply: (_user, body) =>
-        isChild(body) ? "ALPHA_RESULT_SENTINEL the alpha child finished" : "parent finished",
+        isChild(body) ? `ALPHA_RESULT_SENTINEL ${PATH_PROBE} ${LONG_TAIL}` : "parent finished",
     },
     async ({ server, sessionId, dataDir, requests }) => {
       const managed = server.sessions.get(sessionId)!;
@@ -161,18 +166,13 @@ it("spawns two children, cancels one, and awaits both with structured results", 
         };
         expect(outcome.timedOut).toBe(false);
         const [alpha, beta] = outcome.results;
-        expect(alpha).toMatchObject({
-          id: alphaId,
-          status: "completed",
-          artifacts: [],
-          model: MOCK_MODEL_ID,
-        });
-        expect(alpha?.summary).toContain("ALPHA_RESULT_SENTINEL");
-        expect(alpha?.summaryBytes).toBeGreaterThan(0);
+        expect(alpha).toMatchObject({ id: alphaId, status: "completed", model: MOCK_MODEL_ID });
+        // Full private summary: longer than the 4,000-char public head, real path intact.
+        expect(alpha?.summary).toBe(`ALPHA_RESULT_SENTINEL ${PATH_PROBE} ${LONG_TAIL}`);
         expect(alpha?.durationMs).toBeGreaterThanOrEqual(0);
         expect(alpha).toHaveProperty("tokens");
-        expect(alpha).not.toHaveProperty("checkpointRef");
-        expect(beta).toMatchObject({ id: betaId, status: "stopped", artifacts: [] });
+        expect(alpha).not.toHaveProperty("artifacts");
+        expect(beta).toMatchObject({ id: betaId, status: "stopped" });
         expect(beta?.error).toContain("stopped");
 
         const records = storedRuns(dataDir);
@@ -184,6 +184,10 @@ it("spawns two children, cancels one, and awaits both with structured results", 
         expect(new Set(records.map((r) => r.parentToolCallId)).size).toBe(2);
         const finished = loggedEvents(dataDir).filter((e) => e.kind === "subagent.run.finished");
         expect(finished.map((e) => e.subject.id).sort()).toEqual([alphaId, betaId].sort());
+        // The log keeps the public view: a capped head with the path redacted.
+        const logged = finished.find((e) => e.subject.id === alphaId)?.payload.result?.summary;
+        expect(logged?.length).toBeLessThan(alpha!.summary!.length);
+        expect(logged).not.toContain(PATH_PROBE);
         // The cancelled child never produced output after the stop.
         betaGate.resolve();
         await new Promise((resolve) => setTimeout(resolve, 500));

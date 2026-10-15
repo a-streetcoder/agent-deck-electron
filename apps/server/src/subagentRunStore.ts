@@ -15,11 +15,13 @@ import path from "node:path";
 import {
   diffSubagentRuns,
   emptyTranscript,
+  subagentRunResult,
   toPublicSubagentRun,
   type ChildTranscriptSnapshot,
   type EventDraft,
   type PublicSubagentRun,
   type PublicViewOptions,
+  type RunResult,
   type SubagentCell,
   type TranscriptCell,
   type TranscriptState,
@@ -31,6 +33,7 @@ import {
   type SubagentArtifactAllocation,
 } from "@agent-deck/loop-catalog-native";
 import { z } from "zod";
+import type { EventLog } from "./eventLog.ts";
 import {
   MAX_DECLARED_READS_TOTAL_BYTES,
   normalizeDeclaredReads,
@@ -58,6 +61,82 @@ const MAX_DECLARED_READS = 32;
 const MAX_DECLARED_READ_LENGTH = 512;
 
 export type SubagentRunSource = "single" | "parallel";
+
+/**
+ * A4: what await_subagents hands the OWNING parent, built from the private record:
+ * the full summary and error with real paths. The public view stays for the log only.
+ */
+export interface StructuredSubagentResult extends RunResult {
+  id: string;
+  /** Omitted while subagent runs record no public artifacts. */
+  artifacts?: string[];
+}
+
+export const DEFAULT_AWAIT_TIMEOUT_MS = 120_000;
+/** Below undici's 300 s headers timeout on the bridge extension's fetch. */
+export const MAX_AWAIT_TIMEOUT_MS = 240_000;
+
+export interface AwaitSubagentDeps {
+  subscribe: EventLog["subscribe"];
+  /** The caller's own private record of a run; undefined for unknown or foreign ids. */
+  read: (runId: string) => SubagentRunRecord | undefined;
+  /** Settles when a run this process launched ends: the wake-up when the log is read-only. */
+  settled?: (runId: string) => Promise<unknown> | undefined;
+}
+
+const awaitedRunActive = (run: SubagentRunRecord | undefined): boolean =>
+  run?.status === "starting" || run?.status === "running";
+
+function structuredResult(
+  id: string,
+  run: SubagentRunRecord | undefined,
+): StructuredSubagentResult {
+  return run ? { id, ...subagentRunResult(run) } : { id, status: "not_found" };
+}
+
+/**
+ * Wait until every run is terminal, or until the timeout (partial results with their
+ * current statuses). Subscribes to the event log BEFORE reading the store: a finish
+ * committed in between is seen by the read, one after it by the subscriber.
+ */
+export function awaitSubagentRuns(
+  runIds: readonly string[],
+  deps: AwaitSubagentDeps,
+  options: { timeoutMs: number; signal?: AbortSignal },
+): Promise<{ results: StructuredSubagentResult[]; timedOut: boolean }> {
+  const wanted = new Set(runIds);
+  return new Promise((resolve) => {
+    let finished = false;
+    let timer: ReturnType<typeof setTimeout> | undefined = undefined;
+    function finish(timedOut: boolean): void {
+      if (finished) return;
+      finished = true;
+      unsubscribe();
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onAbort);
+      resolve({ results: runIds.map((id) => structuredResult(id, deps.read(id))), timedOut });
+    }
+    function onAbort(): void {
+      finish(true);
+    }
+    const check = (): void => {
+      if (!finished && runIds.every((id) => !awaitedRunActive(deps.read(id)))) finish(false);
+    };
+    const unsubscribe = deps.subscribe((event) => {
+      if (
+        (event.kind === "subagent.run.finished" || event.kind === "subagent.run.removed") &&
+        wanted.has(event.subject.id)
+      ) {
+        check();
+      }
+    });
+    check();
+    if (finished) return;
+    timer = setTimeout(() => finish(true), options.timeoutMs);
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    for (const id of wanted) deps.settled?.(id)?.then(check, check);
+  });
+}
 
 export type SubagentRunStatus =
   | "starting"
@@ -343,12 +422,6 @@ export class SubagentRunStore {
   publicRuns(): PublicSubagentRun[] {
     const options = this.publicView();
     return this.state.runs.map((run) => toPublicSubagentRun(run, options));
-  }
-
-  /** One run as publicRuns() shows it (A4 structured results). */
-  publicRun(id: string): PublicSubagentRun | undefined {
-    const run = this.state.runs.find((candidate) => candidate.id === id);
-    return run ? toPublicSubagentRun(run, this.publicView()) : undefined;
   }
 
   /** True when the store file was corrupt at boot and renamed aside (history unknown). */

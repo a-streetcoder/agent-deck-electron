@@ -1,10 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  subagentRunResult,
-  type PublicSubagentRun,
-  type RunResult,
-  type SessionPlanItem,
-} from "@agent-deck/domain";
+import type { SessionPlanItem } from "@agent-deck/domain";
 import { z } from "zod";
 import type { BridgeRegistry } from "./bridge.ts";
 import {
@@ -18,84 +13,12 @@ import type { EventLog } from "./eventLog.ts";
 import type { BridgeRouteHandles } from "./routes/bridge.ts";
 import type { SessionManager } from "./SessionManager.ts";
 import { ChildRunError } from "./services/sessionManager.ts";
+import {
+  awaitSubagentRuns,
+  DEFAULT_AWAIT_TIMEOUT_MS,
+  MAX_AWAIT_TIMEOUT_MS,
+} from "./subagentRunStore.ts";
 import { supervisorRequestTitle, type SupervisorLog } from "./supervisor.ts";
-
-/** A4: what await_subagents reports per run, built from the public run record. */
-export interface StructuredSubagentResult extends RunResult {
-  id: string;
-  /** No subagent artifact is public yet: always empty until runs record one. */
-  artifacts: string[];
-  /** The child's last checkpoint ref; omitted while runs record none. */
-  checkpointRef?: string;
-}
-
-export const DEFAULT_AWAIT_TIMEOUT_MS = 120_000;
-/** Below undici's 300 s headers timeout on the bridge extension's fetch. */
-export const MAX_AWAIT_TIMEOUT_MS = 240_000;
-
-export interface AwaitSubagentDeps {
-  subscribe: EventLog["subscribe"];
-  /** The parent's own public record of a run; undefined for unknown or foreign ids. */
-  read: (runId: string) => PublicSubagentRun | undefined;
-  /** Settles when a run this process launched ends: the wake-up when the log is read-only. */
-  settled?: (runId: string) => Promise<unknown> | undefined;
-}
-
-const runActive = (run: PublicSubagentRun | undefined): boolean =>
-  run?.status === "starting" || run?.status === "running";
-
-function structuredResult(
-  id: string,
-  run: PublicSubagentRun | undefined,
-): StructuredSubagentResult {
-  return run
-    ? { id, ...subagentRunResult(run), artifacts: [] }
-    : { id, status: "not_found", artifacts: [] };
-}
-
-/**
- * Wait until every run is terminal, or until the timeout (partial results with their
- * current statuses). Subscribes to the event log BEFORE reading the store: a finish
- * committed in between is seen by the read, one after it by the subscriber.
- */
-export function awaitSubagentRuns(
-  runIds: readonly string[],
-  deps: AwaitSubagentDeps,
-  options: { timeoutMs: number; signal?: AbortSignal },
-): Promise<{ results: StructuredSubagentResult[]; timedOut: boolean }> {
-  const wanted = new Set(runIds);
-  return new Promise((resolve) => {
-    let finished = false;
-    let timer: ReturnType<typeof setTimeout> | undefined = undefined;
-    function finish(timedOut: boolean): void {
-      if (finished) return;
-      finished = true;
-      unsubscribe();
-      clearTimeout(timer);
-      options.signal?.removeEventListener("abort", onAbort);
-      resolve({ results: runIds.map((id) => structuredResult(id, deps.read(id))), timedOut });
-    }
-    function onAbort(): void {
-      finish(true);
-    }
-    const check = (): void => {
-      if (!finished && runIds.every((id) => !runActive(deps.read(id)))) finish(false);
-    };
-    const unsubscribe = deps.subscribe((event) => {
-      if (
-        (event.kind === "subagent.run.finished" || event.kind === "subagent.run.removed") &&
-        wanted.has(event.subject.id)
-      ) {
-        check();
-      }
-    });
-    check();
-    if (finished) return;
-    timer = setTimeout(() => finish(true), options.timeoutMs);
-    options.signal?.addEventListener("abort", onAbort, { once: true });
-    for (const id of wanted) deps.settled?.(id)?.then(check, check);
-  });
-}
 
 /**
  * The parent Deck-agent bridge tools — subagent launch and the session activity
@@ -223,7 +146,7 @@ export function registerDeckBridgeTools(
       name: "spawn_subagent",
       label: "Spawn subagent",
       description:
-        "Start a Deck subagent on a self-contained task WITHOUT waiting for it, and get its stable Deck run ID back at once. Keep working, then collect the result with await_subagents, or stop it with cancel_subagent. Use it to run independent work alongside your own, or to start several children and await them together. Optional `agentName` delegates to an installed agent; `continueSubagentID` follows up on a finished single child; `reads` lists project-relative files for the child to read first; `worktree: true` runs a fresh child in its own app-owned detached Git worktree. At most 8 spawned children run at once per session, and stopping your turn cancels the ones still running.",
+        "Start a Deck subagent on a self-contained task WITHOUT waiting for it, and get its stable Deck run ID back at once. Keep working, then collect the result with await_subagents, or stop it with cancel_subagent. Use it to run independent work alongside your own, or to start several children and await them together. Optional `agentName` delegates to an installed agent; `continueSubagentID` follows up on a finished single child; `reads` lists project-relative files for the child to read first; `worktree: true` runs a fresh child in its own app-owned detached Git worktree. At most 8 spawned children run at once per session. A spawned child keeps running after your turn ends, until it finishes, is cancelled, or the user presses Stop, which cancels every running child, including ones spawned in earlier turns.",
       parameters: {
         type: "object",
         properties: {
@@ -300,14 +223,14 @@ export function registerDeckBridgeTools(
   const awaitParams = z
     .object({
       runIds: z.array(z.string().trim().min(1)).min(1).max(32),
-      timeoutMs: z.number().int().min(0).max(MAX_AWAIT_TIMEOUT_MS).optional(),
+      timeoutMs: z.number().int().min(0).optional(),
     })
     .strict();
   bridge.register(
     {
       name: "await_subagents",
       label: "Await subagents",
-      description: `Wait for Deck subagents started with spawn_subagent and get their structured results: per run its id, status (completed, failed, stopped or interrupted; still starting or running after a timeout; not_found for an unknown id), summary (the head of its answer; summaryBytes is the full size), error, tokens, durationMs, model and artifacts. Returns when every run has finished, or after timeoutMs (default ${DEFAULT_AWAIT_TIMEOUT_MS}, maximum ${MAX_AWAIT_TIMEOUT_MS}) with timedOut: true and the partial results; await again to keep waiting.`,
+      description: `Wait for Deck subagents started with spawn_subagent and get their structured results: per run its id, status (completed, failed, stopped or interrupted; still starting or running after a timeout; not_found for an id this session did not start), summary (the child's full answer), error, tokens, durationMs and model. Returns when every run has finished, or after timeoutMs (default ${DEFAULT_AWAIT_TIMEOUT_MS}, clamped to ${MAX_AWAIT_TIMEOUT_MS}) with timedOut: true and the partial results; await again to keep waiting.`,
       parameters: {
         type: "object",
         properties: {
@@ -321,8 +244,7 @@ export function registerDeckBridgeTools(
           timeoutMs: {
             type: "integer",
             minimum: 0,
-            maximum: MAX_AWAIT_TIMEOUT_MS,
-            description: `Optional wait limit in milliseconds (default ${DEFAULT_AWAIT_TIMEOUT_MS}).`,
+            description: `Optional wait limit in milliseconds (default ${DEFAULT_AWAIT_TIMEOUT_MS}; larger values are clamped to ${MAX_AWAIT_TIMEOUT_MS}).`,
           },
         },
         required: ["runIds"],
@@ -343,10 +265,16 @@ export function registerDeckBridgeTools(
         [...new Set(parsed.data.runIds)],
         {
           subscribe: (subscriber) => events.subscribe(subscriber),
-          read: (runId) => sessions.subagentRunView(ctx.sessionId, runId),
+          read: (runId) => sessions.subagentRunRecord(ctx.sessionId, runId),
           settled: (runId) => sessions.subagentRunSettled(ctx.sessionId, runId),
         },
-        { timeoutMs: parsed.data.timeoutMs ?? DEFAULT_AWAIT_TIMEOUT_MS, signal: ctx.signal },
+        {
+          timeoutMs: Math.min(
+            parsed.data.timeoutMs ?? DEFAULT_AWAIT_TIMEOUT_MS,
+            MAX_AWAIT_TIMEOUT_MS,
+          ),
+          signal: ctx.signal,
+        },
       );
       return { content: JSON.stringify(outcome) };
     },
@@ -358,7 +286,7 @@ export function registerDeckBridgeTools(
       name: "cancel_subagent",
       label: "Cancel subagent",
       description:
-        "Stop one running Deck subagent of this session (started with spawn_subagent, or still running from managed_subagent) and wait until it has stopped. Returns its status: stopped when it was cancelled, or its final status when it had already finished.",
+        "Stop one running Deck subagent of this session that was started with spawn_subagent or managed_subagent, and wait until it has stopped. Returns {status}: stopped when it was cancelled, or its final status when it had already finished. Returns {ok: false, reason} when the run is unknown or could not be cancelled here (managed_parallel children, or runs owned by another server process).",
       parameters: {
         type: "object",
         properties: {
@@ -378,12 +306,12 @@ export function registerDeckBridgeTools(
         };
       }
       const status = await sessions.cancelSubagent(ctx.sessionId, parsed.data.runId);
-      if (!status) {
-        return {
-          content: `No Deck subagent \`${parsed.data.runId}\` in this session.`,
-          isError: true,
-        };
-      }
+      const reason = !status
+        ? `No Deck subagent ${parsed.data.runId} in this session.`
+        : status === "starting" || status === "running"
+          ? `Deck subagent ${parsed.data.runId} is still ${status}: it was not started by spawn_subagent or managed_subagent in this server process, so it cannot be cancelled here.`
+          : undefined;
+      if (reason) return { content: JSON.stringify({ ok: false, reason }), isError: true };
       return { content: JSON.stringify({ status }) };
     },
   );

@@ -34,6 +34,8 @@ function setup(overrides: Partial<SubagentRunRecord> = {}) {
   (manager as unknown as { subagentRuns: SubagentRunStore }).subagentRuns = store;
   (manager as unknown as { sessions: Map<string, unknown> }).sessions.set(parentId, {
     runChildAgent,
+    spawnedSubagents: new Map(),
+    launchingSubagents: new Set(),
   });
   return { manager, parentId, run, sessionFile, runChildAgent, store };
 }
@@ -177,6 +179,8 @@ describe("SessionManager managed_subagent continuation eligibility", () => {
     const otherParent = randomUUID();
     (manager as unknown as { sessions: Map<string, unknown> }).sessions.set(otherParent, {
       runChildAgent,
+      spawnedSubagents: new Map(),
+      launchingSubagents: new Set(),
     });
     await expect(
       manager.runManagedSubagent(otherParent, "follow up", undefined, run.id),
