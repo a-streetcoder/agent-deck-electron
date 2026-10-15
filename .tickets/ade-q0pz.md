@@ -31,3 +31,7 @@ Each of the seven items has a regression test that fails on HEAD and passes afte
 **2026-10-15T19:26:58Z**
 
 2026-10-15 round 1 (a389707) reviewed: GPT second pass (review47) NOT READY: blocker = transfer cleanup (discard, update-ref) still runs hooks; should-fix = tokenless shared-server pushes keep hooks, commit route returns raw hook stderr, revealArtifacts/revealWorktree IPCs still take server paths in remote mode, resource test exercises only the helper. Fix round 2 sent to the developer; contrarian pass still running.
+
+**2026-10-15T19:31:23Z**
+
+2026-10-15 contrarian on a389707: no blocker; confirmed with git 2.48 that -c core.hooksPath=<empty dir> outranks repository config and that the sessionReturn test fails on base for the right reason; should-fix: hook-free pushes skip git-lfs pre-push (LFS pointers without objects), drop:classifyPaths and the reveal IPCs still take server paths in remote mode, SECRET_KEY misses AWS_SECRET_ACCESS_KEY/passwordHash/DATABASE_URL, items 1 and 4 tested only through helpers, docs bullet overclaims. All folded into fix round 2. Owner live check before shipping remote mode: WebSocket connects and a forced cross-host redirect arrives without cf-access-token (Electron behaviour not testable here).
