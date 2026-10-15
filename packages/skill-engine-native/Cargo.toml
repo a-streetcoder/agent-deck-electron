@@ -1,0 +1,31 @@
+# Vendored from Syncr `crates/skill-engine-napi` at engine-v0.2.0 (see VENDORED.md). This crate is
+# the NAPI binding; the engine itself is the `engine/` workspace member.
+[workspace]
+members = [".", "engine"]
+default-members = [".", "engine"]
+resolver = "2"
+
+[package]
+name = "skill-engine-napi"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88.0"
+publish = false
+description = "NAPI binding for the vendored skill engine — implements agent-deck's SkillStore seam."
+
+# cdylib for the addon; rlib so Rust tests can exercise the binding layer directly.
+# Matches agent-deck's loop-catalog-native, which this addon loads alongside.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The ENGINE crate only. Depending on syncr-core dragged bundled SQLite, a filesystem watcher
+# and a diff library into this addon, none of which any operation below calls (ADR 0004, task 1).
+skill-engine = { path = "engine" }
+# Versions EXACT-pinned and matched to agent-deck's loop-catalog-native: two addons with
+# divergent napi runtimes in one Electron process is a class of problem nobody should debug.
+napi = { version = "=3.11.0", default-features = false, features = ["napi8", "dyn-symbols"] }
+napi-derive = "=3.6.0"
+
+[build-dependencies]
+napi-build = "=2.3.2"
