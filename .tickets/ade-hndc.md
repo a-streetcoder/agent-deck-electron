@@ -1,6 +1,6 @@
 ---
 id: ade-hndc
-status: in_progress
+status: closed
 deps: [ade-wvbh]
 links: []
 created: 2026-10-15T21:55:07Z
@@ -44,3 +44,7 @@ node --test on the state machine (startup paths: cached token ok, expired -> nee
 **2026-10-15T22:49:42Z**
 
 2026-10-15 fix round + merge of 16c landed as 9763047 (all seven GPT items). Contrarian on b715697: blockers already covered by that round (first-contact hold, lifted cloudflared state); round 3 sent: warning names the relaying origin + aud pinning, recovery from unreachable (mount, 2xx, focus throttle, 10 s /me timeout), 'Remove cached token' action, transfer guard from freeze to dialog close with a ceiling, strict /me shape, teamServer.cancelSignIn, docs fixes; then merge poc/shared-server again.
+
+**2026-10-15T22:59:02Z**
+
+2026-10-15 round 3 (4a87022 + merge 9a4aa2e) verified by the architect; squashed 5b70e7d onto poc/shared-server, merged efe887d; typecheck + design-system + 69 desktop node tests + 71 web tests green; web build deployed. CLOSED. Owner live checks: first dev launch confirms the preload gets the origin via sendSync (frame URL available at preload time), a real Sign in / Sign out / Remove cached token cycle, a Save that changes the origin reloads the window, the team warning on a second origin. Follow-ups: token file naming untested with a non-default port; trustTeam rewrites the pins on every accepted token; hold ceiling 5 min.

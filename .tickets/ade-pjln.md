@@ -1,6 +1,6 @@
 ---
 id: ade-pjln
-status: open
+status: in_progress
 deps: [ade-hndc, ade-u5bg]
 links: []
 created: 2026-10-15T21:55:07Z
@@ -18,3 +18,9 @@ After 13a-c: delete the remote-attach bootstrap path (AGENT_DECK_REMOTE_SERVER_U
 
 No reference to AGENT_DECK_REMOTE_SERVER_URL remains outside the changelog/archive; desktop tests pass; docs consistent; the browser client documented as the only non-desktop client.
 
+
+## Notes
+
+**2026-10-15T22:59:03Z**
+
+2026-10-15 started; worktree E:\agent-deck-wt\ade-pjln (wt/ade-pjln). 16a-16c are merged: the Team server setting + sign-in replace the env-driven modes.
