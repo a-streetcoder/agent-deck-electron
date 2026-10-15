@@ -32,3 +32,7 @@ docker build succeeds in CI; the container answers /health 200 and GET /projects
 **2026-10-15T22:21:26Z**
 
 2026-10-15 implemented as a0ef079; VM build passed (unpacked 552 MB, compressed 193 MB; size gate changed to compressed <= 400 MB since node-slim + git alone is ~330 MB unpacked), smoke: /health 200, /projects, /, /me, Pi 1.2.0 + addons + node-pty load. Code changes: AGENT_DECK_HOST listen address (default unchanged), pi-mcp lookup beside AGENT_DECK_PI_CLI (+test; likely fixes the packaged desktop too). Contrarian + GPT (review54) running. Developer ran docker builder prune -af on the VM (whole build cache cleared, service untouched).
+
+**2026-10-15T22:24:42Z**
+
+2026-10-15 GPT review (review54): blocker = image must default to loopback (0.0.0.0 exposes an unauthenticated control plane on a shared Docker network; the sidecar shares the namespace anyway); should-fix = rustup bootstrap piped from sh.rustup.rs, pin rustup-init with a committed sha256. Fix round sent; contrarian still running.
