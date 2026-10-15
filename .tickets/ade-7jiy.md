@@ -1,6 +1,6 @@
 ---
 id: ade-7jiy
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-15T07:25:21Z
@@ -20,3 +20,9 @@ GUARDRAILS: worktree E:/agent-deck-wt/<ticket> on wt/<ticket>; never git checkou
 ## Acceptance Criteria
 
 Domain tests for the aggregation (windows, roles, empty); server route tests; real-Pi test showing a loop child records tokens; web test for the Agents screen profile; the list_agents tool returns profiles for the project's agents; tsc, eslint, prettier clean.
+
+## Notes
+
+**2026-10-15T07:56:43Z**
+
+2026-10-15 merged as 899f63c (90e2743 + fix round 1ae76d6: contrarian 5 items and GPT review31 5 items: 'finished' rate wording, failed-child usage kept, numeric token whitelist, unique project-name lookup, frontmatter control-char normalisation and labelled lines, inclusive window). Server tsc clean after the merge; deployed to the VM. Follow-ups (not ticketed yet): verdict-based approval rate once A7 lands (map role verify to checker in subagentSample); cache tokens and per-model keying; per-project profile keying needs a session-to-project join for subagent runs; list_agents name filter; aggregation recomputed per call.
