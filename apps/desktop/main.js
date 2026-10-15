@@ -30,10 +30,20 @@ import {
   remoteServerOrigin,
   retryInSlots,
 } from "./remote-server.js";
+import {
+  cloudflaredVersion,
+  CLOUDFLARED_ASSETS,
+  CLOUDFLARED_VERSION,
+  downloadAndStoreCloudflared,
+  lazyCloudflaredRunner,
+  resolveCloudflared,
+} from "./cloudflared-resolver.js";
 import { createSharedServerClient } from "./shared-server.js";
 import {
   createTeamServerHandlers,
   nextSharedServerClient,
+  readTeamServerSettings,
+  REMOTE_MODE_ERROR,
   restartGate,
 } from "./team-server-settings.js";
 import { localShellActionsAllowed, resolveResourceFile } from "./resource-file-request.js";
@@ -1216,13 +1226,78 @@ ipcMain.on("attention:notify", (event, payload) => {
   });
 });
 
-/** `run(args, timeoutMs, signal)` for AGENT_DECK_CLOUDFLARED, or null when unset. */
-function cloudflaredRunner() {
-  const cloudflared = process.env.AGENT_DECK_CLOUDFLARED;
-  if (!cloudflared) return null;
-  return (args, timeout, signal) =>
-    execFileAsync(cloudflared, args, { timeout, signal, windowsHide: true }).then((r) => r.stdout);
+// --- SRV-16c: cloudflared (cloudflared-resolver.js) ---
+/** The cloudflared to use: AGENT_DECK_CLOUDFLARED, stored cloudflaredPath, PATH, install folders. */
+function resolvedCloudflared() {
+  return resolveCloudflared({
+    storedPath: readTeamServerSettings(app.getPath("userData")).cloudflaredPath,
+    env: process.env,
+  });
 }
+
+const execCloudflared = (cloudflared, args, timeout, signal) =>
+  execFileAsync(cloudflared, args, { timeout, signal, windowsHide: true }).then((r) => r.stdout);
+
+/** The shared-server client's runner: resolves cloudflared on every call. */
+function cloudflaredRunner() {
+  return lazyCloudflaredRunner(resolvedCloudflared, execCloudflared);
+}
+
+/** { path, source, version, warning } for Settings > Team server, or null when none is found. */
+ipcMain.handle("team-server:cloudflared", async (event) => {
+  assertTrustedPickerSender(event, "Team server settings are unavailable");
+  if (remoteServer) throw new Error(REMOTE_MODE_ERROR);
+  const found = resolvedCloudflared();
+  if (!found.path) return null;
+  const version = await cloudflaredVersion((args, timeout) =>
+    execCloudflared(found.path, args, timeout),
+  );
+  return { ...found, version };
+});
+
+/**
+ * { downloadVersion, warning }: the version a download would fetch (null when
+ * there is none for this machine) and the resolver's warning, also when none is found.
+ */
+ipcMain.handle("team-server:cloudflared-info", (event) => {
+  assertTrustedPickerSender(event, "Team server settings are unavailable");
+  if (remoteServer) throw new Error(REMOTE_MODE_ERROR);
+  const supported = CLOUDFLARED_ASSETS[`${process.platform}-${process.arch}`];
+  return {
+    downloadVersion: supported ? CLOUDFLARED_VERSION : null,
+    warning: resolvedCloudflared().warning,
+  };
+});
+
+let cloudflaredDownload = null;
+/**
+ * One verified download at a time; progress goes to the asking renderer as
+ * 'team-server:cloudflared-progress'. Answers { ok, path, version } or
+ * { ok: false, error }; a success records cloudflaredPath, which the client's
+ * runner picks up on its next call. Any failure (also the deadline) clears
+ * the pending promise, so Download can be retried.
+ */
+ipcMain.handle("team-server:cloudflared-download", (event) => {
+  assertTrustedPickerSender(event, "Team server settings are unavailable");
+  if (remoteServer) return { ok: false, error: REMOTE_MODE_ERROR };
+  const sender = event.sender;
+  cloudflaredDownload ??= downloadAndStoreCloudflared({
+    userDataDir: app.getPath("userData"),
+    onProgress: (progress) => {
+      if (!sender.isDestroyed()) sender.send("team-server:cloudflared-progress", progress);
+    },
+  })
+    .then(({ path: cloudflared, version }) => ({ ok: true, path: cloudflared, version }))
+    .catch((error) => ({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    }))
+    .finally(() => {
+      cloudflaredDownload = null;
+    });
+  return cloudflaredDownload;
+});
+// --- end SRV-16c ---
 
 async function bootstrap() {
   startupTrace("bootstrap started");
@@ -1238,8 +1313,12 @@ async function bootstrap() {
       // ade-1vjx: with AGENT_DECK_CLOUDFLARED set, sign in through cloudflared
       // (system browser) and present the token as `cf-access-token` on every
       // request and WebSocket upgrade to the origin, so Access never shows its
-      // login inside the window. Unset keeps the in-window login.
-      const run = cloudflaredRunner();
+      // login inside the window. Unset keeps the in-window login. SRV-16c:
+      // only the variable counts here, not the resolved or downloaded one.
+      const remoteCloudflared = process.env.AGENT_DECK_CLOUDFLARED;
+      const run = remoteCloudflared
+        ? (args, timeout, signal) => execCloudflared(remoteCloudflared, args, timeout, signal)
+        : null;
       if (run) {
         const { host } = new URL(remoteServer);
         // ponytail: token fixed for the run; mid-run expiry (168 h) needs an app restart.

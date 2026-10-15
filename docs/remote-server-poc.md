@@ -34,7 +34,7 @@ Desktop (`apps/desktop/main.js`):
 | `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`  | `streetcoding-collective.cloudflareaccess.com` | Optional. Pins the in-window login round-trip to this team's Access pages (else any `*.cloudflareaccess.com`).                           |
 | `AGENT_DECK_DESKTOP_RECOVERY_TOKEN` | _(same as the VM)_                             | Optional. Honored instead of a random per-launch token.                                                                                  |
 | `AGENT_DECK_SHARED_SERVER_URL`      | `https://deck.moretti.cc`                      | Dev override of **Settings > Team server** (local mode). Set, it wins over the stored setting and the screen says so.                    |
-| `AGENT_DECK_CLOUDFLARED`            | `C:\Tools\cloudflared.exe`                     | Dev override: the cloudflared binary used to sign in to the team server. Needed today; SRV-16c brings discovery and a verified download. |
+| `AGENT_DECK_CLOUDFLARED`            | `C:\Tools\cloudflared.exe`                     | Dev override (wins over the saved one): the cloudflared used to sign in. When unset it is found or downloaded (see Desktop login below). |
 
 `AGENT_DECK_SERVER_URL` (loopback attach, used by `pnpm dev` and the SSH-tunnel launcher) is
 unchanged and mutually exclusive with `AGENT_DECK_REMOTE_SERVER_URL`.
@@ -174,14 +174,16 @@ and from a signed-in browser: `https://deck.moretti.cc/me` shows your identity.
   origin is accepted (no path, query, credentials or port 0; plain host name labels, an IPv4 or
   a bracketed IPv6 literal); an empty field clears it. The value is stored per machine in
   Electron userData (`team-server.json`, `{ serverUrl, cloudflaredPath? }`; `cloudflaredPath`
-  is reserved for SRV-16c and unused today; keys the app does not know are kept on Save; a
+  is the cloudflared Settings downloaded, see [Desktop login](#desktop-login); keys the app
+  does not know are kept on Save; a
   missing or corrupt file reads as not configured) and the status line reads "Not configured",
   "Configured, sign-in pending", or "Set by AGENT_DECK_SHARED_SERVER_URL (dev override)" when
   that variable is set: it is a dev override and wins over the setting. Saving a different
   address replaces main's shared-server client (its token and sign-in state start over; an
   empty address drops it, so no network call is made), but the page keeps the server it
   started with: Make shared and the mirror refuse with "Restart Agent Deck" until the app is
-  restarted. `AGENT_DECK_CLOUDFLARED` (the cloudflared path) is still needed to sign in. With a
+  restarted. Sign-in needs cloudflared, found or downloaded as in
+  [Desktop login](#desktop-login). With a
   server set, the Projects screen offers **Make shared** on each local project (see
   [Make shared from the desktop](#make-shared-from-the-desktop)). Not configured, the app looks
   exactly like local Agent Deck (the setting is reached from Settings or the command palette).
@@ -353,6 +355,39 @@ Electron.
   the server-minted token design in
   [handover-shared-server-poc.md](handover-shared-server-poc.md) stays shelved.
 - **Not covered**: candidate 2 (`agentdeck://` callback plus cookie copy) was not tried.
+- **cloudflared** (SRV-16c, `apps/desktop/cloudflared-resolver.js`): main uses the first that
+  exists of `AGENT_DECK_CLOUDFLARED` (dev override; it wins like `AGENT_DECK_SHARED_SERVER_URL`,
+  and when it points at a missing file the next source is used and the screen says
+  "AGENT_DECK_CLOUDFLARED points at a missing file"), the stored `cloudflaredPath` in
+  `team-server.json`, `cloudflared` / `cloudflared.exe` on PATH (quoted Windows entries are
+  unquoted), then the install folders (Windows: `%ProgramFiles(x86)%\cloudflared`,
+  `%ProgramFiles%\cloudflared`, `%LOCALAPPDATA%\Microsoft\WinGet\Links`; macOS:
+  `/opt/homebrew/bin`, `/usr/local/bin`; Linux: `/usr/local/bin`, `/usr/bin`). The shared-server client
+  resolves it again on every call, so a cloudflared installed or downloaded while the app runs
+  is used without a restart. Remote-attach mode uses only `AGENT_DECK_CLOUDFLARED` (unset keeps
+  the in-window login). **Settings > Team server** shows the one in use (path, source,
+  `cloudflared --version`); with none it offers **Download cloudflared**, which fetches the
+  pinned release **2026.10.0** over https from
+  `github.com/cloudflare/cloudflared/releases/download/<version>/<asset>` (Windows x64, macOS
+  x64/arm64, Linux x64/arm64; other systems must install it). Redirects are followed by hand, at
+  most 5, each hop https on `github.com`, `objects.githubusercontent.com` or
+  `release-assets.githubusercontent.com`; the transfer is capped at 200 MB, the unpacked macOS
+  archive at 300 MB, and the whole download at 10 minutes. The file goes to
+  `<userData>/cloudflared/<version>/<asset>.part`; main checks the sha256 of the file on disk
+  against the table in the module, and only then renames it to `cloudflared(.exe)`, makes it executable and records it as
+  `cloudflaredPath`. The table holds the "SHA256 Checksums" from Cloudflare's release notes; for
+  the macOS `.tgz` assets those are the checksums of the binary inside the archive, so the binary
+  is extracted and verified. A mismatch or any error deletes the partial files and records
+  nothing; nothing downloaded is run before it passes. Without any cloudflared, sign-in answers
+  "cloudflared is not available. Download it in Settings > Team server." **Bumping the version**:
+  change `CLOUDFLARED_VERSION` and every entry of `CLOUDFLARED_SHA256` together in one PR, copied
+  from the new release's notes (for Windows and Linux they also match the GitHub asset digest);
+  a missing or malformed checksum makes the download refuse to start. A bump does not replace a
+  download already made: the stored `cloudflaredPath` still points at the old version's folder
+  and wins over PATH. To fetch the new one, remove `cloudflaredPath` from `team-server.json` (or
+  delete the old folder) and click Download again. Old `<userData>/cloudflared/<version>`
+  folders are not cleaned up. Follow-up: treat a stored path outside the current version's
+  folder as stale.
 
 ### Recovery
 
