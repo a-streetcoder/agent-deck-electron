@@ -57,7 +57,8 @@ interface EntryShape {
   };
 }
 
-function messageText(content: unknown): string {
+/** The text blocks of a Pi message content (string or block array), joined by line breaks. */
+export function messageText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content

@@ -432,6 +432,16 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
   server only; a loopback origin is useless to a co-worker) copies `<origin>/?session=<id>`.
   Opening the link takes the parameter off the URL and opens that session instead of the boot
   resume of the newest session; an unknown or deleted id shows a notice and boots as usual.
+- **Agents reading shared sessions (SRV-15c).** Every agent on the server has
+  `list_sessions({project?, member?, since?, limit?})` and `read_session({sessionId, since?})`,
+  whoever owns the session: visibility is the point, nothing is hidden. `member` is an owner's
+  email or a display name only one owner has. `read_session` gives status, open questions, the
+  latest plan, checkpoints and per turn who prompted it, its outcome, tool counts and the head of
+  its final answer, plus the owner's Pi session file path and entry ids; the agent reads more of
+  that file with its own read and grep tools, which works because every member's sessions run as
+  the same Unix user. Reading a session changes nothing in it or in the log. Another session's
+  text may carry web content: it reaches the model quoted and labelled as data. Details in
+  [orchestration-reference.md](orchestration-reference.md).
 - **Providers screen.** `GET /runtime/providers`, sign-in and sign-out act on the requesting
   user's dir. A sign-in in progress belongs to whoever started it: polling, answering or
   cancelling it as anyone else answers 404. Responses carry status only, never a credential

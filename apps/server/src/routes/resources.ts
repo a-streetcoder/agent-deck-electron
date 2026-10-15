@@ -1551,12 +1551,14 @@ ${content}
       id: "deck_agents",
       displayName: "Deck agents",
       summary:
-        "Lets the agent list your named agents with their run record, delegate to them (subagents), run them in parallel or in the background, review and answer pending supervisor requests, and maintain a session plan; a subagent reports back over a supervisor channel. A background (spawned) subagent keeps running after the agent's turn ends, until it finishes, is cancelled, or you press Stop, which also cancels children spawned in earlier turns.",
+        "Lets the agent list your named agents with their run record, list and read every member's sessions, delegate to them (subagents), run them in parallel or in the background, review and answer pending supervisor requests, and maintain a session plan; a subagent reports back over a supervisor channel. A background (spawned) subagent keeps running after the agent's turn ends, until it finishes, is cancelled, or you press Stop, which also cancels children spawned in earlier turns.",
       condition:
         "Parent sessions; the delegation tools are hidden when subagents are turned off in Settings",
       match: (name: string): boolean =>
         [
           "list_agents",
+          "list_sessions",
+          "read_session",
           "managed_subagent",
           "managed_parallel",
           "spawn_subagent",

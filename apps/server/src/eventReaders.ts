@@ -10,6 +10,7 @@ import {
   projectSubagentRuns,
   projectSupervisor,
   SubagentDeltaIndex,
+  type EventEnvelope,
   type LoopRunsProjection,
   type OpenHumanRequest,
   type ProjectedPlanDispatch,
@@ -30,8 +31,15 @@ export interface LogProjections {
   subagentDeltas: SubagentDeltaIndex;
   /** A8: human requests still waiting on a person, over the whole log. */
   openHuman: Map<string, OpenHumanRequest>;
+  /** SRV-15c: completed top-level turns per session, and the newest one's prompt label. */
+  sessionTurns: Map<string, SessionTurnCount>;
   /** ts of the log's first event: older store history predates the log. */
   startedAt?: string;
+}
+
+export interface SessionTurnCount {
+  turns: number;
+  lastLabel?: string;
 }
 
 export interface LogReaders {
@@ -44,6 +52,8 @@ export interface LogReaders {
   subagentDeltas(): SubagentDeltaIndex | undefined;
   /** A8: open human requests, caught up (empty for the disabled log). */
   openHuman(): ReadonlyMap<string, OpenHumanRequest>;
+  /** SRV-15c: turn counts per session, caught up; undefined for the disabled log. */
+  sessionTurns(): ReadonlyMap<string, SessionTurnCount> | undefined;
 }
 
 // ponytail: every boot folds all history; projection snapshots when startup passes ~1 s.
@@ -59,6 +69,7 @@ export function createLogReaders(log: EventLog): LogReaders {
     dispatches: new Map(),
     subagentDeltas: new SubagentDeltaIndex(),
     openHuman: new Map(),
+    sessionTurns: new Map(),
   };
   const catchUp = (): LogProjections => {
     while (log.lastSeq() > afterSeq) {
@@ -70,7 +81,10 @@ export function createLogReaders(log: EventLog): LogReaders {
       state.plans = projectPlans(page.events, state.plans);
       state.dispatches = projectPlanDispatches(page.events, state.dispatches);
       state.openHuman = projectOpenHumanRequests(page.events, state.openHuman);
-      for (const event of page.events) state.subagentDeltas.apply(event);
+      for (const event of page.events) {
+        state.subagentDeltas.apply(event);
+        countSessionTurn(state.sessionTurns, event);
+      }
       if (page.nextAfterSeq === undefined || page.nextAfterSeq <= afterSeq) break;
       afterSeq = page.nextAfterSeq;
     }
@@ -82,5 +96,18 @@ export function createLogReaders(log: EventLog): LogReaders {
     plans: (sessionId) => (disabled ? undefined : (catchUp().plans.get(sessionId) ?? [])),
     subagentDeltas: () => (disabled ? undefined : catchUp().subagentDeltas),
     openHuman: () => (disabled ? new Map() : catchUp().openHuman),
+    sessionTurns: () => (disabled ? undefined : catchUp().sessionTurns),
   };
+}
+
+/** A child's turns carry no sessionId (their parent is the run), so only top-level turns count. */
+function countSessionTurn(counts: Map<string, SessionTurnCount>, event: EventEnvelope): void {
+  if (!event.sessionId) return;
+  if (event.kind === "session.removed") counts.delete(event.sessionId);
+  if (event.kind !== "session.turn.completed") return;
+  const label = (event.payload as { label?: unknown } | null)?.label;
+  counts.set(event.sessionId, {
+    turns: (counts.get(event.sessionId)?.turns ?? 0) + 1,
+    ...(typeof label === "string" && label ? { lastLabel: label } : {}),
+  });
 }

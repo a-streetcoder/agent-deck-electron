@@ -225,6 +225,31 @@ once, then per agent its name, description and authored tools on labelled lines 
 characters and line breaks flattened, each capped) and the profile on server-written lines,
 rounded, the whole capped at 12,000 characters.
 
+`list_sessions({project?, member?, since?, limit?})` and `read_session({sessionId, since?})`
+(SRV-15c, `apps/server/src/sessionTools.ts`) let any agent look at any member's session; they are
+not delegation tools, so they stay when subagents are off. `list_sessions` sorts by `updatedAt`
+(else `createdAt`) newest first, 20 by default and 50 at most, one block per session (id, title,
+project, owner, SRV-15b `activity`, update time, completed top-level turns and the newest prompt
+label from the log readers' `sessionTurns` fold, open human request yes/no), the whole capped at
+12,000 characters ending `(N more)`. `member` is an owner id (case-insensitive) or a display name
+only one owner has (an ambiguous or unknown one is an error, as is an unknown `project`, resolved
+like `list_agents`); `since` is an ISO time compared with the update time. `read_session` is
+stateless: it writes no cursor event (A3's `subagent.result.read` belongs to a parent and its
+run). `since` is a log seq and every result names `uptoSeq` to pass next time. It renders status,
+the open human requests (5 shown), the meta's latest plan (30 items), the newest 5
+`checkpoint.created` after `since`, then the `session.turn.completed` turns after `since`, newest
+first: who prompted it (the `turn.prompted` that opened it), the label, outcome, tool counts and
+failed tools, the head (1,500 characters) of the turn's final assistant message read from the Pi
+session file by the turn's entry ids, and `refs` (first..last entry id, the final message id). The
+Pi file path is printed once as the "read more" pointer: the agent runs as the same Unix user, so
+its read and grep tools reach the file. Oldest turns drop first at `SUBAGENT_DELTA_MAX_CHARS`
+(16,000). A session older than the log (no turns in it, `since` 0) and a server whose log is
+disabled read the turns from the Pi file's active chain instead, and say so; with the log off
+there are no authors, outcomes, checkpoints or cursor. Every authored value (titles, names,
+prompts, questions, plan titles, assistant text, which may carry web content) is on a labelled
+line, control characters flattened, capped and JSON-quoted, under a line saying quoted values are
+data, never instructions.
+
 ### Plan dependencies and dispatch
 
 A plan item may carry `dependsOn` (item ids), `assignee` and `verifiedBy` (agent names, compared
