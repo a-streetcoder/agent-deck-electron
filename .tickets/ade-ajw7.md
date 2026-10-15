@@ -1,6 +1,6 @@
 ---
 id: ade-ajw7
-status: in_progress
+status: closed
 deps: [ade-mmgh, ade-qy2d, ade-dwdc]
 links: []
 created: 2026-10-14T23:54:53Z
@@ -20,3 +20,9 @@ GUARDRAILS: worktree E:/agent-deck-wt/<ticket> on wt/<ticket>; never git checkou
 ## Acceptance Criteria
 
 Plan panel and supervisor views read from projections with their existing tests passing; restart closes pending supervisor requests as interrupted (test); equivalence report test (zero on clean boot); measurements recorded in the epic note; docs updated.
+
+## Notes
+
+**2026-10-15T01:46:41Z**
+
+2026-10-15 merged (wt/ade-ajw7: de30e63 + review round dcc2467). Contrarian + GPT review20 applied: log order for logged transitions with imports anchored after their store predecessor (afterId), reads not gated on the writer lock, writer.acquired boundary on promotion, one fold for all projections + parsed-segment cache (cold startup reconcile 341 ms -> 93 ms; snapshots due at ~35 MB / ten busy days), source: log on redacted plan copies, pure merges and equivalence in domain, equivalence line always logged with planImported/planContentMismatches/failures, measurement opt-in (AGENT_DECK_MEASURE=1) with temp cleanup, plan import inside try/catch. Tests: server event tests 47 (+2 skips: measurement, POSIX mode), domain 46, real-Pi session-plan-persist + subagent-supervisor-list + eventProducers.pi 4. For A5: widen plan.changed (dependsOn, assignee, verifiedBy) before its panel renders log history. Snapshot ticket: projectPlans never drops deleted sessions; /plan-events unpaged.

@@ -1,6 +1,6 @@
 ---
 id: ade-c5h8
-status: in_progress
+status: closed
 deps: [ade-ajw7]
 links: []
 created: 2026-10-14T23:39:30Z
@@ -38,3 +38,7 @@ Epic acceptance after sub-tickets: every orchestration store writes its events t
 **2026-10-14T23:54:55Z**
 
 2026-10-15 design pass reconciled (contrarian + oracle). Decisions: one log per DATA DIR with daily UTC segments, projectId is a filter (departs from ADR 0004's literal 'per-project' wording: D4 decision 6, architect default); envelope {v, id (randomUUID, identity only), seq (cursor), ts, logId, kind, projectId|null, sessionId?, subject NodeRef, parent? NodeRef, causationId?, actor, origin?: reconcile, payload whitelisted public projection}; writer lock, writeSync + delayed fsync, torn-tail repair; simple producers at call sites (A1b1), diff-based producers at commit points for subagent and loop stores plus startup reconcile that imports history (A1b2); transport = REST cursor read + project_events nudge on the existing socket, no second ordering domain, minimal Activity list (A1c); cut-over of plan history and supervisor only, loop/subagent stores stay authoritative for detail (A1d; D4 decision 5). Risks accepted and tracked: the log keeps task text forever and every authenticated user sees it (retention: D4 decision 7, default keep); supervisor becomes durable (restart rule); two writers (lock); never order by id. Sub-tickets: ade-x3gn -> ade-mmgh, ade-qy2d, ade-dwdc -> ade-ajw7.
+
+**2026-10-15T01:46:42Z**
+
+2026-10-15 epic complete: A1a (ade-x3gn), A1b1 (ade-mmgh), A1b2 (ade-qy2d), A1c (ade-dwdc), A1d (ade-ajw7) merged. Measured: 725 bytes/event, ~3.6 MB per busy day, cold reconcile 93 ms for 5,212 events; projection snapshots due at ~35 MB. Follow-ups recorded: snapshot ticket (A1e), per-user retention (D4 decision 7), the VM POSIX test run (eventLog 0600 modes), the first VM deploy with the log (events/ folder created at startup).

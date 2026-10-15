@@ -1,6 +1,6 @@
 ---
 id: ade-mw03
-status: open
+status: in_progress
 deps: [ade-c5h8]
 links: []
 created: 2026-10-14T23:39:30Z
