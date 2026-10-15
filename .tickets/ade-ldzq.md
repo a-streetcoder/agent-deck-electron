@@ -1,6 +1,6 @@
 ---
 id: ade-ldzq
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-10-15T03:42:36Z
