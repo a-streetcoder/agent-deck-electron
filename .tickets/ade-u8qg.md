@@ -1,6 +1,6 @@
 ---
 id: ade-u8qg
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-10-15T00:57:50Z
