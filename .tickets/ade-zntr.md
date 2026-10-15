@@ -1,6 +1,6 @@
 ---
 id: ade-zntr
-status: open
+status: in_progress
 deps: [ade-74y5, ade-0nzw]
 links: []
 created: 2026-10-15T07:25:23Z

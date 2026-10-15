@@ -1,6 +1,6 @@
 ---
 id: ade-0nzw
-status: in_progress
+status: closed
 deps: [ade-m5ku, ade-bfxw]
 links: []
 created: 2026-10-15T07:25:23Z
@@ -30,3 +30,7 @@ Domain tests for normalisation of all six templates and graph validation; loopEn
 **2026-10-15T08:49:22Z**
 
 2026-10-15 fix round 4db101a (template shapes + stages-with-one-checker only, human kind refused in hand-written graphs, loopChildStatus exported from domain and used by LoopGraphView, skipped on finished runs, graphHasNoRepeatEdge stop reason, stage numbering in execution order; loopEngine 75, loops.pi 13, loopGraph 23, nodeTree 21). GPT review35 of 42f035d: items 1,3,4 covered by the shape/human refusals; remaining sent as the final round: editor draftFrom drops the graph (graph-only loops cannot save), loader coerces malformed edges to [].
+
+**2026-10-15T08:55:24Z**
+
+2026-10-15 merged as c74119f (42f035d + 4db101a + 0f9d5f7). Post-merge: server tsc clean, loopEngine+loopHonestyRoutes 101 passed; domain loopGraph/nodeTree/eventDiffs 69; resources and web tsc clean; LoopsScreen/LoopGraphView/NodeTreeView 12. Follow-ups: editor cannot change a graph loop's rubric or structure label; a type-malformed graph file is hidden from the Bank without a visible load error; stop reason graphHasNoRepeatEdge is new to older readers; 'human node' now names both A8 requests and the A9 node kind (docs).
