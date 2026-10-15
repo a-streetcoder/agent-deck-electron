@@ -358,6 +358,21 @@ describe("HistoryActionCoordinator", () => {
     );
   });
 
+  it("hands the requester and the pinned plan to the materialized fork (SRV-15a)", async () => {
+    const { coordinator, manager } = harness();
+    const bob = { id: "bob@example.com", name: "Bob" };
+    const launchPlan = { kind: "parent", provider: "claude-bridge", model: "claude-x" };
+    await coordinator.run("source", "chosen", "fork", undefined, { owner: bob, launchPlan });
+    expect(manager.materializeHistoryFork).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "source", launchPlan }),
+      "/tmp/branch.jsonl",
+      undefined,
+      expect.objectContaining({ sourceSessionId: "source" }),
+      undefined,
+      bob,
+    );
+  });
+
   it("a fork of a fork records only its immediate source", async () => {
     const { coordinator, manager } = harness({ priorProvenance: true });
     await coordinator.run("source", "chosen", "fork");

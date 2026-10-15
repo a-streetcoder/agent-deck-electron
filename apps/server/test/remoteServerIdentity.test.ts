@@ -70,6 +70,10 @@ let server: AgentDeckServer;
 const endpoint = (pathname: string) => `http://127.0.0.1:${server.port}${pathname}`;
 const ale = { "cf-access-jwt-assertion": assertionFor("ale@example.com", "Ale") };
 const AUTHORED_SESSION = randomUUID();
+// SRV-15a: sessions a fork must refuse (Loop) or check against the forker's catalog.
+const LOOP_REVIEW_SESSION = randomUUID();
+const LOOP_PARENT_SESSION = randomUUID();
+const CODEX_SESSION = randomUUID();
 const loginAuthPaths: string[] = [];
 // SRV-06: github.com stand-in for the device flow; token answers are queued per test.
 const tokenAnswers: Array<Record<string, unknown>> = [];
@@ -115,10 +119,21 @@ beforeAll(async () => {
   process.env.AGENT_DECK_CF_ACCESS_JWKS_URL = `http://127.0.0.1:${(jwks.address() as AddressInfo).port}/certs`;
   // An ended session with an authors row, plus an authors row whose session is gone.
   const now = new Date().toISOString();
+  const piSessionFile = path.join(dataDir, "history.jsonl");
+  writeFileSync(piSessionFile, "");
+  const ended = { cwd: dataDir, createdAt: now, updatedAt: now, endedAt: now, piSessionFile };
   writeFileSync(
     path.join(dataDir, "sessions.json"),
     JSON.stringify([
       { id: AUTHORED_SESSION, cwd: dataDir, createdAt: now, updatedAt: now, endedAt: now },
+      { id: LOOP_REVIEW_SESSION, ...ended, loopReviewRunId: "run-1" },
+      { id: LOOP_PARENT_SESSION, ...ended, agentName: "Loop · nightly" },
+      {
+        id: CODEX_SESSION,
+        ...ended,
+        createdBy: { id: "andrea@example.com" },
+        launchPlan: { kind: "parent", provider: "openai-codex", model: "gpt-5.5:high" },
+      },
     ]),
   );
   const turn = { signature: "a".repeat(64), author: { id: "ale@example.com", name: "Ale" } };
@@ -412,6 +427,24 @@ describe.skipIf(!canSymlink)("SRV-13 no provider connected on a shared server", 
 });
 
 // Runs on the Linux VM (symlinks); skipped on Windows without Developer Mode.
+describe.skipIf(!canSymlink)("SRV-15a a fork runs on the forker's catalog", () => {
+  it("refuses a fork whose model the forker's providers do not offer, on both fork paths", async () => {
+    // Ale has an Anthropic API key (SRV-13 above); Andrea's session runs on Codex.
+    for (const route of ["fork", "history/fork"]) {
+      const response = await fetch(endpoint(`/sessions/${CODEX_SESSION}/${route}`), {
+        method: "POST",
+        headers: { ...ale, "content-type": "application/json" },
+        body: JSON.stringify({ entryId: "e1" }),
+      });
+      expect(response.status).toBe(409);
+      expect(((await response.json()) as { error: string }).error).toContain(
+        "This session runs on openai-codex/gpt-5.5, which your providers do not offer. Pick a model",
+      );
+    }
+  });
+});
+
+// Runs on the Linux VM (symlinks); skipped on Windows without Developer Mode.
 describe.skipIf(!canSymlink)("PRV-01 claude-bridge for a trusted-proxy owner", () => {
   const andrea = { "cf-access-jwt-assertion": assertionFor("andrea@example.com") };
   const userAuth = (email: string) =>
@@ -543,6 +576,24 @@ describe("trusted proxy on the WebSocket upgrade", () => {
   });
 });
 
+describe("SRV-15a forks on a shared server", () => {
+  it("refuses forks of Loop review and Loop sessions with 409, on both fork paths", async () => {
+    for (const id of [LOOP_REVIEW_SESSION, LOOP_PARENT_SESSION]) {
+      for (const route of [`/sessions/${id}/fork`, `/sessions/${id}/history/fork`]) {
+        const response = await fetch(endpoint(route), {
+          method: "POST",
+          headers: { ...ale, "content-type": "application/json" },
+          body: JSON.stringify({ entryId: "e1" }),
+        });
+        expect(response.status).toBe(409);
+        expect(((await response.json()) as { error: string }).error).toContain(
+          "A Loop session cannot be forked",
+        );
+      }
+    }
+  });
+});
+
 describe("session-authors.json pruning", () => {
   it("drops orphan rows at startup and the session's row on delete", async () => {
     expect(authorRowIds()).toEqual([AUTHORED_SESSION]);
@@ -591,6 +642,31 @@ describe("SessionAuthorStore", () => {
     );
     // Other sessions are unaffected.
     expect(reloaded.attachToUserCell("s2", live("hello"), raw("hello")).author).toBeUndefined();
+  });
+
+  it("a fork keeps the source's bound authors, not its staged turns (SRV-15a)", () => {
+    const store = new SessionAuthorStore(new SessionAuthorIndex(dataDir));
+    const andrea = { id: "andrea@example.com", name: "Andrea" };
+    const raw = (text: string) => ({ role: "user", content: [{ type: "text", text }] });
+    const cell = (text: string, entryId?: string): UserCell => ({
+      kind: "user",
+      id: `u-${text}`,
+      text,
+      ...(entryId ? { entryId } : {}),
+    });
+    store.stage("src", "inherited", andrea);
+    store.attachToUserCell("src", cell("inherited", "e1"), raw("inherited"));
+    store.stage("src", "in flight", andrea);
+    store.fork("src", "dst");
+    expect(store.attachToUserCell("dst", cell("inherited", "e1"), raw("inherited")).author).toEqual(
+      andrea,
+    );
+    expect(
+      store.attachToUserCell("dst", cell("in flight"), raw("in flight")).author,
+    ).toBeUndefined();
+    expect(store.attachToUserCell("src", cell("in flight"), raw("in flight")).author).toEqual(
+      andrea,
+    );
   });
 
   it("a rejected message's staged author is rolled back, so the next sender gets the cell", () => {

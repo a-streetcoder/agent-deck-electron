@@ -2102,8 +2102,11 @@ export class SessionManager {
     copyTo: string,
     env?: Record<string, string | undefined>,
     announce?: SessionAnnounce,
+    /** SRV-15a: the requester on a shared server; the fork is theirs. */
+    forker?: UserIdentity,
   ): Promise<ManagedSession> {
     copyFileSync(sessionFilePath, copyTo);
+    const owner = forker ?? source.createdBy;
     const meta: SessionMeta = {
       id: randomUUID(),
       cwd: source.cwd,
@@ -2124,8 +2127,9 @@ export class SessionManager {
       // A simple full-file duplicate retains identical canonical ancestry, so
       // its latest-turn prompt evidence remains valid (unlike history rewrites).
       finalSystemPromptAudit: source.finalSystemPromptAudit,
-      // SRV-11: a fork keeps the source owner, and so its credentials.
-      ...(source.createdBy ? { createdBy: source.createdBy } : {}),
+      // SRV-15a: a fork belongs to the forker and runs on their credentials;
+      // without an identity (desktop) it keeps the source owner.
+      ...(owner ? { createdBy: owner } : {}),
       ...(source.worktreeOwnerSessionId
         ? { worktreeOwnerSessionId: source.worktreeOwnerSessionId }
         : source.worktreePath
@@ -2189,6 +2193,8 @@ export class SessionManager {
     env?: Record<string, string | undefined>,
     forkProvenance?: ForkProvenance,
     announce?: SessionAnnounce,
+    /** SRV-15a: the requester on a shared server; the fork is theirs. */
+    forker?: UserIdentity,
   ): Promise<ManagedSession> {
     const now = new Date().toISOString();
     const meta: SessionMeta = {
@@ -2201,6 +2207,7 @@ export class SessionManager {
       piSessionFile: branchFile,
       title: source.title ? `${source.title} (fork)` : undefined,
       ...(forkProvenance ? { forkProvenance } : {}),
+      ...(forker ? { createdBy: forker } : {}),
     };
     if (!forkProvenance) delete meta.forkProvenance;
     // A newly materialized fork is an independent recovery boundary. Retry

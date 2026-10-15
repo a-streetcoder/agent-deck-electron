@@ -179,3 +179,89 @@ describe("SessionsMainPanel", () => {
     expect(screen.getByTestId("status-indicator").getAttribute("data-status")).toBe("idle");
   });
 });
+
+describe("SessionRow fork action (SRV-15a)", () => {
+  it("says the fork shares another member's checkout", () => {
+    const at = "2026-01-01T00:00:00.000Z";
+    const alice = { id: "alice@example.com", name: "Alice" };
+    const owner = {
+      id: "wt",
+      cwd: "/wt",
+      createdAt: at,
+      worktreePath: "/wt",
+      piSessionFile: "/w.jsonl",
+      createdBy: alice,
+    };
+    const fork = {
+      id: "fork",
+      cwd: "/wt",
+      createdAt: at,
+      worktreeOwnerSessionId: "wt",
+      piSessionFile: "/f.jsonl",
+    };
+    const plain = { id: "plain", cwd: "/tmp", createdAt: at, piSessionFile: "/p.jsonl" };
+    useAppStore.setState({
+      sessions: [owner, fork, plain],
+      me: { id: "bob@example.com", email: "bob@example.com" },
+    });
+    try {
+      for (const session of [owner, fork, plain]) {
+        render(
+          <SessionRow
+            session={session}
+            displayTitle={session.id}
+            active={false}
+            running={false}
+            onSelect={vi.fn()}
+          />,
+        );
+      }
+      expect(screen.getByTestId("chat-fork-fork").getAttribute("title")).toContain(
+        "shares Alice's checkout",
+      );
+      expect(screen.getByTestId("chat-fork-wt").getAttribute("title")).toContain(
+        "shares Alice's checkout",
+      );
+      expect(screen.getByTestId("chat-fork-plain").getAttribute("title")).toBe("Duplicate");
+      // The checkout owner sees a plain duplicate.
+      cleanup();
+      useAppStore.setState({ me: { id: alice.id, email: alice.id } });
+      render(
+        <SessionRow
+          session={fork}
+          displayTitle="fork"
+          active={false}
+          running={false}
+          onSelect={vi.fn()}
+        />,
+      );
+      expect(screen.getByTestId("chat-fork-fork").getAttribute("title")).toBe("Duplicate");
+    } finally {
+      useAppStore.setState({ sessions: [], me: null });
+    }
+  });
+});
+
+describe("SessionRow fork action on Loop sessions (SRV-15a)", () => {
+  it("disables the fork with the server's refusal reason", () => {
+    const at = "2026-01-01T00:00:00.000Z";
+    const sessions = [
+      { id: "review", cwd: "/r", createdAt: at, piSessionFile: "/r.jsonl", loopReviewRunId: "run" },
+      { id: "parent", cwd: "/p", createdAt: at, piSessionFile: "/p.jsonl", agentName: "Loop · x" },
+    ];
+    for (const session of sessions) {
+      render(
+        <SessionRow
+          session={session}
+          displayTitle={session.id}
+          active={false}
+          running={false}
+          onSelect={vi.fn()}
+        />,
+      );
+      const button = screen.getByTestId(`chat-fork-${session.id}`);
+      expect(button.hasAttribute("disabled")).toBe(true);
+      expect(button.getAttribute("title")).toContain("A Loop session cannot be forked");
+    }
+  });
+});

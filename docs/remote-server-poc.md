@@ -389,9 +389,21 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
   missing `auth.json`. Not linked: `.env` (Agent Deck layers the shared one at spawn anyway),
   `AGENTS.md`, `SYSTEM.md`, `APPEND_SYSTEM.md`.
 - **Sessions.** A session whose owner (`createdBy`) is set spawns Pi with
-  `PI_CODING_AGENT_DIR=<owner dir>`; resumes, forks, branches, Loop parents (owned by whoever
+  `PI_CODING_AGENT_DIR=<owner dir>`; resumes, branches, Loop parents (owned by whoever
   started the Loop), subagents and helpers keep it. Prompting someone else's session spends the
   session OWNER's subscription.
+- **Forks (SRV-15a).** A fork, plain (`POST /sessions/:id/fork`) or from a message
+  (`/history/fork`), belongs to whoever asked for it: `createdBy` is the forker, so it runs on
+  the forker's agent dir, git identity and GitHub connection. Inherited messages keep their
+  original author label (`session-authors.json` is copied). The inherited model (from the plan,
+  else the one in force at the forked message) must be in the forker's catalog, otherwise 409
+  asking to pick a model; like a new session, a `--model` pattern or an extension provider
+  (claude-bridge included) is left to Pi. Both fork paths get the PRV-01 claude-bridge swap. Loop sessions (a Loop parent or a
+  Loop review session) cannot be forked (409). A fork of a session with a worktree shares that
+  checkout and blocks its merge while the fork exists; the fork button says whose checkout it
+  shares. MCP sign-ins do not carry over: they live in each user's own `mcp-auth.json`, so the
+  forker signs in to the session's MCP servers themselves. Without an identity (desktop,
+  loopback) a fork keeps the source owner, as before.
 - **Providers screen.** `GET /runtime/providers`, sign-in and sign-out act on the requesting
   user's dir. A sign-in in progress belongs to whoever started it: polling, answering or
   cancelling it as anyone else answers 404. Responses carry status only, never a credential

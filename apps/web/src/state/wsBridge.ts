@@ -1235,7 +1235,7 @@ export async function forkSession(sessionId: string): Promise<void> {
     const response = await fetch(`/sessions/${encodeURIComponent(sessionId)}/fork`, {
       method: "POST",
     });
-    if (!response.ok) throw new Error(await response.text());
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
     const { session } = (await response.json()) as { session: SessionMeta };
     await refreshSessions();
     await switchToSession(session);

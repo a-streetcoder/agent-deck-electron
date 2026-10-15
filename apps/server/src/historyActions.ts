@@ -4,6 +4,7 @@ import type {
   HistoryDraft,
   ImageAttachment,
   SessionMeta,
+  UserIdentity,
 } from "@agent-deck/contracts";
 import type { UserCell } from "@agent-deck/domain";
 import { activeEntryChain } from "./services/sessionManager.ts";
@@ -141,6 +142,9 @@ export class HistoryActionCoordinator {
     action: "fork" | "rerun",
     /** A1 event log: the requesting route announces a materialized fork. */
     announce?: SessionAnnounce,
+    /** SRV-15a: the materialized fork's owner (the requester on a shared
+     * server) and, PRV-01, its pinned launch plan. */
+    fork?: { owner?: UserIdentity; launchPlan?: unknown },
   ): Promise<HistoryActionResult> {
     const releaseClaim = this.claims.tryClaim(sessionId, "history");
     if (!releaseClaim) {
@@ -324,12 +328,15 @@ export class HistoryActionCoordinator {
       if (action === "fork") {
         try {
           const targetSession = await this.sessions.materializeHistoryFork(
-            originalMeta,
+            fork?.launchPlan ? { ...originalMeta, launchPlan: fork.launchPlan } : originalMeta,
             branchFile,
             this.env(),
             forkProvenance,
             // Only when given: callers and tests see the original four-argument call.
-            ...((announce ? [announce] : []) as [SessionAnnounce?]),
+            ...((announce || fork?.owner ? [announce, fork?.owner] : []) as [
+              SessionAnnounce?,
+              UserIdentity?,
+            ]),
           );
           committed = true;
           return { outcome: "forked", session: targetSession.meta, draft };

@@ -219,18 +219,26 @@ export function claudeChoice(
   throw refusal();
 }
 
-/** The model a Pi session file was last on (what a resume restores). */
-function sessionFileModel(file: string): { provider: string; modelId: string } | null {
+/** The model a Pi session file was last on (what a resume restores), or the one
+ * in force at `entryId` (what a fork from that message restores). */
+function sessionFileModel(
+  file: string,
+  entryId?: string,
+): { provider: string; modelId: string } | null {
   try {
     const entries = parseSessionEntries(readFileSync(file, "utf8"));
     migrateSessionEntries(entries);
     return buildSessionContext(
       entries.filter((entry): entry is SessionEntry => entry.type !== "session"),
+      entryId,
     ).model;
   } catch {
     return null;
   }
 }
+
+/** Where a launch resumes: the session file, and for a fork from a message, its entry. */
+type LaunchWhere = { cwd: string; sessionFile?: string; entryId?: string };
 
 /** The model Pi would pick for a launch: explicit choice, else the resumed
  * session file, else Pi settings; a refused `provider/model` id is split. */
@@ -238,12 +246,12 @@ function launchChoice(
   ctx: Ctx,
   owner: UserIdentity | undefined,
   chosen: { provider?: string; model?: string },
-  where: { cwd: string; sessionFile?: string },
+  where: LaunchWhere,
   refused: ReadonlySet<string>,
 ): { provider?: string; model?: string } {
   let { provider, model } = chosen;
   if (!model && where.sessionFile) {
-    const restored = sessionFileModel(where.sessionFile);
+    const restored = sessionFileModel(where.sessionFile, where.entryId);
     provider = restored?.provider;
     model = restored?.modelId;
   }
@@ -300,15 +308,61 @@ export async function claudeLaunchModel(
   ctx: Ctx,
   owner: UserIdentity | undefined,
   chosen: { provider?: string; model?: string },
-  where: { cwd: string; sessionFile?: string },
+  where: LaunchWhere,
 ): Promise<{ provider: string; model: string } | undefined> {
   const { refused } = await credentialTransport(await ownerRuntime(ctx, owner));
   if (refused.size === 0) return undefined;
   const { provider, model } = launchChoice(ctx, owner, chosen, where, refused);
   if (provider && model && !refused.has(provider)) return undefined;
   await ensureBridgeCatalog(ctx);
-  const pinned = pinLaunchModel(provider, model, refused, await ownerCatalog(ctx, owner));
-  return pinned && { provider: pinned.provider, model: pinned.id };
+  // The twin is looked up by id; the thinking choice stays on the pinned model.
+  const parts = model === undefined ? undefined : modelParts(provider, model);
+  const pinned = pinLaunchModel(provider, parts?.id, refused, await ownerCatalog(ctx, owner));
+  const thinking = parts?.thinking ? `:${parts.thinking}` : "";
+  return pinned && { provider: pinned.provider, model: `${pinned.id}${thinking}` };
+}
+
+/** A `--model` pattern split from its `:<thinking>` suffix, and without a
+ * redundant `<provider>/` prefix when the provider is given separately. */
+function modelParts(provider: string | undefined, model: string) {
+  const thinking = /:(off|minimal|low|medium|high|xhigh|max)$/.exec(model)?.[1];
+  const id = thinking ? model.slice(0, -thinking.length - 1) : model;
+  const bare = provider && id.startsWith(`${provider}/`) ? id.slice(provider.length + 1) : id;
+  return { id: bare, literal: id, thinking };
+}
+
+/**
+ * SRV-15a: the model a fork would run on (as Pi picks it), as `provider/model`,
+ * when the owner's catalog (`available`) lacks it. Lenient like a new session:
+ * only a concrete model of a provider Pi knows without a Models refresh is
+ * named; a fuzzy `--model` pattern or an extension provider (claude-bridge
+ * included) is left to Pi.
+ */
+export async function unofferedLaunchModel(
+  ctx: Ctx,
+  owner: UserIdentity | undefined,
+  chosen: { provider?: string; model?: string },
+  where: LaunchWhere,
+  available: readonly { provider: string; id: string }[],
+): Promise<string | undefined> {
+  const choice = launchChoice(ctx, owner, chosen, where, new Set());
+  if (!choice.model) return undefined;
+  const { id: bare, literal } = modelParts(choice.provider, choice.model);
+  const slash = literal.indexOf("/");
+  const provider = choice.provider ?? (slash > 0 ? literal.slice(0, slash) : undefined);
+  if (!provider) return undefined;
+  // Exact provider/id, read either way: `openrouter` + `openrouter/meta/llama`
+  // may be the id `meta/llama`, or a literal id; a bare `a/b` may be a whole id.
+  const ids = choice.provider ? [...new Set([literal, bare])] : [literal.slice(slash + 1)];
+  const offered = available.some(
+    (entry) =>
+      (entry.provider === provider && ids.includes(entry.id)) ||
+      (!choice.provider && entry.id === literal),
+  );
+  if (offered) return undefined;
+  const runtime = await ownerRuntime(ctx, owner);
+  const known = ids.find((id) => runtime.getModel(provider, id));
+  return known && `${provider}/${known}`;
 }
 
 /**

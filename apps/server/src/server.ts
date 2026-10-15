@@ -788,7 +788,7 @@ async function initServer(
     },
     (sourceSessionId, targetSessionId) => {
       return forkSessionAttachmentStores(
-        [sessionImages, sessionPastes],
+        [sessionImages, sessionPastes, ...(sessionAuthors ? [sessionAuthors] : [])],
         sourceSessionId,
         targetSessionId,
       );

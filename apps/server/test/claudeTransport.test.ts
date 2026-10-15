@@ -4,7 +4,12 @@ import path from "node:path";
 import type * as PiHost from "@agent-deck/pi-host";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import { claudeChoice, discoveredUsable } from "../src/claudeTransport.ts";
+import {
+  claudeChoice,
+  claudeLaunchModel,
+  discoveredUsable,
+  unofferedLaunchModel,
+} from "../src/claudeTransport.ts";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 // The extension-discovered catalog (claude-bridge), without spawning Pi.
@@ -259,6 +264,112 @@ describe("PRV-01 launch and set_model choices", () => {
     await discover([]);
     expect(await draftModel()).toBeNull();
     writeAuth(API_KEY);
+  });
+});
+
+describe("SRV-15a the model a fork inherits", () => {
+  const catalog = [
+    { provider: "anthropic", id: "claude-x" },
+    { provider: "openrouter", id: "meta/llama" },
+  ];
+  // No owner: the operator's registry (no models.json) decides which providers Pi knows.
+  const ctx = { rootsFor: () => ({ home: fakeHome }) } as never;
+  const unoffered = (
+    chosen: { provider?: string; model?: string },
+    where: { sessionFile?: string; entryId?: string } = {},
+    available: Array<{ provider: string; id: string }> = catalog,
+  ) => unofferedLaunchModel(ctx, undefined, chosen, { cwd: dataDir, ...where }, available);
+
+  it("names a concrete model the catalog lacks, ignoring the thinking suffix", async () => {
+    expect(await unoffered({ provider: "openai-codex", model: "gpt-5.5:high" })).toBe(
+      "openai-codex/gpt-5.5",
+    );
+    expect(await unoffered({ model: "openai-codex/gpt-5.5:max" })).toBe("openai-codex/gpt-5.5");
+    expect(await unoffered({ provider: "anthropic", model: "claude-x:max" })).toBeUndefined();
+    expect(await unoffered({ model: "anthropic/claude-x" })).toBeUndefined();
+    expect(await unoffered({ model: "meta/llama" })).toBeUndefined();
+  });
+
+  it("reads a provider-prefixed model with its provider either way, still exactly", async () => {
+    expect(
+      await unoffered({ provider: "openrouter", model: "openrouter/meta/llama:high" }),
+    ).toBeUndefined();
+    expect(await unoffered({ provider: "anthropic", model: "anthropic/claude-x" })).toBeUndefined();
+    expect(await unoffered({ provider: "openai-codex", model: "openai-codex/gpt-5.5" })).toBe(
+      "openai-codex/gpt-5.5",
+    );
+    // The catalog's anthropic model is not offered under another provider.
+    expect(await unoffered({ provider: "openai-codex", model: "claude-x" })).toBeUndefined();
+  });
+
+  it("pins a refused anthropic model with a thinking suffix on its bridge twin, keeping the suffix", async () => {
+    writeAuth(OAUTH);
+    const bridgeModel = {
+      provider: "claude-bridge",
+      id: "claude-haiku-4-5",
+      contextWindow: 1000,
+      maxTokens: 100,
+      reasoning: false,
+      input: ["text"],
+    };
+    const bridgeCtx = {
+      rootsFor: () => ({ home: fakeHome }),
+      settings: { get: () => ({ disabledModels: [] }) },
+      discoveredModels: [bridgeModel],
+      discoverModels: async () => {},
+      claudeCodeLoggedIn: async () => true,
+    } as never;
+    expect(
+      await claudeLaunchModel(
+        bridgeCtx,
+        undefined,
+        { provider: "anthropic", model: "claude-haiku-4-5:high" },
+        { cwd: dataDir },
+      ),
+    ).toEqual({ provider: "claude-bridge", model: "claude-haiku-4-5:high" });
+  });
+
+  it("leaves patterns and extension providers to Pi (agent models, claude-bridge)", async () => {
+    expect(await unoffered({ model: "sonnet" })).toBeUndefined();
+    expect(await unoffered({ provider: "anthropic", model: "sonnet" })).toBeUndefined();
+    // No Models refresh since a restart: the bridge is not listed yet, the fork still runs.
+    expect(
+      await unoffered({ provider: "claude-bridge", model: "claude-opus-4-5" }, {}, []),
+    ).toBeUndefined();
+  });
+
+  it("reads the model in force at the forked message, else the last one", async () => {
+    const file = path.join(dataDir, "srv15a-history.jsonl");
+    const timestamp = new Date().toISOString();
+    const user = (id: string, parentId: string) => ({
+      type: "message",
+      id,
+      parentId,
+      timestamp,
+      message: { role: "user", content: "hi", timestamp: 0 },
+    });
+    const change = (id: string, parentId: string | null, provider: string, modelId: string) => ({
+      type: "model_change",
+      id,
+      parentId,
+      timestamp,
+      provider,
+      modelId,
+    });
+    writeFileSync(
+      file,
+      [
+        { type: "session", version: 3, id: "s", timestamp, cwd: dataDir },
+        change("m1", null, "openai-codex", "gpt-5.5"),
+        user("u1", "m1"),
+        change("m2", "u1", "anthropic", "claude-x"),
+        user("u2", "m2"),
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n"),
+    );
+    expect(await unoffered({}, { sessionFile: file })).toBeUndefined();
+    expect(await unoffered({}, { sessionFile: file, entryId: "u1" })).toBe("openai-codex/gpt-5.5");
   });
 });
 

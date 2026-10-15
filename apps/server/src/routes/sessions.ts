@@ -28,6 +28,7 @@ import {
   ownerRuntime,
   ownerTransport,
   previewLaunchModel,
+  unofferedLaunchModel,
 } from "../claudeTransport.ts";
 import { z } from "zod";
 import {
@@ -66,6 +67,12 @@ import { LaunchResourceResolutionError, resolveLaunchResources } from "../launch
 import { assembleSlashUniverseForSession } from "../slashUniverse.ts";
 
 const mergeLocks = new Set<string>();
+
+// SRV-15a: a Loop session's fork would be a writable session inside its read-only
+// review worktree (plain fork) or break the diff gateway (history fork).
+const loopSession = (meta: SessionMeta): boolean =>
+  Boolean(meta.loopReviewRunId || meta.agentName?.startsWith("Loop ·"));
+const LOOP_FORK_REFUSED = "A Loop session cannot be forked. Open its run from Loops instead.";
 
 /** The verified creator (trusted proxy), as the identity shape persisted on SessionMeta. */
 function sessionCreator(raw: IncomingMessage): UserIdentity | undefined {
@@ -312,6 +319,53 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       );
     }
     return models;
+  }
+
+  // SRV-15a: on a shared server a fork belongs to the forker, so the model it
+  // inherits must be in their catalog; refused otherwise. `entryId`: a fork from
+  // that message inherits the model in force there.
+  async function forkModelRefusal(
+    meta: SessionMeta,
+    forker: UserIdentity | undefined,
+    entryId?: string,
+  ) {
+    const plan = (meta.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
+    if (!forker || plan.kind === "helper") return undefined;
+    try {
+      // ctx.discoveredModels is in memory: list claude-bridge again after a restart.
+      await ensureBridgeCatalog(ctx);
+      const missing = await unofferedLaunchModel(
+        ctx,
+        forker,
+        plan,
+        { cwd: meta.cwd, sessionFile: meta.piSessionFile, entryId },
+        await ownerModels(forker),
+      );
+      return (
+        missing &&
+        `This session runs on ${missing}, which your providers do not offer. Pick a model: connect its provider under Settings > Providers, or start a new session.`
+      );
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }
+
+  // PRV-01: a fork is a new session, so a refused anthropic/* model (from its
+  // plan or its history) moves to the claude-bridge twin, or the fork is refused
+  // (throws the 409). Returns the source with the pinned plan.
+  async function pinForkModel(
+    meta: SessionMeta,
+    owner: UserIdentity | undefined,
+    entryId?: string,
+  ): Promise<SessionMeta> {
+    const plan = (meta.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
+    if (plan.kind === "helper") return meta;
+    const pinned = await claudeLaunchModel(ctx, owner, plan, {
+      cwd: meta.cwd,
+      sessionFile: meta.piSessionFile,
+      entryId,
+    });
+    return pinned ? { ...meta, launchPlan: { ...plan, ...pinned } } : meta;
   }
 
   fastify.get("/sessions/:id/models", async (request, reply) => {
@@ -648,7 +702,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         return reply.status(409).send({
           code: "session_worktree_in_use",
           error:
-            "A history-fork session still depends on this isolated worktree. Delete dependent sessions before deleting its owner.",
+            "A fork of this session still depends on its isolated worktree. Delete its forks before deleting it.",
         });
       }
       // Retained Loop review evidence is explicitly outside this boundary. Before
@@ -983,7 +1037,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
           code: "merge_worktree_in_use",
           outcome: "stale_ownership",
           error:
-            "A history-fork session still depends on this isolated worktree. Delete dependent sessions before merging its owner.",
+            "A fork of this session still depends on its isolated worktree. Delete its forks before merging it.",
           worktreeCommitted: false,
         });
       }
@@ -1546,12 +1600,33 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         });
       }
       const { id } = request.params as { id: string };
+      const forker = sessionCreator(request.raw);
+      let fork: { owner?: UserIdentity; launchPlan?: unknown } | undefined;
+      const source = sessions.get(id)?.meta ?? index.find((s) => s.id === id);
+      if (action === "fork" && source) {
+        const refuse = (error: string) =>
+          reply.status(409).send({ code: "history_fork_refused", error });
+        if (loopSession(source)) return refuse(LOOP_FORK_REFUSED);
+        let pinned: SessionMeta;
+        try {
+          pinned = await pinForkModel(source, forker ?? source.createdBy, parsed.data.entryId);
+        } catch (error) {
+          return refuse((error as Error).message);
+        }
+        const refusal = await forkModelRefusal(pinned, forker, parsed.data.entryId);
+        if (refusal) return refuse(refusal);
+        fork = {
+          ...(forker ? { owner: forker } : {}),
+          ...(pinned !== source ? { launchPlan: pinned.launchPlan } : {}),
+        };
+      }
       try {
         const result = await historyActions.run(
           id,
           parsed.data.entryId,
           action,
           action === "fork" ? forkAnnounce(request.raw, id) : undefined,
+          fork,
         );
         return reply.status(result.outcome === "forked" ? 201 : 200).send(result);
       } catch (error) {
@@ -1576,6 +1651,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const live = sessions.get(id);
     const meta = live?.meta ?? index.find((s) => s.id === id);
     if (!meta) return reply.status(404).send({ error: "unknown session" });
+    if (loopSession(meta)) return reply.status(409).send({ error: LOOP_FORK_REFUSED });
     if (!meta.piSessionFile || !existsSync(meta.piSessionFile)) {
       return reply.status(409).send({ error: "session has no history to fork yet" });
     }
@@ -1599,21 +1675,17 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     do {
       copyTo = nodePath.join(dir, `${base}-fork-${randomUUID()}${ext}`);
     } while (existsSync(copyTo));
-    // PRV-01: a fork is a new session, so a refused anthropic/* model (from its
-    // plan or its history) moves to the claude-bridge twin, or the fork is refused.
-    let source = meta;
-    const sourcePlan = (meta.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
-    if (sourcePlan.kind !== "helper") {
-      try {
-        const pinned = await claudeLaunchModel(ctx, meta.createdBy, sourcePlan, {
-          cwd: meta.cwd,
-          sessionFile: meta.piSessionFile,
-        });
-        if (pinned) source = { ...meta, launchPlan: { ...sourcePlan, ...pinned } };
-      } catch (error) {
-        return reply.status(409).send({ error: (error as Error).message });
-      }
+    // SRV-15a: on a shared server the fork belongs to the forker (their
+    // credentials); without an identity it keeps the source owner.
+    const forker = sessionCreator(request.raw);
+    let source: SessionMeta;
+    try {
+      source = await pinForkModel(meta, forker ?? meta.createdBy);
+    } catch (error) {
+      return reply.status(409).send({ error: (error as Error).message });
     }
+    const refusal = await forkModelRefusal(source, forker);
+    if (refusal) return reply.status(409).send({ error: refusal });
     try {
       const session = await sessions.fork(
         source,
@@ -1621,6 +1693,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         copyTo,
         envDefaults().env,
         forkAnnounce(request.raw, meta.id),
+        forker,
       );
       index.upsert(session.meta);
       return reply.status(201).send({ session: session.meta });

@@ -2907,6 +2907,54 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
     }
   });
 
+  it("spawns both fork paths on the forker's agent dir and GitHub token (SRV-15a)", async () => {
+    const { runtime, spawned } = makeFakeRuntime();
+    const args: unknown[] = [runtime, new ReceiptBus(false)];
+    args[24] = {
+      resolve: (user: { id: string }) => `/data/users/${user.id}/agent`,
+    } as unknown as UserAgentDirs;
+    args[26] = {
+      read: (user: { id: string }) => ({ token: `gho_${user.id}` }),
+    } as unknown as GitHubConnections;
+    const manager = new SessionManager(...(args as ConstructorParameters<typeof SessionManager>));
+    const dir = mkdtempSync(path.join(tmpdir(), "deck-sm-fork-owner-"));
+    const file = path.join(dir, "source.jsonl");
+    writeFileSync(file, "");
+    const source: SessionMeta = {
+      id: randomUUID(),
+      cwd: process.cwd(),
+      createdAt: new Date().toISOString(),
+      piSessionFile: file,
+      createdBy: { id: "alice" },
+    };
+    const bob = { id: "bob", name: "Bob" };
+    try {
+      await manager
+        .fork(source, file, path.join(dir, "a.jsonl"), undefined, undefined, bob)
+        .catch(() => {});
+      await manager
+        .materializeHistoryFork(source, file, undefined, undefined, undefined, bob)
+        .catch(() => {});
+      for (const forked of [spawned[0]!, spawned[1]!]) {
+        expect(forked.meta.createdBy).toEqual(bob);
+        expect(forked.spawn.env).toMatchObject({
+          PI_CODING_AGENT_DIR: "/data/users/bob/agent",
+          GH_TOKEN: "gho_bob",
+        });
+      }
+      // No identity (desktop): the fork keeps the source owner, as before.
+      await manager.fork(source, file, path.join(dir, "b.jsonl")).catch(() => {});
+      await manager.materializeHistoryFork(source, file).catch(() => {});
+      for (const forked of [spawned[2]!, spawned[3]!]) {
+        expect(forked.meta.createdBy).toEqual({ id: "alice" });
+        expect(forked.spawn.env).toMatchObject({ GH_TOKEN: "gho_alice" });
+      }
+    } finally {
+      await runtime.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("runs a one-shot helper on the requester's own agent dir (review3 R3)", async () => {
     const envs: Array<Record<string, string | undefined> | undefined> = [];
     const piHost: PiHostShape = {
