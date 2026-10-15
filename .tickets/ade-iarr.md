@@ -1,6 +1,6 @@
 ---
 id: ade-iarr
-status: open
+status: in_progress
 deps: [ade-shxc]
 links: []
 created: 2026-10-15T07:37:07Z
