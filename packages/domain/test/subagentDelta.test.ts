@@ -149,6 +149,30 @@ describe("subagentDelta over a recorded child log", () => {
     });
   });
 
+  it("A7: a verdict on the finished run keeps its result the latest (no new turn)", () => {
+    const verified = {
+      ...recorded.at(-1)!,
+      id: uuid(400),
+      seq: 10,
+      kind: "subagent.run.verified",
+      subject: runRef,
+      payload: {
+        run: {
+          ...run("completed"),
+          verdict: { decision: "APPROVE", reason: "ok", verifierRunId: uuid(401) },
+        },
+        runId: RUN,
+        verdict: "APPROVE",
+      },
+    } as EventEnvelope;
+    const delta = subagentDelta([...recorded, verified], { runId: RUN, sinceSeq: 0 });
+    expect(delta).toMatchObject({
+      statusNow: "completed",
+      resultIsLatest: true,
+      turnsCompleted: 1,
+    });
+  });
+
   it("second look: only what changed after the parent's cursor", () => {
     const delta = subagentDelta(log, { runId: RUN, sinceSeq: 9 });
     expect(delta).toEqual({

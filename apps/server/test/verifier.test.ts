@@ -1,8 +1,13 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ValidationResult } from "../src/loopEngine.ts";
 import type { SubagentRunRecord } from "../src/subagentRunStore.ts";
 import {
   launchVerifier,
+  planMayRunShell,
+  VALIDATION_SHELL_GATE,
   VerifierRefusedError,
   verifierVerdict,
   verifyTargetError,
@@ -61,11 +66,28 @@ describe("verifyTargetError: only a finished run of the caller session", () => {
   });
 });
 
+describe("planMayRunShell: the validationCommand gate", () => {
+  it("allows a parent launch and agents with Pi's defaults or bash, refuses the rest", () => {
+    expect(planMayRunShell({ kind: "parent" })).toBe(true);
+    expect(planMayRunShell({ kind: "agent" })).toBe(true);
+    expect(planMayRunShell({ kind: "agent", tools: ["read", "bash"] })).toBe(true);
+    expect(planMayRunShell({ kind: "agent", tools: ["read", "grep"] })).toBe(false);
+    expect(planMayRunShell({ kind: "agent", tools: [] })).toBe(false);
+    expect(planMayRunShell(undefined)).toBe(false);
+  });
+});
+
 describe("launchVerifier", () => {
-  function deps(record: SubagentRunRecord | undefined, answer: Promise<{ text: string }>) {
+  const VERIFIER = "22222222-2222-4222-8222-222222222222";
+  function deps(
+    record: SubagentRunRecord | undefined,
+    answer: Promise<{ text: string }>,
+    gates: { shell?: boolean; cap?: boolean } = {},
+  ) {
     const calls: string[] = [];
     const spawned: { task: string; options: Record<string, unknown> }[] = [];
     const verdicts: unknown[] = [];
+    const state = { record };
     const validation: ValidationResult = {
       command: "npm test",
       workingDirectory: "/repo",
@@ -79,8 +101,15 @@ describe("launchVerifier", () => {
       evidence: "exit 1",
     };
     const value: VerifierDeps = {
-      run: (parent, runId) => (parent === "s1" && runId === record?.id ? record : undefined),
+      run: (parent, runId) =>
+        parent === "s1" && runId === state.record?.id ? state.record : undefined,
       cwd: () => "/repo",
+      mayRunShell: () => gates.shell !== false,
+      assertCanSpawn: () => {
+        calls.push("gate");
+        if (gates.cap) throw new Error("child cap reached");
+      },
+      head: async () => "h".repeat(40),
       filesChanged: async () => ["src/a.ts"],
       runValidation: async (cwd, command) => {
         calls.push(`validate ${cwd} ${command}`);
@@ -89,7 +118,7 @@ describe("launchVerifier", () => {
       spawn: async (_parent, task, options) => {
         calls.push("spawn");
         spawned.push({ task, options });
-        return { runId: "22222222-2222-4222-8222-222222222222", done: answer };
+        return { runId: VERIFIER, done: answer };
       },
       recordVerdict: (parent, runId, verdict) => {
         calls.push("record");
@@ -97,11 +126,11 @@ describe("launchVerifier", () => {
       },
       warn: () => {},
     };
-    return { value, calls, spawned, verdicts };
+    return { value, calls, spawned, verdicts, state };
   }
 
   it("runs validation first, hands the evidence to a verify-role spawn and records the verdict", async () => {
-    const record = target({ worktreePath: "/wt" });
+    const record = target();
     const d = deps(record, Promise.resolve({ text: "REJECT: 1 failing test" }));
     const { runId, done } = await launchVerifier(d.value, {
       parentSessionId: "s1",
@@ -111,8 +140,8 @@ describe("launchVerifier", () => {
       validationCommand: "npm test",
     });
     const outcome = await done;
-    // Validation in the target's worktree, before the verifier starts.
-    expect(d.calls).toEqual(["validate /wt npm test", "spawn", "record"]);
+    // Gates, then validation in the session checkout, then the verifier.
+    expect(d.calls).toEqual(["gate", "validate /repo npm test", "spawn", "record"]);
     const prompt = d.spawned[0]!.task;
     expect(prompt).toMatch(/^verify: check the build/);
     expect(prompt).toContain("PRODUCER_SUMMARY");
@@ -127,6 +156,7 @@ describe("launchVerifier", () => {
       targetRunId: record.id,
       detached: false,
     });
+    expect(d.spawned[0]!.options).not.toHaveProperty("cwd");
     expect(outcome).toMatchObject({ decision: "REJECT", reason: "1 failing test" });
     expect(d.verdicts).toEqual([
       {
@@ -135,6 +165,65 @@ describe("launchVerifier", () => {
         verdict: { decision: "REJECT", reason: "1 failing test", verifierRunId: runId },
       },
     ]);
+  });
+
+  it("works in a worktree target: validation and the verifier there, base and HEAD in the prompt", async () => {
+    const worktree = mkdtempSync(path.join(tmpdir(), "verify-wt-"));
+    try {
+      const base = "b".repeat(40);
+      const record = target({ worktreePath: worktree, worktreeBaseCommit: base });
+      const d = deps(record, Promise.resolve({ text: "APPROVE" }));
+      await (
+        await launchVerifier(d.value, {
+          parentSessionId: "s1",
+          targetRunId: record.id,
+          task: "t",
+          validationCommand: "npm test",
+        })
+      ).done;
+      expect(d.calls).toEqual(["gate", `validate ${worktree} npm test`, "spawn", "record"]);
+      expect(d.spawned[0]!.options).toMatchObject({ cwd: worktree });
+      const prompt = d.spawned[0]!.task;
+      expect(prompt).toContain(`Base commit: ${base}; HEAD: ${"h".repeat(40)}`);
+      expect(prompt).toContain(`\`git diff ${base}..${"h".repeat(40)}\``);
+    } finally {
+      rmSync(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses validationCommand when the session's agent may not run a shell; nothing runs", async () => {
+    const d = deps(target(), Promise.resolve({ text: "APPROVE" }), { shell: false });
+    await expect(
+      launchVerifier(d.value, {
+        parentSessionId: "s1",
+        targetRunId: target().id,
+        task: "t",
+        validationCommand: "npm test",
+      }),
+    ).rejects.toThrow(VALIDATION_SHELL_GATE);
+    expect(d.calls).toEqual([]);
+    // Without a command the same session may still verify.
+    const plain = await launchVerifier(d.value, {
+      parentSessionId: "s1",
+      targetRunId: target().id,
+      task: "t",
+    });
+    await plain.done;
+    expect(d.calls).toEqual(["gate", "spawn", "record"]);
+  });
+
+  it("checks the child cap before spending a validation run", async () => {
+    const d = deps(target(), Promise.resolve({ text: "APPROVE" }), { cap: true });
+    await expect(
+      launchVerifier(d.value, {
+        parentSessionId: "s1",
+        targetRunId: target().id,
+        task: "t",
+        validationCommand: "npm test",
+        detached: true,
+      }),
+    ).rejects.toThrow("child cap reached");
+    expect(d.calls).toEqual(["gate"]);
   });
 
   it("refuses a foreign or running target before anything runs", async () => {
@@ -158,7 +247,34 @@ describe("launchVerifier", () => {
     expect([...running.calls, ...foreign.calls]).toEqual([]);
   });
 
-  it("a verifier that did not finish records a missing verdict and done still resolves", async () => {
+  it("drops a verdict when the target was continued while the verifier ran", async () => {
+    let answer!: (value: { text: string }) => void;
+    const d = deps(target(), new Promise((resolve) => (answer = resolve)));
+    const { done } = await launchVerifier(d.value, {
+      parentSessionId: "s1",
+      targetRunId: target().id,
+      task: "t",
+    });
+    // A continuation ran and finished: a newer turn the verifier never saw.
+    d.state.record = target({ completedAt: "2026-10-15T00:05:00.000Z", summary: "NEWER" });
+    answer({ text: "APPROVE" });
+    await expect(done).resolves.toMatchObject({ decision: "APPROVE" });
+    expect(d.verdicts).toEqual([]);
+    // Still running its continuation: dropped as well.
+    let answerLate!: (value: { text: string }) => void;
+    const running = deps(target(), new Promise((resolve) => (answerLate = resolve)));
+    const late = await launchVerifier(running.value, {
+      parentSessionId: "s1",
+      targetRunId: target().id,
+      task: "t",
+    });
+    running.state.record = { ...target(), status: "running", completedAt: undefined };
+    answerLate({ text: "APPROVE" });
+    await late.done;
+    expect(running.verdicts).toEqual([]);
+  });
+
+  it("a cancelled or failed verifier records nothing (an earlier verdict stays); done resolves", async () => {
     const d = deps(target(), Promise.reject(new Error("child crashed")));
     const { done } = await launchVerifier(d.value, {
       parentSessionId: "s1",
@@ -169,7 +285,8 @@ describe("launchVerifier", () => {
       decision: "missing",
       reason: "The verifier did not finish: child crashed",
     });
-    expect(d.calls).toEqual(["spawn", "record"]);
+    expect(d.calls).toEqual(["gate", "spawn"]);
+    expect(d.verdicts).toEqual([]);
     expect(d.spawned[0]!.task).toContain("Validation: no validation command is configured.");
   });
 });

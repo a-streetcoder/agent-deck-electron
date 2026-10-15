@@ -82,9 +82,18 @@ function world(initial: SessionPlanItem[]) {
           {
             run: (_p, runId) => {
               const run = runs.get(runId);
-              return run && ({ id: runId, parentSessionId: "s1", ...run } as SubagentRunRecord);
+              // Every producer in these tests runs as "coder".
+              return (
+                run &&
+                ({ id: runId, parentSessionId: "s1", agent: "coder", ...run } as SubagentRunRecord)
+              );
             },
             cwd: () => undefined,
+            mayRunShell: () => true,
+            assertCanSpawn: () => {},
+            head: async () => {
+              throw new Error("no worktrees in these tests");
+            },
             filesChanged: async () => ["src/a.ts"],
             runValidation: async () => {
               throw new Error("no validation in these tests");
@@ -366,6 +375,26 @@ describe("plan dispatcher", () => {
       }),
       expect.objectContaining({ itemId: "b", verdict: "REJECT", reason: "REJECT: tests missing" }),
     ]);
+    dispatcher.close();
+  });
+
+  it("a verifier that cannot start blocks the item and logs a verdict-less verification", async () => {
+    // The producer's own agent as verifier: launchVerifier refuses it.
+    const w = world([todo("a", { verifiedBy: "Coder" })]);
+    const dispatcher = createPlanDispatcher(w.deps);
+    w.agentPlan();
+    await w.settle();
+    w.finish("run-1");
+    await w.settle();
+    expect(w.status()).toEqual({ a: "blocked" });
+    expect(w.plan()[0]?.note).toMatch(
+      /^The verifier could not start: .*never verifies its own work/,
+    );
+    expect(w.verified).toEqual([
+      expect.objectContaining({ itemId: "a", producerRunId: "run-1", verdict: "missing" }),
+    ]);
+    expect(w.verified[0]).not.toHaveProperty("runId");
+    expect(w.spawned.filter((s) => s.verifier)).toHaveLength(0);
     dispatcher.close();
   });
 

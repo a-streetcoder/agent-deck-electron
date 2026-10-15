@@ -69,7 +69,8 @@ export interface PlanDispatcherDeps {
     sessionId: string,
     verified: {
       itemId: string;
-      runId: string;
+      /** The verifier run; absent when the verifier could not start. */
+      runId?: string;
       producerRunId: string;
       verdict: SubagentVerdict["decision"];
       reason: string;
@@ -141,17 +142,27 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
       : "";
   };
 
+  /** The item is still the one being verified: in progress on the same run, same agents. */
+  const asVerified = (sessionId: string, item: SessionPlanItem, producerRunId: string): boolean => {
+    const current = deps.plan(sessionId)?.find((candidate) => candidate.id === item.id);
+    return (
+      current?.status === "in_progress" &&
+      current.runId === producerRunId &&
+      current.assignee === item.assignee &&
+      sameAgent(current.verifiedBy, item.verifiedBy)
+    );
+  };
+
   const verify = async (
     sessionId: string,
     item: SessionPlanItem,
     producerRunId: string,
     cause: string | undefined,
   ): Promise<"started" | "wait"> => {
-    const snapshot = { assignee: item.assignee, verifiedBy: item.verifiedBy! };
     const spawned = await deps.verify(sessionId, {
       targetRunId: producerRunId,
       task: verifierTask(item),
-      agentName: snapshot.verifiedBy,
+      agentName: item.verifiedBy!,
     });
     if (spawned === "wait") return "wait";
     verifying.add(producerRunId);
@@ -159,15 +170,9 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
       verifying.delete(producerRunId);
       if (closed) return;
       if (deps.run(sessionId, spawned.runId)?.status === "stopped") owned.delete(sessionId);
-      const current = deps.plan(sessionId)?.find((candidate) => candidate.id === item.id);
       // Applies only to the item as it was verified: a rewrite, reassignment or new
       // verifier meanwhile discards the verdict, and the next pass recomputes.
-      const unchanged =
-        current?.status === "in_progress" &&
-        current.runId === producerRunId &&
-        current.assignee === snapshot.assignee &&
-        sameAgent(current.verifiedBy, snapshot.verifiedBy);
-      if (unchanged) {
+      if (asVerified(sessionId, item, producerRunId)) {
         deps.recordVerified(
           sessionId,
           { itemId: item.id, runId: spawned.runId, producerRunId, verdict, reason },
@@ -246,18 +251,17 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
       } catch (error) {
         // Refused (the target vanished) or the launch failed: the item cannot be verified.
         deps.warn(`plan verifier for item ${item.id} could not start`, error);
+        // As for a verdict: an item changed meanwhile is the next pass's to decide.
+        if (!asVerified(sessionId, item, runId)) continue;
+        const reason = `The verifier could not start: ${error instanceof Error ? error.message : String(error)}`;
+        deps.recordVerified(
+          sessionId,
+          { itemId: item.id, producerRunId: runId, verdict: "missing", reason },
+          cause,
+        );
         deps.updatePlan(
           sessionId,
-          [
-            {
-              id: item.id,
-              status: "blocked",
-              note: `The verifier could not start: ${error instanceof Error ? error.message : String(error)}`.slice(
-                0,
-                MAX_NOTE_CHARS,
-              ),
-            },
-          ],
+          [{ id: item.id, status: "blocked", note: reason.slice(0, MAX_NOTE_CHARS) }],
           cause,
         );
         continue;

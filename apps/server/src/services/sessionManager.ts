@@ -2086,6 +2086,9 @@ export interface ChildLaunchOverrides {
   durable?: boolean;
   /** A7: this child verifies that run (record role "verify" + targetRunId). */
   verifyTarget?: string;
+  /** A7: working directory of a readOnly child (the verifier in its target's worktree);
+   * ignored for any other policy. */
+  cwd?: string;
 }
 
 export interface ChildRunOptions {
@@ -2245,7 +2248,8 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
     const durable = toolPolicy === undefined || overrides?.durable ? params.childRuns : undefined;
     const createdAt = new Date().toISOString();
     let artifactSessionsDirectory: string | undefined;
-    let childCwd = meta.cwd;
+    // A7: a read-only child (the verifier) may work in another existing checkout.
+    let childCwd = toolPolicy === "readOnly" && overrides?.cwd ? overrides.cwd : meta.cwd;
     let transcriptRegistered = false;
     let childTranscript = emptyTranscript();
     const childIngest = createIngestState();

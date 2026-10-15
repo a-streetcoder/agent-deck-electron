@@ -16,9 +16,10 @@ import {
   normalizeDeclaredReads,
 } from "./declaredReads.ts";
 import type { EventLog } from "./eventLog.ts";
+import { gitHead } from "./git.ts";
 import { runValidationCommand } from "./loopEngine.ts";
 import type { BridgeRouteHandles } from "./routes/bridge.ts";
-import type { SessionManager } from "./SessionManager.ts";
+import { SubagentCapError, type SessionManager } from "./SessionManager.ts";
 import { ChildRunError } from "./services/sessionManager.ts";
 import { filesChanged, renderSubagentDelta, type SubagentDeltaReader } from "./subagentDelta.ts";
 import {
@@ -37,13 +38,23 @@ export function sessionVerifierDeps(
   return {
     run: (parentSessionId, runId) => sessions.subagentRunRecord(parentSessionId, runId),
     cwd: (parentSessionId) => sessions.get(parentSessionId)?.meta.cwd,
+    mayRunShell: (parentSessionId) => sessions.sessionMayRunShell(parentSessionId),
+    assertCanSpawn: (parentSessionId, detached) => {
+      const meta = sessions.get(parentSessionId)?.meta;
+      if (!meta) throw new Error(`unknown parent session: ${parentSessionId}`);
+      if (!sessions.delegationAllowed(meta)) {
+        throw new Error("subagent delegation is off for this session");
+      }
+      if (detached && sessions.detachedSlots(parentSessionId) <= 0) throw new SubagentCapError();
+    },
+    head: (worktreePath) => gitHead(worktreePath),
     filesChanged: async (target) =>
       target.worktreePath ? (await filesChanged(target, warn)).filesChangedSinceBase : undefined,
     runValidation: (cwd, command, signal) => runValidationCommand(cwd, command, signal),
     spawn: (
       parentSessionId,
       task,
-      { agentName, targetRunId, detached, signal, parentToolCallId },
+      { agentName, targetRunId, detached, signal, parentToolCallId, cwd },
     ) =>
       sessions.spawnSubagent(parentSessionId, task, {
         ...(agentName ? { agentName } : {}),
@@ -56,6 +67,7 @@ export function sessionVerifierDeps(
           defaultExpectedOutcome: VERIFIER_PROFILE.defaultExpectedOutcome,
           durable: true,
           verifyTarget: targetRunId,
+          ...(cwd ? { cwd } : {}),
         },
       }),
     recordVerdict: (parentSessionId, targetRunId, verdict) =>
@@ -99,7 +111,7 @@ const VERIFY_SCHEMA_PROPERTIES = {
   validationCommand: {
     type: "string",
     description:
-      'Optional, with role "verify": a shell command Agent Deck runs before the verifier starts (in the target\'s worktree, else the session checkout); its result is handed to the verifier.',
+      "Optional, with role \"verify\": a shell command Agent Deck runs before the verifier starts (in the target's worktree, else the session checkout); its result is handed to the verifier. It runs with the server's plain environment, without the owner's git identity, and only when this session's agent may use bash itself.",
   },
 } as const;
 

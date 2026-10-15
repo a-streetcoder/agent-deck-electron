@@ -27,6 +27,7 @@ import { runPromiseUnwrapped, runSyncUnwrapped } from "./effectRun.ts";
 import type { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import type { ReceiptBus } from "./receipts.ts";
 import type { SubagentRunRecord, SubagentRunStore } from "./subagentRunStore.ts";
+import { planMayRunShell } from "./verifier.ts";
 import type { ServerRuntime } from "./runtime.ts";
 import { SessionMutationClaims } from "./sessionMutationClaims.ts";
 import { gitIdentityEnv, type GitIdentityMap } from "./gitIdentity.ts";
@@ -1697,6 +1698,14 @@ export class SessionManager {
     const override: unknown = meta.subagentsEnabled;
     if (override === undefined) return this.subagentsEnabled();
     return override === true;
+  }
+
+  /**
+   * A7: whether the session's own agent may run a shell: a parent launch or an agent
+   * with Pi's default tools (bash included), or a `tools:` list naming bash.
+   */
+  sessionMayRunShell(sessionId: string): boolean {
+    return planMayRunShell(this.sessions.get(sessionId)?.meta.launchPlan as LaunchPlan | undefined);
   }
 
   /** A5: free detached-child slots of a live session (MAX_DETACHED_SUBAGENTS bound). */

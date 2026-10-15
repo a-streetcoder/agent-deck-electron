@@ -216,6 +216,42 @@ describe("maker-checker validation ordering (D7)", () => {
     });
   });
 
+  it("pins the checker prompt text (A7: shared verifierPrompt must not change loops)", async () => {
+    let checkerPrompt = "";
+    const engine = new LoopEngine({
+      executeRole: async ({ phase, prompt }) => {
+        if (phase === "checker") checkerPrompt = prompt;
+        return phase === "checker" ? "APPROVE\nok" : phase === "evaluator" ? "SUCCESS\nok" : "MADE";
+      },
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "makerChecker",
+        makerName: "Maker",
+        checkerName: "Checker",
+        checkerRubric: "strict",
+        successCondition: "it is done",
+        validationCommand: undefined,
+      }),
+      cwd(),
+    );
+    await engine.settled(run.id);
+    expect(
+      checkerPrompt.endsWith(
+        [
+          "Goal: do the thing",
+          "Success condition: it is done",
+          "Iteration: 1",
+          "Review only; do not edit project files.",
+          "Review criteria: strict",
+          "Maker report:\nMADE",
+          "Validation: no validation command is configured.",
+          "The exact first non-empty line must be APPROVE, CONTINUE, REJECT, ASK_HUMAN, or FAIL. Then give concise rationale and concrete evidence.",
+        ].join("\n\n"),
+      ),
+    ).toBe(true);
+  });
+
   it("hands the checker the real tail of output beyond the capture limit", async () => {
     let checkerPrompt = "";
     const engine = new LoopEngine({

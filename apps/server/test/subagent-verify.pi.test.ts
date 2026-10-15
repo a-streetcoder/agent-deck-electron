@@ -1,4 +1,13 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -232,6 +241,114 @@ it("verifies a finished run ad hoc: typed verdicts, the event, the card, read-on
       .state.cells.filter((c): c is SubagentCell => c.kind === "subagent");
     expect(cards.find((c) => c.id === producerId)?.verdict).toEqual(verdict.verdict);
     expect(cards.find((c) => c.id === verdict.runId)?.targetRunId).toBe(producerId);
+  } finally {
+    await server.close();
+    await mock.close();
+    if (previous === undefined) delete process.env.AGENT_DECK_PROVIDER_EXTENSIONS;
+    else process.env.AGENT_DECK_PROVIDER_EXTENSIONS = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 120_000);
+
+it("verifies a worktree producer inside its worktree, with base and HEAD to diff against", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "pi-verify-wt-"));
+  const project = path.join(root, "project");
+  mkdirSync(project);
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: project });
+  writeFileSync(path.join(project, "base.txt"), "base\n");
+  execFileSync("git", ["add", "."], { cwd: project });
+  execFileSync(
+    "git",
+    ["-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "init"],
+    { cwd: project },
+  );
+  const base = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: project,
+    encoding: "utf8",
+  }).trim();
+  const mock = await startMockProvider({
+    chunkDelayMs: 5,
+    toolCall: (_user, body) => {
+      const results = toolTexts(body);
+      if (isChild(body)) {
+        if (results.length > 0) return null;
+        if (systemText(body).includes("verify: check TASK_WT"))
+          return { name: "checker_shell", arguments: { command: "git status --short" } };
+        return { name: "write", arguments: { path: "a7-made.txt", content: "made\n" } };
+      }
+      if (!JSON.stringify(body.tools ?? []).includes("spawn_subagent")) return null;
+      const producer = runIdIn(results[0]);
+      switch (results.length) {
+        case 0:
+          return {
+            name: "spawn_subagent",
+            arguments: { task: "TASK_WT: write a7-made.txt", worktree: true },
+          };
+        case 1:
+          return { name: "await_subagents", arguments: { runIds: [producer] } };
+        case 2:
+          return {
+            name: "managed_subagent",
+            arguments: { task: "check TASK_WT", role: "verify", targetRunId: producer },
+          };
+        default:
+          return null;
+      }
+    },
+    reply: (_user, body) =>
+      !isChild(body)
+        ? "parent finished"
+        : systemText(body).includes("verify: check TASK_WT")
+          ? "APPROVE\nThe file is there."
+          : "WT_RESULT written",
+  });
+  const previous = process.env.AGENT_DECK_PROVIDER_EXTENSIONS;
+  process.env.AGENT_DECK_PROVIDER_EXTENSIONS = writeMockProviderExtension(mock.baseUrl);
+  const server = await startServer({ dataDir: path.join(root, "data") });
+  try {
+    const base_ = `http://127.0.0.1:${server.port}`;
+    const created = (await (
+      await fetch(`${base_}/projects`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: project }),
+      })
+    ).json()) as { project: { id: string } };
+    const response = await fetch(`${base_}/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        startImmediately: true,
+        cwd: project,
+        projectId: created.project.id,
+        provider: MOCK_PROVIDER_ID,
+        model: MOCK_MODEL_ID,
+        extensions: [process.env.AGENT_DECK_PROVIDER_EXTENSIONS],
+        env: { HOME: root, USERPROFILE: root, PI_SKIP_VERSION_CHECK: "1" },
+      }),
+    });
+    expect(response.status).toBe(201);
+    const { session } = (await response.json()) as { session: { id: string } };
+    await server.sessions.get(session.id)!.prompt("Write in a worktree, then verify");
+    const final = await vi.waitFor(
+      () => {
+        const request = mock.requests.find((r) => !isChild(r) && toolTexts(r).length === 3);
+        expect(request).toBeDefined();
+        return request!;
+      },
+      { timeout: 90_000, interval: 250 },
+    );
+    const verdict = JSON.parse(toolTexts(final)[2]!) as { verdict: { decision: string } };
+    expect(verdict.verdict.decision).toBe("APPROVE");
+    const verifierRequests = mock.requests.filter(
+      (r) => isChild(r) && systemText(r).includes("verify: check TASK_WT"),
+    );
+    const prompt = systemText(verifierRequests[0]!);
+    expect(prompt).toContain(`Base commit: ${base}; HEAD: ${base}`);
+    expect(prompt).toContain("- a7-made.txt");
+    // checker_shell ran in the producer's worktree: it sees the new file.
+    expect(toolTexts(verifierRequests.at(-1)!)[0]).toContain("a7-made.txt");
+    expect(existsSync(path.join(project, "a7-made.txt"))).toBe(false);
   } finally {
     await server.close();
     await mock.close();

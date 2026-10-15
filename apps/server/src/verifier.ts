@@ -4,6 +4,7 @@
 // grep, find, ls + git-only checker_shell), the validation result run by the server
 // BEFORE the verifier starts, the producer's evidence in the prompt, and a typed
 // verdict read with parseVerdict.
+import { existsSync } from "node:fs";
 import {
   sameAgent,
   type LoopVerdictParse,
@@ -183,6 +184,16 @@ export interface VerifierDeps {
   run: (parentSessionId: string, runId: string) => SubagentRunRecord | undefined;
   /** The parent session's checkout. */
   cwd: (parentSessionId: string) => string | undefined;
+  /**
+   * The gate on validationCommand: true only when the parent's own agent may run a
+   * shell (Pi's default tools, or a `tools:` list with bash). Otherwise the command
+   * would hand an agent without bash a shell through the server.
+   */
+  mayRunShell: (parentSessionId: string) => boolean;
+  /** Throws when no child may start now (the detached cap, delegation off). */
+  assertCanSpawn: (parentSessionId: string, detached: boolean) => void;
+  /** HEAD of a worktree; rejects when it cannot be read. */
+  head: (worktreePath: string) => Promise<string>;
   /** A3: files the target changed in its own worktree since its base; undefined without one. */
   filesChanged: (target: SubagentRunRecord) => Promise<string[] | undefined>;
   runValidation: (cwd: string, command: string, signal?: AbortSignal) => Promise<ValidationResult>;
@@ -196,6 +207,8 @@ export interface VerifierDeps {
       detached: boolean;
       signal?: AbortSignal;
       parentToolCallId?: string;
+      /** The target's worktree: the verifier reads (and checker_shell runs) there. */
+      cwd?: string;
     },
   ) => Promise<{ runId: string; done: Promise<{ text: string }> }>;
   /** Writes the verdict on the target run (subagent.run.verified) and its card. */
@@ -216,12 +229,25 @@ export interface VerifierRequest {
   parentToolCallId?: string;
 }
 
+/** The shell gate's rule: a parent launch, or an agent with Pi's default tools or bash. */
+export function planMayRunShell(
+  plan: { kind: string; tools?: readonly string[] } | undefined,
+): boolean {
+  if (!plan) return false;
+  return plan.kind !== "agent" || plan.tools === undefined || plan.tools.includes("bash");
+}
+
+export const VALIDATION_SHELL_GATE =
+  "validationCommand refused: this session's agent has no bash tool, and a verifier's validation must not give it a shell through Agent Deck. Omit validationCommand, or run it from a session whose agent may use bash.";
+
 /**
- * Launch a verifier on a finished run of the same parent. Validation (when a command
- * is given) runs first, in the target's worktree or the parent's checkout. Resolves
- * once the verifier run is accepted; `done` never rejects: a verifier that did not
- * finish gives "missing". The verdict is recorded on the target BEFORE `done`'s
- * consumers (await_subagents) see the verifier finish.
+ * Launch a verifier on a finished run of the same parent. The gates (shell, child cap,
+ * delegation) are checked first; validation (when a command is given) runs next, in
+ * the target's worktree or the parent's checkout. The verifier itself works in the
+ * target's worktree when it has one. Resolves once the verifier run is accepted;
+ * `done` never rejects: a verifier that did not finish gives "missing" and records
+ * nothing. A verdict is recorded on the target only while the target is still the
+ * turn it verified, and BEFORE `done`'s consumers (await_subagents) see it finish.
  */
 export async function launchVerifier(
   deps: VerifierDeps,
@@ -231,13 +257,26 @@ export async function launchVerifier(
   const target = deps.run(parentSessionId, targetRunId);
   const refused = verifyTargetError(target, targetRunId, request.agentName);
   if (refused || !target) throw new VerifierRefusedError(refused ?? "unknown target");
+  if (request.validationCommand && !deps.mayRunShell(parentSessionId)) {
+    throw new VerifierRefusedError(VALIDATION_SHELL_GATE);
+  }
+  // Before validation: a spawn the cap refuses must not cost a validation run first.
+  deps.assertCanSpawn(parentSessionId, request.detached === true);
+  const worktree =
+    target.worktreePath &&
+    target.worktreeCleanup !== "physical_removed" &&
+    existsSync(target.worktreePath)
+      ? target.worktreePath
+      : undefined;
   const files = await deps.filesChanged(target).catch(() => undefined);
+  const worktreeHead = worktree ? await deps.head(worktree).catch(() => undefined) : undefined;
   let validation: ValidationResult | undefined;
   if (request.validationCommand) {
-    const cwd = target.worktreePath ?? deps.cwd(parentSessionId);
+    const cwd = worktree ?? deps.cwd(parentSessionId);
     if (!cwd) throw new VerifierRefusedError("the parent session has no checkout to validate in");
     validation = await deps.runValidation(cwd, request.validationCommand, request.signal);
   }
+  const base = target.worktreeBaseCommit;
   const summary = target.summary ?? "";
   const head = summary.slice(0, MAX_VERIFIER_SUMMARY_CHARS);
   const context = [
@@ -256,6 +295,11 @@ export async function launchVerifier(
           }`,
         ]
       : []),
+    ...(worktree && base
+      ? [
+          `The producer worked in its own worktree, which is your working directory. Base commit: ${base}; HEAD: ${worktreeHead ?? "unavailable"}. Inspect the change with checker_shell: \`git diff ${base}\` (working tree against the base)${worktreeHead && worktreeHead !== base ? ` or \`git diff ${base}..${worktreeHead}\` (its commits)` : ""}.`,
+        ]
+      : []),
   ];
   const prompt = verifierPrompt(
     context,
@@ -268,11 +312,18 @@ export async function launchVerifier(
     detached: request.detached === true,
     ...(request.signal ? { signal: request.signal } : {}),
     ...(request.parentToolCallId ? { parentToolCallId: request.parentToolCallId } : {}),
+    ...(worktree ? { cwd: worktree } : {}),
   });
   // One callback pair on the spawn's own promise: it runs before anything that
   // subscribes later (await_subagents), so the verdict is on the target first.
+  const verifiedTurn = target.completedAt;
   const record = (outcome: VerifierOutcome): VerifierOutcome => {
     const { decision, reason, verifierRunId } = outcome;
+    // A continuation of the target since launch made this verdict stale: drop it.
+    const now = deps.run(parentSessionId, targetRunId);
+    if (!now || verifyTargetError(now, targetRunId) || now.completedAt !== verifiedTurn) {
+      return outcome;
+    }
     try {
       deps.recordVerdict(parentSessionId, targetRunId, { decision, reason, verifierRunId });
     } catch (error) {
@@ -282,18 +333,18 @@ export async function launchVerifier(
   };
   const done = spawned.done.then(
     ({ text }) => record(verifierVerdict(text, spawned.runId)),
-    (error: unknown) =>
-      record({
-        decision: "missing",
-        reason:
-          `The verifier did not finish: ${error instanceof Error ? error.message : String(error)}`.slice(
-            0,
-            MAX_VERDICT_REASON_CHARS,
-          ),
-        verifierRunId: spawned.runId,
-        parse: "missing",
-        text: "",
-      }),
+    // Cancelled, stopped or failed: no verdict, and an earlier one stays.
+    (error: unknown): VerifierOutcome => ({
+      decision: "missing",
+      reason:
+        `The verifier did not finish: ${error instanceof Error ? error.message : String(error)}`.slice(
+          0,
+          MAX_VERDICT_REASON_CHARS,
+        ),
+      verifierRunId: spawned.runId,
+      parse: "missing",
+      text: "",
+    }),
   );
   return { runId: spawned.runId, done };
 }
