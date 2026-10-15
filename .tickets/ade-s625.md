@@ -46,3 +46,11 @@ All gates green or failures documented as environmental; review findings disposi
 **2026-10-15T18:49:14Z**
 
 2026-10-15 non-blocking finding during the gates: three tracked sources contain a literal NUL byte used as a string separator (apps/server/src/routes/bridge.ts:340, apps/server/src/services/persistence.ts:284, apps/web/src/components/preview/PreviewPanel.test.tsx:240). All three are already on main; tsc, eslint and prettier accept them. Follow-up: replace with the \0 escape when those files are next touched.
+
+**2026-10-15T19:02:01Z**
+
+2026-10-15 owner decision: the final cross-vendor review is RISK-FOCUSED (trust-boundary files of main...HEAD + merge list), not the whole diff; per-ticket GPT reviews already cover each merge. Launched as review45.
+
+**2026-10-15T19:10:48Z**
+
+2026-10-15 review45 (GPT, risk-focused) result: NOT READY, 2 blockers (remote-mode resources:openFile authorized by the server catalog; transfer worktree add/reset run with hooks enabled) + 5 should-fix (share/abort served on the shared server; cf-access-token not stripped on cross-host redirects; Git-screen pushes with hooks and raw errors; token redaction before JSON.parse bypassed by \u escapes; SECRET_KEY exact-name only). All seven verified against HEAD and accepted; fix ticket ade-q0pz drafted for approval. No impersonation or unauthenticated bypass found in the reviewed paths.
