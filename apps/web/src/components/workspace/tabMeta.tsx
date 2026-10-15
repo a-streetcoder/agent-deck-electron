@@ -1,4 +1,4 @@
-import { FolderTree, GitCompareArrows, Globe, History, MonitorPlay } from "lucide-react";
+import { FolderTree, GitCompareArrows, Globe, History, ListTree, MonitorPlay } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { WorkspaceTabKind } from "../../state/store.ts";
 
@@ -32,6 +32,7 @@ export const WORKSPACE_TAB_META: Record<WorkspaceTabKind, WorkspaceTabMeta> = {
   diff: { title: "Changes", icon: GitCompareArrows, width: "min(42vw, 560px)" },
   checkpoints: { title: "Checkpoints", icon: History, width: "300px" },
   browser: { title: "Browser", icon: Globe, width: "min(52vw, 640px)" },
+  tree: { title: "Run tree", icon: ListTree, width: "360px" },
 };
 
 /**
@@ -45,4 +46,5 @@ export const WORKSPACE_TAB_MENU_ORDER: readonly WorkspaceTabKind[] = [
   "diff",
   "checkpoints",
   "browser",
+  "tree",
 ];

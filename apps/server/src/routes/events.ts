@@ -21,6 +21,12 @@ const eventsQuery = z.object({
     .min(1)
     .transform((value) => (value === "null" ? null : value))
     .optional(),
+  /** A2: one session's events (see EventReadQuery.sessionId); implies includeServerEvents. */
+  sessionId: z.string().min(1).max(500).optional(),
+  includeServerEvents: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional(),
   afterSeq: seqParam,
   beforeSeq: seqParam,
   limit: z.coerce.number().int().min(1).max(MAX_EVENT_READ_LIMIT).default(DEFAULT_LIMIT),
@@ -32,7 +38,7 @@ export function registerEventRoutes(fastify: FastifyInstance, log: EventLog): vo
   fastify.get("/events", async (request, reply) => {
     const parsed = eventsQuery.safeParse(request.query);
     if (!parsed.success) return reply.status(400).send({ error: "Invalid event query." });
-    const { projectId, afterSeq, beforeSeq, limit } = parsed.data;
+    const { projectId, sessionId, includeServerEvents, afterSeq, beforeSeq, limit } = parsed.data;
     // lastSeq first: a tail read is capped at it, so the client's cursor never skips
     // an event a read-only process saw appended between the two calls.
     const lastSeq = log.lastSeq();
@@ -40,6 +46,8 @@ export function registerEventRoutes(fastify: FastifyInstance, log: EventLog): vo
       afterSeq,
       beforeSeq: afterSeq === undefined ? Math.min(beforeSeq ?? Infinity, lastSeq + 1) : beforeSeq,
       projectId,
+      sessionId,
+      includeServerEvents: includeServerEvents ?? sessionId !== undefined,
       limit,
     });
     return { logId: log.logId, lastSeq, ...page };

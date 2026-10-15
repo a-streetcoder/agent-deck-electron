@@ -5,6 +5,7 @@ import { BrowserPanel } from "../browser/BrowserPanel.tsx";
 import { CheckpointsPanel } from "../CheckpointsPanel.tsx";
 import { DiffPanel } from "../diff/DiffPanel.tsx";
 import { FilesPanel } from "../files/FilesPanel.tsx";
+import { NodeTreeView } from "../NodeTreeView.tsx";
 import { PreviewPanel } from "../preview/PreviewPanel.tsx";
 import { TabStrip } from "./TabStrip.tsx";
 import { WORKSPACE_TAB_META } from "./tabMeta.tsx";
@@ -131,5 +132,7 @@ function TabBody({ kind }: { kind: WorkspaceTabKind }) {
       return <CheckpointsPanel />;
     case "browser":
       return <BrowserPanel />;
+    case "tree":
+      return <NodeTreeView />;
   }
 }

@@ -83,6 +83,13 @@ export interface EventReadQuery {
   beforeSeq?: number;
   /** Exact match when present; null selects project-less events. */
   projectId?: string | null;
+  /**
+   * A2: one session's events: its sessionId, an agent actor in it, the session node
+   * itself, or an edge from it (a fork's session.created).
+   */
+  sessionId?: string;
+  /** Also return server.started outside the filters, so a reader can apply the restart rule. */
+  includeServerEvents?: boolean;
   /** Capped at MAX_EVENT_READ_LIMIT. */
   limit: number;
 }
@@ -644,14 +651,21 @@ export function createEventLog(dataDir: string, options: EventLogOptions = {}): 
   };
 
   const read = (query: EventReadQuery): EventPage => {
-    const { afterSeq, projectId } = query;
+    const { afterSeq, projectId, sessionId } = query;
     const limit = Math.min(Math.max(Math.floor(query.limit), 0), MAX_EVENT_READ_LIMIT);
     const upper = query.beforeSeq ?? Number.POSITIVE_INFINITY;
     const lower = afterSeq ?? Number.NEGATIVE_INFINITY;
+    const ofSession = (event: EventEnvelope): boolean =>
+      event.sessionId === sessionId ||
+      (event.actor.type === "agent" && event.actor.sessionId === sessionId) ||
+      (event.subject.type === "session" && event.subject.id === sessionId) ||
+      (event.parent?.type === "session" && event.parent.id === sessionId);
     const matches = (event: EventEnvelope): boolean =>
       event.seq > lower &&
       event.seq < upper &&
-      (projectId === undefined || event.projectId === projectId);
+      (((projectId === undefined || event.projectId === projectId) &&
+        (sessionId === undefined || ofSession(event))) ||
+        (query.includeServerEvents === true && event.kind === "server.started"));
     // A read-only process's ring is a boot snapshot, so it always reads the files.
     const useRing = writable && !closed;
     const index = useRing ? segments : buildIndex();

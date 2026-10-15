@@ -71,6 +71,38 @@ describe("GET /events", () => {
     expect(seqs((await get("")).body)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
+  it("reads one session's events with the server markers, and server markers on request", async () => {
+    const { log, get } = await serve();
+    const s1 = [
+      { kind: "session.created", sessionId: "s1", subject: { type: "session", id: "s1" } },
+      { kind: "turn.prompted", sessionId: "s1", subject: { type: "turn", id: "t1" } },
+      // A fork of s1: its own session, with an edge from s1.
+      {
+        kind: "session.created",
+        sessionId: "s2",
+        subject: { type: "session", id: "s2" },
+        parent: { type: "session", id: "s1" },
+      },
+      { kind: "turn.prompted", sessionId: "s2", subject: { type: "turn", id: "t2" } },
+    ] as const;
+    for (const draft of s1) {
+      log.append({ ...draft, projectId: "p1", actor: { type: "user" }, payload: {} });
+    }
+    log.append({
+      kind: "session.turn.completed",
+      projectId: "p1",
+      subject: { type: "turn", id: "t3" },
+      actor: { type: "agent", sessionId: "s1" },
+      payload: {},
+    });
+    expect(seqs((await get("?sessionId=s1&afterSeq=0")).body)).toEqual([1, 7, 8, 9, 11]);
+    expect(seqs((await get("?sessionId=s1&afterSeq=0&includeServerEvents=false")).body)).toEqual([
+      7, 8, 9, 11,
+    ]);
+    expect(seqs((await get("?projectId=p2&includeServerEvents=true")).body)).toEqual([1, 3]);
+    expect(seqs((await get("?projectId=p2")).body)).toEqual([3]);
+  });
+
   it("rejects malformed cursors and limits", async () => {
     const { get } = await serve();
     for (const query of [
@@ -79,6 +111,8 @@ describe("GET /events", () => {
       "?limit=0",
       "?limit=5000",
       "?projectId=",
+      "?sessionId=",
+      "?includeServerEvents=yes",
     ]) {
       expect((await get(query)).status).toBe(400);
     }
