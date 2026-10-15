@@ -26,3 +26,7 @@ All gates green or failures documented as environmental; review findings disposi
 **2026-10-15T06:53:58Z**
 
 2026-10-15 owner decision: the push does not wait for SRV-06; remaining gates: SRV-03 Andrea round, Windows visual baselines regenerated, desktop-electron specs run on an Electron-capable machine, then the full validation and the cross-vendor review.
+
+**2026-10-15T07:39:27Z**
+
+2026-10-15 push checklist addition (from the D1 contrarian): packages/skill-engine-native vendors ~9k lines of Rust from the private UNLICENSED Syncr repository into this public MIT repository. Before the first push the owner must confirm publication under MIT (or add a licence note for that folder); also delete the unused PACKAGES_READ_TOKEN repository secret in GitHub settings, and expect the first CI run to exercise the engine's cargo test/clippy on Windows and macOS for the first time.
