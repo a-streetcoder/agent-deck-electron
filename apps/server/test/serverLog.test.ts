@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatServerLog, serverLog } from "../src/serverLog.ts";
@@ -16,6 +16,24 @@ describe("serverLog", () => {
     expect(formatServerLog("loops", "failed", "text")).toBe("[loops] failed: text");
   });
 
+  it("keeps the name, code, first stderr line and one cause, on one line", () => {
+    vi.stubEnv("AGENT_DECK_DEBUG", "");
+    const git = Object.assign(new Error("git exited with code 128"), {
+      code: 128,
+      stderr: "fatal: not a git repository\nhint: run git init\n",
+    });
+    expect(formatServerLog("sessions", "cleanup failed", git)).toBe(
+      "[sessions] cleanup failed: git exited with code 128 [code 128] (stderr: fatal: not a git repository)",
+    );
+    const chained = new TypeError("outer", {
+      cause: new Error("inner", { cause: new Error("deep") }),
+    });
+    expect(formatServerLog("x", "m", chained)).toBe("[x] m: TypeError: outer (cause: inner)");
+    expect(formatServerLog("x", "two\nlines", new Error("bad\r\ntoken"))).toBe(
+      "[x] two\nlines: bad\r\ntoken",
+    );
+  });
+
   it("appends the stack only when AGENT_DECK_DEBUG=1", () => {
     vi.stubEnv("AGENT_DECK_DEBUG", "1");
     const error = new Error("boom");
@@ -23,6 +41,7 @@ describe("serverLog", () => {
   });
 
   it("writes warnings and errors to stderr and info to stdout as one line", () => {
+    vi.stubEnv("AGENT_DECK_DEBUG", "");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
@@ -34,13 +53,23 @@ describe("serverLog", () => {
     expect(info).toHaveBeenCalledWith("[c] i");
   });
 
-  it("leaves no call to fastify's silenced logger in the server source", () => {
-    const root = path.join(import.meta.dirname, "../src");
-    const offenders = (readdirSync(root, { recursive: true }) as string[])
-      .filter((file) => file.endsWith(".ts"))
-      .filter((file) =>
-        /\b(fastify|request)\.log\./.test(readFileSync(path.join(root, file), "utf8")),
-      );
+  it("leaves no call to fastify's silenced logger in the server or package sources", () => {
+    const repo = path.join(import.meta.dirname, "../../..");
+    const roots = [
+      path.join(repo, "apps/server/src"),
+      ...readdirSync(path.join(repo, "packages")).map((name) =>
+        path.join(repo, "packages", name, "src"),
+      ),
+    ].filter((root) => existsSync(root));
+    const allowed = new Set([path.join(repo, "apps/server/src/serverLog.ts")]);
+    const offenders = roots.flatMap((root) =>
+      (readdirSync(root, { recursive: true }) as string[])
+        .map((file) => path.join(root, file))
+        .filter((file) => /\.tsx?$/.test(file) && !allowed.has(file))
+        .filter((file) =>
+          /\b\w+\.log\.(warn|error|info|debug|trace|fatal)\(/.test(readFileSync(file, "utf8")),
+        ),
+    );
     expect(offenders).toEqual([]);
   });
 });

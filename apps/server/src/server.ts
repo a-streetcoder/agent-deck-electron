@@ -1354,6 +1354,7 @@ async function initServer(
   // Who the server believes the caller is. `null` on a single-user loopback server.
   // SRV-13: `providersConnected` says whether the caller's own agent dir has any
   // signed-in or configured provider, so the web can warn before a start fails.
+  const providersCheckWarned = new Set<string>();
   fastify.get("/me", async (request) => {
     const user = requestUser(request.raw);
     if (!user) return { user: null };
@@ -1371,7 +1372,13 @@ async function initServer(
             !(API_KEY_ONLY_PROVIDERS.has(provider.id) && provider.credentialType === "oauth"),
         );
     } catch (error) {
-      serverLog.warn("providers", "providersConnected check failed", error);
+      // A malformed auth.json error quotes text around the bad token, and /me runs on
+      // every bridge connect: log the error name only, once per user per process.
+      if (!providersCheckWarned.has(user.id)) {
+        providersCheckWarned.add(user.id);
+        const name = error instanceof Error ? error.name : typeof error;
+        serverLog.warn("providers", `providersConnected check failed (${name})`);
+      }
     }
     return {
       user: {

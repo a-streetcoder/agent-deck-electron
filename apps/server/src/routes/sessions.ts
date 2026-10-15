@@ -1890,7 +1890,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
           await gitDeleteOwnedWorktreeBranch(project.path, worktree).catch((cleanupError) => {
             serverLog.warn(
               "sessions",
-              `failed to remove generated session branch after startup ${worktree?.branch}`,
+              `failed to remove generated session branch after startup${worktree?.branch ? ` (branch ${worktree.branch})` : ""}`,
               cleanupError,
             );
           });

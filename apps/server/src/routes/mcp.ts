@@ -494,7 +494,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     // ends, i.e. after the user pasted the redirect URL, far past the RPC
     // timeout. A timeout is not recorded as a session failure.
     session.prompt(`/mcp login ${name}`).catch((error: unknown) => {
-      serverLog.warn("mcp", `MCP sign-in prompt did not complete (server ${id})`, error);
+      serverLog.warn("mcp", `sign-in prompt did not complete (server ${id})`, error);
     });
     return reply.code(202).send({ ok: true });
   });
