@@ -253,6 +253,27 @@ export async function gitClonePersistent(
   );
 }
 
+/**
+ * SRV-12a: clone a shared project's repository. A FULL clone (no --depth, no
+ * --filter): sessions create worktrees from its history and must never fetch
+ * blobs lazily later, when no credential may be at hand. `branch` is checked
+ * out; `env` carries the requester's GitHub credential helper (githubEnv), so
+ * no token is written to the clone's config. Throws the git error (stderr on
+ * `.stderr`); the caller redacts it before showing it.
+ */
+export async function gitCloneRepository(
+  source: string,
+  destDir: string,
+  branch: string,
+  env: Record<string, string>,
+): Promise<void> {
+  await execFileAsync(gitBin(), ["clone", `--branch=${branch}`, "--", source, destDir], {
+    timeout: 600_000,
+    maxBuffer: 8_000_000,
+    env: { ...process.env, ...env, GIT_TERMINAL_PROMPT: "0" },
+  });
+}
+
 /** Restore a managed legacy clone to a validated persisted commit after a failed prepare/apply. */
 export async function gitResetHardTo(dir: string, commit: string): Promise<void> {
   validateGitObjectId(commit);

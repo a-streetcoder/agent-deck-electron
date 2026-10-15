@@ -82,3 +82,36 @@ describe("ProjectsScreen with no projects", () => {
     });
   }
 });
+
+describe("ProjectsScreen on the shared server (SRV-12a)", () => {
+  afterEach(() => useAppStore.setState({ me: null }));
+
+  it("opens Add Projects on Repository and keeps the server folder one tab away", async () => {
+    vi.stubGlobal("window", Object.assign(window, { agentDeck: undefined }));
+    stubServer();
+    useAppStore.setState({
+      projects: [],
+      currentProjectId: null,
+      me: { id: "ale@example.test", email: "ale@example.test" },
+    });
+    render(<ProjectsScreen />);
+    fireEvent.click(screen.getByTestId("projects-add"));
+    await screen.findByTestId("add-projects-dialog");
+
+    expect(screen.getByTestId("projects-add-repo")).toBeTruthy();
+    expect(screen.queryByTestId("server-folder-browser")).toBeNull();
+    fireEvent.change(screen.getByTestId("projects-add-repo"), {
+      target: { value: "https://github.com/acme/app" },
+    });
+    fireEvent.click(screen.getByTestId("projects-add-repo-confirm"));
+    await waitFor(() =>
+      expect(vi.mocked(addProject)).toHaveBeenCalledWith(
+        { repo: "https://github.com/acme/app" },
+        { rethrow: true },
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("projects-add-source-folder"));
+    await screen.findByTestId("server-folder-syncr");
+  });
+});

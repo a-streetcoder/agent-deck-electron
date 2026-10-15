@@ -190,7 +190,8 @@ generic setup above in two places: the checkout is `~/ai-playground/a-streetcodi
   initials chip on session rows, an author label above user messages, and folder pickers that
   browse the VM (no native dialogs).
 - **Projects** live on the VM in `/srv/streetcoding` as server-owned git clones (today
-  CrunchyMurmur and agent-deck-electron). To register one, clone it there
+  CrunchyMurmur and agent-deck-electron). Add one from its GitHub repository (see
+  [Shared projects from a repository](#shared-projects-from-a-repository)), or clone it there
   (`ssh dev`, `cd /srv/streetcoding && git clone <url>`), then Projects → Add Projects… and either
   use the folder browser (rooted at `AGENT_DECK_PROJECT_ROOT=/srv/streetcoding`) or Monitored
   folders (`/srv/streetcoding` → Add folder → add each discovered repo). Registration is server
@@ -585,6 +586,45 @@ agent can read every token, so this is attribution, not an authorization boundar
 - **Limits.** Any agent can print `GH_TOKEN` (for example by running `env`) into its own
   transcript, and can read every `github.json`; the event log redacts GitHub token prefixes
   (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), the Pi transcript does not.
+
+### Shared projects from a repository
+
+Projects → Add Projects… (and the project picker's Add project) opens on **Repository**: type
+`owner/name` or `https://github.com/owner/name`, optionally a branch or tag; **Server folder** is
+the folder browser above. The web sends `POST /projects { repo, ref? }`, accepted only on a
+shared server. The server asks `GET https://api.github.com/repos/{owner}/{name}` with the
+requester's GitHub connection (anonymously without one), then makes a full clone (history for
+session worktrees, no `--depth` or `--filter`) of the repository's `clone_url` into
+`<AGENT_DECK_PROJECT_ROOT>/<repository name>`, checking out `ref` or the default branch. The
+project records `origin` (the clone URL), `repoId` (GitHub's repository id, its identity across
+machines), `defaultBranch` and `createdBy`.
+
+- **Project root.** The repository flow needs `AGENT_DECK_PROJECT_ROOT`; without it the answer is
+  `409` (it never clones into the server user's home). Repository names that are not a safe
+  folder on every platform (a leading dot, Windows device names such as `con` or `lpt1`, a
+  trailing dot) are refused.
+- **Private repositories need the requester's [GitHub connection](#github-connection)**; without
+  one the answer is `409 connect GitHub first` (anonymously GitHub cannot tell private from
+  missing). Public repositories clone anonymously, with every inherited git credential helper
+  cleared, so the server's own credentials are never used. An expired connection answers `409`
+  (reconnect in Settings); GitHub's anonymous rate limit answers `409` too.
+- **No token on disk outside `github.json`.** The clone runs with the same `GH_TOKEN` env and
+  credential helper as sessions; the clone's `.git/config` holds the plain HTTPS URL. A failed
+  clone's folder is removed and git's error is returned with the token redacted.
+- **Where a clone runs.** In a hidden `<root>/.agent-deck-clone-<uuid>` folder (invisible to the
+  folder browser and discovery), renamed to its name only when complete. A second request for
+  the same folder while it clones is `409`. Leftover temporary folders from a crash are removed
+  when the server starts.
+- **Conflicts.** The same repository again un-hides its project if it was hidden (`200`), else is
+  `409` with its `projectId`. When the folder is held by another repository's project (a fork, a
+  same-named repository), the clone goes to `<owner>-<name>` instead; if that is held too, `409`
+  names the holder. An unregistered folder of that name is `409`.
+- **Delete.** On a shared server, new projects (repository or Server folder) record their creator;
+  removing one is allowed only for that person or the operator (`AGENT_DECK_OPERATOR_EMAIL`);
+  others get `403`. Projects added before this (without a creator) stay removable by anyone.
+- **Long clones.** The request waits for the clone (up to 10 minutes). Cloudflare closes a
+  response after about 100 s; the web then says the server is still cloning, and a reload a
+  minute later shows the project.
 
 ## Security model
 

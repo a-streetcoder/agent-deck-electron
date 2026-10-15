@@ -5,6 +5,7 @@ import { cn } from "@/lib/cn";
 import { canPickLocalPaths, chooseDirectory } from "@/lib/native";
 import { useAppStore } from "../state/store.ts";
 import { ProjectImage } from "./ProjectImage.tsx";
+import { ProjectSourcePicker } from "./ProjectSourcePicker.tsx";
 import { ServerProjectPathPicker } from "./ServerFolderBrowser.tsx";
 import { addProject, switchToProject } from "../state/wsBridge.ts";
 
@@ -241,7 +242,13 @@ export function ProjectPicker() {
 
           {adding ? (
             <div className="px-1 py-1">
-              <ServerProjectPathPicker onConfirm={submitPath} />
+              <ProjectSourcePicker
+                folder={<ServerProjectPathPicker onConfirm={submitPath} />}
+                onAdded={() => {
+                  setAdding(false);
+                  setOpen(false);
+                }}
+              />
             </div>
           ) : (
             <ControlButton

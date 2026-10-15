@@ -26,6 +26,7 @@ import { ProjectTypeIcon } from "../components/ProjectTypeIcon.tsx";
 import { useAppStore } from "../state/store.ts";
 import { addProject, refreshProjects, updateProject } from "../state/wsBridge.ts";
 import { ServerFolderBrowser } from "../components/ServerFolderBrowser.tsx";
+import { ProjectSourcePicker } from "../components/ProjectSourcePicker.tsx";
 
 type Filter = "all" | "available" | "unavailable";
 
@@ -188,40 +189,50 @@ function AddProjectsDialog({ onClose }: { onClose: () => void }) {
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 sm:p-5">
           <section>
             <h3 className="text-label font-semibold text-text-primary">Choose a project</h3>
-            {!canPickLocalPaths() ? (
-              <p className="mt-0.5 text-caption text-text-muted">
-                Browse the folders on the server, or type a path there.
-              </p>
-            ) : null}
-            {!canPickLocalPaths() ? (
-              <div className="mt-2">
-                <ServerFolderBrowser path={browsePath} onNavigate={navigateServerFolder} />
-              </div>
-            ) : null}
-            <div className="mt-2 flex min-w-0 gap-2">
-              {!canPickLocalPaths() ? (
-                <AppTextField
-                  data-testid="projects-add-path"
-                  size="sm"
-                  className="min-w-0 flex-1 font-mono text-code"
-                  placeholder="/path/to/project"
-                  value={projectDraft}
-                  onChange={setProjectDraft}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") void chooseProject();
-                  }}
-                />
-              ) : null}
-              <Button
-                data-testid={canPickLocalPaths() ? "choose-project-folder" : "projects-add-confirm"}
-                size="sm"
-                variant="primary"
-                disabled={!canPickLocalPaths() && !projectDraft.trim()}
-                onClick={() => void chooseProject()}
-              >
-                <Plus size={14} /> Choose Project Folder…
-              </Button>
-            </div>
+            <ProjectSourcePicker
+              testIdPrefix="projects-add"
+              onAdded={() => void scan()}
+              folder={
+                <>
+                  {!canPickLocalPaths() ? (
+                    <p className="mt-0.5 text-caption text-text-muted">
+                      Browse the folders on the server, or type a path there.
+                    </p>
+                  ) : null}
+                  {!canPickLocalPaths() ? (
+                    <div className="mt-2">
+                      <ServerFolderBrowser path={browsePath} onNavigate={navigateServerFolder} />
+                    </div>
+                  ) : null}
+                  <div className="mt-2 flex min-w-0 gap-2">
+                    {!canPickLocalPaths() ? (
+                      <AppTextField
+                        data-testid="projects-add-path"
+                        size="sm"
+                        className="min-w-0 flex-1 font-mono text-code"
+                        placeholder="/path/to/project"
+                        value={projectDraft}
+                        onChange={setProjectDraft}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") void chooseProject();
+                        }}
+                      />
+                    ) : null}
+                    <Button
+                      data-testid={
+                        canPickLocalPaths() ? "choose-project-folder" : "projects-add-confirm"
+                      }
+                      size="sm"
+                      variant="primary"
+                      disabled={!canPickLocalPaths() && !projectDraft.trim()}
+                      onClick={() => void chooseProject()}
+                    >
+                      <Plus size={14} /> Choose Project Folder…
+                    </Button>
+                  </div>
+                </>
+              }
+            />
           </section>
 
           <section>
