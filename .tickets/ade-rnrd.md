@@ -1,6 +1,6 @@
 ---
 id: ade-rnrd
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-15T00:57:50Z
@@ -20,3 +20,9 @@ GUARDRAILS as every ticket. VISION_ORCHESTRATION principle 4 (the producer never
 ## Acceptance Criteria
 
 Tests above green; the evidence doc's two failure modes (G2 makerChecker FAIL-before-validation, G3 singleAgent verdict miss) reproduce in tests and pass after the change.
+
+## Notes
+
+**2026-10-15T01:54:45Z**
+
+2026-10-15 merged (wt/ade-rnrd: bc2095c + review round c9a17ca). Contrarian + GPT review22 applied: parser accepts whole-line, Verdict:/Decision: prefix, leading token + separator and the real G3 form (token glued after a sentence end on the first line), never mid-sentence; missing checker verdict -> CONTINUE with note; G2 rule: checker FAIL after passed validation skips the evaluator and continues with the checker report, last iteration ends notAchieved (divergence from native documented); validation spawnError/timeout -> toolFailed early (makerChecker only); checker_shell is GIT-ONLY with an exact per-subcommand allowlist (--ext-dif regression + 500 dangerous options tested), repo-relative args, GIT_* cleared, config/hooks/attributes isolation, refusal when filter/diff/merge drivers are configured; processTree.ts shared tree-kill; rolling 16 KiB validation tails to the checker; goalVerdictParse rename; loop fixture re-recorded; harness retries loop_checkout_busy; D7 real-Pi test runs on currentCheckout. Tests: loopEngine + checkerShell 90, loops.pi 12, eventProducers.pi 2, eventDiffs 23. Known: merge=union attribute over-refused; short-circuit only in makerChecker; no UI for the new fields.
