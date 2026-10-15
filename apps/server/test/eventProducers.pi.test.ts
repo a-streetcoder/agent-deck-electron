@@ -24,13 +24,15 @@ import {
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 import { LoopEngine } from "../src/loopEngine.ts";
-import { SubagentRunStore } from "../src/subagentRunStore.ts";
+import { CAPABILITY_FIELDS, SubagentRunStore } from "../src/subagentRunStore.ts";
 
 /**
- * A1b2 against real Pi: one managed_subagent run and one makerChecker loop. The
- * store commit points emit diff events; the log's projection must equal each store's
- * public view. With AGENT_DECK_RECORD_EVENT_FIXTURES=1 the run also rewrites the
- * domain fixtures (the public state after every commit, and the emitted events).
+ * A1b2 against real Pi: one managed_subagent run (fresh, continued, then removed with
+ * its parent session) and one makerChecker loop. The store commit points emit diff
+ * events; the log's projection must equal each store's public view after every
+ * commit. With AGENT_DECK_RECORD_EVENT_FIXTURES=1 the run also rewrites the domain
+ * fixtures: per commit the public state and how many events the log held by then,
+ * plus the events, with ids, timestamps and durations mapped to stable values.
  */
 
 process.env.AGENT_DECK_TEST = "1";
@@ -44,14 +46,19 @@ let mock: MockProviderServer;
 let server: AgentDeckServer;
 let projectId: string;
 let base: string;
+let continueId: string | undefined;
 const tmpHome = mkdtempSync(path.join(tmpdir(), "pi-home-"));
 const cwd = mkdtempSync(path.join(tmpdir(), "pi-events-"));
 const dataDir = mkdtempSync(path.join(tmpdir(), "agent-deck-data-"));
 const piEnv = { HOME: tmpHome, USERPROFILE: tmpHome, PI_SKIP_VERSION_CHECK: "1" };
 
-// The public view after every store commit, recorded from the real commit points.
-const subagentStates: PublicSubagentRun[][] = [];
-const loopStates: PublicLoopRun[][] = [];
+interface Commit<T> {
+  /** Events of the store's kinds in the log once the commit returned. */
+  events: number;
+  runs: T[];
+}
+const subagentStates: Commit<PublicSubagentRun>[] = [];
+const loopStates: Commit<PublicLoopRun>[] = [];
 
 function systemText(request: ChatCompletionRequest): string {
   return request.messages
@@ -60,24 +67,53 @@ function systemText(request: ChatCompletionRequest): string {
     .join("\n");
 }
 
-function logEvents(): EventEnvelope[] {
+function logEvents(prefix: string): EventEnvelope[] {
   const dir = path.join(dataDir, "events");
   return readdirSync(dir)
     .filter((name) => name.endsWith(".jsonl"))
     .sort()
     .flatMap((name) => splitJsonl(readFileSync(path.join(dir, name), "utf8")).lines)
     .map((line) => parseEventLine(line))
-    .filter((event): event is EventEnvelope => event !== null);
+    .filter((event): event is EventEnvelope => event?.kind.startsWith(prefix) ?? false);
+}
+
+/** Map uuids, timestamps and durations to stable values so re-recording does not churn. */
+function stable(text: string): string {
+  const ids = new Map<string, string>();
+  const withIds = text.replace(
+    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+    (id) => {
+      if (!ids.has(id)) {
+        ids.set(id, `00000000-0000-4000-8000-${String(ids.size + 1).padStart(12, "0")}`);
+      }
+      return ids.get(id)!;
+    },
+  );
+  // One fixed instant: collisions between real timestamps vary from run to run.
+  return withIds
+    .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, "2026-01-01T00:00:00.000Z")
+    .replace(/("durationMs":\s*)\d+/g, (_match, key: string) => `${key}1000`);
 }
 
 function record(name: string, states: unknown[], events: EventEnvelope[]): void {
   if (process.env.AGENT_DECK_RECORD_EVENT_FIXTURES !== "1") return;
   mkdirSync(FIXTURES, { recursive: true });
-  writeFileSync(path.join(FIXTURES, `${name}.states.json`), `${JSON.stringify(states, null, 2)}\n`);
-  writeFileSync(
-    path.join(FIXTURES, `${name}.jsonl`),
-    events.map((event) => `${JSON.stringify(event)}\n`).join(""),
+  const separator = "\n<<<events>>>\n";
+  const text = stable(
+    `${JSON.stringify(states, null, 2)}${separator}${events.map((event) => JSON.stringify(event)).join("\n")}`,
   );
+  const [statesText, eventsText] = text.split(separator) as [string, string];
+  writeFileSync(path.join(FIXTURES, `${name}.states.json`), `${statesText}\n`);
+  writeFileSync(path.join(FIXTURES, `${name}.jsonl`), `${eventsText}\n`);
+}
+
+/** Same rules as the domain fixture scan, with the server's own capability list. */
+function expectNoSecrets(events: EventEnvelope[]): void {
+  const text = JSON.stringify(events);
+  for (const field of CAPABILITY_FIELDS) expect(text).not.toContain(`"${field}"`);
+  for (const root of [dataDir, tmpHome, cwd]) {
+    expect(text).not.toContain(JSON.stringify(root).slice(1, -1));
+  }
 }
 
 beforeAll(async () => {
@@ -95,40 +131,51 @@ beforeAll(async () => {
   mock = await startMockProvider({
     chunkDelayMs: 5,
     toolCall: (lastUser, body) => {
-      if (!lastUser.includes("delegate the summary task")) return null;
       if (systemText(body).includes("focused subagent launched by Agent Deck")) return null;
-      if (body.messages.some((m) => m.role === "tool")) return null;
-      return { name: "managed_subagent", arguments: { task: "Summarize the meeting notes." } };
+      // Delegate once per prompt: not again after this prompt's tool result.
+      if (body.messages.at(-1)?.role === "tool") return null;
+      if (lastUser.includes("delegate the summary task")) {
+        return { name: "managed_subagent", arguments: { task: "Summarize the meeting notes." } };
+      }
+      if (lastUser.includes("follow up on the summary") && continueId) {
+        return {
+          name: "managed_subagent",
+          arguments: { task: "Shorten the meeting summary.", continueSubagentID: continueId },
+        };
+      }
+      return null;
     },
     reply: (message) => {
       if (message.includes("Summarize the meeting notes.")) {
         return "CHILD_SUBAGENT_SENTINEL: three bullet summary.";
       }
+      if (message.includes("Shorten the meeting summary.")) return "CHILD_FOLLOW_UP: one bullet.";
       if (message.includes("exact first non-empty line must be APPROVE")) {
         return "APPROVE\nChecker streamed concrete evidence before approving.";
       }
       if (message.includes("exact first non-empty line must be SUCCESS")) {
         return "SUCCESS\nEvaluator streamed independent evidence of completion.";
       }
-      if (message.includes("delegate the summary task")) return "Delegated and done.";
+      if (message.includes("summary")) return "Delegated and done.";
       return "MAKER_RAW_OUTPUT streamed several ordered implementation words.";
     },
   });
   process.env.AGENT_DECK_PROVIDER_EXTENSIONS = writeMockProviderExtension(mock.baseUrl);
 
-  type Commit = (this: SubagentRunStore, candidate: unknown) => void;
-  const proto = SubagentRunStore.prototype as unknown as { commit: Commit };
+  type CommitFn = (this: SubagentRunStore, candidate: unknown) => void;
+  const proto = SubagentRunStore.prototype as unknown as { commit: CommitFn };
   const commit = proto.commit;
   vi.spyOn(proto, "commit").mockImplementation(function (this: SubagentRunStore, candidate) {
     commit.call(this, candidate);
-    subagentStates.push(this.publicRuns());
+    subagentStates.push({ events: logEvents("subagent.").length, runs: this.publicRuns() });
   });
   type Persist = (this: LoopEngine) => void;
   const loopProto = LoopEngine.prototype as unknown as { persist: Persist };
   const persist = loopProto.persist;
   vi.spyOn(loopProto, "persist").mockImplementation(function (this: LoopEngine) {
     persist.call(this);
-    loopStates.push(this.publicRuns());
+    // Constructor persists run before the log sinks exist; they hold no runs here.
+    loopStates.push({ events: logEvents("loop.").length, runs: this.publicRuns() });
   });
 
   server = await startServer({ dataDir });
@@ -152,7 +199,7 @@ afterAll(async () => {
 });
 
 describe("diff producers (real pi)", () => {
-  it("a managed_subagent run reaches the log as created / finished with its tool call", async () => {
+  it("a managed_subagent run: created, finished, continued, finished again, removed", async () => {
     const response = await fetch(`${base}/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -168,21 +215,41 @@ describe("diff producers (real pi)", () => {
     });
     expect(response.status).toBe(201);
     const { session } = (await response.json()) as { session: { id: string } };
-    await server.sessions.get(session.id)!.prompt("delegate the summary task");
+    const live = server.sessions.get(session.id)!;
+    await live.prompt("delegate the summary task");
+    await server.receipts.waitFor("idle", session.id);
+    continueId = subagentStates.at(-1)!.runs[0]!.id;
+    await live.prompt("follow up on the summary");
+    await expect.poll(() => logEvents("subagent.run.finished").length, { timeout: 60_000 }).toBe(2);
     await server.receipts.waitFor("idle", session.id);
 
-    const events = logEvents().filter((event) => event.kind.startsWith("subagent.run."));
-    const created = events.find((event) => event.kind === "subagent.run.created");
-    expect(created?.parent?.type).toBe("toolCall");
-    expect(created?.projectId).toBe(projectId);
-    const finished = events.find((event) => event.kind === "subagent.run.finished");
-    expect(finished?.payload).toMatchObject({
-      result: { status: "completed", summary: expect.stringContaining("CHILD_SUBAGENT_SENTINEL") },
-    });
-    const last = subagentStates.at(-1)!;
-    expect(last).toHaveLength(1);
-    expect([...projectSubagentRuns(events).values()]).toEqual(last);
-    record("managed-subagent", [[], ...subagentStates], events);
+    const finished = logEvents("subagent.run.finished");
+    const created = logEvents("subagent.run.created");
+    expect(created).toHaveLength(1);
+    expect(created[0]?.parent?.type).toBe("toolCall");
+    expect(created[0]?.projectId).toBe(projectId);
+    expect(
+      finished.map((event) => (event.payload as { result: { summary: string } }).result.summary),
+    ).toEqual([
+      expect.stringContaining("CHILD_SUBAGENT_SENTINEL"),
+      expect.stringContaining("CHILD_FOLLOW_UP"),
+    ]);
+    // Each turn's finished names the tool call of that turn; the parent edge stays.
+    const turnCalls = finished.map(
+      (event) => (event.payload as { run: PublicSubagentRun }).run.turnToolCallId,
+    );
+    expect(new Set(turnCalls).size).toBe(2);
+    expect(turnCalls[0]).toBe(created[0]?.parent?.id);
+
+    const deleted = await fetch(`${base}/sessions/${session.id}`, { method: "DELETE" });
+    expect(deleted.ok).toBe(true);
+    const events = logEvents("subagent.");
+    expect(events.at(-1)?.kind).toBe("subagent.run.removed");
+    for (const state of subagentStates) {
+      expect([...projectSubagentRuns(events.slice(0, state.events)).values()]).toEqual(state.runs);
+    }
+    expectNoSecrets(events);
+    record("managed-subagent", [{ events: 0, runs: [] }, ...subagentStates], events);
   });
 
   it("a makerChecker loop reaches the log as run / iteration / child / artifact facts", async () => {
@@ -225,28 +292,27 @@ describe("diff producers (real pi)", () => {
     await expect
       .poll(async () => (await getRun()).status, { timeout: 90_000, interval: 200 })
       .toSatisfy(isLoopRunTerminal);
-    const finalRun = await getRun();
-    if (finalRun.status !== "completed") console.log(JSON.stringify(finalRun, null, 1));
-    expect(finalRun.status).toBe("completed");
+    expect((await getRun()).status).toBe("completed");
 
-    const events = logEvents().filter((event) => event.kind.startsWith("loop."));
+    const events = logEvents("loop.");
     const kinds = new Set(events.map((event) => event.kind));
     for (const kind of [
       "loop.run.started",
       "loop.iteration.started",
       "loop.timeline.appended",
       "loop.child.upserted",
-      "loop.artifact.added",
+      "loop.artifact.upserted",
       "loop.run.finished",
     ]) {
       expect(kinds).toContain(kind);
     }
     expect(events.at(-1)?.kind).toBe("loop.run.finished");
-    const states = [loopStates[before - 1] ?? [], ...loopStates.slice(before)];
-    expect([...projectLoopRuns(events).values()]).toEqual(states.at(-1));
-    const text = JSON.stringify(events);
-    expect(text).not.toContain("MAKER_RAW_OUTPUT");
-    expect(text).not.toContain(JSON.stringify(dataDir).slice(1, -1));
+    const states = [loopStates[before - 1] ?? { events: 0, runs: [] }, ...loopStates.slice(before)];
+    for (const state of states) {
+      expect([...projectLoopRuns(events.slice(0, state.events)).values()]).toEqual(state.runs);
+    }
+    expect(JSON.stringify(events)).not.toContain("MAKER_RAW_OUTPUT");
+    expectNoSecrets(events);
     record("loop-makerChecker", states, events);
   });
 });

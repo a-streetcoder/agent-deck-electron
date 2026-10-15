@@ -19,6 +19,7 @@ import {
   type ChildTranscriptSnapshot,
   type EventDraft,
   type PublicSubagentRun,
+  type PublicViewOptions,
   type SubagentCell,
   type TranscriptCell,
   type TranscriptState,
@@ -71,6 +72,8 @@ export interface SubagentRunRecord {
   parentSessionId: string;
   /** Additive: the managed_subagent / managed_parallel tool call that created the run. */
   parentToolCallId?: string;
+  /** Additive: the tool call of the current turn; a continuation replaces it. */
+  turnToolCallId?: string;
   task: string;
   agent?: string;
   status: SubagentRunStatus;
@@ -109,6 +112,7 @@ const runSchema = z
     id: z.string().uuid(),
     parentSessionId: z.string().uuid(),
     parentToolCallId: z.string().min(1).max(500).optional(),
+    turnToolCallId: z.string().min(1).max(500).optional(),
     task: z.string().max(MAX_TASK_BYTES),
     agent: z.string().max(500).optional(),
     status: z.enum(["starting", "running", "completed", "failed", "stopped", "interrupted"]),
@@ -231,7 +235,8 @@ function utf8Suffix(value: string, maxBytes: number): string {
 const active = (status: SubagentRunStatus): boolean =>
   status === "starting" || status === "running";
 
-const CAPABILITY_FIELDS = new Set([
+/** Never crosses a public API or the event log (scans in the tests import this list). */
+export const CAPABILITY_FIELDS: ReadonlySet<string> = new Set([
   "artifactRootId",
   "artifactRootToken",
   "identityToken",
@@ -290,8 +295,9 @@ export class SubagentRunStore {
   /** Runtime-only projections. Pi's existing child event consumer is the sole writer. */
   private readonly liveTranscripts = new Map<string, TranscriptState>();
   /** A1 event log: the public view as loaded, before boot recovery (startup reconcile). */
-  private readonly bootPublic: PublicSubagentRun[];
+  private readonly bootRuns: readonly SubagentRunRecord[];
   private eventSink?: (drafts: EventDraft[]) => void;
+  private publicView: () => PublicViewOptions = () => ({});
   private lastPublic: PublicSubagentRun[] = [];
 
   constructor(
@@ -305,7 +311,8 @@ export class SubagentRunStore {
     this.artifacts = new SubagentArtifactStore(dataDir);
     this.worktrees = new SessionWorktreeStore(dataDir);
     this.load();
-    this.bootPublic = this.publicRuns();
+    // Records are replaced, never edited, so the loaded array is a stable snapshot.
+    this.bootRuns = this.state.runs;
     this.interruptActiveRuns();
     this.reconcileArtifacts();
   }
@@ -326,17 +333,29 @@ export class SubagentRunStore {
     if (errors.length > 1) throw new AggregateError(errors, "subagent run store close failed");
   }
 
+  /** The public view as loaded, before boot recovery (startup reconcile). */
   bootPublicRuns(): PublicSubagentRun[] {
-    return this.bootPublic;
+    const options = this.publicView();
+    return this.bootRuns.map((run) => toPublicSubagentRun(run, options));
   }
 
-  /** Every run as the event log may see it (no capability fields). */
+  /** Every run as the event log may see it (no capability fields, local paths redacted). */
   publicRuns(): PublicSubagentRun[] {
-    return this.state.runs.map(toPublicSubagentRun);
+    const options = this.publicView();
+    return this.state.runs.map((run) => toPublicSubagentRun(run, options));
+  }
+
+  /** True when the store file was corrupt at boot and renamed aside (history unknown). */
+  quarantined(): boolean {
+    return this.storeQuarantined;
   }
 
   /** From now on every commit hands the diff of the public view to sink. */
-  attachEventSink(sink: (drafts: EventDraft[]) => void): void {
+  attachEventSink(
+    sink: (drafts: EventDraft[]) => void,
+    publicView: () => PublicViewOptions = () => ({}),
+  ): void {
+    this.publicView = publicView;
     this.lastPublic = this.publicRuns();
     this.eventSink = sink;
   }

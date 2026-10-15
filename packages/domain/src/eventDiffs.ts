@@ -10,7 +10,14 @@
 // Two child node kinds exist until A9: subagentRun (managed_subagent / managed_parallel,
 // in the subagent store) and loopChild (a role run inside a loop iteration, from
 // LoopRun.iterations[].children; its transcript lives in loopSessionSnapshots).
-import type { EventActor, EventDraft, EventEnvelope, NodeRef } from "./events.ts";
+import {
+  redactPaths,
+  type EventActor,
+  type EventDraft,
+  type EventEnvelope,
+  type NodeRef,
+  type PathPrefix,
+} from "./events.ts";
 import {
   isLoopRunTerminal,
   type LoopChildRecord,
@@ -21,10 +28,15 @@ import {
   type LoopWorktreeReview,
 } from "./loops.ts";
 
-/** Producers cap their own strings so an event stays far below MAX_EVENT_BYTES. */
-export const MAX_EVENT_SUMMARY_BYTES = 256_000;
-export const MAX_EVENT_TASK_BYTES = 50_000;
-export const MAX_EVENT_TEXT_BYTES = 16_000;
+/**
+ * The log holds facts and references: free text is cut to its head (summaries, task,
+ * prompts, notes) and errors to their tail, so every event stays far below
+ * MAX_EVENT_BYTES even fully JSON-escaped (tested through serializeEvent). The full
+ * text stays in the store, read by run id.
+ */
+export const MAX_EVENT_TEXT_CHARS = 4_000;
+export const MAX_EVENT_ERROR_BYTES = 16_000;
+const ELLIPSIS = "\u2026";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -39,8 +51,25 @@ export function utf8Suffix(value: string, maxBytes: number): string {
   return decoder.decode(encoded.subarray(start));
 }
 
-const cap = (value: string | undefined, maxBytes: number): string | undefined =>
-  value === undefined ? undefined : utf8Suffix(value, maxBytes);
+/** The first maxChars UTF-16 units plus an ellipsis, never splitting a surrogate pair. */
+export function textHead(value: string, maxChars = MAX_EVENT_TEXT_CHARS): string {
+  if (value.length <= maxChars) return value;
+  let end = maxChars;
+  const last = value.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${value.slice(0, end)}${ELLIPSIS}`;
+}
+
+/** How the server shapes free text for the log: which local roots to redact. */
+export interface PublicViewOptions {
+  pathPrefixes?: readonly PathPrefix[];
+}
+
+// Redact before capping, so a cut never leaves half a path behind.
+const headText = (value: string, options: PublicViewOptions): string =>
+  textHead(redactPaths(value, options.pathPrefixes));
+const errorText = (value: string, options: PublicViewOptions): string =>
+  utf8Suffix(redactPaths(value, options.pathPrefixes), MAX_EVENT_ERROR_BYTES);
 
 /** Copy only the listed keys whose value is defined (JSON shape: no undefined keys). */
 function pick<T extends object, K extends keyof T>(value: T, keys: readonly K[]): Pick<T, K> {
@@ -87,38 +116,43 @@ export interface PublicSubagentRun {
   parentSessionId: string;
   /** The managed_subagent / managed_parallel tool call that created the run. */
   parentToolCallId?: string;
+  /** The tool call of the current turn (a continuation replaces it): maps a call to its result. */
+  turnToolCallId?: string;
+  /** Head of the task (MAX_EVENT_TEXT_CHARS). */
   task: string;
   agent?: string;
   status: PublicSubagentRunStatus;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  /** Head of the result; the full text is in the store. */
   summary?: string;
+  /** UTF-8 bytes of the full summary in the store. */
+  summaryBytes?: number;
   error?: string;
   model?: string;
   inputTokens?: number;
   outputTokens?: number;
   durationMs?: number;
   source?: "single" | "parallel";
-  /** Opaque identity the transcript cell already exposes; the token never leaves the store. */
-  artifactRootId?: string;
 }
 
 /** A4's structured result, the payload of *.finished. */
 export interface RunResult {
   status: string;
   summary?: string;
+  summaryBytes?: number;
   error?: string;
   tokens?: { input?: number; output?: number };
   durationMs?: number;
   model?: string;
-  artifactRootId?: string;
 }
 
 const SUBAGENT_KEYS = [
   "id",
   "parentSessionId",
   "parentToolCallId",
+  "turnToolCallId",
   "task",
   "agent",
   "status",
@@ -132,15 +166,20 @@ const SUBAGENT_KEYS = [
   "outputTokens",
   "durationMs",
   "source",
-  "artifactRootId",
 ] as const satisfies readonly (keyof PublicSubagentRun)[];
 
 /** Whitelist projection of a stored record (the server's record is a structural superset). */
-export function toPublicSubagentRun(record: PublicSubagentRun): PublicSubagentRun {
-  const run = pick(record, SUBAGENT_KEYS);
-  run.task = utf8Suffix(run.task, MAX_EVENT_TASK_BYTES);
-  if (run.summary !== undefined) run.summary = utf8Suffix(run.summary, MAX_EVENT_SUMMARY_BYTES);
-  if (run.error !== undefined) run.error = utf8Suffix(run.error, MAX_EVENT_TEXT_BYTES);
+export function toPublicSubagentRun(
+  record: PublicSubagentRun,
+  options: PublicViewOptions = {},
+): PublicSubagentRun {
+  const run: PublicSubagentRun = pick(record, SUBAGENT_KEYS);
+  run.task = headText(run.task, options);
+  if (run.summary !== undefined) {
+    run.summaryBytes = encoder.encode(run.summary).byteLength;
+    run.summary = headText(run.summary, options);
+  }
+  if (run.error !== undefined) run.error = errorText(run.error, options);
   return run;
 }
 
@@ -150,7 +189,7 @@ export function subagentRunResult(run: PublicSubagentRun): RunResult {
   const tokens = pick({ input: run.inputTokens, output: run.outputTokens }, ["input", "output"]);
   return {
     status: run.status,
-    ...pick(run, ["summary", "error", "durationMs", "model", "artifactRootId"]),
+    ...pick(run, ["summary", "summaryBytes", "error", "durationMs", "model"]),
     ...(Object.keys(tokens).length ? { tokens } : {}),
   };
 }
@@ -176,9 +215,10 @@ export function diffSubagentRuns(
         : { type: "session", id: run.parentSessionId };
       out.push({ ...base, kind: "subagent.run.created", parent, payload: { run } });
     }
+    // Once per turn: a continuation goes finished -> updated (active) -> finished.
     if (!subagentActive(run.status) && (!old || subagentActive(old.status))) {
       // The summary and error travel once, in the result.
-      const { summary: _summary, error: _error, ...rest } = run;
+      const { summary: _summary, summaryBytes: _bytes, error: _error, ...rest } = run;
       out.push({
         ...base,
         kind: "subagent.run.finished",
@@ -202,7 +242,11 @@ export function diffSubagentRuns(
 
 export type SubagentRunsProjection = Map<string, PublicSubagentRun>;
 
-/** Fold subagent.run.* events onto a projection (a copy of initial). Other kinds are skipped. */
+/**
+ * Fold subagent.run.* events onto a projection (a copy of initial). Other kinds are
+ * skipped, and so are updates for a run whose created event is missing: the startup
+ * reconcile then sees the run absent and writes created again (with its tree edge).
+ */
 export function projectSubagentRuns(
   events: Iterable<ProjectedEvent>,
   initial: Iterable<PublicSubagentRun> = [],
@@ -217,14 +261,16 @@ export function projectSubagentRuns(
       | undefined;
     switch (event.kind) {
       case "subagent.run.created":
-      case "subagent.run.updated":
         if (payload?.run) state.set(id, payload.run);
         break;
+      case "subagent.run.updated":
+        if (payload?.run && state.has(id)) state.set(id, payload.run);
+        break;
       case "subagent.run.finished":
-        if (payload?.run && payload.result) {
+        if (payload?.run && payload.result && state.has(id)) {
           state.set(id, {
             ...payload.run,
-            ...pick(payload.result, ["summary", "error"]),
+            ...pick(payload.result, ["summary", "summaryBytes", "error"]),
           });
         }
         break;
@@ -275,7 +321,6 @@ export interface PublicLoopRunSummary {
   id: string;
   sessionId?: string;
   catalogId?: string;
-  artifactDirectoryId?: string;
   loopName: string;
   structure?: LoopRun["structure"];
   launchContext?: string;
@@ -302,7 +347,6 @@ const RUN_KEYS = [
   "id",
   "sessionId",
   "catalogId",
-  "artifactDirectoryId",
   "loopName",
   "structure",
   "launchContext",
@@ -368,7 +412,10 @@ const TIMELINE_KEYS = [
   "branchIndex",
 ] as const satisfies readonly (keyof LoopTimelineEvent)[];
 
-function toPublicIteration(iteration: LoopRunIteration): PublicLoopIteration {
+function toPublicIteration(
+  iteration: LoopRunIteration,
+  options: PublicViewOptions,
+): PublicLoopIteration {
   const validation = iteration.validationResult;
   return {
     ...pick(iteration, ["id", "index", "startedAt", "endedAt", "checkerDecision", "goalDecision"]),
@@ -385,11 +432,11 @@ function toPublicIteration(iteration: LoopRunIteration): PublicLoopIteration {
       : {}),
     timeline: (iteration.timeline ?? []).map((entry) => ({
       ...pick(entry, TIMELINE_KEYS),
-      note: utf8Suffix(entry.note, MAX_EVENT_TEXT_BYTES),
+      note: headText(entry.note, options),
     })),
     children: (iteration.children ?? []).map((child) => {
       const out = pick(child, CHILD_KEYS);
-      if (out.error !== undefined) out.error = utf8Suffix(out.error, MAX_EVENT_TEXT_BYTES);
+      if (out.error !== undefined) out.error = errorText(out.error, options);
       return out;
     }),
     artifacts: (iteration.artifacts ?? []).map((artifact) => pick(artifact, ARTIFACT_KEYS)),
@@ -400,20 +447,20 @@ function toPublicIteration(iteration: LoopRunIteration): PublicLoopIteration {
  * Whitelist projection of a LoopRun. Builds fresh objects all the way down, so it is
  * also the deep copy the engine keeps between persists (runs are edited in place).
  */
-export function toPublicLoopRun(run: LoopRun): PublicLoopRun {
+export function toPublicLoopRun(run: LoopRun, options: PublicViewOptions = {}): PublicLoopRun {
   const summary = pick(run, RUN_KEYS);
   if (summary.launchContext !== undefined) {
-    summary.launchContext = utf8Suffix(summary.launchContext, MAX_EVENT_TEXT_BYTES);
+    summary.launchContext = headText(summary.launchContext, options);
   }
   if (summary.checkpointPrompt !== undefined) {
-    summary.checkpointPrompt = utf8Suffix(summary.checkpointPrompt, MAX_EVENT_TEXT_BYTES);
+    summary.checkpointPrompt = headText(summary.checkpointPrompt, options);
   }
   const review = run.review ? pick(run.review, REVIEW_KEYS) : undefined;
-  if (review?.error !== undefined) review.error = cap(review.error, MAX_EVENT_TEXT_BYTES);
+  if (review?.error !== undefined) review.error = errorText(review.error, options);
   return {
     ...summary,
     ...(run.launch?.writeTarget ? { writeTarget: run.launch.writeTarget } : {}),
-    iterations: run.iterations.map(toPublicIteration),
+    iterations: run.iterations.map((iteration) => toPublicIteration(iteration, options)),
     ...(review ? { review } : {}),
   };
 }
@@ -435,9 +482,11 @@ export function loopRunResult(run: PublicLoopRunSummary): RunResult & { stopReas
     status: run.status,
     ...(run.stopReason ? { stopReason: run.stopReason } : {}),
     ...(durationMs !== undefined && Number.isFinite(durationMs) ? { durationMs } : {}),
-    ...(run.artifactDirectoryId ? { artifactRootId: run.artifactDirectoryId } : {}),
   };
 }
+
+const awaitingHuman = (run: PublicLoopRunSummary): boolean =>
+  run.status === "stopped" && run.stopReason === "humanInputRequired";
 
 /** Items of next whose id is new or whose content changed against prev. */
 function changedById<T extends { id: string }>(
@@ -528,14 +577,19 @@ export function diffLoopRuns(
       for (const artifact of changedById(previous?.artifacts, iteration.artifacts)) {
         out.push({
           ...base,
-          kind: "loop.artifact.added",
+          kind: "loop.artifact.upserted",
           subject: iterationRef,
           payload: { ...nested, artifact },
         });
       }
     }
-    // The run event goes last so *.finished follows its final iteration facts.
-    if (isLoopRunTerminal(run.status) && (!old || !isLoopRunTerminal(old.status))) {
+    // The run event goes last so *.finished follows its final iteration facts. A Human
+    // Approval run pauses as stopped/humanInputRequired (finished once); the decision
+    // after the pause finishes it again with the resolved stop reason.
+    if (
+      isLoopRunTerminal(run.status) &&
+      (!old || !isLoopRunTerminal(old.status) || (awaitingHuman(old) && !awaitingHuman(run)))
+    ) {
       out.push({
         ...base,
         kind: "loop.run.finished",
@@ -591,6 +645,8 @@ export function projectLoopRuns(
       case "loop.run.finished": {
         if (!payload.run) break;
         const old = state.get(payload.run.id);
+        // Like subagent runs: no started, no run (reconcile writes started again).
+        if (!old && event.kind !== "loop.run.started") break;
         state.set(payload.run.id, {
           ...payload.run,
           iterations: old?.iterations ?? [],
@@ -624,7 +680,7 @@ export function projectLoopRuns(
       }
       case "loop.timeline.appended":
       case "loop.child.upserted":
-      case "loop.artifact.added": {
+      case "loop.artifact.upserted": {
         const run = payload.runId ? state.get(payload.runId) : undefined;
         const iteration = run?.iterations.find((item) => item.id === payload.iterationId);
         if (!run || !iteration) break;

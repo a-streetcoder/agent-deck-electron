@@ -1,26 +1,33 @@
-// A1b2 startup reconcile: after the log opens and the stores load, bring the log up
-// to the stores. diff(projection(log), store as loaded) is written with
-// origin "reconcile" (first boot imports history; a crash between a store write and its
-// log write is repaired; a clean boot writes nothing), then boot recovery (interrupted
-// runs) as ordinary system events, then the stores' commit points take over.
-// Uses its own comparison over the projections, never the writer's id dedupe.
+// A1b2 startup reconcile and the diff producers' sinks. After the log opens and the
+// stores load: (1) attach every store's sink, always; (2) reconcile BOTH stores,
+// writing diff(projection(log), store as loaded) with origin "reconcile" (first boot
+// imports history, a crash between a store write and its log write is repaired, a
+// clean boot writes nothing); (3) only then write boot recovery (interrupted runs) as
+// ordinary system events. A sink that finds the log unsynced (read-only at boot and
+// promoted since, a failed reconcile, a failed append) reconciles again before it
+// continues incrementally. Uses its own comparison over projections, never the
+// writer's id dedupe (ids are checked over two segments only).
+import { homedir } from "node:os";
 import {
   diffLoopRuns,
   diffSubagentRuns,
   projectLoopRuns,
   projectSubagentRuns,
   type EventDraft,
-  type EventEnvelope,
+  type PathPrefix,
   type PublicLoopRun,
   type PublicSubagentRun,
+  type PublicViewOptions,
 } from "@agent-deck/domain";
-import { MAX_EVENT_READ_LIMIT, type EventLog } from "./eventLog.ts";
+import { MAX_EVENT_READ_LIMIT, type AppendResult, type EventLog } from "./eventLog.ts";
 
 export interface DiffProducerStore<T> {
   /** Public view as loaded, before boot recovery. */
   bootPublicRuns(): T[];
   publicRuns(): T[];
-  attachEventSink(sink: (drafts: EventDraft[]) => void): void;
+  /** The store file was corrupt at boot: its history is unknown, so never infer removals. */
+  quarantined(): boolean;
+  attachEventSink(sink: (drafts: EventDraft[]) => void, view: () => PublicViewOptions): void;
 }
 
 export interface ReconcileCounts {
@@ -30,64 +37,165 @@ export interface ReconcileCounts {
   loopRecovered: number;
 }
 
-/** Every event in the log, oldest first. */
-// ponytail: replays all history at every boot; projection snapshots when this
-// exceeds ~1 s (~50 MB), see A1d.
-export function readAllEvents(log: EventLog): EventEnvelope[] {
-  const events: EventEnvelope[] = [];
+/** Placeholders for the local roots in event text (longest prefix wins in redactPaths). */
+export function localPathPrefixes(dataDir: string, projectRoots: readonly string[]): PathPrefix[] {
+  return [
+    { prefix: dataDir, placeholder: "<data>" },
+    { prefix: homedir(), placeholder: "~" },
+    ...projectRoots.map((prefix) => ({ prefix, placeholder: "<project>" })),
+  ];
+}
+
+interface Projections {
+  subagent: PublicSubagentRun[];
+  loop: PublicLoopRun[];
+}
+
+/** Fold the whole log into both projections one page at a time. */
+// ponytail: replays all history at every boot and every resync; projection snapshots
+// when this exceeds ~1 s (~50 MB), see A1d.
+export function projectLog(log: EventLog): Projections {
+  let subagent = projectSubagentRuns([]);
+  let loop = projectLoopRuns([]);
   let afterSeq = 0;
   for (;;) {
     const page = log.read({ afterSeq, limit: MAX_EVENT_READ_LIMIT });
-    events.push(...page.events);
+    subagent = projectSubagentRuns(page.events, subagent.values());
+    loop = projectLoopRuns(page.events, loop.values());
     if (!page.more || page.nextAfterSeq === undefined || page.nextAfterSeq <= afterSeq) break;
     afterSeq = page.nextAfterSeq;
   }
-  return events;
+  return { subagent: [...subagent.values()], loop: [...loop.values()] };
 }
 
-function reconcileOne<T>(
+/** A failure that means the log missed events, so the next commit must reconcile. */
+const lost = (result: AppendResult): boolean =>
+  !result.ok &&
+  (result.reason === "io" || result.reason === "readonly" || result.reason === "closed");
+
+interface Producer {
+  /** Reconcile drafts: diff(logged, boot) with origin reconcile. */
+  reconcileBoot(logged: Projections): number;
+  /** Boot recovery: diff(boot, current) as ordinary events. Marks the producer synced. */
+  recoverBoot(): number;
+}
+
+function producer<T>(
   log: EventLog,
+  name: string,
   store: DiffProducerStore<T>,
-  logged: T[],
+  logged: (projections: Projections) => T[],
   diff: (prev: readonly T[], next: readonly T[]) => EventDraft[],
-): { reconciled: number; recovered: number } {
-  const append = (drafts: EventDraft[]): number =>
-    drafts.filter((draft) => log.append(draft).ok).length;
-  const boot = store.bootPublicRuns();
-  const reconciled = append(
-    diff(logged, boot).map((draft) => ({ ...draft, origin: "reconcile" as const })),
-  );
-  const recovered = append(diff(boot, store.publicRuns()));
-  store.attachEventSink((drafts) => void append(drafts));
-  return { reconciled, recovered };
+  view: () => PublicViewOptions,
+  warn: (message: string, error?: unknown) => void,
+): Producer {
+  let synced = false;
+  let warnedReadonly = false;
+  const append = (drafts: EventDraft[]): number => {
+    let written = 0;
+    for (const draft of drafts) {
+      const result = log.append(draft);
+      if (result.ok) written += 1;
+      else if (lost(result)) synced = false;
+    }
+    return written;
+  };
+  const asReconcile = (drafts: EventDraft[]): EventDraft[] =>
+    drafts
+      // A quarantined store starts empty: its absent runs were not removed.
+      .filter((draft) => !(store.quarantined() && draft.kind.endsWith(".removed")))
+      .map((draft) => ({ ...draft, origin: "reconcile" as const }));
+  const resync = (): void => {
+    synced = true;
+    const count = append(asReconcile(diff(logged(projectLog(log)), store.publicRuns())));
+    if (count > 0) console.info(`[events] ${name} reconciled ${count} events after a gap`);
+  };
+
+  store.attachEventSink((drafts) => {
+    if (!log.writable) {
+      synced = false;
+      if (!warnedReadonly) {
+        warnedReadonly = true;
+        warn(`[events] log is read-only; ${name} events wait for a reconcile`);
+      }
+      return;
+    }
+    warnedReadonly = false;
+    if (!synced) {
+      try {
+        resync();
+      } catch (error) {
+        synced = false;
+        warn(`[events] ${name} reconcile failed`, error);
+      }
+      return;
+    }
+    append(drafts);
+  }, view);
+
+  return {
+    reconcileBoot: (projections) =>
+      append(asReconcile(diff(logged(projections), store.bootPublicRuns()))),
+    recoverBoot: () => {
+      synced = true; // before the appends, so a lost one marks the gap
+      return append(diff(store.bootPublicRuns(), store.publicRuns()));
+    },
+  };
 }
 
-export function reconcileEventLog(
+export function startEventProducers(
   log: EventLog,
   stores: {
     subagentRuns: DiffProducerStore<PublicSubagentRun>;
-    loopRuns: DiffProducerStore<PublicLoopRun>;
+    loopRuns: DiffProducerStore<PublicLoopRun> & { releaseBootRuns?(): void };
+  },
+  options: {
+    view: () => PublicViewOptions;
+    warn: (message: string, error?: unknown) => void;
+    /** Rethrow a failed boot reconcile (tests). */
+    strict?: boolean;
   },
 ): ReconcileCounts | undefined {
-  // A read-only process does not own the log; the writer process reconciles it.
-  if (!log.writable) return undefined;
-  const events = readAllEvents(log);
-  const subagent = reconcileOne(
+  const { view, warn } = options;
+  // Sinks first, always: a read-only or failed boot reconciles at the next commit.
+  const subagent = producer(
     log,
+    "subagent runs",
     stores.subagentRuns,
-    [...projectSubagentRuns(events).values()],
+    (projections) => projections.subagent,
     diffSubagentRuns,
+    view,
+    warn,
   );
-  const loop = reconcileOne(
+  const loop = producer(
     log,
+    "loop runs",
     stores.loopRuns,
-    [...projectLoopRuns(events).values()],
+    (projections) => projections.loop,
     diffLoopRuns,
+    view,
+    warn,
   );
-  return {
-    subagentReconciled: subagent.reconciled,
-    subagentRecovered: subagent.recovered,
-    loopReconciled: loop.reconciled,
-    loopRecovered: loop.recovered,
-  };
+  try {
+    if (!log.writable) {
+      warn("[events] log is read-only at boot; the writer process reconciles it");
+      return undefined;
+    }
+    const projections = projectLog(log);
+    // Two phases across the stores: every reconcile event precedes every recovery event.
+    const subagentReconciled = subagent.reconcileBoot(projections);
+    const loopReconciled = loop.reconcileBoot(projections);
+    return {
+      subagentReconciled,
+      loopReconciled,
+      subagentRecovered: subagent.recoverBoot(),
+      loopRecovered: loop.recoverBoot(),
+    };
+  } catch (error) {
+    if (options.strict) throw error;
+    warn("[events] startup reconcile failed; the next commit retries", error);
+    return undefined;
+  } finally {
+    stores.loopRuns.releaseBootRuns?.();
+  }
 }

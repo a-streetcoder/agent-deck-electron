@@ -40,6 +40,7 @@ import {
   type LoopStopReason,
   type LoopWorktreeReview,
   type PublicLoopRun,
+  type PublicViewOptions,
 } from "@agent-deck/domain";
 import { z } from "zod";
 
@@ -623,9 +624,11 @@ export class LoopEngine {
   private readonly artifactsRoot?: string;
   private readonly artifactSetupError?: Error;
   private readonly warn: (message: string, error?: unknown) => void;
-  /** A1 event log: the public view as loaded, before boot recovery (startup reconcile). */
-  private bootPublic: PublicLoopRun[] = [];
+  /** A1 event log: runs as loaded, before boot recovery (copies; released at attach). */
+  private bootRuns: LoopRun[] = [];
+  private storeQuarantined = false;
   private eventSink?: (drafts: EventDraft[]) => void;
+  private publicView: () => PublicViewOptions = () => ({});
   /** Deep copies: runs are edited in place, so the previous view cannot be the live objects. */
   private lastPublic: PublicLoopRun[] = [];
 
@@ -675,7 +678,7 @@ export class LoopEngine {
       const parsed = persistedRunsSchema.parse(JSON.parse(readFileSync(this.storePath, "utf8")));
       for (const persisted of parsed) {
         const run = persisted as unknown as LoopRun;
-        this.bootPublic.push(toPublicLoopRun(run));
+        this.bootRuns.push(structuredClone(run));
         if (run.artifactDirectory || run.artifactDirectoryId) {
           if (!this.artifactsRoot || !run.artifactDirectoryId || !run.artifactDirectory) {
             throw new Error("incomplete Loop artifact ownership metadata");
@@ -769,23 +772,41 @@ export class LoopEngine {
         this.warn("Loop run store is invalid and could not be quarantined", quarantineError);
       }
       this.runs.clear();
-      this.bootPublic = [];
+      this.bootRuns = [];
+      this.storeQuarantined = true;
     }
   }
 
+  /** The public view as loaded, before boot recovery (startup reconcile). */
   bootPublicRuns(): PublicLoopRun[] {
-    return this.bootPublic;
+    const options = this.publicView();
+    return this.bootRuns.map((run) => toPublicLoopRun(run, options));
   }
 
-  /** Every run as the event log may see it (fresh deep copies). */
+  /** Every run as the event log may see it (fresh deep copies, local paths redacted). */
   publicRuns(): PublicLoopRun[] {
-    return [...this.runs.values()].map(toPublicLoopRun);
+    const options = this.publicView();
+    return [...this.runs.values()].map((run) => toPublicLoopRun(run, options));
+  }
+
+  /** True when loop-runs.json was invalid at boot and renamed aside (history unknown). */
+  quarantined(): boolean {
+    return this.storeQuarantined;
   }
 
   /** From now on every persist hands the diff of the public view to sink. */
-  attachEventSink(sink: (drafts: EventDraft[]) => void): void {
+  attachEventSink(
+    sink: (drafts: EventDraft[]) => void,
+    publicView: () => PublicViewOptions = () => ({}),
+  ): void {
+    this.publicView = publicView;
     this.lastPublic = this.publicRuns();
     this.eventSink = sink;
+  }
+
+  /** The boot copies are needed only until the startup reconcile has run. */
+  releaseBootRuns(): void {
+    this.bootRuns = [];
   }
 
   private emitEvents(): void {

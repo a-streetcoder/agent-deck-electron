@@ -174,3 +174,46 @@ export function serializeEvent(event: EventEnvelope): string {
   if (originalBytes <= MAX_EVENT_BYTES) return text;
   return JSON.stringify({ ...event, payload: { truncated: true, originalBytes } });
 }
+
+/** A known local root and the placeholder that replaces it in event text. */
+export interface PathPrefix {
+  prefix: string;
+  placeholder: string;
+}
+
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Whatever absolute path survives the known prefixes: drive-letter and UNC paths, and
+// POSIX paths under the usual roots (a bare "/x" stays: it is too often not a path).
+const WINDOWS_PATH = /(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s"'`<>|]*/g;
+const UNC_PATH = /\\\\[^\s\\"'`<>|]+\\[^\s"'`<>|]*/g;
+const POSIX_PATH =
+  /(?<![\w.~>/-])\/(?:home|Users|tmp|var|private|root|opt|mnt|srv|etc|usr|Volumes|workspace|data)(?:\/[^\s"'`<>|]*)?/g;
+// A known prefix matches only up to a separator or the end of the path.
+const PREFIX_END = String.raw`(?![^\\/\s"'` + "`" + String.raw`<>|])`;
+
+/**
+ * Replace local filesystem paths in free text (errors, notes, summaries) before it
+ * reaches the log: each known prefix (longest first; both slash styles, and case-
+ * insensitively for Windows roots) by its placeholder, then any remaining absolute
+ * path by "<path>". Pure: the server injects the data dir, home and project roots.
+ */
+export function redactPaths(text: string, prefixes: readonly PathPrefix[] = []): string {
+  let out = text;
+  const sorted = prefixes
+    .filter(({ prefix }) => prefix.replace(/[\\/]+$/, "").length > 2)
+    .sort((a, b) => b.prefix.length - a.prefix.length);
+  for (const { prefix, placeholder } of sorted) {
+    const trimmed = prefix.replace(/[\\/]+$/, "");
+    const windows = /^[A-Za-z]:|^\\\\/.test(trimmed);
+    const pattern = trimmed
+      .split(/[\\/]+/)
+      .map(escapeRegExp)
+      .join(String.raw`[\\/]+`);
+    out = out.replace(new RegExp(pattern + PREFIX_END, windows ? "gi" : "g"), () => placeholder);
+  }
+  return out.replace(WINDOWS_PATH, generic).replace(UNC_PATH, generic).replace(POSIX_PATH, generic);
+}
+
+/** "<path>", keeping the sentence punctuation a path match swallowed at its end. */
+const generic = (match: string): string => `<path>${/[).,;:]*$/.exec(match)?.[0] ?? ""}`;

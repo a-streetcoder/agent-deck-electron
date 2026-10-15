@@ -130,7 +130,7 @@ import {
 import { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import { SubagentRunStore } from "./subagentRunStore.ts";
 import { createEventLog, disabledEventLog, type EventLog } from "./eventLog.ts";
-import { reconcileEventLog } from "./eventReconcile.ts";
+import { localPathPrefixes, startEventProducers } from "./eventReconcile.ts";
 import { resolveTrustedDataDir } from "./trustedDataDir.ts";
 import { SupervisorLog } from "./supervisor.ts";
 import { createTerminalGateway } from "./terminalGateway.ts";
@@ -783,18 +783,26 @@ async function initServer(
     dataDir,
     warn: (message, error) => fastify.log.warn({ err: error }, message),
   });
-  // A1b2: both diff-producing stores have loaded. Import or repair the log against
-  // them, record boot recovery, then their commit points emit (eventReconcile.ts).
-  try {
-    const counts = reconcileEventLog(eventLog, { subagentRuns, loopRuns: loopEngine });
-    if (counts) console.info("[events] startup reconcile", counts);
-  } catch (error) {
-    if (process.env.AGENT_DECK_TEST === "1") throw error;
-    console.warn("[events] startup reconcile failed", error);
-  }
   // Interactive provider OAuth login relay (native PiProviderLoginService).
   const providerLogin = new ProviderLoginManager(options.providerLoginFn);
   const projects = new ProjectIndex(dataDir);
+  // A1b2: both diff-producing stores have loaded. Attach their sinks, import or repair
+  // the log against them, then record boot recovery (eventReconcile.ts).
+  const eventCounts = startEventProducers(
+    eventLog,
+    { subagentRuns, loopRuns: loopEngine },
+    {
+      view: () => ({
+        pathPrefixes: localPathPrefixes(
+          dataDir,
+          projects.list().map((project) => project.path),
+        ),
+      }),
+      warn: (message, error) => console.warn(message, error ?? ""),
+      strict: process.env.AGENT_DECK_TEST === "1",
+    },
+  );
+  if (eventCounts) console.info("[events] startup reconcile", eventCounts);
   const mcpAssignments =
     options.mcpAssignmentStore ?? new FileMcpAssignmentStore(settings, projects);
   // App-owned command files are materialized under trusted app data at startup.

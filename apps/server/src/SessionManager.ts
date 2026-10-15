@@ -1667,7 +1667,7 @@ export class SessionManager {
         source,
         ...(worktree ? { worktree: true } : {}),
         ...(signal ? { signal } : {}),
-        ...(parentToolCallId ? { parentToolCallId } : {}),
+        ...(parentToolCallId ? { toolCallId: parentToolCallId } : {}),
       })
     ).text;
   }
@@ -1693,7 +1693,7 @@ export class SessionManager {
         source: "single",
         declaredReads: [...(declaredReads ?? [])],
         ...(signal ? { signal } : {}),
-        ...(parentToolCallId ? { parentToolCallId } : {}),
+        ...(parentToolCallId ? { toolCallId: parentToolCallId } : {}),
       });
     }
 
@@ -1746,6 +1746,7 @@ export class SessionManager {
         source: "single",
         declaredReads: [...(declaredReads ?? [])],
         ...(signal ? { signal } : {}),
+        ...(parentToolCallId ? { toolCallId: parentToolCallId } : {}),
         runId: continueSubagentId,
         resumeSessionPath: run.sessionFile,
         artifactRootId: run.artifactRootId,
