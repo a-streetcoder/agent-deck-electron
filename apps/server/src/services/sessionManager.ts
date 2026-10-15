@@ -626,6 +626,9 @@ const SUBAGENT_TIMEOUT_MS = 120_000;
 const CHILD_FORBIDDEN_TOOLS = new Set([
   "managed_subagent",
   "managed_parallel",
+  "spawn_subagent",
+  "await_subagents",
+  "cancel_subagent",
   "list_supervisor_requests",
   "answer_supervisor_request",
   "set_session_plan",
@@ -2058,8 +2061,10 @@ export interface ChildRunOptions {
   source: SubagentRunSource;
   /** The bridge tool call of this turn: parent (tree edge) of a fresh run, turn call of every run. */
   toolCallId?: string;
-  /** Fresh parallel children only; continuation and single-child callers omit it. */
+  /** Fresh children only (managed_parallel, spawn_subagent); continuations omit it. */
   worktree?: boolean;
+  /** A4: called once the durable run record is committed (spawn_subagent returns here). */
+  onAccepted?: (runId: string) => void;
 }
 
 export interface ChildRunResult {
@@ -2403,6 +2408,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
                 transcriptRegistered = true;
               });
               yield* persistChildRun(() => durable.registerTranscript?.(runId));
+              yield* Effect.sync(() => runOptions?.onAccepted?.(runId));
             }),
           );
         }

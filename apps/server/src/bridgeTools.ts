@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { SessionPlanItem } from "@agent-deck/domain";
+import {
+  subagentRunResult,
+  type PublicSubagentRun,
+  type RunResult,
+  type SessionPlanItem,
+} from "@agent-deck/domain";
 import { z } from "zod";
 import type { BridgeRegistry } from "./bridge.ts";
 import {
@@ -9,17 +14,99 @@ import {
   MAX_MANAGED_SUBAGENT_TASK_BYTES,
   normalizeDeclaredReads,
 } from "./declaredReads.ts";
+import type { EventLog } from "./eventLog.ts";
 import type { BridgeRouteHandles } from "./routes/bridge.ts";
 import type { SessionManager } from "./SessionManager.ts";
 import { ChildRunError } from "./services/sessionManager.ts";
 import { supervisorRequestTitle, type SupervisorLog } from "./supervisor.ts";
+
+/** A4: what await_subagents reports per run, built from the public run record. */
+export interface StructuredSubagentResult extends RunResult {
+  id: string;
+  /** No subagent artifact is public yet: always empty until runs record one. */
+  artifacts: string[];
+  /** The child's last checkpoint ref; omitted while runs record none. */
+  checkpointRef?: string;
+}
+
+export const DEFAULT_AWAIT_TIMEOUT_MS = 120_000;
+/** Below undici's 300 s headers timeout on the bridge extension's fetch. */
+export const MAX_AWAIT_TIMEOUT_MS = 240_000;
+
+export interface AwaitSubagentDeps {
+  subscribe: EventLog["subscribe"];
+  /** The parent's own public record of a run; undefined for unknown or foreign ids. */
+  read: (runId: string) => PublicSubagentRun | undefined;
+  /** Settles when a run this process launched ends: the wake-up when the log is read-only. */
+  settled?: (runId: string) => Promise<unknown> | undefined;
+}
+
+const runActive = (run: PublicSubagentRun | undefined): boolean =>
+  run?.status === "starting" || run?.status === "running";
+
+function structuredResult(
+  id: string,
+  run: PublicSubagentRun | undefined,
+): StructuredSubagentResult {
+  return run
+    ? { id, ...subagentRunResult(run), artifacts: [] }
+    : { id, status: "not_found", artifacts: [] };
+}
+
+/**
+ * Wait until every run is terminal, or until the timeout (partial results with their
+ * current statuses). Subscribes to the event log BEFORE reading the store: a finish
+ * committed in between is seen by the read, one after it by the subscriber.
+ */
+export function awaitSubagentRuns(
+  runIds: readonly string[],
+  deps: AwaitSubagentDeps,
+  options: { timeoutMs: number; signal?: AbortSignal },
+): Promise<{ results: StructuredSubagentResult[]; timedOut: boolean }> {
+  const wanted = new Set(runIds);
+  return new Promise((resolve) => {
+    let finished = false;
+    let timer: ReturnType<typeof setTimeout> | undefined = undefined;
+    function finish(timedOut: boolean): void {
+      if (finished) return;
+      finished = true;
+      unsubscribe();
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onAbort);
+      resolve({ results: runIds.map((id) => structuredResult(id, deps.read(id))), timedOut });
+    }
+    function onAbort(): void {
+      finish(true);
+    }
+    const check = (): void => {
+      if (!finished && runIds.every((id) => !runActive(deps.read(id)))) finish(false);
+    };
+    const unsubscribe = deps.subscribe((event) => {
+      if (
+        (event.kind === "subagent.run.finished" || event.kind === "subagent.run.removed") &&
+        wanted.has(event.subject.id)
+      ) {
+        check();
+      }
+    });
+    check();
+    if (finished) return;
+    timer = setTimeout(() => finish(true), options.timeoutMs);
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    for (const id of wanted) deps.settled?.(id)?.then(check, check);
+  });
+}
 
 /**
  * The parent Deck-agent bridge tools — subagent launch and the session activity
  * plan — registered on the app bridge at startup. Moved
  * verbatim from server.ts (Slice 2 decomposition).
  */
-export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: SessionManager): void {
+export function registerDeckBridgeTools(
+  bridge: BridgeRegistry,
+  sessions: SessionManager,
+  events: Pick<EventLog, "subscribe"> = { subscribe: () => () => {} },
+): void {
   // Native subagents (native-subagent-bridge.md): a parent session can launch a
   // focused child pi to complete one task and report back. v1 is text-returning
   // (managed_subagent); parallel / supervisor / plan tools + the deck UI follow.
@@ -113,6 +200,191 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
         const idLine = errorRunId ? `\nDeck subagent ID: ${errorRunId}` : "";
         return { content: `Subagent failed.${idLine}\n\n${String(error)}`, isError: true };
       }
+    },
+  );
+
+  // A4: spawn / await / cancel. spawn_subagent returns once the child's run record
+  // is committed, so the parent's turn continues while the child works; the child
+  // keeps its own Pi process, worktree and policy exactly as managed_subagent's.
+  const spawnParams = z
+    .object({
+      task: subagentParams.shape.task,
+      agentName: z.string().trim().min(1).optional(),
+      continueSubagentID: z.string().uuid().optional(),
+      reads: z.array(z.string()).max(MAX_DECLARED_READS).optional(),
+      worktree: z.boolean().optional(),
+    })
+    .strict()
+    .refine((value) => !(value.worktree && value.continueSubagentID), {
+      message: "worktree cannot be combined with continueSubagentID",
+    });
+  bridge.register(
+    {
+      name: "spawn_subagent",
+      label: "Spawn subagent",
+      description:
+        "Start a Deck subagent on a self-contained task WITHOUT waiting for it, and get its stable Deck run ID back at once. Keep working, then collect the result with await_subagents, or stop it with cancel_subagent. Use it to run independent work alongside your own, or to start several children and await them together. Optional `agentName` delegates to an installed agent; `continueSubagentID` follows up on a finished single child; `reads` lists project-relative files for the child to read first; `worktree: true` runs a fresh child in its own app-owned detached Git worktree. At most 8 spawned children run at once per session, and stopping your turn cancels the ones still running.",
+      parameters: {
+        type: "object",
+        properties: {
+          task: {
+            type: "string",
+            description:
+              "A complete, self-contained description of the task for the subagent (maximum 50,000 UTF-8 bytes).",
+          },
+          agentName: {
+            type: "string",
+            description:
+              "Optional: the name of an installed agent to delegate to; the subagent adopts its persona.",
+          },
+          continueSubagentID: {
+            type: "string",
+            description:
+              "Optional stable Deck run ID of a finished single child to follow up on; omit to start fresh.",
+          },
+          reads: {
+            type: "array",
+            items: { type: "string" },
+            maxItems: MAX_DECLARED_READS,
+            description:
+              "Optional current project-relative file paths the child should read first as hints. File contents are not preloaded.",
+          },
+          worktree: {
+            type: "boolean",
+            description:
+              "Optional. When true, the fresh child runs in its own retained app-owned detached Git worktree. Not allowed with continueSubagentID.",
+          },
+        },
+        required: ["task"],
+        additionalProperties: false,
+      },
+      promptSnippet:
+        "spawn_subagent(task, agentName?, continueSubagentID?, reads?, worktree?) — start a child without waiting; returns {runId} for await_subagents / cancel_subagent.",
+    },
+    async (params, ctx) => {
+      const parsed = spawnParams.safeParse(params);
+      if (!parsed.success) {
+        return {
+          content: `Invalid spawn_subagent arguments: ${parsed.error.message}`,
+          isError: true,
+        };
+      }
+      let reads: string[] | undefined;
+      try {
+        reads = normalizeDeclaredReads(parsed.data.reads);
+      } catch (error) {
+        return {
+          content: `Invalid spawn_subagent arguments: ${error instanceof Error ? error.message : "invalid reads"}`,
+          isError: true,
+        };
+      }
+      try {
+        const { runId } = await sessions.spawnSubagent(ctx.sessionId, parsed.data.task, {
+          agentName: parsed.data.agentName,
+          continueSubagentId: parsed.data.continueSubagentID,
+          declaredReads: reads,
+          worktree: parsed.data.worktree,
+          signal: ctx.signal,
+          parentToolCallId: ctx.toolCallId,
+          detached: true,
+        });
+        return { content: JSON.stringify({ runId }) };
+      } catch (error) {
+        const errorRunId = error instanceof ChildRunError ? error.runId : undefined;
+        const idLine = errorRunId ? `\nDeck subagent ID: ${errorRunId}` : "";
+        return { content: `Subagent spawn failed.${idLine}\n\n${String(error)}`, isError: true };
+      }
+    },
+  );
+
+  const awaitParams = z
+    .object({
+      runIds: z.array(z.string().trim().min(1)).min(1).max(32),
+      timeoutMs: z.number().int().min(0).max(MAX_AWAIT_TIMEOUT_MS).optional(),
+    })
+    .strict();
+  bridge.register(
+    {
+      name: "await_subagents",
+      label: "Await subagents",
+      description: `Wait for Deck subagents started with spawn_subagent and get their structured results: per run its id, status (completed, failed, stopped or interrupted; still starting or running after a timeout; not_found for an unknown id), summary (the head of its answer; summaryBytes is the full size), error, tokens, durationMs, model and artifacts. Returns when every run has finished, or after timeoutMs (default ${DEFAULT_AWAIT_TIMEOUT_MS}, maximum ${MAX_AWAIT_TIMEOUT_MS}) with timedOut: true and the partial results; await again to keep waiting.`,
+      parameters: {
+        type: "object",
+        properties: {
+          runIds: {
+            type: "array",
+            items: { type: "string" },
+            minItems: 1,
+            maxItems: 32,
+            description: "Deck run IDs returned by spawn_subagent.",
+          },
+          timeoutMs: {
+            type: "integer",
+            minimum: 0,
+            maximum: MAX_AWAIT_TIMEOUT_MS,
+            description: `Optional wait limit in milliseconds (default ${DEFAULT_AWAIT_TIMEOUT_MS}).`,
+          },
+        },
+        required: ["runIds"],
+        additionalProperties: false,
+      },
+      promptSnippet:
+        "await_subagents(runIds, timeoutMs?) — wait for spawned subagents; returns {results, timedOut}.",
+    },
+    async (params, ctx) => {
+      const parsed = awaitParams.safeParse(params);
+      if (!parsed.success) {
+        return {
+          content: `Invalid await_subagents arguments: ${parsed.error.message}`,
+          isError: true,
+        };
+      }
+      const outcome = await awaitSubagentRuns(
+        [...new Set(parsed.data.runIds)],
+        {
+          subscribe: (subscriber) => events.subscribe(subscriber),
+          read: (runId) => sessions.subagentRunView(ctx.sessionId, runId),
+          settled: (runId) => sessions.subagentRunSettled(ctx.sessionId, runId),
+        },
+        { timeoutMs: parsed.data.timeoutMs ?? DEFAULT_AWAIT_TIMEOUT_MS, signal: ctx.signal },
+      );
+      return { content: JSON.stringify(outcome) };
+    },
+  );
+
+  const cancelParams = z.object({ runId: z.string().trim().min(1) }).strict();
+  bridge.register(
+    {
+      name: "cancel_subagent",
+      label: "Cancel subagent",
+      description:
+        "Stop one running Deck subagent of this session (started with spawn_subagent, or still running from managed_subagent) and wait until it has stopped. Returns its status: stopped when it was cancelled, or its final status when it had already finished.",
+      parameters: {
+        type: "object",
+        properties: {
+          runId: { type: "string", description: "The Deck run ID to cancel." },
+        },
+        required: ["runId"],
+        additionalProperties: false,
+      },
+      promptSnippet: "cancel_subagent(runId) — stop a running subagent; returns {status}.",
+    },
+    async (params, ctx) => {
+      const parsed = cancelParams.safeParse(params);
+      if (!parsed.success) {
+        return {
+          content: `Invalid cancel_subagent arguments: ${parsed.error.message}`,
+          isError: true,
+        };
+      }
+      const status = await sessions.cancelSubagent(ctx.sessionId, parsed.data.runId);
+      if (!status) {
+        return {
+          content: `No Deck subagent \`${parsed.data.runId}\` in this session.`,
+          isError: true,
+        };
+      }
+      return { content: JSON.stringify({ status }) };
     },
   );
 

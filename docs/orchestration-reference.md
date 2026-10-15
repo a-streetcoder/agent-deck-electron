@@ -24,6 +24,28 @@ queued parallel tasks from allocating; unrelated children and the parent session
 remain alive. Cancellation waits for owned acquisition/process cleanup and retains
 durable run/worktree identity; it is not session destruction or worktree deletion.
 
+### Spawn, await and cancel
+
+`spawn_subagent` returns `{runId}` once the child's run record is committed; the
+parent's turn continues while the child runs in the parent session scope with its own
+Pi process, worktree (`worktree: true`, fresh children only) and policy, exactly as a
+`managed_subagent` child. `await_subagents({runIds, timeoutMs?})` subscribes to the
+event log first and then reads the store, so a `subagent.run.finished` landing in
+between is not missed; an in-process settle also wakes it when the log is read-only.
+It returns `{results, timedOut}`, one structured result per id (`id`, `status`, the
+4,000-character `summary` head with `summaryBytes`, `error`, `tokens`, `durationMs`,
+`model`, `artifacts` (empty until runs record any), `checkpointRef` omitted while runs
+record none); on timeout (default 120 s, maximum 240 s, under the bridge fetch's 300 s
+headers timeout) unfinished runs report their current status. `cancel_subagent` aborts
+the child's delegation signal, waits for its scope finalizer, and returns the run's
+status (`stopped`, or the final status of a finished run). `managed_subagent` is spawn
+plus an in-process await of the same child, so its tool result is unchanged.
+
+Orphans: a parent abort (composer Stop) cancels every child of that parent still
+running, awaited or not; a child spawned in an earlier turn keeps running until it
+finishes, is cancelled, or the parent stops. At most 8 spawned children (the
+`managed_parallel` maximum) run per parent at once; spawn refuses the ninth.
+
 ### Managed child provider settlement
 
 Managed children consume the pinned Pi 1.2.0 stream through `agent_settled`,

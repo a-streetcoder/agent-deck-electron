@@ -68,6 +68,9 @@ describe("SessionManager managed_subagent continuation eligibility", () => {
         declaredReads: [],
         runId: run.id,
         resumeSessionPath: sessionFile,
+        // A4: managed_subagent is spawn + await; the spawn owns the child's signal.
+        signal: expect.any(AbortSignal),
+        onAccepted: expect.any(Function),
       },
     );
   });

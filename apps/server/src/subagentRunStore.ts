@@ -345,6 +345,12 @@ export class SubagentRunStore {
     return this.state.runs.map((run) => toPublicSubagentRun(run, options));
   }
 
+  /** One run as publicRuns() shows it (A4 structured results). */
+  publicRun(id: string): PublicSubagentRun | undefined {
+    const run = this.state.runs.find((candidate) => candidate.id === id);
+    return run ? toPublicSubagentRun(run, this.publicView()) : undefined;
+  }
+
   /** True when the store file was corrupt at boot and renamed aside (history unknown). */
   quarantined(): boolean {
     return this.storeQuarantined;
