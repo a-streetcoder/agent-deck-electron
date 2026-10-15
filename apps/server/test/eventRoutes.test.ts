@@ -85,6 +85,30 @@ describe("GET /events", () => {
   });
 });
 
+describe("GET /events against a log that moves under the read", () => {
+  it("caps a tail read at the lastSeq it reports", async () => {
+    // A read-only backend: another process appends between lastSeq() and read().
+    let head = 5;
+    const stored = (): EventEnvelope[] =>
+      Array.from({ length: head }, (_, i) => ({ seq: i + 1 }) as EventEnvelope);
+    const log = {
+      logId: "log-a",
+      lastSeq: () => head,
+      read: (query: { beforeSeq?: number }) => {
+        const events = stored().filter((event) => event.seq < (query.beforeSeq ?? Infinity));
+        head += 1; // appended right after the read
+        return { events, more: false };
+      },
+    } as unknown as EventLog;
+    const fastify = Fastify();
+    registerEventRoutes(fastify, log);
+    cleanups.push(() => fastify.close());
+    const body = (await fastify.inject({ method: "GET", url: "/events" })).json();
+    expect(body.lastSeq).toBe(5);
+    expect(seqs(body)).toEqual([1, 2, 3, 4, 5]);
+  });
+});
+
 describe("project_events nudges", () => {
   it("coalesces a burst into one nudge per project carrying the newest seq", () => {
     vi.useFakeTimers();

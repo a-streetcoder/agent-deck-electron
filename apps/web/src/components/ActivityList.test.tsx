@@ -14,12 +14,13 @@ vi.mock("../state/wsBridge.ts", () => ({
   refreshProjectLog: () => refreshProjectLog(),
 }));
 
+const OLD_TS = "2020-01-02T03:04:00.000Z";
 const session: SessionMeta = { id: "s1", cwd: "/tmp", createdAt: "now", title: "Fix the build" };
 const event = (seq: number, overrides: Partial<EventEnvelope>): EventEnvelope => ({
   v: 1,
   id: `id-${seq}`,
   seq,
-  ts: "2026-10-15T12:00:00.000Z",
+  ts: new Date().toISOString(),
   logId: "log-a",
   kind: "turn.prompted",
   projectId: "p1",
@@ -37,7 +38,7 @@ beforeEach(() => {
     projectLog: {
       projectId: "p1",
       logId: "log-a",
-      lastSeq: 3,
+      lastSeq: 4,
       events: [
         event(1, {
           sessionId: "s1",
@@ -47,6 +48,12 @@ beforeEach(() => {
           kind: "loop.run.started",
           subject: { type: "loopRun", id: "run-12345678" },
           actor: { type: "agent", sessionId: "s1", agentName: "builder" },
+        }),
+        event(4, {
+          ts: OLD_TS,
+          kind: "subagent.run.finished",
+          sessionId: "s1",
+          subject: { type: "subagentRun", id: "sub-1" },
         }),
       ],
     },
@@ -61,20 +68,27 @@ afterEach(() => {
 it("renders the open project's events newest first and fetches on mount", () => {
   render(<ActivityList />);
   expect(refreshProjectLog).toHaveBeenCalled();
-  expect(screen.getByText("Activity (2)")).toBeTruthy();
+  expect(screen.getByText("Activity (3)")).toBeTruthy();
   const rows = screen.getAllByRole("listitem").map((row) => row.textContent);
-  expect(rows[0]).toContain("builder");
-  expect(rows[0]).toContain("loop.run.started");
-  expect(rows[1]).toContain("Ale");
-  expect(rows[1]).toContain("turn.prompted");
+  expect(rows[0]).toContain("subagent.run.finished");
+  // Not today: the date is shown.
+  expect(rows[0]).toContain(
+    new Date(OLD_TS).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" }),
+  );
+  expect(rows[1]).toContain("builder");
+  expect(rows[1]).toContain("loop.run.started");
+  expect(rows[2]).toContain("Ale");
+  expect(rows[2]).toContain("turn.prompted");
 });
 
-it("activates the session from a turn row and opens Loops from a loop row", () => {
+it("links turn and subagent rows to their session, loop rows to the Loops view", () => {
   render(<ActivityList />);
-  fireEvent.click(screen.getByRole("button", { name: "Fix the build" }));
+  const sessionLinks = screen.getAllByRole("button", { name: "Fix the build" });
+  expect(sessionLinks).toHaveLength(2);
+  fireEvent.click(sessionLinks[0]!);
   expect(switchToSession).toHaveBeenCalledWith(session);
   expect(useAppStore.getState().view).toBe("chat");
-  fireEvent.click(screen.getByRole("button", { name: "loopRun run-1234" }));
+  fireEvent.click(screen.getByRole("button", { name: "loopRun run-1234 (opens Loops)" }));
   expect(useAppStore.getState().view).toBe("loops");
 });
 

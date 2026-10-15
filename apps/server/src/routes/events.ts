@@ -33,8 +33,16 @@ export function registerEventRoutes(fastify: FastifyInstance, log: EventLog): vo
     const parsed = eventsQuery.safeParse(request.query);
     if (!parsed.success) return reply.status(400).send({ error: "Invalid event query." });
     const { projectId, afterSeq, beforeSeq, limit } = parsed.data;
-    const page = log.read({ afterSeq, beforeSeq, projectId, limit });
-    return { logId: log.logId, lastSeq: log.lastSeq(), ...page };
+    // lastSeq first: a tail read is capped at it, so the client's cursor never skips
+    // an event a read-only process saw appended between the two calls.
+    const lastSeq = log.lastSeq();
+    const page = log.read({
+      afterSeq,
+      beforeSeq: afterSeq === undefined ? Math.min(beforeSeq ?? Infinity, lastSeq + 1) : beforeSeq,
+      projectId,
+      limit,
+    });
+    return { logId: log.logId, lastSeq, ...page };
   });
 }
 

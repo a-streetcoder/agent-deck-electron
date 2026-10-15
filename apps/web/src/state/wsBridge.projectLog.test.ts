@@ -23,6 +23,8 @@ afterEach(() => {
   useAppStore.setState({ currentProjectId: null, projectLog: null });
 });
 const urls = (): string[] => vi.mocked(fetch).mock.calls.map(([url]) => String(url));
+const shownSeqs = (): number[] =>
+  (useAppStore.getState().projectLog?.events ?? []).map((event) => event.seq);
 
 it("reads the tail first, then forward from the cursor", async () => {
   vi.mocked(fetch).mockResolvedValueOnce(Response.json(body("log-a", [3, 4])));
@@ -48,9 +50,60 @@ it("falls back to the tail when the server log was replaced", async () => {
   expect(useAppStore.getState().projectLog).toMatchObject({ logId: "log-b", lastSeq: 2 });
 });
 
-it("asks for project-less events when no project is open", async () => {
+it("shows every project when no project is open", async () => {
   useAppStore.setState({ currentProjectId: null });
   vi.mocked(fetch).mockResolvedValueOnce(Response.json(body("log-a", [])));
   await refreshProjectLog();
-  expect(urls()).toEqual(["/events?projectId=null&limit=200"]);
+  expect(urls()).toEqual(["/events?limit=200"]);
+});
+
+it("walks back past empty segments to a sparse project's last events", async () => {
+  vi.mocked(fetch)
+    .mockResolvedValueOnce(
+      Response.json({ ...body("log-a", []), lastSeq: 900, more: true, nextBeforeSeq: 600 }),
+    )
+    .mockResolvedValueOnce(Response.json({ ...body("log-a", []), more: true, nextBeforeSeq: 300 }))
+    .mockResolvedValueOnce(Response.json(body("log-a", [12, 40], { more: true })));
+  await refreshProjectLog();
+  expect(urls().slice(1)).toEqual([
+    "/events?projectId=p1&beforeSeq=600&limit=200",
+    "/events?projectId=p1&beforeSeq=300&limit=200",
+  ]);
+  // The historical events are kept, and the cursor is the head at the start of the walk.
+  expect(shownSeqs()).toEqual([12, 40]);
+  expect(useAppStore.getState().projectLog?.lastSeq).toBe(900);
+});
+
+it("runs one refresh at a time and one follow-up for calls made during it", async () => {
+  let release: (response: Response) => void = () => {};
+  vi.mocked(fetch)
+    .mockReturnValueOnce(new Promise<Response>((resolve) => (release = resolve)))
+    .mockResolvedValueOnce(Response.json(body("log-a", [5], { nextAfterSeq: 5 })));
+  const first = refreshProjectLog();
+  void refreshProjectLog();
+  void refreshProjectLog();
+  expect(fetch).toHaveBeenCalledTimes(1);
+  release(Response.json(body("log-a", [1, 2])));
+  await first;
+  expect(urls()).toEqual([
+    "/events?projectId=p1&limit=200",
+    "/events?projectId=p1&afterSeq=2&limit=1000",
+  ]);
+  expect(shownSeqs()).toEqual([1, 2, 5]);
+});
+
+it("resets to a fresh tail when still behind after five forward pages", async () => {
+  useAppStore.setState({
+    projectLog: { projectId: "p1", logId: "log-a", lastSeq: 0, events: [] },
+  });
+  for (let page = 1; page <= 5; page += 1) {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      Response.json(body("log-a", [page], { more: true, nextAfterSeq: page })),
+    );
+  }
+  vi.mocked(fetch).mockResolvedValueOnce(Response.json(body("log-a", [9000, 9001])));
+  await refreshProjectLog();
+  expect(urls().at(-1)).toBe("/events?projectId=p1&limit=200");
+  expect(shownSeqs()).toEqual([9000, 9001]);
+  expect(useAppStore.getState().projectLog?.lastSeq).toBe(9001);
 });

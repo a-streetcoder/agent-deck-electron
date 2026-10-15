@@ -4,7 +4,7 @@ import type { EventEnvelope } from "@agent-deck/domain";
 export const PROJECT_LOG_LIMIT = 2_000;
 
 export interface ProjectLogState {
-  /** null = project-less events (no project open). */
+  /** The open project; null = no project open, which shows every project's events. */
   projectId: string | null;
   logId: string;
   /** The afterSeq cursor: events at or below it are already applied. */
