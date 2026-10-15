@@ -124,6 +124,9 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     broadcast,
     dropDiffCache,
   } = ctx;
+  // SRV-15b: REST replies carry the computed activity too, or the client's
+  // upsert of a reply would drop the dot until the next push.
+  const decorated = (meta: SessionMeta): SessionMeta => ctx.withActivity?.([meta])[0] ?? meta;
 
   // A1: a fork is announced by the request that asked for it, before its plan restore.
   const forkAnnounce = (raw: IncomingMessage, sourceId: string): SessionAnnounce => ({
@@ -587,7 +590,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const live = sessions.get(id);
     if (live) {
       await live.rename(parsed.data.title);
-      return { session: live.meta };
+      return { session: decorated(live.meta) };
     }
     const meta = index.find((s) => s.id === id);
     if (!meta) return reply.status(404).send({ error: "unknown session" });
@@ -601,7 +604,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     };
     index.upsert(next);
     broadcast({ type: "session_meta", session: next });
-    return { session: next };
+    return { session: decorated(next) };
   });
 
   // Acknowledge-only attention mutation. The backend is the sole authority
@@ -623,7 +626,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       const live = sessions.get(id);
       const current = live?.meta ?? index.find((session) => session.id === id);
       if (!current) return reply.status(404).send({ error: "unknown session" });
-      if (current.needsAttention !== true) return { session: current };
+      if (current.needsAttention !== true) return { session: decorated(current) };
 
       if (live) live.meta.needsAttention = false;
       // Delete/history share this claim. Re-prove membership and re-read the
@@ -634,7 +637,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       const next = { ...latest, needsAttention: false as const };
       index.upsert(next);
       broadcast({ type: "session_meta", session: next });
-      return { session: next };
+      return { session: decorated(next) };
     } finally {
       releaseMutation();
     }
@@ -654,7 +657,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const pinnedAt = parsed.data.pinned
       ? (current.pinnedAt ?? new Date().toISOString())
       : undefined;
-    if (pinnedAt === current.pinnedAt) return { session: current };
+    if (pinnedAt === current.pinnedAt) return { session: decorated(current) };
 
     if (live) {
       if (pinnedAt) live.meta.pinnedAt = pinnedAt;
@@ -667,7 +670,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const next = { ...latest, pinnedAt };
     index.upsert(next);
     broadcast({ type: "session_meta", session: next });
-    return { session: next };
+    return { session: decorated(next) };
   });
 
   // Delete: stop the live process, drop the index entry, remove the pi
@@ -2055,7 +2058,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       next.launchResourceFingerprint = resolved.fingerprint;
       index.upsert(next);
       broadcast({ type: "session_meta", session: next });
-      return { session: next };
+      return { session: decorated(next) };
     } catch (error) {
       return reply.status(409).send({ error: String(error) });
     }

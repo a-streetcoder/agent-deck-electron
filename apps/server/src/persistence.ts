@@ -91,19 +91,41 @@ export class SessionIndex extends JsonArrayStore<SessionMeta> {
         delete normalized.draftThinkingLevel;
       }
       if (!validAudit) delete normalized.finalSystemPromptAudit;
-      const rawCreator = (session as SessionMeta & { createdBy?: unknown }).createdBy;
+      const identity = (raw: unknown): { id: string; name?: string } | undefined => {
+        if (
+          !raw ||
+          typeof raw !== "object" ||
+          typeof (raw as { id?: unknown }).id !== "string" ||
+          !["undefined", "string"].includes(typeof (raw as { name?: unknown }).name)
+        ) {
+          return undefined;
+        }
+        const user = raw as { id: string; name?: string };
+        return {
+          id: user.id.slice(0, 320),
+          ...(user.name !== undefined ? { name: user.name.slice(0, 200) } : {}),
+        };
+      };
+      const creator = identity((session as SessionMeta & { createdBy?: unknown }).createdBy);
+      if (creator) normalized.createdBy = creator;
+      else delete normalized.createdBy;
+      // SRV-15b: a plain fork's origin, the same shape checks as createdBy.
+      const rawFork = (session as SessionMeta & { forkedFrom?: unknown }).forkedFrom as
+        | { sessionId?: unknown; title?: unknown; owner?: unknown }
+        | undefined;
       if (
-        !rawCreator ||
-        typeof rawCreator !== "object" ||
-        typeof (rawCreator as { id?: unknown }).id !== "string" ||
-        !["undefined", "string"].includes(typeof (rawCreator as { name?: unknown }).name)
+        !rawFork ||
+        typeof rawFork !== "object" ||
+        typeof rawFork.sessionId !== "string" ||
+        !["undefined", "string"].includes(typeof rawFork.title)
       ) {
-        delete normalized.createdBy;
+        delete normalized.forkedFrom;
       } else {
-        const creator = rawCreator as { id: string; name?: string };
-        normalized.createdBy = {
-          id: creator.id.slice(0, 320),
-          ...(creator.name !== undefined ? { name: creator.name.slice(0, 200) } : {}),
+        const owner = identity(rawFork.owner);
+        normalized.forkedFrom = {
+          sessionId: rawFork.sessionId,
+          ...(typeof rawFork.title === "string" ? { title: rawFork.title.slice(0, 200) } : {}),
+          ...(owner ? { owner } : {}),
         };
       }
       const rawResources = (session as SessionMeta & { launchResourceConfig?: unknown })

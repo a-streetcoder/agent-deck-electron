@@ -266,3 +266,28 @@ it("SRV-15b: the member chip shows that member's rows only (acted, or in their s
   expect(screen.getByText("Activity (2)")).toBeTruthy();
   expect(screen.queryByText("turn.prompted")).toBeNull();
 });
+
+it("SRV-15b: the waiting list ignores the member chip (a loop approval belongs to no member)", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      Response.json({
+        logId: "log-a",
+        requests: [
+          {
+            id: "run-1",
+            kind: "loopApproval",
+            prompt: "Approve the release",
+            timeoutPolicy: { type: "none" },
+            projectId: "p1",
+            actor: { type: "system" },
+            requestedAt: "2026-09-01T10:00:00.000Z",
+          },
+        ],
+      }),
+    ),
+  );
+  render(<ActivityList member="bob@example.com" />);
+  await waitFor(() => expect(screen.getAllByTestId("activity-waiting-row")).toHaveLength(1));
+  vi.unstubAllGlobals();
+});

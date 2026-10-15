@@ -407,20 +407,31 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
   Uncommitted edits a deleted fork leaves in the shared checkout are swept into the owner's
   merge auto-commit. The per-message Fork and Re-run buttons show on your own sessions only
   (they resume and replace the source runtime on its owner's credentials); another member's
-  session offers the plain fork. A plain fork records `forkedFrom` (source id, title and owner
-  at fork time), so the session shows "Forked from Alice's session …" and the Activity row of
-  its `session.created` says who forked whose session (SRV-15b).
+  session offers the plain fork. This is the UI only: `/history/fork` and `/history/rerun`
+  still accept any member (ADR 0003: attribution, not isolation). A plain fork records
+  `forkedFrom` (source id, title and owner at fork time) and the persistence normaliser checks
+  its shape like `createdBy`: the source owner and the fork-time title are not derivable on the
+  client (the source may be renamed or deleted, and its `session.created` is usually outside
+  the client's event window), so the session record keeps them. The session shows "Forked from
+  Alice's session …" and the Activity row of its `session.created` says who forked whose
+  session (SRV-15b).
 - **Using shared sessions (SRV-15b).** Every session row has a status dot computed by the
   server: running (a live Pi run), needs input (an open human node: ask_user, a supervisor
   decision, an extension dialog, a loop approval), attention, failed, parked, idle. It comes
   from the live runtime and the meta, never from the event log alone (a turn left open by a
   restart reads idle). `GET /sessions` carries it as `activity`, and every `session_meta`
   push re-computes it; the turn-idle edge and each human node opening or closing re-push the
-  row. With sessions from two or more members, a row of avatar chips above the search box
-  filters the list (projects stay the groups) and the Activity list, where a row belongs to the
-  member who acted, else to the owner of the session it happened in. Copy link on a row copies
-  `<origin>/?session=<id>`; opening it switches to that session once the socket is up and
-  removes the parameter (an unknown id is ignored).
+  row; REST replies that return a session (rename, pin, attention, draft) carry it too, and the
+  client keeps the last pushed value when a reply has none. With sessions from two or more
+  members, a row of avatar chips above the search box filters the list (projects stay the
+  groups) and the Activity history: a row belongs to the member who acted, else to the owner of
+  the session it happened in, so Bob's prompt in Alice's session is under Bob and the agent's
+  replies under Alice. The "Waiting on a person" list is never filtered (a loop approval
+  belongs to no member, and anyone may answer). Opening another member's session clears its
+  "needs attention" for everyone: the marker is per session, not per person. Copy link (shared
+  server only; a loopback origin is useless to a co-worker) copies `<origin>/?session=<id>`.
+  Opening the link takes the parameter off the URL and opens that session instead of the boot
+  resume of the newest session; an unknown or deleted id shows a notice and boots as usual.
 - **Providers screen.** `GET /runtime/providers`, sign-in and sign-out act on the requesting
   user's dir. A sign-in in progress belongs to whoever started it: polling, answering or
   cancelling it as anyone else answers 404. Responses carry status only, never a credential

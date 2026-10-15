@@ -21,7 +21,7 @@ vi.mock("./clientTransport.ts", () => ({
   },
 }));
 
-import { sessionLink } from "./wsBridge.ts";
+import { connectAndBootstrap, sessionLink } from "./wsBridge.ts";
 import { useAppStore } from "./store.ts";
 
 const session = (id: string): SessionMeta => ({ id, cwd: `/tmp/${id}`, createdAt: "now" });
@@ -36,26 +36,49 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
-it("SRV-15b: ?session=<id> opens that session once subscribed, then leaves the URL", async () => {
+it("SRV-15b: ?session=<id> opens that session at boot instead of the newest one", async () => {
   window.history.replaceState(null, "", "/?session=target&onboarding");
   const target = session("target");
   vi.mocked(fetch).mockImplementation(async (input) => {
     const url = String(input);
+    if (url === "/projects") return json({ projects: [] });
     if (url === "/sessions") return json({ sessions: [session("current"), target] });
     if (url === "/sessions/target/resume") return json({ session: target });
     return new Response("{}", { status: 404 });
   });
 
-  transportMock.host?.onSessionSubscribed?.("current");
-  expect(new URLSearchParams(window.location.search).has("session")).toBe(false);
-  expect(new URLSearchParams(window.location.search).has("onboarding")).toBe(true);
-  await vi.waitFor(() => expect(useAppStore.getState().session?.id).toBe("target"));
+  await connectAndBootstrap();
+  const search = new URLSearchParams(window.location.search);
+  expect(search.has("session")).toBe(false);
+  expect(search.has("onboarding")).toBe(true);
+  expect(useAppStore.getState().session?.id).toBe("target");
   expect(useAppStore.getState().view).toBe("chat");
+  // No other session was resumed first.
+  const resumed = vi
+    .mocked(fetch)
+    .mock.calls.map(([input]) => String(input))
+    .filter((url) => url.endsWith("/resume"));
+  expect(resumed).toEqual(["/sessions/target/resume"]);
+});
 
-  // Consumed: a later subscription (reconnect) does not switch again.
-  vi.mocked(fetch).mockClear();
-  transportMock.host?.onSessionSubscribed?.("target");
-  expect(vi.mocked(fetch).mock.calls.map(([input]) => String(input))).not.toContain("/sessions");
+it("SRV-15b: an unknown or deleted id shows a notice and boots as usual", async () => {
+  window.history.replaceState(null, "", "/?session=gone");
+  useAppStore.setState({ toasts: [] });
+  vi.mocked(fetch).mockImplementation(async (input) => {
+    const url = String(input);
+    if (url === "/projects") return json({ projects: [] });
+    if (url === "/sessions") return json({ sessions: [session("current")] });
+    if (url === "/sessions/current/resume") return json({ session: session("current") });
+    return new Response("{}", { status: 404 });
+  });
+
+  await connectAndBootstrap();
+  expect(useAppStore.getState().toasts.map((toast) => toast.message)).toEqual([
+    "The shared session no longer exists.",
+  ]);
+  expect(window.location.search).toBe("");
+  // The usual boot: the newest project-less session.
+  expect(useAppStore.getState().session?.id).toBe("current");
 });
 
 it("SRV-15b: the copied link opens the session on this server", () => {

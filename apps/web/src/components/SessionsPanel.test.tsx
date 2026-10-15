@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "../state/store.ts";
 import { SessionRow, SessionsMainPanel } from "./SessionsPanel.tsx";
@@ -321,6 +321,8 @@ describe("SRV-15b: status, member chips and links", () => {
     show(rows);
     expect(screen.getByTestId("chat-activity-a1").getAttribute("data-activity")).toBe("running");
     expect(screen.getByTestId("chat-activity-a2").getAttribute("data-activity")).toBe("needsInput");
+    expect(screen.getByTestId("chat-a2").getAttribute("aria-label")).toContain(", needs input");
+    expect(screen.getByTestId("chat-a1").getAttribute("aria-label")).toContain(", running");
     // No pushed activity yet: the meta decides (parked).
     expect(screen.getByTestId("chat-activity-b1").getAttribute("data-activity")).toBe("parked");
   });
@@ -353,7 +355,7 @@ describe("SRV-15b: status, member chips and links", () => {
     expect(screen.getByText("Activity (2)")).toBeTruthy();
   });
 
-  it("copies a link that opens the session", async () => {
+  it("copies a link that opens the session, on the shared server only", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(() => new Promise(() => {})),
@@ -361,15 +363,20 @@ describe("SRV-15b: status, member chips and links", () => {
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     const onSelect = vi.fn();
-    render(
+    const row = (
       <SessionRow
         session={rows[0]!}
         displayTitle="a1"
         active={false}
         running={false}
         onSelect={onSelect}
-      />,
+      />
     );
+    // Loopback (no signed-in person): no link to share.
+    const view = render(row);
+    expect(screen.queryByTestId("chat-copy-link-a1")).toBeNull();
+    act(() => useAppStore.setState({ me: { id: alice.id, email: alice.id } }));
+    view.rerender(row);
     fireEvent.click(screen.getByTestId("chat-copy-link-a1"));
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/?session=a1`),

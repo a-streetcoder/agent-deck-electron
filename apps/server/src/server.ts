@@ -12,7 +12,9 @@ import {
   equivalenceReport,
   extensionBridgeConflict,
   planGeneration,
+  projectOpenHumanRequests,
   sessionActivity,
+  type OpenHumanRequest,
 } from "@agent-deck/domain";
 import {
   addResourceWatchPaths,
@@ -327,6 +329,19 @@ async function initServer(
   startupCleanups.push(() => eventLog.close());
   // A1d: plan history and the supervisor view read the log's projections.
   const logReaders = createLogReaders(eventLog);
+  // SRV-15b: the open human requests for every row's status, folded per appended
+  // event (the readers' catchUp copies every projection, too much per push). A
+  // read-only process sees no appends of its own and reads the readers; a takeover
+  // (writer.acquired) reseeds from them.
+  let openHuman = new Map(logReaders.openHuman());
+  eventLog.subscribe((event) => {
+    openHuman =
+      event.kind === "writer.acquired"
+        ? new Map(logReaders.openHuman())
+        : projectOpenHumanRequests([event], openHuman);
+  });
+  const openHumanNow = (): ReadonlyMap<string, OpenHumanRequest> =>
+    eventLog.writable ? openHuman : logReaders.openHuman();
   // Free event text never carries these roots (A1 policy); project roots are read live.
   const events = createEventProducers(eventLog, {
     pathPrefixes: () =>
@@ -1591,7 +1606,7 @@ async function initServer(
   // the meta and the open human nodes; the records themselves never carry it.
   const withActivity = (metas: readonly SessionMeta[]): SessionMeta[] => {
     const waiting = new Set<string>();
-    for (const request of logReaders.openHuman().values()) {
+    for (const request of openHumanNow().values()) {
       if (request.sessionId) waiting.add(request.sessionId);
     }
     return metas.map((meta) => {

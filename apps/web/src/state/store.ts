@@ -913,13 +913,21 @@ export const useAppStore = create<AppState>((set) => ({
       diffJumpRequest: { ...request, token: (state.diffJumpRequest?.token ?? 0) + 1 },
     })),
   clearDiffJump: () => set({ diffJumpRequest: null }),
-  upsertSessionMeta: (session) =>
-    set((state) => ({
-      sessions: state.sessions.some((s) => s.id === session.id)
-        ? state.sessions.map((s) => (s.id === session.id ? session : s))
-        : [...state.sessions, session],
-      session: state.session?.id === session.id ? session : state.session,
-    })),
+  upsertSessionMeta: (incoming) =>
+    set((state) => {
+      // SRV-15b: activity is computed by the server; a REST reply without it keeps the last one.
+      const previous = state.sessions.find((s) => s.id === incoming.id)?.activity;
+      const session =
+        incoming.activity === undefined && previous !== undefined
+          ? { ...incoming, activity: previous }
+          : incoming;
+      return {
+        sessions: state.sessions.some((s) => s.id === session.id)
+          ? state.sessions.map((s) => (s.id === session.id ? session : s))
+          : [...state.sessions, session],
+        session: state.session?.id === session.id ? session : state.session,
+      };
+    }),
   removeSession: (sessionId) =>
     set((state) => {
       const composerDrafts =

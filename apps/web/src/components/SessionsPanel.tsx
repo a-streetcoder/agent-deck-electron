@@ -74,6 +74,16 @@ const ACTIVITY_DOT: Record<SessionActivity, { label: string; color: string }> = 
   idle: { label: "Idle", color: "var(--color-border-strong)" },
 };
 
+/** The activity words the row label does not already say (failed, parked, attention do). */
+const ACTIVITY_SPOKEN: Record<SessionActivity, string> = {
+  running: ", running",
+  needsInput: ", needs input",
+  attention: "",
+  failed: "",
+  parked: "",
+  idle: ", idle",
+};
+
 /** Native session-row caption (PiAgentSessionListViews.swift:439): abbreviated
  * date + short time of the last activity (updatedAt, falling back to createdAt). */
 function formatSessionTime(iso: string): string {
@@ -97,6 +107,8 @@ export function SessionRow({
   onSelect: () => void;
 }) {
   const [renaming, setRenaming] = useState(false);
+  // GET /me answers a person only behind the trusted proxy (the shared server).
+  const sharedServer = useAppStore((state) => state.me !== null);
   const [draft, setDraft] = useState(session.title ?? "");
   const rowRef = useRef<HTMLDivElement>(null);
   const pinControlRef = useRef<HTMLButtonElement>(null);
@@ -189,7 +201,7 @@ export function SessionRow({
           : session.parkedAt
             ? ", Parked; resumes on next command"
             : ""
-      }${session.needsAttention === true ? ", needs attention" : ""}`}
+      }${session.needsAttention === true ? ", needs attention" : ""}${ACTIVITY_SPOKEN[activity]}`}
       role="button"
       tabIndex={0}
       onClick={onSelect}
@@ -315,15 +327,18 @@ export function SessionRow({
         >
           <GitFork size={12} />
         </ControlButton>
-        <span className="contents" onClick={(event) => event.stopPropagation()}>
-          <AppCopyButton
-            text={sessionLink(session.id)}
-            aria-label="Copy link"
-            copiedLabel="Link copied"
-            data-testid={`chat-copy-link-${session.id}`}
-            className="h-auto w-auto rounded border-0 bg-transparent p-0.5 text-text-muted hover:bg-transparent hover:text-text-primary"
-          />
-        </span>
+        {sharedServer ? (
+          // A loopback origin opens nothing on a co-worker's machine: shared server only.
+          <span className="contents" onClick={(event) => event.stopPropagation()}>
+            <AppCopyButton
+              text={sessionLink(session.id)}
+              aria-label="Copy link"
+              copiedLabel="Link copied"
+              data-testid={`chat-copy-link-${session.id}`}
+              className="h-auto w-auto rounded border-0 bg-transparent p-0.5 text-text-muted hover:bg-transparent hover:text-text-primary"
+            />
+          </span>
+        ) : null}
         <ControlButton
           data-testid={`chat-delete-${session.id}`}
           className="rounded p-0.5 text-text-muted hover:text-danger"

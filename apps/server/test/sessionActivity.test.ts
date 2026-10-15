@@ -75,6 +75,15 @@ describe("session activity (SRV-15b)", () => {
     await live.prompt("run-until-abort");
     await vi.waitFor(() => expect(lastPushed()).toBe("running"), { timeout: 10_000 });
     expect(await listed()).toBe("running");
+    // REST replies carry it too (the client upserts them over the pushed row).
+    const pinned = (await (
+      await fetch(`${base}/sessions/${id}/pin`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pinned: true }),
+      })
+    ).json()) as { session: SessionMeta };
+    expect(pinned.session.activity).toBe("running");
 
     await live.abort();
     // The idle edge re-pushes the row although its meta did not change.

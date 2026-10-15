@@ -77,16 +77,17 @@ export function formatEventTime(iso: string): string {
 
 /**
  * SRV-15b: the member a row belongs to: the person who acted, else the owner of
- * the session it happened in (an agent's or the system's work in Alice's session).
+ * the session it happened in. Asymmetric on purpose: Bob's prompt in Alice's
+ * session is Bob's row, the agent's replies to it are Alice's.
  */
 export function memberOf(
   actor: EventActor,
   sessionId: string | undefined,
-  sessions: readonly SessionMeta[],
+  owners: ReadonlyMap<string, string>,
 ): string | undefined {
   if (actor.type === "user") return actor.id;
   const id = sessionId ?? (actor.type === "agent" ? actor.sessionId : undefined);
-  return sessions.find((candidate) => candidate.id === id)?.createdBy?.id;
+  return id === undefined ? undefined : owners.get(id);
 }
 
 /** A1c: the open project's event stream (every project when none is open), newest first.
@@ -102,20 +103,22 @@ export function ActivityList({ member = null }: { member?: string | null } = {})
   }, [projectId]);
 
   const all = log?.projectId === projectId ? log.events : undefined;
-  const events = useMemo(
-    () =>
-      (all ?? []).filter(
-        (event) =>
-          !SERVER_KINDS.has(event.kind) &&
-          (member === null || memberOf(event.actor, event.sessionId, sessions) === member),
-      ),
-    [all, member, sessions],
-  );
+  const events = useMemo(() => {
+    const owners = new Map<string, string>();
+    for (const session of sessions) {
+      if (session.createdBy) owners.set(session.id, session.createdBy.id);
+    }
+    return (all ?? []).filter(
+      (event) =>
+        !SERVER_KINDS.has(event.kind) &&
+        (member === null || memberOf(event.actor, event.sessionId, owners) === member),
+    );
+  }, [all, member, sessions]);
   const shown = events.slice(-SHOWN).reverse();
-  // A8: requests waiting on a person, first and outside the collapsed list.
-  const waiting = useOpenHumanRequests(projectId, log?.lastSeq).filter(
-    (request) => member === null || memberOf(request.actor, request.sessionId, sessions) === member,
-  );
+  // A8: requests waiting on a person, first and outside the collapsed list. Never
+  // filtered by the member chip: whoever is looking may be the one to answer, and a
+  // loop approval (system actor, no session) belongs to no member.
+  const waiting = useOpenHumanRequests(projectId, log?.lastSeq);
   return (
     <>
       {waiting.length > 0 ? (

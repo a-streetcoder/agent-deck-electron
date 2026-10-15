@@ -110,6 +110,29 @@ describe("persistence service — existing-data-dir round-trip", () => {
     expect(loaded.find((row) => row.id === "ended-parked")?.parkedAt).toBeUndefined();
   });
 
+  it("SRV-15b: keeps a well-formed forkedFrom and drops a malformed one", () => {
+    const dir = freshCopy();
+    const file = path.join(dir, "sessions.json");
+    const rows = JSON.parse(readFileSync(file, "utf8")) as unknown[];
+    const at = "2026-01-01T00:00:00.000Z";
+    rows.push(
+      {
+        id: "fork",
+        cwd: "/tmp",
+        createdAt: at,
+        forkedFrom: { sessionId: "src", title: "T", owner: { id: "a@x", name: "A", extra: 1 } },
+      },
+      { id: "bad-owner", cwd: "/tmp", createdAt: at, forkedFrom: { sessionId: "src", owner: 7 } },
+      { id: "bad", cwd: "/tmp", createdAt: at, forkedFrom: { title: "no id" } },
+    );
+    writeFileSync(file, JSON.stringify(rows));
+    const loaded = new SessionIndex(dir).list();
+    const of = (id: string) => loaded.find((row) => row.id === id)?.forkedFrom;
+    expect(of("fork")).toEqual({ sessionId: "src", title: "T", owner: { id: "a@x", name: "A" } });
+    expect(of("bad-owner")).toEqual({ sessionId: "src" });
+    expect(of("bad")).toBeUndefined();
+  });
+
   it("never exposes environment values from persisted launch-resource metadata", () => {
     const dir = freshCopy();
     const sessions = new SessionIndex(dir);

@@ -112,23 +112,32 @@ const transportHost: TransportHost = {
     useAppStore.getState().setSessionSubscriptionSettled(true);
     void refreshDiffFiles(sessionId);
     void refreshCheckpoints(sessionId);
-    openLinkedSession(sessionId);
   },
 };
 
-/**
- * SRV-15b: a shared link (`?session=<id>`, see sessionLink) opens that session once
- * the first socket is up. The param is consumed so a reload or reconnect keeps
- * whatever the user opened since; an unknown id is ignored (the notification path
- * checks the catalog first).
- */
-function openLinkedSession(subscribedId: string): void {
+/** SRV-15b: take `?session=<id>` off the URL (a reload keeps what the user opened since). */
+function takeLinkedSessionId(): string | null {
   const url = new URL(window.location.href);
   const linked = url.searchParams.get("session");
-  if (linked === null) return;
+  if (linked === null) return null;
   url.searchParams.delete("session");
   window.history.replaceState(window.history.state, "", url);
-  if (linked && linked !== subscribedId) void focusSessionFromNotification(linked);
+  return linked || null;
+}
+
+/** SRV-15b: open a shared link's session; false (with a notice) when it is unknown or deleted. */
+async function openLinkedSession(sessionId: string): Promise<boolean> {
+  const { sessions } = await fetchJson<{ sessions: SessionMeta[] }>("/sessions");
+  const store = useAppStore.getState();
+  store.setSessions(sessions);
+  const target = sessions.find((session) => session.id === sessionId);
+  if (!target) {
+    store.pushToast({ kind: "info", message: "The shared session no longer exists." });
+    return false;
+  }
+  store.setView("chat");
+  await switchToSession(target);
+  return true;
 }
 
 /** SRV-15b: the link that opens a session for any member of this server. */
@@ -1661,7 +1670,11 @@ export async function refreshMe(): Promise<void> {
 export async function connectAndBootstrap(): Promise<void> {
   void refreshMe();
   try {
+    // SRV-15b: a shared link wins over the boot resume of the newest session, so
+    // no other session's Pi is woken first and a failed boot resume cannot lose it.
+    const linked = takeLinkedSessionId();
     await refreshProjects();
+    if (linked && (await openLinkedSession(linked))) return;
     await switchToProject(null);
   } catch (error) {
     useAppStore.getState().setError(String(error));
