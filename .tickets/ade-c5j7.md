@@ -26,3 +26,7 @@ Domain tests mapping each kind; server tests for the events and the timeout expi
 **2026-10-15T08:19:53Z**
 
 2026-10-15 contrarian on 293067b: nothing blocks on correctness; attribution (REST requestUser, RPC deps.user, first answer wins) and secrets handling hold. Fix before close: extension UI requests settled by Pi itself never close (exit path, request.timeout, agent_end); includeServerEvents breaks the sparse-project tail walk (server.started pages treated as non-empty); afterMinutes above 5 cannot fire (Pi undici 300 s headersTimeout) -> cap 4 min; loop.run.removed must close the approval node; default answer must respect allowFreeform; supervisorRequest row hidden when a human node exists. Owner decision: loop approvals get only an in-app announcement (Electron main notifies per session; Human Approval runs have no session). Follow-ups: maker-checker ASK_HUMAN stop gets no human node; third-party extension inputs titled password/token could be withheld; merge conflict expected only in NodeTreeView.test.tsx (keep both). Fix round sent.
+
+**2026-10-15T08:26:00Z**
+
+2026-10-15 GPT review33: items 1,3,4,8 already in the fix round; added writer.acquired as interruption boundary, a server read of open human nodes per project for the waiting list (tail-independent), loop approvals unreachable in the session-scoped tree (document), desktop notification for sessionless approvals only if the existing bridge carries it (no main.js change).
