@@ -1,6 +1,6 @@
 ---
 id: ade-scu0
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-10-15T01:04:56Z
