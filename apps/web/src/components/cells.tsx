@@ -62,6 +62,7 @@ import {
   revealSubagentArtifacts,
 } from "../lib/native.ts";
 import { ChildTranscriptDialog } from "./ChildTranscriptDialog.tsx";
+import { SubagentDeltaSummary } from "./SubagentDeltaSummary.tsx";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { sectionHeaderClass } from "@/design-system/styles";
 import { cn } from "@/lib/cn";
@@ -436,6 +437,13 @@ function SubagentCellView({ cell }: { cell: SubagentCell }) {
               >
                 {cell.error}
               </div>
+            ) : null}
+            {parentSessionId ? (
+              <SubagentDeltaSummary
+                parentSessionId={parentSessionId}
+                runId={cell.id}
+                status={cell.status}
+              />
             ) : null}
             <RunMeta
               model={cell.model}

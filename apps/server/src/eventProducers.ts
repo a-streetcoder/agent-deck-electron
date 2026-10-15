@@ -14,6 +14,7 @@ import {
   PROMPT_LABEL_MAX_CHARS,
   redactPaths,
   redactSecrets,
+  SUBAGENT_RESULT_READ,
   type EventActor,
   type EventDraft,
   type NodeRef,
@@ -73,6 +74,8 @@ export interface EventProducers {
   supervisorOpened(request: SupervisorRequest, childSessionId: string): void;
   supervisorAnswered(request: SupervisorRequest, actor: EventActor): void;
   supervisorCancelled(request: SupervisorRequest): void;
+  /** A3: the parent was handed a run's delta up to uptoSeq; false when the log refused it. */
+  subagentResultRead(parentSessionId: string, runId: string, uptoSeq: number): boolean;
   loopUserAction(
     runId: string,
     projectId: string | undefined,
@@ -401,6 +404,17 @@ export function createEventProducers(
         // `response`, as in SupervisorRequest: the cancellation reason.
         payload: { id: request.id, response: clean(request.response ?? "", EVENT_TEXT_MAX_CHARS) },
       });
+    },
+
+    subagentResultRead(parentSessionId, runId, uptoSeq) {
+      return log.append({
+        kind: SUBAGENT_RESULT_READ,
+        sessionId: parentSessionId,
+        subject: { type: "subagentRun", id: runId },
+        actor: agentActor(parentSessionId),
+        ...causeOf(parentSessionId),
+        payload: { uptoSeq },
+      }).ok;
     },
 
     loopUserAction(runId, projectId, action, actor) {

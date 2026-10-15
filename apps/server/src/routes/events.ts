@@ -3,6 +3,7 @@ import type { ServerMessage } from "@agent-deck/contracts";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { MAX_EVENT_READ_LIMIT, type EventLog } from "../eventLog.ts";
+import type { SubagentDeltaReader } from "../subagentDelta.ts";
 
 /**
  * A1c event log transport: a REST cursor read and a coalesced `project_events`
@@ -83,4 +84,27 @@ export function startProjectEventNudges(
     timer = undefined;
     pending.clear();
   };
+}
+
+/**
+ * A3: the full delta of one subagent run for its parent's result card. Read-only:
+ * it never moves the parent agent's cursor (only subagent_delta does).
+ */
+export function registerSubagentDeltaRoute(
+  fastify: FastifyInstance,
+  reader: Pick<SubagentDeltaReader, "read">,
+): void {
+  fastify.get("/sessions/:parentSessionId/subagent-runs/:runId/delta", async (request, reply) => {
+    const parsed = z
+      .object({ parentSessionId: z.string().uuid(), runId: z.string().uuid() })
+      .safeParse(request.params);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Parent session and run IDs must be UUIDs." });
+    }
+    const read = await reader.read(parsed.data.parentSessionId, parsed.data.runId, {
+      from: "start",
+    });
+    if (!read.ok) return reply.status(404).send({ error: "Subagent run was not found." });
+    return { delta: read.delta, hasEvents: read.hasEvents };
+  });
 }

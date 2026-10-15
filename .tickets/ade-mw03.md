@@ -1,6 +1,6 @@
 ---
 id: ade-mw03
-status: in_progress
+status: closed
 deps: [ade-c5h8]
 links: []
 created: 2026-10-14T23:39:30Z
@@ -30,3 +30,7 @@ Unit tests for the delta over a recorded child log (first look = full summary; s
 **2026-10-14T23:54:55Z**
 
 2026-10-15 design-pass amendment: the delta is computed over the child's EVENTS (turn.completed references, run status, verdicts) between two cursors; the full transcript comes from the Pi session file via the existing transcript route, not from the log; the parent's last-looked cursor is itself an event subagent.result.read {uptoSeq}; 'files touched' comes from git (child base commit to HEAD or checkpoint refs). Requires child-session turn.completed events (A1b1 verifies child idle reconcile).
+
+**2026-10-15T02:16:55Z**
+
+2026-10-15 merged (wt/ade-mw03: b697922, merge 0f0fe48, review round fcd51d2). Contrarian + GPT review23 applied: await_subagents / managed_subagent / managed_parallel write the subagent.result.read cursor at the finish they delivered (the delta serves later looks only), compact valid JSON with state first and structured trimming under 16,000 chars, tool-call counts per name + failed names, full private summary to the owning parent, full?: true re-read, abort leaves the cursor, filesChangedSinceBase only on full/new-turn looks and unavailable on a removed worktree, SubagentDeltaIndex fed by the shared boot fold (bounded per run, removed runs dropped), nodeTree ignores subagent.result.read, subagent_delta in DELEGATION_TOOL_NAMES, card refetches on nudges while the child runs. Tests: domain 34, server 43 (+1 POSIX skip), real-Pi subagent-delta 1 (spawn/await/delta, managed/continue/delta, full re-read, card route), web cells 36. Found and ticketed separately: continuing a spawn_subagent run with managed_subagent throws 'Subagent transcript already registered' (A4 bug).
