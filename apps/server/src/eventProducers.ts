@@ -50,6 +50,19 @@ export interface PromptAttempt {
 export interface EventProducers {
   sessionCreated(meta: SessionMeta, actor: EventActor, forkedFrom?: string): void;
   sessionRemoved(meta: Pick<SessionMeta, "id" | "projectId">, actor: EventActor): void;
+  /** SRV-12c1: a session moved to a shared server ("out", on the device) or was imported ("in"). */
+  sessionShared(
+    meta: Pick<SessionMeta, "id" | "projectId">,
+    actor: EventActor,
+    share: {
+      direction: "out" | "in";
+      mode: "snapshot" | "conversation";
+      serverOrigin?: string;
+      serverSessionId?: string;
+      localSessionId?: string;
+      device?: string;
+    },
+  ): void;
   /** Before Pi sees the message; a steer or follow-up joins the turn still running. */
   turnPrompted(sessionId: string, actor: EventActor, mode: PromptMode, text: string): PromptAttempt;
   /** The live session's turn boundaries and completions (SessionManager calls them). */
@@ -274,6 +287,26 @@ export function createEventProducers(
         subject: { type: "session", id: meta.id },
         actor,
         payload: {},
+      });
+    },
+
+    sessionShared(meta, actor, share) {
+      // Facts and references only: never a path or any session content.
+      const ref = (text: string | undefined, max: number) => (text ? clean(text, max) : undefined);
+      append({
+        kind: "session.shared",
+        sessionId: meta.id,
+        projectId: meta.projectId ?? null,
+        subject: { type: "session", id: meta.id },
+        actor,
+        payload: {
+          direction: share.direction,
+          mode: share.mode,
+          serverOrigin: ref(share.serverOrigin, EVENT_LABEL_MAX_CHARS),
+          serverSessionId: ref(share.serverSessionId, 100),
+          localSessionId: ref(share.localSessionId, 100),
+          device: ref(share.device, EVENT_LABEL_MAX_CHARS),
+        },
       });
     },
 

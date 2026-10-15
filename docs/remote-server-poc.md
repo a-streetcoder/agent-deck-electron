@@ -645,7 +645,8 @@ repository's root (`git rev-parse --show-toplevel`) is refused too: share the ro
 server, which clones it as in [Shared projects from a repository](#shared-projects-from-a-repository).
 
 - **The token stays in Electron main.** The page asks main over IPC (`shared-server:request`),
-  which allows only `GET /projects`, `POST /projects { repo, ref? }` and `GET /me` to the
+  which allows only `GET /projects`, `POST /projects { repo, ref? }`, `GET /me` and a session
+  move (`POST /projects/<uuid>/sessions/import`, below) to the
   configured origin, adds `cf-access-token` from `cloudflared access token`, never follows a
   redirect, and hands back only the status and the JSON body (with the token redacted should the
   server echo it). Without a valid token (none cached, expired, or Access answers 401 or a login
@@ -669,6 +670,79 @@ server, which clones it as in [Shared projects from a repository](#shared-projec
   local project whose GitHub `owner/name` matches a server project's `origin` shows the same
   badge with **Link** (stores `sharedTo` without creating anything). Matching is by repository
   name, case-insensitive: a renamed or transferred repository does not match until shared again.
+
+### Moving a session to the server
+
+In the desktop app, a session of a shared project (above) has **Share to server** in the chat
+toolbar. The move is a copy on the system (the server session has its own id) but one session for
+the user: the local row stays, with the same title, and becomes a read-only pointer.
+
+- **Preflight** (`POST /sessions/:id/share/preflight` on the local backend) refuses while the
+  session is responding or a subagent runs (detached ones too), for Loop sessions, for a draft
+  and when the project is not shared. Otherwise it answers the branch, the number of changed
+  tracked files, the **untracked files by name** (they travel too: the dialog lists every one,
+  check them for secrets), the local commits not on the upstream yet (they travel too; a branch
+  without upstream says every commit not on the remote travels) and the
+  submodules with changes of their own. Ignored files (for example `.env`) never travel.
+- **Move with my changes** (`POST /sessions/:id/share { mode: "snapshot", untracked }`): the
+  request names the untracked files the user saw; a different set answers
+  `409 share_plan_changed` with the new list and the dialog asks again. The snapshot stages
+  the tracked changes and exactly those untracked files (a file that appeared later never
+  travels; a missing one is a changed plan, and nothing is pushed). It is
+  committed through a throwaway index (a copy of the real index under `GIT_INDEX_FILE`, never
+  split; the real index, HEAD and files are not touched) on top of HEAD and pushed with **this
+  device's own git login** to `refs/agent-deck/transfer/<session id>`. Only when the remote
+  refuses that namespace does it push the branch `agent-deck/transfer/<session id>` instead
+  (never after a login, permission or network error). A staged and unstaged mix of one file
+  travels as its working-tree content. A dirty submodule, or a failed push, offers **Move the
+  conversation only**: the edits stay on the device, and the server copy gets a note the model
+  reads before its next turn ("Earlier edits from <device> are not in this workspace.").
+- **The hand-off**: from the export until the link is recorded (or the move is cancelled, or 15
+  minutes pass) the local session is frozen: prompts, delegation, history actions and merges are
+  refused (`session_moving`). Anything that fails after the push removes the pushed ref first.
+- **The export** carries the Pi transcript, title, plan, agent and model choice, the composer
+  draft (without file and folder references) and paste records; images are inside the
+  transcript. Checkpoints, subagent runs, Loop cells, plan history and event history stay behind
+  and are named in the result. It is at most 16 MB. The renderer sends it through Electron main
+  (`POST /projects/<id>/sessions/import`, the only patterned path the client allows) so the
+  Access token never reaches the page.
+- **The import** on the shared server validates the export strictly (closed shapes, UUIDs, a
+  transcript whose entries have unique ids and parents written before them, no device paths),
+  fetches the transfer ref first with the requester's GitHub connection (a private repository
+  without one: "connect GitHub first"), creates a session worktree from it, undoes the snapshot
+  commit with `git reset --mixed` (the edits are uncommitted changes again, untracked files
+  untracked) and rewrites only the transcript header's cwd (Pi resumes there). The thinking level the
+  session last ran at becomes part of its launch configuration, above the server default and
+  any agent level. The model the session ran on must be one the
+  requester's providers offer (as for a fork), else `409 model_unavailable`. Every message
+  author becomes the requester. The new session belongs to the requester, records
+  `sharedFrom { device, localSessionId }`, and resumes Pi from the imported transcript when
+  opened. The same session from the same member again (also two posts at once) answers
+  `409 session_already_imported` with the existing `sessionId` (the dialog then links that copy),
+  or with `pending: true` while the first attempt still runs (retry later). An earlier copy whose
+  transcript differs (`sharedFrom.exportSha256`) answers `409 export_changed` and is never
+  linked; cancel the move. The answer says `transferRefDeleted`; the device deletes the ref again after
+  recording the link, since the server may lack push rights (a public repository without a
+  GitHub connection). If neither side can, the dialog shows the `git push origin --delete`
+  command.
+- **When the server does not answer** (no connection, 502, 504, 524) nothing is undone: the
+  server may still be importing. Try again; a retry links the copy if it arrived.
+- **The pointer** (`sharedTo { serverOrigin, serverSessionId, sharedAt, mode }` in the local
+  `sessions.json`): its Pi is stopped and its failure or attention state cleared; it opens without
+  Pi, showing its last local transcript read-only, "on <host>" in the list and, instead of the
+  composer, "This session continues on <host>." with **Open on server**
+  (`<server>/?session=<id>`) and **Continue locally**, a plain fork that has no link. Prompts,
+  rollback, re-run, message fork, rename, merge, plan retry and composer drafts answer
+  `409 session_shared`; delete removes only the local copy.
+- **Events**: `session.shared` on both logs (`direction` out or in, mode, ids, host or device;
+  no paths, no content).
+- **Owner check on the live server**: verify that GitHub accepts `refs/agent-deck/*` for push,
+  fetch and delete; the branch fallback covers a refusal.
+- **Not covered (v1)**: the pointer does not follow the server session (live mirror, SRV-12c2)
+  and nothing comes back to the device (SRV-12c3). If the app closes between the push and the
+  import, the ref stays on the remote until the hand-off expires on the device (15 minutes, if the
+  app is still running) or is deleted by hand (`git push origin --delete
+refs/agent-deck/transfer/<id>`).
 
 ## Security model
 

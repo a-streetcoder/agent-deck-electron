@@ -2,7 +2,7 @@ import type { CatalogModel } from "@agent-deck/pi-host";
 import type { ComposerDraftStore } from "./composerDrafts.ts";
 import type { SessionDraftGateway } from "./sessionDrafts.ts";
 import nodePath from "node:path";
-import type { ServerMessage, SessionMeta } from "@agent-deck/contracts";
+import type { ServerMessage, SessionMeta, UserIdentity } from "@agent-deck/contracts";
 import type { AgentWarningContext, SkillInfo, SubagentExpectedOutcome } from "@agent-deck/domain";
 import type {
   McpServerCatalog,
@@ -159,6 +159,13 @@ export interface ServerContext {
   githubConnections?: GitHubConnections;
   /** SRV-09: AGENT_DECK_TRUSTED_PROXY is set; host launchers (terminal, editor) refuse. */
   sharedServer?: boolean;
+  /** SRV-12c1: the fork's model check (SRV-15a), reused by the session import. */
+  sessionModelGate?: {
+    pin(meta: SessionMeta, owner: UserIdentity | undefined): Promise<SessionMeta>;
+    refusal(meta: SessionMeta, owner: UserIdentity | undefined): Promise<string | undefined>;
+  };
+  /** SRV-12c1: where an imported session's Pi transcript is written. */
+  importedSessionsDir?: string;
   /** SRV-12a test seams: the GitHub API fetch and the clone behind POST /projects { repo }. */
   repoProjectSeams?: { fetch?: typeof fetch; clone?: typeof gitCloneRepository };
   /** SRV-15b: copies of the metas with their computed `activity`; absent in narrow tests. */

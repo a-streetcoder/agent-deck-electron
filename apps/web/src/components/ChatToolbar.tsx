@@ -12,6 +12,7 @@ import { isElectron, isMacDesktop } from "@/lib/native";
 import { useAppStore } from "../state/store.ts";
 import { TranscriptDisplayMenu } from "./TranscriptDisplayMenu.tsx";
 import { FinalSystemPromptButton } from "./FinalSystemPromptDialog.tsx";
+import { ShareSessionButton } from "./SessionShare.tsx";
 
 /**
  * Chat-only tool strip. Session name and folder already live on the Sessions
@@ -45,6 +46,7 @@ export function ChatToolbar() {
         </span>
       ) : null}
       <div className={cn("flex shrink-0 items-center gap-1.5", noDrag)}>
+        <ShareSessionButton />
         {session ? <FinalSystemPromptButton /> : null}
         <TranscriptDisplayMenu />
         {session ? (

@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, realpath, rm } from "node:fs/promises";
+import { access, copyFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { withTrailers } from "./gitIdentity.ts";
@@ -118,11 +118,16 @@ export async function gitBlobAtCommit(
 
 /** As {@link runGit}, but with extra environment (checkpoint capture threads a
  * throwaway `GIT_INDEX_FILE` + author/committer identity through here). */
-async function runGitEnv(cwd: string, args: string[], env: NodeJS.ProcessEnv): Promise<string> {
+async function runGitEnv(
+  cwd: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  timeout = 15_000,
+): Promise<string> {
   const { stdout } = await execFileAsync(gitBin(), args, {
     cwd,
     env,
-    timeout: 15_000,
+    timeout,
     maxBuffer: 8_000_000,
   });
   return stdout;
@@ -787,16 +792,19 @@ export async function createSessionWorktree(
   targetPath: string,
   branch: string,
   identityToken: string,
+  /** SRV-12c1: branch from this commit instead of the source branch's tip. */
+  startPoint?: string,
 ): Promise<GitWorktree> {
   const sourceBranch = await gitCurrentBranch(projectDir);
   if (sourceBranch === "HEAD") throw new Error("detached HEAD — check out a branch first");
+  if (startPoint !== undefined) validateGitObjectId(startPoint);
   // `git branch` is atomic: success proves this attempt owns the new ref;
   // failure means we own nothing and therefore must not delete anything. Retry
   // policy needs to distinguish an exact branch collision from every other Git
   // failure without parsing localized stderr, so classify only after proving
   // the fully-qualified local ref exists.
   try {
-    await runGit(projectDir, ["branch", branch, sourceBranch]);
+    await runGit(projectDir, ["branch", branch, startPoint ?? sourceBranch]);
   } catch (error) {
     const branchExists = await gitOwnedWorktreeBranchOid(projectDir, branch)
       .then((oid) => oid !== undefined)
@@ -832,11 +840,12 @@ export async function createSessionWorktreeWithBranchRetries(
   baseBranch: string,
   identityToken: string,
   maxAttempts = 50,
+  startPoint?: string,
 ): Promise<GitWorktree> {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const branch = attempt === 0 ? baseBranch : `${baseBranch}-${attempt + 1}`;
     try {
-      return await createSessionWorktree(projectDir, targetPath, branch, identityToken);
+      return await createSessionWorktree(projectDir, targetPath, branch, identityToken, startPoint);
     } catch (error) {
       if (!(error instanceof SessionWorktreeBranchCollisionError)) throw error;
     }
@@ -1586,6 +1595,40 @@ async function gitHasHead(cwd: string): Promise<boolean> {
  * the checkpoint commit is a detached snapshot, not history the user sees.
  */
 export async function gitCaptureCheckpoint(cwd: string, ref: string): Promise<string> {
+  const commit = await gitWorkTreeCommit(cwd, `agent-deck checkpoint ${ref}`, false);
+  // update-ref needs no temp index (it touches refs, not the index).
+  await runGit(cwd, ["update-ref", ref, commit]);
+  return commit;
+}
+
+/**
+ * SRV-12c1: the working tree of a session as one commit on top of HEAD, for a
+ * session move. Same throwaway index as a checkpoint (the real index, working
+ * tree and HEAD are untouched; ignored files stay out); no ref is written.
+ */
+/** The untracked files changed from what the user agreed to send. */
+export class SnapshotPlanChangedError extends Error {
+  constructor() {
+    super("The untracked files changed since you looked.");
+    this.name = "SnapshotPlanChangedError";
+  }
+}
+
+export async function gitSnapshotCommit(
+  cwd: string,
+  message: string,
+  /** The consented untracked paths: exactly these are added, or SnapshotPlanChangedError. */
+  untracked: readonly string[],
+): Promise<string> {
+  return await gitWorkTreeCommit(cwd, message, true, untracked);
+}
+
+async function gitWorkTreeCommit(
+  cwd: string,
+  message: string,
+  onHead: boolean,
+  consent?: readonly string[],
+): Promise<string> {
   const commonDir = await gitCommonDir(cwd);
   const tempIndex = path.join(commonDir, `agent-deck-checkpoint-index-${randomUUID()}`);
   const env: NodeJS.ProcessEnv = {
@@ -1599,18 +1642,78 @@ export async function gitCaptureCheckpoint(cwd: string, ref: string): Promise<st
   try {
     // Seed the THROWAWAY index from HEAD (when there is one) so unchanged
     // entries keep their blob+mode, then stage the whole worktree into it.
-    if (await gitHasHead(cwd)) {
+    const hasHead = await gitHasHead(cwd);
+    if (onHead && !hasHead) throw new Error("This repository has no commit yet.");
+    // SRV-12c1: a move seeds from a COPY of the real index (its stat data spares
+    // re-hashing a large tree); the add result is the working tree either way.
+    const realIndex = onHead
+      ? path.resolve(cwd, (await runGit(cwd, ["rev-parse", "--git-path", "index"])).trim())
+      : undefined;
+    const copied = realIndex
+      ? await copyFile(realIndex, tempIndex).then(
+          () => true,
+          () => false,
+        )
+      : false;
+    if (hasHead && !copied) {
       await runGitEnv(cwd, ["read-tree", "HEAD"], env);
     }
-    await runGitEnv(cwd, ["add", "-A", "--", "."], env);
+    if (consent === undefined) {
+      await runGitEnv(cwd, ["add", "-A", "--", "."], env, 15_000);
+    } else {
+      // SRV-12c1: a move stages only what the user agreed to: tracked changes,
+      // plus exactly the consented untracked paths (never whatever appeared since).
+      // Never split the throwaway index (its shared part would land in .git).
+      const add = ["-c", "core.splitIndex=false", "add"];
+      const literal = { ...env, GIT_LITERAL_PATHSPECS: "1" };
+      const added = async () =>
+        new Set(
+          (
+            await runGitEnv(
+              cwd,
+              ["diff", "--cached", "--no-renames", "--name-only", "--diff-filter=A", "-z"],
+              env,
+              120_000,
+            )
+          )
+            .split("\0")
+            .filter(Boolean),
+        );
+      await runGitEnv(cwd, [...add, "-u"], env, 120_000);
+      const before = await added();
+      if (consent.length > 0) {
+        const list = path.join(commonDir, `agent-deck-share-paths-${randomUUID()}`);
+        try {
+          await writeFile(list, consent.join("\0"));
+          await runGitEnv(
+            cwd,
+            [...add, `--pathspec-from-file=${list}`, "--pathspec-file-nul"],
+            literal,
+            120_000,
+          ).catch(() => {
+            // A consented file is gone (or ignored now): not what the user agreed to.
+            throw new SnapshotPlanChangedError();
+          });
+        } finally {
+          await rm(list, { force: true }).catch(() => {});
+        }
+      }
+      const after = await added();
+      const fresh = [...after].filter((name) => !before.has(name));
+      const wanted = new Set(consent);
+      if (fresh.length !== wanted.size || fresh.some((name) => !wanted.has(name)))
+        throw new SnapshotPlanChangedError();
+    }
     const tree = (await runGitEnv(cwd, ["write-tree"], env)).trim();
     if (tree.length === 0) throw new Error("git write-tree returned an empty tree");
     const commit = (
-      await runGitEnv(cwd, ["commit-tree", tree, "-m", `agent-deck checkpoint ${ref}`], env)
+      await runGitEnv(
+        cwd,
+        ["commit-tree", tree, ...(onHead ? ["-p", "HEAD"] : []), "-m", message],
+        env,
+      )
     ).trim();
     if (commit.length === 0) throw new Error("git commit-tree returned an empty commit");
-    // update-ref needs no temp index (it touches refs, not the index).
-    await runGit(cwd, ["update-ref", ref, commit]);
     return commit;
   } finally {
     // Best-effort: the throwaway index is inside the git common dir.
@@ -1736,4 +1839,154 @@ export async function gitPush(cwd: string, env?: Record<string, string>): Promis
       throw new Error(gitErrorText(secondError));
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// SRV-12c1 session move: the device pushes a snapshot commit to a transfer ref
+// with its own git login; the shared server fetches it, branches a worktree from
+// it and deletes the ref. GIT_TERMINAL_PROMPT=0 so a missing login fails fast.
+// ---------------------------------------------------------------------------
+
+const TRANSFER_REF = /^refs\/(?:agent-deck|heads\/agent-deck)\/transfer\/[0-9a-f-]{36}$/;
+
+/** A transfer ref this app wrote: the custom namespace or its branch fallback. */
+export function validTransferRef(ref: string): boolean {
+  return TRANSFER_REF.test(ref);
+}
+
+function transferRun(cwd: string, args: string[], env?: Record<string, string>) {
+  return runGitEnv(cwd, args, { ...process.env, ...env, GIT_TERMINAL_PROMPT: "0" }, 120_000);
+}
+
+/** What a move would carry: the repository root, branch, HEAD, changed files
+ * (untracked non-ignored files by name, so the user sees what would travel),
+ * submodules with changes of their own (a snapshot carries only their commit
+ * pointer) and the local commits not on the upstream (null: no upstream). */
+export async function gitSharePlan(cwd: string): Promise<{
+  root: string;
+  branch: string;
+  head: string;
+  tracked: number;
+  untracked: string[];
+  dirtySubmodules: string[];
+  localCommits: number | null;
+}> {
+  const root = (await runGit(cwd, ["rev-parse", "--show-toplevel"])).trim();
+  if (!(await gitHasHead(root))) throw new Error("This repository has no commit yet.");
+  const head = await gitCommitOid(root, "HEAD");
+  const branch = (await runGit(root, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+  const out = await runGit(root, ["status", "--porcelain=v2", "-z", "--untracked-files=all"]);
+  const fields = out.split("\0");
+  let tracked = 0;
+  const untracked: string[] = [];
+  const dirtySubmodules: string[] = [];
+  for (let i = 0; i < fields.length; i += 1) {
+    const field = fields[i]!;
+    if (field.startsWith("? ")) {
+      untracked.push(field.slice(2));
+      continue;
+    }
+    // "1 XY sub mH mI mW hH hI path", "2 ... Xscore path" (+ source path), "u ...".
+    const kind = field[0];
+    const fixed = kind === "1" ? 8 : kind === "2" ? 9 : kind === "u" ? 10 : -1;
+    if (fixed < 0) continue;
+    const parts = field.split(" ");
+    const sub = parts[2] ?? "N...";
+    if (sub[0] === "S" && (sub[1] === "C" || sub[2] === "M" || sub[3] === "U"))
+      dirtySubmodules.push(parts.slice(fixed).join(" "));
+    tracked += 1;
+    if (kind === "2") i += 1;
+  }
+  let localCommits: number | null = null;
+  try {
+    localCommits = Number(
+      (await runGit(root, ["rev-list", "--count", "@{upstream}..HEAD"])).trim(),
+    );
+  } catch {
+    // No upstream: say so rather than guess.
+  }
+  return { root, branch, head, tracked, untracked, dirtySubmodules, localCommits };
+}
+
+/** Only a remote that refuses the custom ref namespace gets the branch form;
+ * a login, permission, network or timeout failure is the answer as it is. */
+export function refNamespaceRefused(stderr: string): boolean {
+  if (
+    /authentication|permission|could not read|unable to access|timed out|could not resolve|repository not found|not appear to be a git repository/i.test(
+      stderr,
+    )
+  )
+    return false;
+  return /refusing|rejected|not allowed|denied|funny refname|invalid ref|hook declined/i.test(
+    stderr,
+  );
+}
+
+/** Push `commit` to refs/agent-deck/transfer/<id>, or the branch form when the
+ * remote refuses the custom namespace. Answers the ref that was written. */
+export async function gitPushTransfer(cwd: string, commit: string, id: string): Promise<string> {
+  validateGitObjectId(commit);
+  const custom = `refs/agent-deck/transfer/${id}`;
+  if (!validTransferRef(custom)) throw new Error("invalid transfer id");
+  try {
+    await transferRun(cwd, ["push", "origin", `+${commit}:${custom}`]);
+    return custom;
+  } catch (first) {
+    const killed = (first as { killed?: boolean }).killed === true;
+    if (killed || !refNamespaceRefused(gitErrorText(first))) throw new Error(gitErrorText(first));
+    const branch = `refs/heads/agent-deck/transfer/${id}`;
+    try {
+      await transferRun(cwd, ["push", "origin", `+${commit}:${branch}`]);
+      return branch;
+    } catch {
+      throw new Error(gitErrorText(first));
+    }
+  }
+}
+
+/** Fetch a transfer ref from origin; answers the commit it points at. Fetched
+ * into a private ref per call (never FETCH_HEAD, which concurrent imports share). */
+export async function gitFetchTransfer(
+  cwd: string,
+  ref: string,
+  env: Record<string, string>,
+): Promise<string> {
+  if (!validTransferRef(ref)) throw new Error("invalid transfer ref");
+  const local = `refs/agent-deck/import/${randomUUID()}`;
+  await transferRun(cwd, ["fetch", "--no-tags", "origin", `+${ref}:${local}`], env);
+  try {
+    return await gitCommitOid(cwd, local);
+  } finally {
+    await runGit(cwd, ["update-ref", "-d", local]).catch(() => {});
+  }
+}
+
+/** Remove a transfer ref from origin (after the import, or when it failed). */
+export async function gitDeleteTransferRef(
+  cwd: string,
+  ref: string,
+  env?: Record<string, string>,
+): Promise<void> {
+  if (!validTransferRef(ref)) throw new Error("invalid transfer ref");
+  try {
+    await transferRun(cwd, ["push", "origin", "--delete", ref], env);
+  } catch (error) {
+    // Already gone (the other side deleted it): done.
+    const left = await transferRun(cwd, ["ls-remote", "origin", ref], env).catch(() => null);
+    if (left === null || left.trim() !== "") throw error;
+  }
+}
+
+/** The parents of a commit, in order. */
+export async function gitCommitParents(cwd: string, commit: string): Promise<string[]> {
+  validateGitObjectId(commit);
+  const out = (await runGit(cwd, ["rev-list", "--parents", "-n", "1", commit])).trim();
+  return out.split(/\s+/).slice(1);
+}
+
+/** Undo the snapshot commit in its worktree: HEAD back to its parent, the
+ * changes left in the working tree as unstaged edits (untracked stay untracked). */
+export async function gitResetMixedTo(cwd: string, commit: string): Promise<void> {
+  validateGitObjectId(commit);
+  await runGit(cwd, ["reset", "--mixed", "-q", commit]);
 }

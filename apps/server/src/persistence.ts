@@ -128,6 +128,42 @@ export class SessionIndex extends JsonArrayStore<SessionMeta> {
           ...(owner ? { owner } : {}),
         };
       }
+      // SRV-12c1: the move links, kept only with their exact shape.
+      const shareLink = (raw: unknown, idKey: "serverSessionId" | "localSessionId") => {
+        const link = raw as Record<string, unknown> | null | undefined;
+        if (
+          !link ||
+          typeof link !== "object" ||
+          typeof link[idKey] !== "string" ||
+          typeof link.sharedAt !== "string" ||
+          (link.mode !== "snapshot" && link.mode !== "conversation")
+        ) {
+          return undefined;
+        }
+        return link;
+      };
+      const sharedTo = shareLink(normalized.sharedTo, "serverSessionId");
+      if (sharedTo && typeof sharedTo.serverOrigin === "string") {
+        normalized.sharedTo = {
+          serverOrigin: sharedTo.serverOrigin,
+          serverSessionId: sharedTo.serverSessionId as string,
+          sharedAt: sharedTo.sharedAt as string,
+          mode: sharedTo.mode as "snapshot" | "conversation",
+        };
+      } else delete normalized.sharedTo;
+      const sharedFrom = shareLink(normalized.sharedFrom, "localSessionId");
+      if (sharedFrom && typeof sharedFrom.device === "string") {
+        normalized.sharedFrom = {
+          device: sharedFrom.device.slice(0, 200),
+          localSessionId: sharedFrom.localSessionId as string,
+          sharedAt: sharedFrom.sharedAt as string,
+          mode: sharedFrom.mode as "snapshot" | "conversation",
+          ...(typeof sharedFrom.exportSha256 === "string" &&
+          /^[0-9a-f]{64}$/.test(sharedFrom.exportSha256)
+            ? { exportSha256: sharedFrom.exportSha256 }
+            : {}),
+        };
+      } else delete normalized.sharedFrom;
       const rawResources = (session as SessionMeta & { launchResourceConfig?: unknown })
         .launchResourceConfig;
       const validStringArray = (value: unknown): value is string[] | undefined =>
@@ -146,7 +182,10 @@ export class SessionIndex extends JsonArrayStore<SessionMeta> {
           typeof (rawResources as { modelOverride?: unknown }).modelOverride,
         ) ||
         !validStringArray((rawResources as { extensionsOverride?: unknown }).extensionsOverride) ||
-        !validStringArray((rawResources as { skillsOverride?: unknown }).skillsOverride)
+        !validStringArray((rawResources as { skillsOverride?: unknown }).skillsOverride) ||
+        ![undefined, "off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
+          (rawResources as { thinkingOverride?: string }).thinkingOverride,
+        )
       ) {
         delete normalized.launchResourceConfig;
         delete normalized.launchResourceFingerprint;
@@ -159,6 +198,7 @@ export class SessionIndex extends JsonArrayStore<SessionMeta> {
           modelOverride?: string;
           extensionsOverride?: string[];
           skillsOverride?: string[];
+          thinkingOverride?: NonNullable<SessionMeta["draftThinkingLevel"]>;
         };
         normalized.launchResourceConfig = {
           version: 1,
@@ -173,6 +213,9 @@ export class SessionIndex extends JsonArrayStore<SessionMeta> {
             : {}),
           ...(resources.skillsOverride !== undefined
             ? { skillsOverride: [...resources.skillsOverride] }
+            : {}),
+          ...(resources.thinkingOverride !== undefined
+            ? { thinkingOverride: resources.thinkingOverride }
             : {}),
         };
       }

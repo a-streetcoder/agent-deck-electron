@@ -243,3 +243,38 @@ test("a 403 page from Access reads as a refused account; a JSON 403 keeps its te
     body: { error: "only the creator" },
   });
 });
+
+test("a session export goes only to one project's import route, capped in size", async () => {
+  const { run } = fakeRun();
+  const { fetchImpl, calls } = fakeFetch(() => globalThis.Response.json({ sessionId: "s" }));
+  const client = createSharedServerClient({ origin: ORIGIN, run, fetchImpl });
+  const project = "0b6f1c2e-6a7d-4c1b-9a51-3f2a7c9d1e00";
+  const envelope = {
+    version: 1,
+    localSessionId: "5d2c1b4a-1111-4222-8333-944445555666",
+    transcript: '{"type":"session"}\n',
+    meta: {},
+    transfer: { mode: "conversation" },
+  };
+  for (const [method, path, body] of [
+    ["POST", "/projects/not-a-uuid/sessions/import", envelope],
+    ["POST", `/projects/${project}/sessions/import/x`, envelope],
+    ["POST", `/projects/${project}/../me/sessions/import`, envelope],
+    ["GET", `/projects/${project}/sessions/import`],
+    ["POST", `/projects/${project}/sessions/import`, { ...envelope, version: 2 }],
+    ["POST", `/projects/${project}/sessions/import`, { repo: "acme/app" }],
+    ["POST", `/projects/${project}/sessions/import`, [envelope]],
+    [
+      "POST",
+      `/projects/${project}/sessions/import`,
+      { ...envelope, transcript: "x".repeat(16 * 1024 * 1024) },
+    ],
+  ]) {
+    await assert.rejects(client.request(method, path, body), `${method} ${path}`);
+  }
+  assert.equal(calls.length, 0);
+  const answer = await client.request("POST", `/projects/${project}/sessions/import`, envelope);
+  assert.deepEqual(answer, { status: 200, body: { sessionId: "s" } });
+  assert.equal(calls[0].url, `${ORIGIN}/projects/${project}/sessions/import`);
+  assert.equal(calls[0].init.body, JSON.stringify(envelope));
+});

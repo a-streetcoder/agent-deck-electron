@@ -6,7 +6,11 @@ import {
   type UserIdentity,
 } from "@agent-deck/contracts";
 import { Either, Schema } from "effect";
-import { emptyTranscript } from "@agent-deck/domain";
+import { readFile, stat } from "node:fs/promises";
+import type { SessionMeta } from "@agent-deck/contracts";
+import { emptyTranscript, type TranscriptState } from "@agent-deck/domain";
+import { parsePiSessionFile } from "./sessionTools.ts";
+import { transcriptFromEntries } from "./services/sessionManager.ts";
 import type { SessionDraftGateway } from "./sessionDrafts.ts";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { CheckpointRollbackGateway } from "./checkpointRollback.ts";
@@ -18,6 +22,7 @@ import {
 } from "./terminalLauncher.ts";
 import type { OpenedScript, ScriptRunnerGateway } from "./scriptRunnerGateway.ts";
 import type { ManagedSession, SessionManager } from "./SessionManager.ts";
+import { SESSION_MOVING_ERROR, SESSION_SHARED_ERROR } from "./SessionManager.ts";
 import type { SessionImageStore } from "./sessionImages.ts";
 import type { IncomingMessage } from "node:http";
 import type { SessionPasteStore } from "./sessionPastes.ts";
@@ -52,6 +57,47 @@ import type { OpenedTerminal, TerminalGateway } from "./terminalGateway.ts";
  */
 
 const decodeClientFrame = Schema.decodeUnknownEither(RpcClientFrame);
+
+/** SRV-12c1: a pointer shows its last local transcript, read from its Pi file
+ * without a Pi process; anything unreadable shows as empty. */
+/** Built once per pointer and file version (mtime + size), bounded. */
+const pointerTranscripts = new Map<string, { version: string; state: TranscriptState }>();
+const MAX_POINTER_TRANSCRIPTS = 32;
+
+export async function pointerTranscript(meta: SessionMeta): Promise<TranscriptState> {
+  try {
+    const file = meta.piSessionFile!;
+    const info = await stat(file);
+    const version = `${info.mtimeMs}:${info.size}`;
+    const cached = pointerTranscripts.get(meta.id);
+    if (cached?.version === version) return cached.state;
+    const { byId, leafId } = parsePiSessionFile(await readFile(file, "utf8"));
+    const state = transcriptFromEntries({ entries: [...byId.values()], leafId } as Parameters<
+      typeof transcriptFromEntries
+    >[0]);
+    pointerTranscripts.delete(meta.id);
+    pointerTranscripts.set(meta.id, { version, state });
+    if (pointerTranscripts.size > MAX_POINTER_TRANSCRIPTS)
+      pointerTranscripts.delete(pointerTranscripts.keys().next().value!);
+    return state;
+  } catch {
+    return emptyTranscript();
+  }
+}
+
+/** For tests: how many pointer transcripts are cached. */
+export const pointerTranscriptCacheSize = (): number => pointerTranscripts.size;
+
+/** SRV-12c1: requests refused while a session is handed to the shared server. */
+const MOVE_FROZEN = new Set([
+  "prompt",
+  "steer",
+  "follow_up",
+  "compact",
+  "checkpoint_rollback",
+  "set_model",
+  "set_thinking",
+]);
 
 // Terminal push backpressure (Slice 8 hardening): a PTY is a sustained
 // multi-MB/s producer (`yes`, `cat largefile`), and `ws` buffers frames in
@@ -414,6 +460,36 @@ export function createRpcConnection(deps: {
         );
         return;
       }
+    }
+
+    // SRV-12c1: a session moved to a shared server is a frozen pointer: it shows
+    // as an empty, process-free session and refuses everything else.
+    const pointer =
+      "sessionId" in request ? deps.drafts?.sharedPointer?.(request.sessionId) : undefined;
+    if ("sessionId" in request && pointer) {
+      if (request.type === "subscribe_session") {
+        cleanups.get(request.sessionId)?.();
+        cleanups.delete(request.sessionId);
+        push({
+          type: "snapshot",
+          sessionId: request.sessionId,
+          seq: 0,
+          state: await pointerTranscript(pointer),
+        });
+        replyOk();
+      } else if (request.type === "abort") replyOk();
+      else replyError(SESSION_SHARED_ERROR);
+      return;
+    }
+    // ...and while it is being handed over, nothing that changes it starts.
+    if (
+      "sessionId" in request &&
+      MOVE_FROZEN.has(request.type) &&
+      // Narrow test doubles may have no claims.
+      sessions.mutationClaims?.owner(request.sessionId) === "share"
+    ) {
+      replyError(SESSION_MOVING_ERROR);
+      return;
     }
 
     // A draft is durable metadata, not a fake running Pi session. Only a first

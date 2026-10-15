@@ -10,6 +10,8 @@ import type { ManagedSession, SessionManager } from "./SessionManager.ts";
 
 export interface SessionDraftGateway {
   find(id: string): SessionMeta | undefined;
+  /** SRV-12c1: a session moved to a shared server, now a frozen pointer without Pi. */
+  sharedPointer?(id: string): SessionMeta | undefined;
   start(id: string): Promise<ManagedSession>;
   setModel(id: string, provider: string, modelId: string): Promise<void>;
   setThinking(id: string, level: ThinkingLevel): Promise<void>;
@@ -38,6 +40,7 @@ export function createSessionDraftGateway(deps: {
   };
   return {
     find,
+    sharedPointer: (id) => deps.index.find((row) => row.id === id && row.sharedTo !== undefined),
     start(id) {
       const existing = pending.get(id);
       if (existing) return existing;

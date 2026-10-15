@@ -563,6 +563,8 @@ export const SessionMeta = Schema.mutable(
           modelOverride: Schema.optional(Schema.String),
           extensionsOverride: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
           skillsOverride: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
+          /** SRV-12c1: an imported session keeps the thinking level it ran at. */
+          thinkingOverride: Schema.optional(ThinkingLevel),
         }),
       ),
     ),
@@ -619,6 +621,31 @@ export const SessionMeta = Schema.mutable(
           sessionId: Schema.String,
           title: Schema.optional(Schema.String),
           owner: Schema.optional(UserIdentity),
+        }),
+      ),
+    ),
+    /** SRV-12c1, desktop only: this session moved to a shared server and is now a
+     * frozen read-only pointer to the server copy. */
+    sharedTo: Schema.optional(
+      Schema.mutable(
+        Schema.Struct({
+          serverOrigin: Schema.String,
+          serverSessionId: Schema.String,
+          sharedAt: Schema.String,
+          mode: Schema.Literal("snapshot", "conversation"),
+        }),
+      ),
+    ),
+    /** SRV-12c1, shared server: this session was imported from a device's session. */
+    sharedFrom: Schema.optional(
+      Schema.mutable(
+        Schema.Struct({
+          device: Schema.String,
+          localSessionId: Schema.String,
+          sharedAt: Schema.String,
+          mode: Schema.Literal("snapshot", "conversation"),
+          /** sha256 of the imported transcript: a retry must send the same export. */
+          exportSha256: Schema.optional(Schema.String),
         }),
       ),
     ),

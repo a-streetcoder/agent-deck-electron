@@ -6,6 +6,7 @@ import {
   type KeybindingBinding,
 } from "@agent-deck/contracts";
 import { Composer } from "./components/Composer.tsx";
+import { SharedSessionPanel } from "./components/SessionShare.tsx";
 import { AppEmptyState } from "./design-system/components/AppEmptyState.tsx";
 import { AppTitleBar } from "./components/AppTitleBar.tsx";
 import { ChatToolbar } from "./components/ChatToolbar.tsx";
@@ -71,7 +72,7 @@ function ChatColumn() {
                 message={agentStatus === "running" ? "Pi is working…" : null}
                 className="px-6"
               />
-              <Composer />
+              {session.sharedTo ? <SharedSessionPanel session={session} /> : <Composer />}
             </div>
             <DeckPanel />
             {/* The single right-side workspace pane (Slice L1): a Chrome-style tab

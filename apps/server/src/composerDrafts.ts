@@ -162,6 +162,18 @@ export function registerComposerDraftRoutes(ctx: ServerContext, store: ComposerD
         return reply.status(404).send({ error: "unknown session" });
       if (ctx.sessions.mutationClaims.owner(id) === "delete")
         return reply.status(409).send({ error: "Session deletion is in progress." });
+      // SRV-12c1: the unsent message travels with a move: frozen during the hand-off.
+      if (ctx.sessions.mutationClaims.owner(id) === "share")
+        return reply.status(409).send({
+          code: "session_moving",
+          error: "This session is moving to the shared server.",
+        });
+      // SRV-12c1: a pointer has no composer; its unsent message moved with it.
+      if (ctx.index.find((session) => session.id === id)?.sharedTo)
+        return reply.status(409).send({
+          code: "session_shared",
+          error: "This session continues on the shared server.",
+        });
       const parsed = z.object({ draft: composerDraftSchema.nullable() }).safeParse(request.body);
       if (!parsed.success)
         return reply.status(400).send({ error: "Invalid or oversized composer draft." });

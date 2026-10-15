@@ -111,6 +111,16 @@ export class SessionAuthorStore {
     if (turns.length > 0) this.index.upsert({ id: targetSessionId, turns });
   }
 
+  /** SRV-12c1: the turns bound to a Pi entry, for a session moved to a server. */
+  exportTurns(sessionId: string): AuthorTurn[] {
+    return this.turns(sessionId).filter((turn) => turn.entryId);
+  }
+
+  /** SRV-12c1: an imported session's bound turns (validated by the import route). */
+  importTurns(sessionId: string, turns: readonly AuthorTurn[]): void {
+    if (turns.length > 0) this.index.upsert({ id: sessionId, turns: turns.map((t) => ({ ...t })) });
+  }
+
   /** The session is gone (DELETE /sessions/:id): its authors go with it. */
   deleteSession(sessionId: string): void {
     this.index.remove(sessionId);

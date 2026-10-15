@@ -408,6 +408,30 @@ export class SessionPasteStore {
     );
   }
 
+  /** SRV-12c1: the turns bound to a Pi entry, for a session moved to a server. */
+  exportTurns(sessionId: string): StoredPasteTurn[] {
+    return this.read(sessionId).filter((record) => record.entryId !== undefined);
+  }
+
+  /** SRV-12c1: an imported session's turns, untrusted: each is checked as on read. */
+  importTurns(sessionId: string, turns: readonly unknown[]): void {
+    const checked = turns.map((turn) => {
+      if (!isStoredPasteTurn(turn) || turn.entryId === undefined) {
+        throw new Error("invalid paste turn");
+      }
+      const pastes = validatePasteAttachments(turn.transcriptText, turn.pastes);
+      return {
+        batchId: randomUUID(),
+        signature: turn.signature,
+        transcriptText: turn.transcriptText,
+        pastes,
+        entryId: turn.entryId,
+        ...(turn.cellId !== undefined ? { cellId: turn.cellId } : {}),
+      };
+    });
+    if (checked.length > 0) this.write(sessionId, checked);
+  }
+
   deleteSession(sessionId: string): void {
     this.assertStore();
     this.pending.delete(sessionId);

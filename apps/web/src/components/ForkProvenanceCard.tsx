@@ -107,6 +107,24 @@ export function ForkProvenanceCard({ session }: { session: SessionMeta }) {
   if (!provenance) {
     // SRV-15b: a plain fork (a full duplicate) has no recap, only its origin.
     const from = session.forkedFrom;
+    // SRV-12c1: a session moved here from a member's device.
+    const moved = session.sharedFrom;
+    if (!from && moved) {
+      return (
+        <section
+          className="flex items-center gap-2 px-1 text-caption text-text-muted"
+          aria-label="Session origin"
+          data-testid="shared-from-line"
+        >
+          <span className="min-w-0 truncate">
+            Moved from {moved.device}.
+            {moved.mode === "conversation"
+              ? ` Earlier edits from ${moved.device} are not in this workspace.`
+              : ""}
+          </span>
+        </section>
+      );
+    }
     if (!from) return null;
     const source = sessions.find((candidate) => candidate.id === from.sessionId);
     return (
