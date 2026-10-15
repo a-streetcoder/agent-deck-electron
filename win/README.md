@@ -6,7 +6,7 @@ Double-click **Create Dev Shortcut.cmd** once to create an **Agent Deck Dev** de
 
 ## Prerequisites
 
-- Node.js 22.19+ and the pnpm version specified in `package.json`, available on PATH.
+- Node.js 22.22+ and the pnpm version specified in `package.json`, available on PATH.
 - Dependencies installed with `pnpm install`, including access to the private skill-engine package.
 - The native build prerequisites described in the repository development guides: `pnpm dev` runs `pnpm build:native` before starting.
 

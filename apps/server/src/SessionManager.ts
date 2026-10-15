@@ -1497,6 +1497,7 @@ export class SessionManager {
       resolveAgent: this.resolveAgent,
       recallChildMemory: this.recallChildMemory,
       mcpPolicyEnabled: this.mcpPolicyEnabled,
+      onChildStarted: () => this.onSubagentStarted?.(),
       ...(this.subagentRuns
         ? {
             childRuns: {
@@ -1710,6 +1711,9 @@ export class SessionManager {
    * whose plan.changed the history suppresses once it holds events.
    */
   onPlanWake?: (sessionId: string) => void;
+
+  /** ANA-01: a delegated child started (generic, Loop/constrained and continuation runs). */
+  onSubagentStarted?: () => void;
 
   private restoreSessionPlan(session: ManagedSession, items: SessionPlanItem[]): void {
     session.restorePlan(items);

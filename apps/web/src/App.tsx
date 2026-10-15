@@ -14,6 +14,7 @@ import { CommandPalette } from "./components/CommandPalette.tsx";
 import { KeybindingsEditor } from "./components/KeybindingsEditor.tsx";
 import { DeckPanel } from "./components/DeckPanel.tsx";
 import { OnboardingOverlay } from "./components/OnboardingOverlay.tsx";
+import { AnalyticsNotice, type AnalyticsNoticeSettings } from "./components/AnalyticsNotice.tsx";
 import { ProviderMissingBanner } from "./components/ProviderMissingBanner.tsx";
 import { TabbedPane } from "./components/workspace/TabbedPane.tsx";
 import { ResizeHandle, useResizable } from "./components/common/Resizable.tsx";
@@ -113,6 +114,7 @@ function ChatColumn() {
 
 export function App() {
   const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [analyticsSettings, setAnalyticsSettings] = useState<AnalyticsNoticeSettings | null>(null);
   // The left sidebar is drag-resizable (Slice L4a), persisted + clamped.
   const sidebar = useResizable({
     storageKey: "agentdeck:sidebar-width",
@@ -156,12 +158,15 @@ export function App() {
             settings?: {
               keybindings?: KeybindingBinding[];
               piAgentTranscriptVisibility?: unknown;
+              analyticsNoticeSeen?: boolean;
             };
+            capabilities?: { analytics?: boolean };
           } | null,
         ) => {
           if (!data) throw new Error("Settings request failed");
           if (!active) return;
           if (data?.settings?.keybindings) setKeybindings(data.settings.keybindings);
+          setAnalyticsSettings(data);
           setTranscriptVisibility(
             coerceTranscriptVisibility(data.settings?.piAgentTranscriptVisibility),
           );
@@ -241,6 +246,7 @@ export function App() {
               {error}
             </div>
           ) : null}
+          <AnalyticsNotice data={analyticsSettings} />
 
           <main className="relative min-h-0 flex-1">
             {/* Chat layer: always mounted. */}

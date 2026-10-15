@@ -20,6 +20,10 @@ await build({
   target: "node22",
   sourcemap: true,
   legalComments: "none",
+  // ANA-01: the public PostHog project key is baked in at build time; no key, no analytics.
+  define: process.env.AGENT_DECK_POSTHOG_KEY
+    ? { "process.env.AGENT_DECK_POSTHOG_KEY": JSON.stringify(process.env.AGENT_DECK_POSTHOG_KEY) }
+    : {},
   banner: {
     // Some bundled CommonJS dependencies use runtime requires for Node built-ins.
     // Re-create require for the ESM output instead of rewriting those packages.
@@ -31,6 +35,8 @@ await build({
     "node-pty",
     // Semantic memory is intentionally optional and runtime-installed.
     "@huggingface/transformers",
+    // posthog-node's optional OpenTelemetry peer (error tracking, unused here).
+    "@opentelemetry/api",
   ],
 });
 

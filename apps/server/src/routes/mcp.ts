@@ -739,6 +739,14 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     if (!(await ctx.probeMcp(scope, id)))
       return reply.code(404).send({ error: "unknown assigned MCP server" });
     broadcast({ type: "resources_changed" });
-    return { server: { id, ...ctx.mcpProbe(scope, id) } };
+    const probe = ctx.mcpProbe(scope, id);
+    if (probe?.connected && ctx.analytics?.active()) {
+      const config = ctx.effectiveMcpConfigs(scope).configs.find((item) => item.id === id);
+      if (config)
+        ctx.analytics?.track("mcp_server_connected", {
+          transport: "url" in config ? "http" : "stdio",
+        });
+    }
+    return { server: { id, ...probe } };
   });
 }

@@ -23,6 +23,7 @@ afterEach(() => {
 const defaults = {
   piAgentIdleParkingEnabled: true,
   piAgentIdleParkingTimeoutMinutes: 10,
+  analyticsEnabled: true,
 };
 
 describe("PerformanceScreen", () => {
@@ -63,6 +64,43 @@ describe("PerformanceScreen", () => {
     release();
     await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
     expect(screen.getByTestId("performance-save-status").textContent).toContain("Saved");
+  });
+
+  it("persists the Privacy analytics switch through PATCH /settings", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ settings: defaults, capabilities: { analytics: true } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ settings: { ...defaults, analyticsEnabled: false } }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<PerformanceScreen />);
+
+    const toggle = await screen.findByRole("switch", { name: "Send anonymous usage counts" });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe("PATCH");
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      analyticsEnabled: false,
+    });
+  });
+
+  it("hides the Privacy switch when this backend cannot send usage counts", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ settings: defaults, capabilities: { analytics: false } }),
+      }),
+    );
+    render(<PerformanceScreen />);
+    await screen.findByTestId("performance-ready");
+    expect(screen.queryByTestId("analytics-toggle")).toBeNull();
   });
 
   it("validates minutes locally and commits once on Enter", async () => {

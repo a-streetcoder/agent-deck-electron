@@ -223,6 +223,7 @@ function ownedServerLaunch() {
         ...process.env,
         PORT: "0",
         AGENT_DECK_DESKTOP_RECOVERY_TOKEN: desktopRecoveryToken,
+        AGENT_DECK_APP_VERSION: app.getVersion(),
       },
       shell: process.platform === "win32",
     };
@@ -238,6 +239,7 @@ function ownedServerLaunch() {
       PORT: "0",
       AGENT_DECK_DATA_DIR: app.getPath("userData"),
       AGENT_DECK_DESKTOP_RECOVERY_TOKEN: desktopRecoveryToken,
+      AGENT_DECK_APP_VERSION: app.getVersion(),
       AGENT_DECK_PI_PATH: process.execPath,
       AGENT_DECK_PI_CLI: bundledPiCli(),
       AGENT_DECK_WEB_DIST: path.join(app.getAppPath(), "apps", "web", "dist"),

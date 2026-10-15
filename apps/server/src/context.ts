@@ -1,4 +1,5 @@
 import type { CatalogModel } from "@agent-deck/pi-host";
+import type { Analytics } from "./analytics.ts";
 import type { ComposerDraftStore } from "./composerDrafts.ts";
 import type { SessionDraftGateway } from "./sessionDrafts.ts";
 import nodePath from "node:path";
@@ -160,6 +161,8 @@ export interface ServerContext {
   githubConnections?: GitHubConnections;
   /** SRV-09: AGENT_DECK_TRUSTED_PROXY is set; host launchers (terminal, editor) refuse. */
   sharedServer?: boolean;
+  /** ANA-01: anonymous usage counts (analytics.ts); absent in hand-built test contexts. */
+  analytics?: Analytics;
   /** SRV-12c1: the fork's model check (SRV-15a), reused by the session import. */
   sessionModelGate?: {
     pin(meta: SessionMeta, owner: UserIdentity | undefined): Promise<SessionMeta>;

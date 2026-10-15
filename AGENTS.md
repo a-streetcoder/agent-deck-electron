@@ -2,7 +2,7 @@
 
 This is the cross-platform Electron implementation of Agent Deck, with a React/Vite UI and a Node/TypeScript backend that hosts Pi through JSONL RPC.
 
-Use Node.js 22.19+ and pnpm. Preserve real streamed events, test Pi-facing changes against the pinned real Pi binary, and never modify bundled resources for user edits—write through the override and persistence layers instead.
+Use Node.js 22.22+ and pnpm. Preserve real streamed events, test Pi-facing changes against the pinned real Pi binary, and never modify bundled resources for user edits—write through the override and persistence layers instead.
 
 Skill storage goes through the skill engine vendored from Syncr into `packages/skill-engine-native` (a Rust N-API addon built by `pnpm build:native` next to `loop-catalog-native`; no private registry or token, see ADR 0005), while Agent Deck owns scanning and Pi runtime. Before changing skill storage, filesystem precedence or native packaging, read [the skill-store contract](docs/skill-store-contract.md) and the relevant modular guides below; do not bypass `EngineSkillStore`, and keep the addon's NAPI method names and `RESOURCE_*` error contract unchanged.
 

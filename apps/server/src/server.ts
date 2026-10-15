@@ -46,6 +46,7 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { buildMemoryPreamble, injectableIndex, type Embedder } from "@agent-deck/memory";
 import { serverLog } from "./serverLog.ts";
+import { createAnalytics } from "./analytics.ts";
 import { writeOpenAIFastConfig, writeOpenAIFastExtension } from "./openaiFastMode.ts";
 import { projectAllowsAgent } from "./agentCuration.ts";
 import { resolveExplicitSkills } from "./agentSkillResolution.ts";
@@ -1705,7 +1706,17 @@ async function initServer(
   // The shared context the route modules read (Slice 2 decomposition): one
   // object, assembled once, so every moved handler body reads exactly as it
   // did in the monolith.
+  const analytics = createAnalytics({
+    enabled: () => settings.get().analyticsEnabled,
+    key: process.env.AGENT_DECK_POSTHOG_KEY,
+    dataDir,
+    appVersion: process.env.AGENT_DECK_APP_VERSION || "dev",
+    sharedServer: trustedProxy !== null,
+  });
+  sessions.onSubagentStarted = () => analytics.track("subagent_spawned");
+
   const ctx: ServerContext = {
+    analytics,
     ...(options.claudeCodeLoggedIn ? { claudeCodeLoggedIn: options.claudeCodeLoggedIn } : {}),
     planDispatcher,
     composerDrafts,
@@ -1826,6 +1837,7 @@ async function initServer(
   // Now that the port is bound, bridge extensions can target this server. The
   // pi subprocess is always local, so loopback is correct regardless of host.
   bridgeAddress.endpoint = `http://127.0.0.1:${port}/bridge`;
+  analytics.track("app_started");
 
   let closePromise: Promise<void> | undefined;
   const close = (): Promise<void> => {
@@ -1878,6 +1890,7 @@ async function initServer(
         await step(() => stopEventNudges());
         await step(() => stopHumanActivityNudges());
         await step(() => eventLog.close());
+        await step(() => analytics.shutdown());
       } finally {
         // Dispose LAST, after the HTTP/WS surface is gone (see startServer).
         await effectRuntime.dispose();

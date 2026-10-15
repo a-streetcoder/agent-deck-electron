@@ -73,6 +73,7 @@ import { LaunchResourceResolutionError, resolveLaunchResources } from "../launch
 import { assembleSlashUniverseForSession } from "../slashUniverse.ts";
 import { MAX_OPEN_IDS, mirrorTranscript, sessionTranscriptSource } from "../sessionMirror.ts";
 import { emptyTranscript } from "@agent-deck/domain";
+import { launchModelProps } from "../analytics.ts";
 
 const mergeLocks = new Set<string>();
 
@@ -2177,6 +2178,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       }
       announcementAttempted = true;
       sessions.announceCreated(session);
+      // ANA-01: counted at the real launch (a draft's first message), with the plan's model.
+      ctx.analytics?.track("session_created", launchModelProps(plan));
       if (draft) draftEnvironment.delete(draft.id);
       return session;
     } catch (error) {
