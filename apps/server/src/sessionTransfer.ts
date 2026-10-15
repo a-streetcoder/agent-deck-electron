@@ -18,6 +18,7 @@ import { envDefaults, type ServerContext } from "./context.ts";
 import { resolveLaunchResources } from "./launchResources.ts";
 import {
   createSessionWorktreeWithBranchRetries,
+  gitCarriesLfs,
   gitCommitParents,
   gitDeleteOwnedWorktreeBranch,
   gitDeleteTransferRef,
@@ -32,12 +33,17 @@ import {
   SessionWorktreeAddError,
   SnapshotPlanChangedError,
   validTransferRef,
+  withoutHooks,
   type GitWorktree,
 } from "./git.ts";
 import type { SessionMutationClaims } from "./sessionMutationClaims.ts";
 
 /** The whole envelope, as JSON, never exceeds this (the transcript is most of it). */
 export const MAX_TRANSFER_BYTES = 16 * 1024 * 1024;
+/** ade-q0pz: transfers push without hooks, so git-lfs would not upload the objects. */
+export const LFS_MOVE_REFUSAL = "LFS repositories cannot be moved yet.";
+export const LFS_DETECTION_REFUSAL =
+  "LFS detection failed, so the work cannot be moved with its files.";
 
 /** What a move never carries: device-local state, named in the import summary. */
 export const ALWAYS_DROPPED = [
@@ -556,6 +562,16 @@ export async function prepareSessionExport(
       `agent-deck transfer ${id}`,
       options.untracked,
     );
+    // ade-q0pz: the push runs without hooks, so git-lfs would not upload; any doubt refuses.
+    const lfs = await gitCarriesLfs(sharePlan.root, {
+      tip: commit,
+      untracked: options.untracked,
+    }).then(
+      (found) => (found ? LFS_MOVE_REFUSAL : undefined),
+      () => LFS_DETECTION_REFUSAL,
+    );
+    if (lfs)
+      return { status: 409, body: { code: "share_refused", error: lfs, fallback: "conversation" } };
     const ref = await gitPushTransfer(sharePlan.root, commit, id, options.pushEnv);
     envelope.transfer = { mode: "snapshot", ref, commit, baseHead: sharePlan.head };
     return {
@@ -743,23 +759,33 @@ export async function createTransferWorktree(
         target,
         made.branch,
       ).catch(() => false);
-      if (registered) await gitWorktreePrune(projectPath).catch(() => {});
-      // A failed `git worktree add` still owns the branch it created.
-      await gitDeleteOwnedWorktreeBranch(projectPath, made).catch(() => {});
+      // ade-q0pz: no hook (reference-transaction) runs while cleaning up either.
+      await withoutHooks(async (hooks) => {
+        if (registered) await gitWorktreePrune(projectPath, hooks).catch(() => {});
+        // A failed `git worktree add` still owns the branch it created.
+        await gitDeleteOwnedWorktreeBranch(projectPath, made, hooks).catch(() => {});
+      }).catch(() => {});
     }
   };
   try {
-    reservation = ctx.sessionWorktreeStore.reserveWorktree(target);
-    worktree = await createSessionWorktreeWithBranchRetries(
-      projectPath,
-      target,
-      `agent-deck/session-${suffix}`,
-      reservation,
-      50,
-      snapshot?.commit,
-    );
-    if (snapshot) await gitResetMixedTo(target, snapshot.baseHead);
-    return { worktree, discard };
+    const held = ctx.sessionWorktreeStore.reserveWorktree(target);
+    reservation = held;
+    // ade-q0pz: the snapshot is someone else's code; no hook of it (or of a
+    // repository-relative core.hooksPath) runs on checkout or reset.
+    const made = await withoutHooks(async (hooks) => {
+      worktree = await createSessionWorktreeWithBranchRetries(
+        projectPath,
+        target,
+        `agent-deck/session-${suffix}`,
+        held,
+        50,
+        snapshot?.commit,
+        hooks,
+      );
+      if (snapshot) await gitResetMixedTo(target, snapshot.baseHead, hooks);
+      return worktree;
+    });
+    return { worktree: made, discard };
   } catch (error) {
     if (error instanceof SessionWorktreeAddError) attempt = error.worktree;
     await discard();

@@ -615,6 +615,8 @@ interface SharePlan {
   files: { tracked: number; untracked: string[] };
   localCommits?: number | null;
   dirtySubmodules?: string[];
+  /** The checkout tracks LFS files: only the conversation can move (ade-q0pz). */
+  lfs?: boolean;
 }
 interface Envelope {
   transfer: { mode: "snapshot"; ref: string } | { mode: "conversation" };
@@ -865,6 +867,7 @@ function ShareDialog({
   const submodules = step.kind === "confirm" ? (step.plan.dirtySubmodules ?? []) : [];
   // null: no upstream to compare with, which is not the same as none.
   const localCommits = step.kind === "confirm" ? step.plan.localCommits : 0;
+  const lfs = step.kind === "confirm" && step.plan.lfs === true;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-4 [-webkit-app-region:no-drag]">
       <div
@@ -924,14 +927,28 @@ function ShareDialog({
                 conversation only, or commit inside them first.
               </p>
             ) : null}
+            {lfs ? (
+              <p className="text-label text-text-primary" data-testid="share-lfs">
+                LFS repositories cannot be moved with their files yet. The conversation moves alone.
+              </p>
+            ) : null}
             <div className="flex flex-wrap justify-end gap-2">
               <Button size="sm" variant="ghost" ref={closeRef} onClick={onClose}>
                 Cancel
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => onMove("conversation")}>
+              <Button
+                size="sm"
+                variant={lfs ? undefined : "ghost"}
+                onClick={() => onMove("conversation")}
+              >
                 Conversation only
               </Button>
-              <Button size="sm" disabled={submodules.length > 0} onClick={() => onMove("snapshot")}>
+              <Button
+                size="sm"
+                variant={lfs ? "ghost" : undefined}
+                disabled={submodules.length > 0 || lfs}
+                onClick={() => onMove("snapshot")}
+              >
                 Move with my changes
               </Button>
             </div>

@@ -18,7 +18,11 @@ import {
   gitLoopWorktreePatch,
   gitOperationInProgress,
   gitOwnedWorktreeBranchOid,
+  GitLfsPushRefusedError,
+  gitPush,
+  gitCarriesLfs,
   gitRepositoryIdentity,
+  gitTracksLfs,
   gitReleaseSynchronization,
   gitRemoteTagExists,
   gitRepoRelativePosixPath,
@@ -150,6 +154,85 @@ describe("git porcelain parsing", () => {
   });
 });
 
+describe("gitPush with the requester's token", () => {
+  it("runs no hook and never returns the token in its error", async () => {
+    const fixture = makeRemoteFixture();
+    const token = "gho_q0pzNotARealToken";
+    const hooks = mkdtempSync(path.join(tmpdir(), "agent-deck-push-hooks-"));
+    const marker = path.join(hooks, "ran");
+    writeFileSync(
+      path.join(hooks, "pre-push"),
+      `#!/bin/sh\necho "$GH_TOKEN" > "${marker.replace(/\\/g, "/")}"\nexit 1\n`,
+      { mode: 0o755 },
+    );
+    git(fixture.work, ["config", "core.hooksPath", hooks]);
+    commitFile(fixture.work, "pushed.md");
+    await gitPush(fixture.work, { GH_TOKEN: token });
+    expect(existsSync(marker)).toBe(false);
+    expect(git(fixture.bare, ["rev-parse", "main"])).toBe(git(fixture.work, ["rev-parse", "HEAD"]));
+
+    // A failure whose git text names the token answers it redacted.
+    const missing = path.join(hooks, token, "missing.git");
+    git(fixture.work, ["remote", "set-url", fixture.remote, missing]);
+    commitFile(fixture.work, "again.md");
+    const failure = await gitPush(fixture.work, { GH_TOKEN: token }).catch((error) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure.message)).not.toContain(token);
+    expect(String(failure.message)).toContain("<secret>");
+  });
+
+  it("detects an LFS-tracked checkout and refuses a hook-free push of it", async () => {
+    const fixture = makeRemoteFixture();
+    expect(await gitTracksLfs(fixture.work)).toBe(false);
+    writeFileSync(path.join(fixture.work, ".gitattributes"), "*.bin filter=lfs diff=lfs -text\n");
+    writeFileSync(path.join(fixture.work, "a.bin"), "binary\n");
+    // No git-lfs needed: a pass-through filter stands in for it.
+    const noLfs = ["-c", "filter.lfs.clean=cat", "-c", "filter.lfs.required=false"];
+    git(fixture.work, [...noLfs, "add", ".gitattributes", "a.bin"]);
+    git(fixture.work, [...noLfs, "commit", "-m", "lfs"]);
+    expect(await gitTracksLfs(fixture.work)).toBe(true);
+    await expect(gitPush(fixture.work, {}, { noHooks: true })).rejects.toBeInstanceOf(
+      GitLfsPushRefusedError,
+    );
+  });
+
+  it("finds LFS attributes an older outgoing commit added and removed, without an upstream", async () => {
+    const fixture = makeRemoteFixture();
+    // A new branch with no upstream: every commit not on a remote is outgoing.
+    git(fixture.work, ["checkout", "-q", "-b", "feature"]);
+    mkdirSync(path.join(fixture.work, "sub"));
+    writeFileSync(path.join(fixture.work, "sub", ".gitattributes"), "*.bin filter=lfs -text\n");
+    git(fixture.work, ["add", "sub/.gitattributes"]);
+    git(fixture.work, ["commit", "-m", "lfs on"]);
+    git(fixture.work, ["rm", "-q", "sub/.gitattributes"]);
+    git(fixture.work, ["commit", "-m", "lfs off"]);
+    for (const name of ["one.md", "two.md", "three.md"]) commitFile(fixture.work, name);
+    expect(await gitTracksLfs(fixture.work)).toBe(false);
+    expect(await gitCarriesLfs(fixture.work)).toBe(true);
+    // Once the remote has those commits, nothing outgoing names LFS.
+    git(fixture.work, ["push", "-q", "-u", fixture.remote, "feature"]);
+    expect(await gitCarriesLfs(fixture.work)).toBe(false);
+    // Detection that cannot run is an error for the caller to refuse on.
+    await expect(gitCarriesLfs(mkdtempSync(path.join(tmpdir(), "not-a-repo-")))).rejects.toThrow();
+  });
+
+  it("finds LFS attributes that only a merge resolution added", async () => {
+    const fixture = makeRemoteFixture();
+    git(fixture.work, ["checkout", "-q", "-b", "side"]);
+    commitFile(fixture.work, "side.md");
+    git(fixture.work, ["checkout", "-q", "-b", "feature", "main"]);
+    commitFile(fixture.work, "feature.md");
+    // The merge commit itself (no parent has it) introduces the attributes.
+    git(fixture.work, ["merge", "-q", "--no-ff", "--no-commit", "side"]);
+    writeFileSync(path.join(fixture.work, ".gitattributes"), "*.bin filter=lfs -text\n");
+    git(fixture.work, ["add", ".gitattributes"]);
+    git(fixture.work, ["commit", "-q", "-m", "merge side"]);
+    git(fixture.work, ["rm", "-q", ".gitattributes"]);
+    git(fixture.work, ["commit", "-q", "-m", "lfs off"]);
+    expect(await gitCarriesLfs(fixture.work)).toBe(true);
+  });
+});
+
 describe("strict release synchronization", () => {
   it("is ready on a synchronized non-origin upstream and captures HEAD", async () => {
     const { work } = makeRemoteFixture();
@@ -198,6 +281,17 @@ describe("strict release synchronization", () => {
       behind: 1,
     });
   }, 20_000);
+
+  it("redacts a secret in the fetch failure it reports", async () => {
+    const fixture = makeRemoteFixture();
+    const secret = `ghp_${"Q0pz".repeat(9)}`;
+    const missing = path.join(path.dirname(fixture.bare), secret, "missing.git");
+    git(fixture.work, ["remote", "set-url", fixture.remote, missing]);
+    const sync = await gitReleaseSynchronization(fixture.work, { noHooks: true });
+    expect(sync.state).toBe("fetch_failed");
+    expect(JSON.stringify(sync)).not.toContain(secret);
+    expect(sync.blocker?.message).toContain("<secret>");
+  });
 
   it("classifies detached HEAD, missing upstream, and an unreachable remote", async () => {
     const detached = makeRemoteFixture();

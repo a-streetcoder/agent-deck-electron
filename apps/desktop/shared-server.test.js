@@ -220,6 +220,25 @@ test("a body echoing the token is redacted before it reaches the page", async ()
   assert.equal(JSON.stringify(answer).includes(TOKEN), false);
 });
 
+test("a token echoed as \\u escapes is redacted after parsing, in strings and keys", async () => {
+  // "aaa.bbb.ccc" survives the raw-text pass and decodes to TOKEN.
+  const escaped = `\\u0061${TOKEN.slice(1)}`;
+  const { fetchImpl } = fakeFetch(
+    () =>
+      new globalThis.Response(
+        `{"error":"bad header ${escaped}","list":["${escaped}"],"${escaped}":1}`,
+        { status: 400, headers: { "content-type": "application/json" } },
+      ),
+  );
+  const client = createSharedServerClient({ origin: ORIGIN, run: fakeRun().run, fetchImpl });
+  const answer = await client.request("GET", "/me");
+  assert.deepEqual(answer, {
+    status: 400,
+    body: { error: "bad header <secret>", list: ["<secret>"], "<secret>": 1 },
+  });
+  assert.equal(JSON.stringify(answer).includes(TOKEN), false);
+});
+
 test("a 403 page from Access reads as a refused account; a JSON 403 keeps its text", async () => {
   const html = createSharedServerClient({
     origin: ORIGIN,

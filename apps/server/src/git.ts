@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 
 import path from "node:path";
 import { promisify } from "node:util";
+import { redactSecrets } from "@agent-deck/domain";
 import { withTrailers } from "./gitIdentity.ts";
 
 /**
@@ -199,10 +200,10 @@ export function parseStatus(stdout: string): { branch?: string; files: GitFileCh
   return { branch, files };
 }
 
-export async function gitStatus(cwd: string): Promise<GitStatus> {
+export async function gitStatus(cwd: string, noHooks: string[] = []): Promise<GitStatus> {
   let stdout: string;
   try {
-    stdout = await runGit(cwd, ["status", "--porcelain=v1", "--branch"]);
+    stdout = await runGit(cwd, [...noHooks, "status", "--porcelain=v1", "--branch"]);
   } catch {
     // Not a repo (or git unavailable) — surfaced as repo:false, not an error.
     return { repo: false, files: [], clean: true };
@@ -680,13 +681,20 @@ export interface GitWorktree {
  * Add a worktree for an EXISTING branch. Branch creation is a separate atomic
  * command in createSessionWorktree so a failed add can delete only a branch this
  * attempt conclusively created, never a pre-existing same-named branch.
+ * `hooks` (an empty directory from {@link withoutHooks}) runs it without hooks.
  */
 export async function gitWorktreeAdd(
   projectDir: string,
   targetPath: string,
   branch: string,
+  hooks?: string,
 ): Promise<void> {
-  await runGit(projectDir, ["worktree", "add", targetPath, branch]);
+  await runGit(projectDir, [...hooksPathArgs(hooks), "worktree", "add", targetPath, branch]);
+}
+
+/** `-c core.hooksPath=<hooks>` when `hooks` is set, else nothing. */
+function hooksPathArgs(hooks?: string): string[] {
+  return hooks === undefined ? [] : ["-c", `core.hooksPath=${hooks}`];
 }
 
 /** Add a detached worktree at one immutable commit. Generic parallel children
@@ -727,11 +735,13 @@ export async function gitWorktreeSource(cwd: string): Promise<{
 export async function gitDeleteOwnedWorktreeBranch(
   projectDir: string,
   worktree: GitWorktree,
+  /** ade-q0pz: an empty hooks directory (a transfer's cleanup). */
+  hooks?: string,
 ): Promise<void> {
   if (worktree.branchOwned !== true || !worktree.branch.startsWith("agent-deck/")) {
     throw new Error("refusing to delete an unowned worktree branch");
   }
-  await runGit(projectDir, ["branch", "-D", "--", worktree.branch]);
+  await runGit(projectDir, [...hooksPathArgs(hooks), "branch", "-D", "--", worktree.branch]);
 }
 
 /** Read the exact local branch object id without accepting revision syntax. */
@@ -796,6 +806,8 @@ export async function createSessionWorktree(
   identityToken: string,
   /** SRV-12c1: branch from this commit instead of the source branch's tip. */
   startPoint?: string,
+  /** ade-q0pz: an empty hooks directory (transfers check out someone else's code). */
+  hooks?: string,
 ): Promise<GitWorktree> {
   const sourceBranch = await gitCurrentBranch(projectDir);
   if (sourceBranch === "HEAD") throw new Error("detached HEAD — check out a branch first");
@@ -806,7 +818,12 @@ export async function createSessionWorktree(
   // failure without parsing localized stderr, so classify only after proving
   // the fully-qualified local ref exists.
   try {
-    await runGit(projectDir, ["branch", branch, startPoint ?? sourceBranch]);
+    await runGit(projectDir, [
+      ...hooksPathArgs(hooks),
+      "branch",
+      branch,
+      startPoint ?? sourceBranch,
+    ]);
   } catch (error) {
     const branchExists = await gitOwnedWorktreeBranchOid(projectDir, branch)
       .then((oid) => oid !== undefined)
@@ -822,7 +839,7 @@ export async function createSessionWorktree(
     branchOwned: true,
   };
   try {
-    await gitWorktreeAdd(projectDir, targetPath, branch);
+    await gitWorktreeAdd(projectDir, targetPath, branch, hooks);
   } catch (error) {
     // Preserve proof that this attempt owns the branch. The route must first use
     // its held native root to remove any partial checkout, then prune Git, then
@@ -843,11 +860,19 @@ export async function createSessionWorktreeWithBranchRetries(
   identityToken: string,
   maxAttempts = 50,
   startPoint?: string,
+  hooks?: string,
 ): Promise<GitWorktree> {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const branch = attempt === 0 ? baseBranch : `${baseBranch}-${attempt + 1}`;
     try {
-      return await createSessionWorktree(projectDir, targetPath, branch, identityToken, startPoint);
+      return await createSessionWorktree(
+        projectDir,
+        targetPath,
+        branch,
+        identityToken,
+        startPoint,
+        hooks,
+      );
     } catch (error) {
       if (!(error instanceof SessionWorktreeBranchCollisionError)) throw error;
     }
@@ -889,10 +914,10 @@ export async function createLoopWorktree(
 }
 
 /** Prune registrations only after native capability-relative physical removal. */
-export async function gitWorktreePrune(projectDir: string): Promise<void> {
+export async function gitWorktreePrune(projectDir: string, hooks?: string): Promise<void> {
   // Git's default expiry keeps freshly-stale administrative entries for months.
   // Physical removal is already proven by the caller, so expire immediately.
-  await runGit(projectDir, ["worktree", "prune", "--expire", "now"]);
+  await runGit(projectDir, [...hooksPathArgs(hooks), "worktree", "prune", "--expire", "now"]);
 }
 
 export interface OwnedLoopWorktreeProof {
@@ -1039,10 +1064,16 @@ export async function gitLocalBranchRef(cwd: string, branch: string): Promise<st
   return gitFullyQualifiedBranchRef(cwd, branch);
 }
 
-export async function gitWorkingTreeClean(cwd: string, includeIgnored = false): Promise<boolean> {
+export async function gitWorkingTreeClean(
+  cwd: string,
+  includeIgnored = false,
+  /** ade-q0pz: hooksPathArgs: status may refresh (write) the index. */
+  noHooks: string[] = [],
+): Promise<boolean> {
   return (
     (
       await runGit(cwd, [
+        ...noHooks,
         "status",
         "--porcelain=v1",
         "-z",
@@ -1277,9 +1308,23 @@ function blockedReleaseSync(
 /**
  * Fetch and compare the checked-out branch with its configured non-local
  * upstream. Classification uses command results and plumbing output only; Git's
- * localized diagnostics are retained solely as actionable fetch details.
+ * localized diagnostics are retained solely as actionable fetch details (secrets
+ * redacted). `noHooks` (ade-q0pz, the shared server): no hook runs.
  */
-export async function gitReleaseSynchronization(cwd: string): Promise<ReleaseSynchronization> {
+export function gitReleaseSynchronization(
+  cwd: string,
+  options: { noHooks?: boolean } = {},
+): Promise<ReleaseSynchronization> {
+  return options.noHooks
+    ? withoutHooks((hooks) => releaseSynchronization(cwd, hooksPathArgs(hooks)))
+    : releaseSynchronization(cwd, []);
+}
+
+async function releaseSynchronization(
+  cwd: string,
+  noHooks: string[],
+): Promise<ReleaseSynchronization> {
+  // Only the fetch and the status (an index refresh) can run a hook.
   try {
     if ((await runGit(cwd, ["rev-parse", "--is-inside-work-tree"])).trim() !== "true") {
       return blockedReleaseSync("not_repo", "This project isn't a git repository.");
@@ -1319,7 +1364,7 @@ export async function gitReleaseSynchronization(cwd: string): Promise<ReleaseSyn
   }
 
   try {
-    await execFileAsync(gitBin(), ["fetch", "--quiet", "--tags", remote, remoteRef], {
+    await execFileAsync(gitBin(), [...noHooks, "fetch", "--quiet", "--tags", remote, remoteRef], {
       cwd,
       timeout: 30_000,
       maxBuffer: 8_000_000,
@@ -1328,12 +1373,12 @@ export async function gitReleaseSynchronization(cwd: string): Promise<ReleaseSyn
   } catch (error) {
     return blockedReleaseSync(
       "fetch_failed",
-      `Couldn't fetch ${upstream} and tags from ${remote}: ${gitErrorText(error)}`,
+      `Couldn't fetch ${upstream} and tags from ${remote}: ${redactSecrets(gitErrorText(error))}`,
       { branch, upstream, remote, remoteRef },
     );
   }
 
-  const status = await gitStatus(cwd);
+  const status = await gitStatus(cwd, noHooks);
   let ahead: number;
   let behind: number;
   try {
@@ -1460,8 +1505,10 @@ export interface ReleaseTagTestHooks {
  * Build and locally own an annotated tag, then atomically publish a no-op branch
  * update plus the explicit tag object under exact branch/tag leases. A server
  * without atomic-push support fails closed without publishing either ref.
+ * `noHooks` (ade-q0pz, the shared server): no hook runs, as for gitPush. No LFS
+ * check is needed: the lease pushes only a commit the remote already has.
  */
-export async function gitCreateAndPushReleaseTag(
+export function gitCreateAndPushReleaseTag(
   cwd: string,
   tag: string,
   message: string,
@@ -1469,6 +1516,23 @@ export async function gitCreateAndPushReleaseTag(
   remote: string,
   remoteRef: string,
   hooks: ReleaseTagTestHooks = {},
+  options: { noHooks?: boolean } = {},
+): Promise<{ ok: true } | { ok: false; failure: ReleasePushFailure | ReleaseStaleLocalFailure }> {
+  const run = (noHooks: string[]) =>
+    createAndPushReleaseTag(cwd, tag, message, headSha, remote, remoteRef, hooks, noHooks);
+  return options.noHooks ? withoutHooks((dir) => run(hooksPathArgs(dir))) : run([]);
+}
+
+async function createAndPushReleaseTag(
+  cwd: string,
+  tag: string,
+  message: string,
+  headSha: string,
+  remote: string,
+  remoteRef: string,
+  hooks: ReleaseTagTestHooks,
+  /** Before the status, ref updates and the push: the commands that can run a hook. */
+  noHooks: string[],
 ): Promise<{ ok: true } | { ok: false; failure: ReleasePushFailure | ReleaseStaleLocalFailure }> {
   const tagger = (await runGit(cwd, ["var", "GIT_COMMITTER_IDENT"])).trim();
   const tagBody = `object ${headSha}\ntype commit\ntag ${tag}\ntagger ${tagger}\n\n${message || tag}\n`;
@@ -1479,7 +1543,7 @@ export async function gitCreateAndPushReleaseTag(
   // This is deliberately adjacent to the guarded ref mutation: no stale UI or
   // earlier synchronization may authorize a moved HEAD or dirty worktree.
   const currentHead = (await runGit(cwd, ["rev-parse", "--verify", "HEAD^{commit}"])).trim();
-  const dirty = (await runGit(cwd, ["status", "--porcelain=v1"])).trim().length > 0;
+  const dirty = (await runGit(cwd, [...noHooks, "status", "--porcelain=v1"])).trim().length > 0;
   if (currentHead !== headSha || dirty) {
     return {
       ok: false,
@@ -1495,11 +1559,12 @@ export async function gitCreateAndPushReleaseTag(
 
   const objectFormat = (await runGit(cwd, ["rev-parse", "--show-object-format"])).trim();
   const zeroObject = "0".repeat(objectFormat === "sha256" ? 64 : 40);
-  await runGit(cwd, ["update-ref", `refs/tags/${tag}`, createdTagObject, zeroObject]);
+  await runGit(cwd, [...noHooks, "update-ref", `refs/tags/${tag}`, createdTagObject, zeroObject]);
   await hooks.beforePush?.(createdTagObject);
 
   try {
     await runGit(cwd, [
+      ...noHooks,
       "push",
       "--atomic",
       `--force-with-lease=${remoteRef}:${headSha}`,
@@ -1511,6 +1576,7 @@ export async function gitCreateAndPushReleaseTag(
     return { ok: true };
   } catch (error) {
     const localRollback = await runGit(cwd, [
+      ...noHooks,
       "update-ref",
       "-d",
       `refs/tags/${tag}`,
@@ -1625,11 +1691,25 @@ export async function gitSnapshotCommit(
   return await gitWorkTreeCommit(cwd, message, true, untracked);
 }
 
-async function gitWorkTreeCommit(
+/** ade-q0pz: no hook (post-index-change on the throwaway index) runs while capturing. */
+function gitWorkTreeCommit(
   cwd: string,
   message: string,
   onHead: boolean,
   consent?: readonly string[],
+): Promise<string> {
+  return withoutHooks((hooks) =>
+    gitWorkTreeCommitWith(cwd, message, onHead, consent, hooksPathArgs(hooks)),
+  );
+}
+
+async function gitWorkTreeCommitWith(
+  cwd: string,
+  message: string,
+  onHead: boolean,
+  consent: readonly string[] | undefined,
+  /** `-c core.hooksPath=<empty dir>`, before every command that writes the index. */
+  noHooks: string[],
 ): Promise<string> {
   const commonDir = await gitCommonDir(cwd);
   const tempIndex = path.join(commonDir, `agent-deck-checkpoint-index-${randomUUID()}`);
@@ -1658,22 +1738,30 @@ async function gitWorkTreeCommit(
         )
       : false;
     if (hasHead && !copied) {
-      await runGitEnv(cwd, ["read-tree", "HEAD"], env);
+      await runGitEnv(cwd, [...noHooks, "read-tree", "HEAD"], env);
     }
     if (consent === undefined) {
-      await runGitEnv(cwd, ["add", "-A", "--", "."], env, 15_000);
+      await runGitEnv(cwd, [...noHooks, "add", "-A", "--", "."], env, 15_000);
     } else {
       // SRV-12c1: a move stages only what the user agreed to: tracked changes,
       // plus exactly the consented untracked paths (never whatever appeared since).
       // Never split the throwaway index (its shared part would land in .git).
-      const add = ["-c", "core.splitIndex=false", "add"];
+      const add = [...noHooks, "-c", "core.splitIndex=false", "add"];
       const literal = { ...env, GIT_LITERAL_PATHSPECS: "1" };
       const added = async () =>
         new Set(
           (
             await runGitEnv(
               cwd,
-              ["diff", "--cached", "--no-renames", "--name-only", "--diff-filter=A", "-z"],
+              [
+                ...noHooks,
+                "diff",
+                "--cached",
+                "--no-renames",
+                "--name-only",
+                "--diff-filter=A",
+                "-z",
+              ],
               env,
               120_000,
             )
@@ -1706,12 +1794,12 @@ async function gitWorkTreeCommit(
       if (fresh.length !== wanted.size || fresh.some((name) => !wanted.has(name)))
         throw new SnapshotPlanChangedError();
     }
-    const tree = (await runGitEnv(cwd, ["write-tree"], env)).trim();
+    const tree = (await runGitEnv(cwd, [...noHooks, "write-tree"], env)).trim();
     if (tree.length === 0) throw new Error("git write-tree returned an empty tree");
     const commit = (
       await runGitEnv(
         cwd,
-        ["commit-tree", tree, ...(onHead ? ["-p", "HEAD"] : []), "-m", message],
+        [...noHooks, "commit-tree", tree, ...(onHead ? ["-p", "HEAD"] : []), "-m", message],
         env,
       )
     ).trim();
@@ -1818,29 +1906,138 @@ export async function gitPushUrl(cwd: string): Promise<string | null> {
  * Push the current branch (native pushCurrentBranch). Try a plain `git push`;
  * if the branch has no upstream (common for a fresh branch), retry with
  * `-u origin <branch>`. Any other failure (no remote, rejected, auth) throws
- * with the git stderr so the caller can surface it. `env` (SRV-06: the
- * requester's GitHub credential env) is layered over the server's.
+ * with the git stderr (secrets redacted) so the caller can surface it. `env`
+ * (SRV-06: the requester's GitHub credential env) is layered over the server's.
+ * No hook runs with its GH_TOKEN or with `noHooks` (the shared server, where a
+ * tokenless push uses the service's credentials) (ade-q0pz, as the transfers).
  */
-export async function gitPush(cwd: string, env?: Record<string, string>): Promise<void> {
-  const run = (args: string[]): Promise<string> =>
-    env ? runGitEnv(cwd, args, { ...process.env, ...env }) : runGit(cwd, args);
-  try {
-    await run(["push"]);
-    return;
-  } catch (firstError) {
-    const stderr = String((firstError as { stderr?: string }).stderr ?? "").toLowerCase();
-    const missingUpstream =
-      stderr.includes("no upstream") ||
-      stderr.includes("set-upstream") ||
-      stderr.includes("has no upstream");
-    if (!missingUpstream) throw new Error(gitErrorText(firstError));
-    const branch = (await runGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+export async function gitPush(
+  cwd: string,
+  env?: Record<string, string>,
+  options: { noHooks?: boolean } = {},
+): Promise<void> {
+  const token = env?.GH_TOKEN;
+  const failed = (error: unknown): Error => {
+    const text = gitErrorText(error);
+    return new Error(redactSecrets(token ? text.split(token).join("<secret>") : text));
+  };
+  const push = async (hooksArgs: string[]): Promise<void> => {
+    const run = (args: string[]): Promise<string> =>
+      env
+        ? runGitEnv(cwd, [...hooksArgs, ...args], { ...process.env, ...env })
+        : runGit(cwd, [...hooksArgs, ...args]);
     try {
-      await run(["push", "-u", "origin", branch]);
-    } catch (secondError) {
-      throw new Error(gitErrorText(secondError));
+      await run(["push"]);
+      return;
+    } catch (firstError) {
+      const stderr = String((firstError as { stderr?: string }).stderr ?? "").toLowerCase();
+      const missingUpstream =
+        stderr.includes("no upstream") ||
+        stderr.includes("set-upstream") ||
+        stderr.includes("has no upstream");
+      if (!missingUpstream) throw failed(firstError);
+      const branch = (await runGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+      try {
+        await run(["push", "-u", "origin", branch]);
+      } catch (secondError) {
+        throw failed(secondError);
+      }
     }
+  };
+  if (!token && !options.noHooks) return push([]);
+  await assertNoLfs(cwd);
+  return withoutHooks((hooks) => push(hooksPathArgs(hooks)));
+}
+
+/**
+ * ade-q0pz: whether pushing `tip` from `cwd` may carry LFS content. True when the
+ * checkout tracks LFS files, a `untracked` file the push adds falls under the LFS
+ * filter, or `tip` or an outgoing commit that changed an attributes file has a
+ * .gitattributes naming filter=lfs. Outgoing: `<upstream>..tip` for HEAD with an
+ * upstream, else `tip --not --remotes`. Throws when a git command fails; callers
+ * treat that as LFS (fail closed).
+ */
+export async function gitCarriesLfs(
+  cwd: string,
+  { tip = "HEAD", untracked = [] }: { tip?: string; untracked?: readonly string[] } = {},
+): Promise<boolean> {
+  if (await gitTracksLfs(cwd)) return true;
+  if (untracked.length > 0) {
+    // -z: path NUL attribute NUL value NUL, per file.
+    const out = (
+      await runGitInput(cwd, ["check-attr", "--stdin", "-z", "filter"], untracked.join("\0"))
+    ).split("\0");
+    for (let i = 2; i < out.length; i += 3) if (out[i] === "lfs") return true;
   }
+  let upstream = "";
+  if (tip === "HEAD") {
+    const branch = await runGit(cwd, ["symbolic-ref", "-q", "HEAD"]).catch((error) => {
+      if ((error as { code?: unknown }).code === 1) return ""; // detached
+      throw error;
+    });
+    if (branch.trim())
+      upstream = (
+        await runGit(cwd, ["for-each-ref", "--format=%(upstream)", branch.trim()])
+      ).trim();
+  }
+  const range = upstream ? [`${upstream}..${tip}`] : [tip, "--not", "--remotes"];
+  const touched = (
+    await runGit(cwd, [
+      "log",
+      ...range,
+      "--format=%H",
+      // -m: a merge is diffed against each parent, so attributes its resolution adds count.
+      "-m",
+      "--diff-filter=AMR",
+      "--",
+      ".gitattributes",
+      "**/.gitattributes",
+    ])
+  )
+    .split("\n")
+    .filter(Boolean);
+  try {
+    await runGit(cwd, [
+      "grep",
+      "-l",
+      "-F",
+      "-e",
+      "filter=lfs",
+      tip,
+      ...touched,
+      "--",
+      ".gitattributes",
+      "*.gitattributes",
+    ]);
+    return true;
+  } catch (error) {
+    if ((error as { code?: unknown }).code === 1) return false;
+    throw error;
+  }
+}
+
+/** Refuse a hook-free push of HEAD that may carry LFS content (or whose detection failed). */
+async function assertNoLfs(cwd: string, tip = "HEAD"): Promise<void> {
+  const found = await gitCarriesLfs(cwd, { tip }).catch(() => "failed" as const);
+  if (found) throw new GitLfsPushRefusedError(found === "failed");
+}
+
+/** ade-q0pz: a hook-free push skips git-lfs's pre-push upload, so the remote
+ * would get pointers without their objects: refused instead. */
+export class GitLfsPushRefusedError extends Error {
+  constructor(detectionFailed = false) {
+    super(
+      detectionFailed
+        ? "LFS detection failed, so this repository cannot be pushed from the shared server."
+        : "LFS repositories cannot be pushed from the shared server yet.",
+    );
+    this.name = "GitLfsPushRefusedError";
+  }
+}
+
+/** Whether any tracked file of the checkout goes through the LFS filter. */
+export async function gitTracksLfs(cwd: string): Promise<boolean> {
+  return (await runGit(cwd, ["ls-files", "-z", "--", ":(attr:filter=lfs)"])).length > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1870,7 +2067,7 @@ function transferRun(cwd: string, args: string[], env?: Record<string, string>) 
 }
 
 /** Run `run` with a fresh, empty directory for core.hooksPath, removed afterwards. */
-async function withoutHooks<T>(run: (hooks: string) => Promise<T>): Promise<T> {
+export async function withoutHooks<T>(run: (hooks: string) => Promise<T>): Promise<T> {
   const hooks = await mkdtemp(path.join(tmpdir(), "agent-deck-no-hooks-"));
   try {
     return await run(hooks);
@@ -1896,7 +2093,16 @@ export async function gitSharePlan(cwd: string): Promise<{
   if (!(await gitHasHead(root))) throw new Error("This repository has no commit yet.");
   const head = await gitCommitOid(root, "HEAD");
   const branch = (await runGit(root, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
-  const out = await runGit(root, ["status", "--porcelain=v2", "-z", "--untracked-files=all"]);
+  // ade-q0pz: status may refresh (write) the index; no post-index-change runs.
+  const out = await withoutHooks((hooks) =>
+    runGit(root, [
+      ...hooksPathArgs(hooks),
+      "status",
+      "--porcelain=v2",
+      "-z",
+      "--untracked-files=all",
+    ]),
+  );
   const fields = out.split("\0");
   let tracked = 0;
   const untracked: string[] = [];
@@ -1984,7 +2190,7 @@ export async function gitFetchTransfer(
   try {
     return await gitCommitOid(cwd, local);
   } finally {
-    await runGit(cwd, ["update-ref", "-d", local]).catch(() => {});
+    await transferRun(cwd, ["update-ref", "-d", local]).catch(() => {});
   }
 }
 
@@ -2012,10 +2218,11 @@ export async function gitCommitParents(cwd: string, commit: string): Promise<str
 }
 
 /** Undo the snapshot commit in its worktree: HEAD back to its parent, the
- * changes left in the working tree as unstaged edits (untracked stay untracked). */
-export async function gitResetMixedTo(cwd: string, commit: string): Promise<void> {
+ * changes left in the working tree as unstaged edits (untracked stay untracked).
+ * `hooks`: an empty hooks directory, as for {@link gitWorktreeAdd}. */
+export async function gitResetMixedTo(cwd: string, commit: string, hooks?: string): Promise<void> {
   validateGitObjectId(commit);
-  await runGit(cwd, ["reset", "--mixed", "-q", commit]);
+  await runGit(cwd, [...hooksPathArgs(hooks), "reset", "--mixed", "-q", commit]);
 }
 
 /** The snapshot merged in place but its commit could not be undone: HEAD is on it. */
@@ -2056,7 +2263,11 @@ export async function gitRestoreSnapshotInPlace(
     const git = (args: string[]) =>
       runGitEnv(cwd, ["-c", `core.hooksPath=${hooks}`, ...args], process.env, 120_000);
     try {
-      if (!(await gitWorkingTreeClean(cwd)) || (await gitOperationInProgress(cwd))) return false;
+      if (
+        !(await gitWorkingTreeClean(cwd, false, hooksPathArgs(hooks))) ||
+        (await gitOperationInProgress(cwd))
+      )
+        return false;
       if ((await gitCommitOid(cwd, "HEAD")) !== base) return false;
       const changed = (await git(["diff", "--name-only", "--no-renames", "-z", base, snapshot]))
         .split("\0")
@@ -2104,6 +2315,8 @@ export async function gitPushBranch(
   env: Record<string, string>,
 ): Promise<void> {
   const ref = await gitFullyQualifiedBranchRef(cwd, branch);
+  // Hook-free (transferRun): an LFS repository would arrive without its objects.
+  await assertNoLfs(cwd, ref);
   await transferRun(cwd, ["push", "origin", `${ref}:${ref}`], env);
 }
 

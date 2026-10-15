@@ -119,6 +119,80 @@ describe("mirrorTranscript", () => {
     expect(answer.state.cells[1]).toMatchObject({ toolCallId: "token=abcdefgh123" });
   });
 
+  it("redacts every secret name in free text, the value up to whitespace or a quote", () => {
+    const lines = [
+      "DATABASE_URL=postgres://user:plain-db@host/db",
+      "AWS_SECRET_ACCESS_KEY=plain-aws",
+      "STRIPE_SECRET_KEY=plain-stripe",
+      "password_hash: plain-hash",
+      'connection_string="plain-conn"',
+      "SENTRY_DSN=https://plain-dsn@sentry.example/1",
+    ];
+    const out = JSON.stringify(mirrorTranscript(stateOf([text("a", lines.join("\n"))])));
+    for (const secret of ["plain-db", "plain-aws", "plain-stripe", "plain-hash", "plain-conn"])
+      expect(out, secret).not.toContain(secret);
+    expect(out).not.toContain("plain-dsn");
+    expect(out).toContain("DATABASE_URL=<secret>");
+  });
+
+  it("redacts a whole connection string, semicolons and spaces included, up to the line end", () => {
+    const value =
+      "connection_string=AccountName=demo;AccountKey=plain-key;EndpointSuffix=x y\nnext line";
+    const out = JSON.stringify(mirrorTranscript(stateOf([text("a", value)])));
+    for (const secret of ["AccountName", "demo", "plain-key", "EndpointSuffix"])
+      expect(out, secret).not.toContain(secret);
+    expect(out).toContain("connection_string=<secret>\\nnext line");
+  });
+
+  it("redacts an ODBC connection string past its backslashes and braces", () => {
+    const value = "connection_string=Server=db\\instance;UID=sa;PWD={first;remaining-secret}";
+    const out = JSON.stringify(mirrorTranscript(stateOf([text("a", value)])));
+    for (const secret of ["Server=", "instance", "UID=", "sa;", "{first", "remaining-secret"])
+      expect(out, secret).not.toContain(secret);
+    expect(out).toContain("connection_string=<secret>");
+  });
+
+  it("redacts a qualified secret key (database_password, dbPassword, github.token)", () => {
+    const tool: TranscriptCell = {
+      kind: "tool",
+      id: "t1",
+      toolCallId: "c1",
+      toolName: "bash",
+      args: {
+        database_password: "plain-one",
+        dbPassword: "plain-two",
+        "github.token": "plain-3",
+        AWS_SECRET_ACCESS_KEY: "plain-4",
+        secretKey: "plain-5",
+        password_hash: "plain-6",
+        DATABASE_URL: "plain-7",
+        connectionString: "plain-8",
+        SENTRY_DSN: "plain-9",
+        // Never secrets: counters, ids and the working directory stay as they are.
+        inputTokens: 11,
+        outputTokens: 12,
+        maxTokens: 13,
+        parentId: "keep-parent",
+        requestId: "keep-request",
+        runId: "keep-run",
+        sessionId: "keep-session",
+        cwd: "keep-cwd",
+      },
+      status: "done",
+      result: "export AWS_SECRET_ACCESS_KEY=plain-free-text",
+    };
+    const out = JSON.stringify(mirrorTranscript(stateOf([tool])));
+    for (const secret of ["plain-one", "plain-two", "plain-3", "plain-4", "plain-5", "plain-6"])
+      expect(out, secret).not.toContain(secret);
+    for (const secret of ["plain-7", "plain-8", "plain-9", "plain-free-text"])
+      expect(out, secret).not.toContain(secret);
+    expect(out).toContain('"database_password":"<secret>"');
+    expect(out).toContain('"inputTokens":11,"outputTokens":12,"maxTokens":13');
+    for (const kept of ["keep-parent", "keep-request", "keep-run", "keep-session", "keep-cwd"])
+      expect(out, kept).toContain(kept);
+    expect(out).toContain('"id":"t1"');
+  });
+
   it("caps the window from the newest end, says so, and keeps an oversized cell as a notice", () => {
     const many = Array.from({ length: MAX_MIRROR_CELLS + 50 }, (_, i) => text(`c${i}`, "x"));
     const counted = mirrorTranscript(stateOf(many));

@@ -1,6 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -371,6 +379,103 @@ describe("session move: local export", () => {
     expect(refsOnOrigin()).toBe("");
     await post(urlA(`/sessions/${S_OK}/share/abort`), { handoff });
   });
+
+  it("captures the snapshot without running a hook of the checkout", async () => {
+    const hooks = path.join(scratch, "device hooks");
+    const marker = path.join(scratch, "device-hook-ran");
+    mkdirSync(hooks, { recursive: true });
+    for (const name of ["post-index-change", "reference-transaction"])
+      writeFileSync(
+        path.join(hooks, name),
+        `#!/bin/sh\necho ${name} >> "${marker.replace(/\\/g, "/")}"\n`,
+        {
+          mode: 0o755,
+        },
+      );
+    git(localClone, "config", "core.hooksPath", hooks);
+    // A new mtime with the same content: the plan's status refreshes the real index.
+    const touch = () => {
+      const later = new Date(Date.now() + 60_000 + Math.random() * 60_000);
+      utimesSync(path.join(localClone, "README.md"), later, later);
+    };
+    try {
+      touch();
+      expect((await post(urlA(`/sessions/${S_OK}/share/preflight`), {})).status).toBe(200);
+      expect(existsSync(marker) ? readFileSync(marker, "utf8") : "", "preflight").toBe("");
+      touch();
+      const { envelope, handoff } = await share(S_OK, {
+        mode: "snapshot",
+        untracked: ["secret.txt"],
+      });
+      await post(urlA(`/sessions/${S_OK}/share/abort`), { ref: envelope.transfer.ref, handoff });
+      expect(existsSync(marker) ? readFileSync(marker, "utf8") : "").toBe("");
+    } finally {
+      git(localClone, "config", "--unset", "core.hooksPath");
+    }
+  });
+
+  it("moves only the conversation of a checkout that tracks LFS files", async () => {
+    // A tracked file under the LFS filter, without git-lfs: a local attributes file.
+    const attributes = path.join(localClone, ".git", "info", "attributes");
+    mkdirSync(path.dirname(attributes), { recursive: true });
+    writeFileSync(attributes, "README.md filter=lfs\n");
+    try {
+      const res = await post(urlA(`/sessions/${S_OK}/share/preflight`), {});
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { plan: { lfs?: boolean } }).plan.lfs).toBe(true);
+      const snapshot = await post(urlA(`/sessions/${S_OK}/share`), {
+        mode: "snapshot",
+        untracked: ["secret.txt"],
+      });
+      expect(snapshot.status).toBe(409);
+      expect(await snapshot.json()).toMatchObject({
+        code: "share_refused",
+        error: "LFS repositories cannot be moved yet.",
+      });
+      expect(refsOnOrigin()).toBe("");
+      const { envelope, handoff } = await share(S_OK, { mode: "conversation" });
+      expect(envelope.transfer.mode).toBe("conversation");
+      await post(urlA(`/sessions/${S_OK}/share/abort`), { handoff });
+    } finally {
+      rmSync(attributes, { force: true });
+    }
+  });
+
+  const snapshotShare = () =>
+    post(urlA(`/sessions/${S_OK}/share`), { mode: "snapshot", untracked: ["secret.txt"] });
+
+  it("refuses a snapshot whose consented untracked file falls under the LFS filter", async () => {
+    const attributes = path.join(localClone, ".git", "info", "attributes");
+    mkdirSync(path.dirname(attributes), { recursive: true });
+    writeFileSync(attributes, "secret.txt filter=lfs\n");
+    try {
+      const preflight = await post(urlA(`/sessions/${S_OK}/share/preflight`), {});
+      expect(((await preflight.json()) as { plan: { lfs?: boolean } }).plan.lfs).toBe(true);
+      const res = await snapshotShare();
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ error: "LFS repositories cannot be moved yet." });
+      expect(refsOnOrigin()).toBe("");
+    } finally {
+      rmSync(attributes, { force: true });
+    }
+  });
+
+  it("refuses a snapshot when LFS detection fails, rather than pushing it", async () => {
+    // A config only git grep reads, and rejects: the attributes scan cannot run.
+    git(localClone, "config", "grep.patternType", "bogus");
+    try {
+      const preflight = await post(urlA(`/sessions/${S_OK}/share/preflight`), {});
+      expect(((await preflight.json()) as { plan: { lfs?: boolean } }).plan.lfs).toBe(true);
+      const res = await snapshotShare();
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        error: "LFS detection failed, so the work cannot be moved with its files.",
+      });
+      expect(refsOnOrigin()).toBe("");
+    } finally {
+      git(localClone, "config", "--unset", "grep.patternType");
+    }
+  });
 });
 
 describe("session move: server import and the frozen pointer", () => {
@@ -450,6 +555,12 @@ describe("session move: server import and the frozen pointer", () => {
     const sharedEvent = events.events.find((e) => e.kind === "session.shared");
     expect(sharedEvent?.payload).toMatchObject({ direction: "in", mode: "snapshot" });
     expect(JSON.stringify(sharedEvent)).not.toContain(scratch.replace(/\\/g, "\\\\"));
+  });
+
+  it("refuses share/abort on the shared server, as preflight and share", async () => {
+    const res = await post(urlB(`/sessions/${serverSessionId}/share/abort`), {}, andrea);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "share_refused" });
   });
 
   it("refuses a model the requester is not offered, leaving nothing behind", async () => {
