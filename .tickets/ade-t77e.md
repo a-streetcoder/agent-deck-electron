@@ -1,6 +1,6 @@
 ---
 id: ade-t77e
-status: open
+status: in_progress
 deps: [ade-wgkk]
 links: []
 created: 2026-10-15T07:37:06Z
