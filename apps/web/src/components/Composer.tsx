@@ -384,9 +384,13 @@ export function Composer() {
   }, [sessionId, refreshPiState, pruneEmptyComposerDraft]);
 
   // Draft settings mutate the same session identity, so refresh the launch
-  // preview without resetting the composer or its submission ownership.
+  // preview without resetting the composer or its submission ownership. The
+  // first send starts Pi under the same id: re-read its live state then too.
+  const lifecycleRef = useRef(session?.lifecycle);
   useEffect(() => {
-    if (session?.lifecycle === "draft") void refreshPiState();
+    const previous = lifecycleRef.current;
+    lifecycleRef.current = session?.lifecycle;
+    if (session?.lifecycle === "draft" || previous === "draft") void refreshPiState();
   }, [
     session?.lifecycle,
     session?.agentName,

@@ -222,11 +222,16 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     if (draft) {
       const plan = draft.launchPlan as LaunchPlan;
       const models = await draftModels(draft.createdBy);
+      // A model outside the owner's catalog (an extension provider before a
+      // Models refresh) still launches as planned: report it unless refused.
+      const refused = (await ownerTransport(ctx, await ownerRuntime(ctx, draft.createdBy))).refused;
       return {
         state: {
           model:
             models.find((model) => model.provider === plan.provider && model.id === plan.model) ??
-            null,
+            (plan.provider && plan.model && !refused.has(plan.provider)
+              ? { provider: plan.provider, id: plan.model }
+              : null),
           thinkingLevel:
             draft.draftThinkingLevel ?? ("thinking" in plan ? plan.thinking : undefined) ?? "off",
           isStreaming: false,

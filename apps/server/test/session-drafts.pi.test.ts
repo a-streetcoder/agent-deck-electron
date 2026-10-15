@@ -166,6 +166,27 @@ describe("durable lazy drafts against real Pi", () => {
     expect(worktrees()).toEqual(before);
   });
 
+  it("reports the launch model in GET /state for a draft, after first send and after resume", async () => {
+    const stateModel = async (id: string) => {
+      const { state } = (await (await request(`/sessions/${id}/state`)).json()) as {
+        state: { model: { provider: string; id: string } | null };
+      };
+      return state.model && { provider: state.model.provider, id: state.model.id };
+    };
+    const expected = { provider: MOCK_PROVIDER_ID, id: MOCK_MODEL_ID };
+    const draft = await createDraft();
+    // The extension-registered mock provider is not in the owner catalog yet.
+    expect(await stateModel(draft.id)).toEqual(expected);
+    expect((await prompt(draft.id)).ok).toBe(true);
+    await server.receipts.waitFor("idle", draft.id);
+    expect(await stateModel(draft.id)).toEqual(expected);
+    await server.close();
+    server = await startServer({ dataDir });
+    expect((await request(`/sessions/${draft.id}/resume`, "POST")).status).toBe(200);
+    expect(await stateModel(draft.id)).toEqual(expected);
+    expect((await request(`/sessions/${draft.id}`, "DELETE")).ok).toBe(true);
+  });
+
   it("retains a draft after launch failure, cleans allocated worktree, and supports retry", async () => {
     const draft = await createDraft();
     const before = worktrees();
