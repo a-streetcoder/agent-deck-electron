@@ -84,7 +84,8 @@ See [`release-windows.md`](release-windows.md). Tickets in `.tickets/`.
 - ade-rnrd — D7 — closed 2026-10-15: tolerant verdict parsing, validation before checker, checker can run validation (A0 finding) — open
 - ade-scu0 — D8: corrupt or missing run stores no longer crash startServer nor tombstone logged runs — closed 2026-10-15
 - ade-p5ik — D9: server warnings through one serverLog helper — closed 2026-10-15
-- ade-w87w — D5: Playwright run + visual baselines on a machine with memory — open, blocks ade-s625
+- ade-w87w — D5: Playwright run on the VM, 14 spec fixes, Linux visual baselines — closed 2026-10-15 (owner: regenerate the -win32 baselines; desktop-electron specs need an Electron-capable machine)
+- ade-ldzq — D10: model chip placeholder after first send / reload (D5 finding) — open
 - `docs/agent-guidelines/ARCHITECTURE.md` — trimmed (D2); the orchestration reference will change again when A2 settles the node shapes.
 - `docs/sync-seams.md` — closed under ADR 0005 (D2).
 
