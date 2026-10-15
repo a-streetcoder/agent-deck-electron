@@ -32,3 +32,7 @@ docker compose config validates in CI (workflow step); .env.example complete; ru
 **2026-10-15T22:47:57Z**
 
 2026-10-15 started; worktree E:\agent-deck-wt\ade-tb53 (wt/ade-tb53).
+
+**2026-10-15T22:54:18Z**
+
+2026-10-15 implemented as f2be30c (compose hardened, cloudflared 2026.10.1 in the server's namespace, TUNNEL_TOKEN blanked for agent-deck, .env.example with safe pre-fills, CI compose-config step, runbook 'Install on a server', legacy retitle, roadmap DST line). docker compose config validated on the VM; the stack has never run (first run is 17c). Image owner a-streetcoder matches the GitHub remote. Contrarian + GPT (review58) running.
