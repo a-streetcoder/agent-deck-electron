@@ -11,7 +11,7 @@ import { refreshProjectLog, switchToSession } from "../state/wsBridge.ts";
 // ponytail: renders the newest rows only; virtualize if the full 2,000 are ever wanted.
 const SHOWN = 100;
 
-function actorLabel(actor: EventActor): string {
+export function actorLabel(actor: EventActor): string {
   if (actor.type === "user") return actor.id ? userDisplayName({ ...actor, id: actor.id }) : "user";
   if (actor.type === "agent") return actor.agentName ?? "agent";
   return "system";
@@ -34,7 +34,7 @@ function subjectLink(
   return { label: session.title?.trim() || "Untitled session", view: "chat", session };
 }
 
-function formatEventTime(iso: string): string {
+export function formatEventTime(iso: string): string {
   const date = new Date(iso);
   return date.toDateString() === new Date().toDateString()
     ? date.toLocaleTimeString(undefined, { timeStyle: "short" })

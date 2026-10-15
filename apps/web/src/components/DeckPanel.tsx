@@ -1,14 +1,23 @@
 import { ControlButton } from "@/design-system/components/NativeControls";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { deckRunDetail, deckRuns, type DeckRun, type DeckRunDetail } from "@agent-deck/domain";
+import {
+  deckRunDetail,
+  deckRuns,
+  deckRunsFromTree,
+  projectNodeTree,
+  type DeckRun,
+  type DeckRunDetail,
+} from "@agent-deck/domain";
 import { RunMeta } from "./RunMeta.tsx";
 import { useAppStore } from "../state/store.ts";
 
 /**
  * The deck: a per-session activity panel that aggregates the session's native
- * subagent runs (native activity-sidebar "Deck Agents"). v1 derives everything
- * from the transcript's subagent + supervisor cells (deckRuns) — no server state.
- * Renders nothing when there are no runs, so it only claims width when active.
+ * subagent runs (native activity-sidebar "Deck Agents"). The rows come from the
+ * execution-node tree of the project event log (A2); a session the log has no runs
+ * for falls back to the transcript's subagent + supervisor cells (deckRuns). The
+ * expanded detail always reads the transcript cell. Renders nothing when there are
+ * no runs, so it only claims width when active.
  */
 
 const STATUS_LABEL: Record<DeckRun["status"], string> = {
@@ -163,7 +172,16 @@ export function DeckPanel() {
   // reduces a new event) and derive the runs with useMemo — selecting a
   // freshly-allocated array directly would defeat zustand's snapshot caching.
   const transcript = useAppStore((state) => state.transcript);
-  const runs = useMemo(() => deckRuns(transcript), [transcript]);
+  const sessionId = useAppStore((state) => state.session?.id ?? null);
+  const log = useAppStore((state) => state.projectLog);
+  const treeRuns = useMemo(
+    () => (sessionId && log ? deckRunsFromTree(projectNodeTree(log.events, { sessionId })) : []),
+    [log, sessionId],
+  );
+  const runs = useMemo(
+    () => (treeRuns.length > 0 ? treeRuns : deckRuns(transcript)),
+    [treeRuns, transcript],
+  );
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const previousStatuses = useRef(new Map<string, DeckRun["status"]>());
   useEffect(() => {
