@@ -300,7 +300,9 @@ export interface PublicLoopIterationSummary {
   startedAt: string;
   endedAt?: string;
   checkerDecision?: LoopRunIteration["checkerDecision"];
+  checkerVerdictParse?: LoopRunIteration["checkerVerdictParse"];
   goalDecision?: LoopRunIteration["goalDecision"];
+  goalVerdictParse?: LoopRunIteration["goalVerdictParse"];
   validationPassed: boolean | null;
   /** Outcome only: never the command, working directory or stdio. */
   validation?: {
@@ -419,7 +421,16 @@ function toPublicIteration(
 ): PublicLoopIteration {
   const validation = iteration.validationResult;
   return {
-    ...pick(iteration, ["id", "index", "startedAt", "endedAt", "checkerDecision", "goalDecision"]),
+    ...pick(iteration, [
+      "id",
+      "index",
+      "startedAt",
+      "endedAt",
+      "checkerDecision",
+      "checkerVerdictParse",
+      "goalDecision",
+      "goalVerdictParse",
+    ]),
     validationPassed: iteration.validationPassed,
     ...(validation
       ? {

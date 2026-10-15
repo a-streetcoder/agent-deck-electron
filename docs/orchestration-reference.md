@@ -23,12 +23,13 @@ Each Loop role child launches with a tool policy and a fallback outcome contract
 filtered by the policy; with no `tools:` the child gets the set in the table. An agent's own
 `defaultExpectedOutcome` always wins over the fallback outcome.
 
-| Role (loop write target)                                                        | Tool policy  | No `tools:` frontmatter      | Fallback outcome      |
-| ------------------------------------------------------------------------------- | ------------ | ---------------------------- | --------------------- |
-| Maker / single agent, pipeline stage (checkout or worktree)                     | `configured` | Pi defaults                  | `directProjectWrites` |
-| Triage (checkout or worktree)                                                   | `configured` | `read`, `grep`, `find`, `ls` | `reportOnly`          |
-| Checker; any non-evaluator role in an `artifactMarkdown` loop (branches always) | `readOnly`   | `read`, `grep`, `find`, `ls` | `reportOnly`          |
-| Evaluator                                                                       | `none`       | none                         | `reportOnly`          |
+| Role (loop write target)                                                     | Tool policy  | No `tools:` frontmatter      | Fallback outcome      |
+| ---------------------------------------------------------------------------- | ------------ | ---------------------------- | --------------------- |
+| Maker / single agent, pipeline stage (checkout or worktree)                  | `configured` | Pi defaults                  | `directProjectWrites` |
+| Triage (checkout or worktree)                                                | `configured` | `read`, `grep`, `find`, `ls` | `reportOnly`          |
+| Checker (also gets `checker_shell`, below)                                   | `readOnly`   | `read`, `grep`, `find`, `ls` | `reportOnly`          |
+| Any other non-evaluator role in an `artifactMarkdown` loop (branches always) | `readOnly`   | `read`, `grep`, `find`, `ls` | `reportOnly`          |
+| Evaluator                                                                    | `none`       | none                         | `reportOnly`          |
 
 Pi's default `bash` and file tools are not sandboxed to the loop checkout or worktree: a child
 can reach the main checkout through absolute paths, and an authored `tools:` list is the way to
@@ -36,6 +37,49 @@ narrow it.
 
 `managed_subagent` and `managed_parallel` children are unchanged: no policy, Pi defaults without
 `tools:`, and `reportOnly` when the agent sets no outcome.
+
+### Loop checker and verdicts
+
+In `makerChecker` the order is maker, validation, checker, evaluator. The validation command
+runs before the checker decides, and its result (passed or failed, classification, exit code,
+command, and the last 2,000 characters of the last 16 KiB of stdout and stderr) is part of the
+checker's prompt. A validation `spawnError` or `timeout` ends the run as `toolFailed` before any
+checker or evaluator call.
+
+A checker `FAIL` against a passed validation does not end the run. The evaluator is skipped (the
+checker keeps its veto on success), the checker's report becomes the next maker's feedback, and
+the timeline says "checker FAIL although validation passed; evaluator skipped, next iteration";
+on the last iteration the run ends `notAchieved` (`maxIterationsReached`). This diverges from the
+native app, where a checker `FAIL` is terminal: one wrong judge costs an iteration, not the run. A
+checker `FAIL` with no validation configured, or after a failed validation, still ends the run as
+`agentFailed`.
+
+Besides its read-only tools the checker has `checker_shell` (`apps/server/src/checkerShell.ts`, a
+Pi extension written per launch). It runs only `git status`, `git diff`, `git log` and `git show`
+in the loop's working directory, without a shell, with options from an exact allowlist (no
+abbreviations): `status --porcelain --short -s --branch`; `diff --stat --numstat --name-only
+--name-status --cached -U<n> --unified=<n>`; `log --oneline -n <k> --max-count=<k> --stat
+--name-only --format=oneline|short|medium`; `show --stat --name-only --format=…`; plus plain
+revisions and repository-relative paths (no absolute paths, no `..`). Git runs with every
+`GIT_*` variable removed, `GIT_CONFIG_NOSYSTEM=1`, an empty global config, empty hooks and
+attributes files, `--no-pager --no-optional-locks`, `core.fsmonitor=false`, `diff.external=`,
+`log.showSignature=false`, and `--no-ext-diff --no-textconv` on `diff`, `log` and `show`. It is
+refused when the repository config defines `filter.*`, `diff.*` or `merge.*` entries, or a
+`.gitattributes` file (or `info/attributes`) mentions `filter=`, `diff=`, `merge=` or `textconv`.
+Every other command or option is refused before it executes, and the refusal is the tool's error
+result. It does not run the validation command: the engine's result is already in the prompt.
+Timeouts (30 s) and cancellation kill the git process tree (`processTree.ts`, shared with the
+engine's validation run) and wait for it to exit.
+
+Decision lines (checker and evaluator) are read by `parseVerdict`. The exact first non-empty line
+is `strict`. Otherwise, on the first non-empty line or one of the next three, with markdown
+emphasis removed, `lenient` accepts in order: the token alone (trailing punctuation trimmed);
+`Verdict:` or `Decision:` followed by the token; an upper-case token starting the line followed by
+a separator (`SUCCESS - …`); and, on the first line only, an upper-case token ending it right after
+a sentence terminator (`…report the decision.SUCCESS`). A token inside or at the end of a sentence
+(`not yet a SUCCESS`) is `missing`. Iterations record `goalVerdictParse` (evaluator) and
+`checkerVerdictParse`. A missing verdict, from either role, is read as `CONTINUE`, and both a
+lenient read and a missing verdict add a timeline note.
 
 ### Delegation cancellation
 
