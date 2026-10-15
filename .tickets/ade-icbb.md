@@ -1,6 +1,6 @@
 ---
 id: ade-icbb
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-15T02:16:56Z
@@ -20,3 +20,9 @@ GUARDRAILS as every ticket (worktree, single test files, real-Pi one at a time, 
 ## Acceptance Criteria
 
 Both continuation directions work in a real-Pi test; existing subagent-spawn.pi and subagent-continuation.pi tests stay green; tsc, eslint, prettier clean.
+
+## Notes
+
+**2026-10-15T02:33:54Z**
+
+2026-10-15 merged (wt/ade-icbb: 68a2143 + review round 05cfc6d). Root cause: the child's live transcript was released at scope close, after the terminal status that wakes await; fixed by releasing it in the terminal write step; the store's 'already registered' throw is kept as the regression guard (proved: the real-Pi test fails with the release reverted and the old await). Also: awaitSubagentRuns counts an in-process run finished only after its scope closes (no second Pi on the same session file), the continuation claim belongs to its caller and is released at acceptance (chain of continuations test with delayed teardown). Tests: store 34, await 6, continuation 19, sessionManager 120, real-Pi spawn 3 + continuation 1 + delta 1. Known: the transcript route can still read the session file during the old Pi's shutdown.
