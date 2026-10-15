@@ -1,6 +1,6 @@
 # ADR 0002 — Consolidate skill sync/store into a shared, Syncr-owned engine
 
-- **Status:** Accepted (2026-07-27); P1–P3 landed, P4 partial — see [Progress](#progress-2026-07-28)
+- **Status:** Superseded by [ADR 0005](0005-retire-skill-engine-addon.md) (2026-10-15: the engine is vendored into `packages/skill-engine-native`). Was Accepted (2026-07-27); P1–P3 landed, P4 partial — see [Progress](#progress-2026-07-28)
 - **Supersedes:** the skill/resource half of [ADR-0001](0001-native-containment-module.md)
 - **Live contract + status:** [skill-store-contract.md](../skill-store-contract.md)
 - **Context:** `agent-deck-electron` and `Syncr` (`../Syncr`) each independently
@@ -163,7 +163,7 @@ What landed, and where reality diverged from the plan above. Full, current detai
 
 - **P1a / P1b — done.** Legacy migration isolated (`legacySkillRepo.ts`); `SkillStore` seam +
   routes/launch repointed through it.
-- **P2 — done (Syncr).** Shipped as `@a-streetcoder/skill-engine-native` (crate `skill-engine`).
+- **P2 — done (Syncr).** Shipped as Syncr's private skill-engine-native package (crate `skill-engine`); vendored into `packages/skill-engine-native` under ADR 0005.
 - **P3 — done.** `EngineSkillStore` replaced `NativeSkillStore`; all in-app skill writes go through
   the engine (0.1.3). Project writes enabled and made visible (the reader now scans
   `<project>/.agents/skills`, where the engine materializes them).

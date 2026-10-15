@@ -58,7 +58,8 @@ acceptance slice added the real-addon route/store test described under P4 below.
 
 ## The contract — historical core NAPI surface (0.1.3)
 
-Verified against the shipped binary via Syncr `crates/skill-engine-napi/scripts/smoke.mjs`.
+Verified against the built binary (originally by Syncr's napi smoke script; in this repository by
+`packages/skill-engine-native/scripts/verify-native.mjs` and `apps/server/test/skillEngineLoader.test.ts`).
 camelCase **named** exports; errors thrown as `Error` with a `RESOURCE_*` code prefix.
 
 ```
@@ -92,7 +93,7 @@ Built in-repo, like `loop-catalog-native`: `pnpm build:native` runs `napi build`
 `packages/skill-engine-native` (napi-rs CLI 3.7.4, Rust 1.88.0, targets win32-x64, darwin-arm64/x64,
 linux-x64-gnu) and writes `native/skill-engine-native.<platform>-<arch>.node`. No token is needed to
 install or build. The engine's version is still 0.2.0 (the API Agent Deck pinned before vendoring).
-Until 2026-10-15 it shipped as the private `@a-streetcoder/skill-engine-native` package.
+Until 2026-10-15 it shipped from Syncr's private package registry.
 
 **0.2.0 (Syncr #206) — filesets carry BYTES.** A skill folder or repo with a non-UTF-8 file (PNG icons
 under `assets/`, as Codex's bundled `.system` skills ship) inspects and imports with every file present
@@ -180,11 +181,12 @@ P4 = delete agent-deck's duplicate skill machinery.
   Runtime acceptance was macOS arm64; Windows/Linux packages exist but were not executed in this
   slice. The synchronous API exposes no deterministic interrupted-operation state; its supported
   stale refresh/retry path is covered.
-- **Question out to Syncr — symlinked skill-tree mutation.** agent-deck's old native rename REFUSED
+- **Open question (now this repository's, in `packages/skill-engine-native/engine`) — symlinked
+  skill-tree mutation.** agent-deck's old native rename REFUSED
   a skill whose `SKILL.md` is a symlink (409 "unsafe"); the engine renames it (200). Safe in
   practice (the rename never dereferences the link; engine discovery doesn't follow symlinks), so
-  the old refusal was agent-deck-side belt-and-suspenders — but confirm the engine should either
-  refuse or knowingly allow symlinked skill trees on mutation. The unix-only regression test is
+  the old refusal was agent-deck-side belt-and-suspenders — but decide whether the vendored engine
+  should refuse or knowingly allow symlinked skill trees on mutation. The unix-only regression test is
   `it.skip`-ped pending that answer (`apps/server/test/skill-rename.test.ts`).
 
 ## Packaging (Electron)

@@ -1,7 +1,7 @@
 # Vendored skill engine
 
-This package is the skill engine that Agent Deck used to install as the private
-`@a-streetcoder/skill-engine-native` 0.2.0 package. The owner chose to vendor it
+This package is the skill engine that Agent Deck used to install as Syncr's private
+`skill-engine-native` 0.2.0 package. The owner chose to vendor it
 (option B of [ADR 0005](../../docs/adr/0005-retire-skill-engine-addon.md)).
 
 | What              | Value                                                                                                                         |
@@ -23,8 +23,14 @@ Layout:
 - `src/index.ts`, `scripts/` and `package.json` are Agent Deck's, mirroring
   `packages/loop-catalog-native`.
 
-There are no licence headers in the source files; the Syncr package was `UNLICENSED`
-(same owner as this repository).
+## Provenance and licence
+
+The source repository (`a-streetcoder/Syncr`) is private, and its package was published as
+`UNLICENSED`; the source files carry no licence headers. The same organisation owns Syncr and this
+repository. This repository's root licence is MIT, so without a folder note the vendored code
+reads as MIT-licensed wherever this repository is published. **The owner must confirm publication
+under the root MIT licence, or add a licence note for this folder, before the branch is pushed.**
+Neither `Cargo.toml` declares a `license` field yet; that waits for the owner's decision.
 
 Since vendoring, this copy is the source of truth. Syncr's crate is no longer tracked.
 

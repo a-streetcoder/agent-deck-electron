@@ -244,6 +244,11 @@ function ownedServerLaunch() {
         "loop-catalog-native",
         `loop-catalog-native.${process.platform}-${process.arch}.node`,
       ),
+      AGENT_DECK_SKILL_ENGINE_NATIVE_PATH: path.join(
+        process.resourcesPath,
+        "skill-engine-native",
+        `skill-engine-native.${process.platform}-${process.arch}.node`,
+      ),
     },
     shell: false,
   };

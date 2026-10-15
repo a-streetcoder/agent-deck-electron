@@ -239,16 +239,19 @@ export interface SkillEngineNative {
  * `loop-catalog-native`'s ladder: `AGENT_DECK_SKILL_ENGINE_NATIVE_PATH` → the package's
  * `native/` → the cwd workspace path → `resources/skill-engine-native/` in packaged Electron.
  *
- * A missing addon throws a clear, actionable error rather than a raw module-not-found.
+ * A missing addon, or a missing workspace link (no `pnpm install` yet), rejects with one
+ * actionable `RESOURCE_NATIVE_UNAVAILABLE` error rather than a raw module-not-found. The server
+ * still refuses to start without the engine.
  */
 export async function loadSkillEngineNative(): Promise<SkillEngineNative> {
-  const { loadSkillEngineBinding } = await import("@agent-deck/skill-engine-native");
   try {
+    const { loadSkillEngineBinding } = await import("@agent-deck/skill-engine-native");
     return loadSkillEngineBinding() as SkillEngineNative;
   } catch (cause) {
     throw new Error(
-      "skill engine addon unavailable: run `pnpm build:native` to build " +
-        "packages/skill-engine-native. See docs/skill-store-contract.md.",
+      "RESOURCE_NATIVE_UNAVAILABLE: skill engine addon unavailable: run `pnpm install`, then " +
+        "`pnpm --filter @agent-deck/skill-engine-native build` (or `pnpm build:native`). " +
+        "See docs/skill-store-contract.md.",
       { cause },
     );
   }

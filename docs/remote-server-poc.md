@@ -216,18 +216,30 @@ ssh dev 'cd ~/ai-playground/a-streetcoding/agent-deck-electron && pnpm build:web
 ```
 
 The Syncthing ignore file (`E:\AI Playground\.stignore`, kept identical on PC and VM, not synced
-itself) excludes `packages/loop-catalog-native/native/` and, since 2026-10-14, the
-agent-deck-electron `dist/`, `release/`, `build/pi-runtime`, `build/skill-engine-native` and
-`apps/web/dist`, so PC builds no longer overwrite what the VM serves.
+itself) excludes the machine-local native folders `packages/loop-catalog-native/native/` and
+`packages/skill-engine-native/native/` and, since 2026-10-14, the agent-deck-electron `dist/`,
+`release/`, `build/pi-runtime` and `apps/web/dist`, so PC builds no longer overwrite what the VM
+serves.
+
+The skill engine addon (vendored Rust, ADR 0005) is built on the VM, not synced. After a change
+under `packages/skill-engine-native`, or on first setup, build it before restarting the unit:
+
+```sh
+PATH=$HOME/.cargo/bin:$PATH pnpm --filter @agent-deck/skill-engine-native build
+```
+
+`PATH` is set because a non-interactive `ssh dev` shell does not load cargo's profile. Not the full
+`pnpm build:native`: it also rebuilds `loop-catalog-native`, whose prebuild empties its `native/`
+folder under the running service although that addon has not changed.
 
 Must not:
 
 - Switch branches, `git checkout` or `git stash` in the PC checkout while the VM depends on the
   tree.
-- Expect `packages/loop-catalog-native/native/` to sync: each OS builds its own and the PC
-  prebuild wipes it.
-- Change `pnpm-lock.yaml` without re-running `pnpm install --frozen-lockfile` on the VM with
-  `GITHUB_TOKEN=$(gh auth token)` exported.
+- Expect `packages/loop-catalog-native/native/` or `packages/skill-engine-native/native/` to sync:
+  each OS builds its own and the PC prebuild wipes them.
+- Change `pnpm-lock.yaml` without re-running `pnpm install --frozen-lockfile` on the VM (no token
+  needed any more).
 - Commit `.sync-conflict-*` files.
 - Run `pnpm install` or builds on the VM while a session is executing.
 

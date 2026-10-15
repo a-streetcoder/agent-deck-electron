@@ -8,7 +8,7 @@ type: feature
 priority: 2
 assignee: almoretti
 ---
-# D1: retire the Syncr skill-engine addon (ADR 0005): skill writes, recoveries and git import in TypeScript
+# D1: retire the Syncr skill-engine addon (ADR 0005): skill writes, recoveries and git import
 
 
 Owner decision 2026-10-15 ("if we have too many things on that seam we can also move away from it"), recorded as docs/adr/0005-retire-skill-engine-addon.md. ADR 0004 already removed Syncr as the coordination plane; this retires the last code dependency, the pinned native addon @a-streetcoder/skill-engine-native 0.2.0 (private registry, native build per platform, the WINDOWS.md packaging pitfalls, the EngineSkillStore contract in docs/skill-store-contract.md).
@@ -23,7 +23,7 @@ GUARDRAILS (every ticket): work in a worktree E:/agent-deck-wt/<ticket> on wt/<t
 
 ## Acceptance Criteria
 
-No reference to skill-engine-native remains in apps/, packages/, package.json or scripts (grep); existing skills, recoveries and imported git repos in a real store open and round-trip (write, rename, delete, restore, import, sync) with the ported unit tests and the real-Pi skill tests; typecheck, lint, format pass; Windows pack:win no longer needs the addon (documented, run by the owner when memory allows).
+No reference to the private @a-streetcoder scope remains outside docs/archive and CHANGELOG (grep); existing skills, recoveries and imported git repos in a real store open and round-trip (write, rename, delete, restore, import, sync) with the ported unit tests and the real-Pi skill tests; typecheck, lint, format pass; Windows pack:win no longer needs the addon (documented, run by the owner when memory allows).
 
 ## Notes
 
@@ -46,3 +46,13 @@ No reference to skill-engine-native remains in apps/, packages/, package.json or
 **2026-10-15T07:20:12Z**
 
 2026-10-15 owner decision: VENDOR the Rust crate for now (option B of ADR 0005). Scope: copy ../Syncr/crates/skill-engine and crates/skill-engine-napi into packages/skill-engine-native (same napi-rs CLI and four targets as loop-catalog-native), keep the crate's 164 tests, point apps/server at the local package, remove @a-streetcoder/skill-engine-native from package.json/pnpm-lock, the @a-streetcoder scope from .npmrc, the GITHUB_TOKEN/packages:read from CI, update build-backend.mjs, electron-builder.yml, the packaged smoke script, DEVELOPMENT/WINDOWS/RELEASE/TESTING docs and ADR 0005 (option B chosen); the NAPI/error contract stays identical so engineSkillStore.ts does not change. Follow-ups (Rust, later tickets): make NAPI calls async/off the event loop and add a git timeout + per-user credential. Archaeology of the old TypeScript stays on record for a future rewrite.
+
+**2026-10-15T07:41:22Z**
+
+Follow-ups (to ticket separately):
+- NAPI calls off the event loop: make the engine calls async (napi AsyncTask / worker) so git and filesystem work stops blocking the server.
+- Git timeout in the engine (clone/fetch have none today), plus per-user git credentials.
+- macOS /private/var canonicalize risk in the vendored Rust tests (tempdir paths under /var vs their canonical /private/var form).
+- CI has never run the engine's Rust tests on Windows or macOS, nor on Rust 1.88 with the cfg(unix) code compiled; the first push is the first run.
+- rust-cache shared-key names still say loop-catalog-native-* although they now cache both crates.
+- PACKAGES_READ_TOKEN repository secret is now unused; delete it.

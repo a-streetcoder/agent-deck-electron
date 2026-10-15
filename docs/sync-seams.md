@@ -3,8 +3,8 @@
 > **Closed.** The lift posture below is closed under [ADR 0005](adr/0005-retire-skill-engine-addon.md): both of its implementation options retire the shared-engine lift, so no slice updates this file or drafts Syncr requests any more. The registry stays as history.
 
 How agent-deck builds **durable, user-owned state** so each domain can later be lifted onto the
-shared, Syncr-owned engine (`@a-streetcoder/skill-engine-native` today; its successors as the
-surface grows) without rewriting call sites. Companion to
+shared, Syncr-owned engine (the skill engine then; its successors as the
+surface grows; since ADR 0005 the skill engine is vendored in `packages/skill-engine-native`) without rewriting call sites. Companion to
 [ADR-0002](adr/0002-consolidate-skill-engine.md) and
 [skill-store-contract.md](skill-store-contract.md), generalizing their pattern from skills to
 every domain that will eventually sync at user level.
