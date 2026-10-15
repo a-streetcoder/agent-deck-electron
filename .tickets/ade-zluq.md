@@ -1,6 +1,6 @@
 ---
 id: ade-zluq
-status: in_progress
+status: closed
 deps: [ade-wruf]
 links: []
 created: 2026-10-15T08:01:14Z
@@ -34,3 +34,7 @@ Renderer tests: output at or under the caps and always well-formed; since round 
 **2026-10-15T09:34:33Z**
 
 2026-10-15 GPT review38 of c3623cb: redaction blocker and the per-call log scan coincide with the contrarian; added to the round: budget the ENCODED length of header + turns under one cap, whole lines only, never slice inside a quoted value (also for the 12,000 list cap).
+
+**2026-10-15T09:42:51Z**
+
+2026-10-15 merged as e0557e8 (c3623cb + 4e11cab: redaction before capping, entry-id whitelist, per-session summary fold in eventReaders replaces the per-call log scan, pre-log notice with startedAt, encoded-length line budgets with an 8,000-char reserve for turns, docs). Follow-ups: whole Pi file still read per call (memoise by path+size+mtime); cursor has no logId; final message more than 10 entries from the turn end shows no head; the older-turns count can overstate when since lands among dropped turns.
