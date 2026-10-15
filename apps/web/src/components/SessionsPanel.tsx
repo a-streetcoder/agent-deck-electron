@@ -21,6 +21,7 @@ import { userDisplayName, userInitials } from "@/lib/userIdentity";
 import { useAppStore } from "../state/store.ts";
 import { ActivityList } from "./ActivityList.tsx";
 import { SessionStatusIndicator } from "./SessionStatusIndicator.tsx";
+import { hostOf } from "./SessionShare.tsx";
 import {
   deleteSession,
   forkSession,
@@ -226,6 +227,15 @@ export function SessionRow({
         <span className="truncate text-label font-medium" data-testid="chat-title">
           {displayTitle}
         </span>
+        {session.sharedTo ? (
+          // SRV-12c1: the same row, now a link to the copy on the shared server.
+          <span
+            className="mt-0.5 truncate text-detail text-text-muted"
+            data-testid={`chat-shared-${session.id}`}
+          >
+            on {hostOf(session.sharedTo.serverOrigin)}
+          </span>
+        ) : null}
         {session.status === "failed" ? (
           <span
             className="mt-0.5 flex items-center gap-1 truncate text-detail text-danger"

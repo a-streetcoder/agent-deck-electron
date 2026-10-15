@@ -5,10 +5,22 @@
  * user's cloudflared token. The token never leaves this module: answers carry
  * only a status and a parsed JSON body.
  */
+import { Buffer } from "node:buffer";
 import { cloudflaredLogin, cloudflaredToken, signInErrorText } from "./remote-server.js";
 
 /** The only requests a renderer may ask for, as "METHOD /path". */
 const ALLOWED = new Set(["GET /projects", "POST /projects", "GET /me"]);
+/** SRV-12c1: a session move into one shared project (a UUID), the only patterned path. */
+const IMPORT_PATH =
+  /^\/projects\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/sessions\/import$/;
+/** The session export the server accepts at most; checked here before it travels. */
+export const MAX_IMPORT_BYTES = 16 * 1024 * 1024;
+
+const isPlainObject = (value) =>
+  value !== null &&
+  typeof value === "object" &&
+  !Array.isArray(value) &&
+  Object.getPrototypeOf(value) === Object.prototype;
 
 /**
  * `run(args, timeoutMs, signal)` runs cloudflared (null when
@@ -40,21 +52,33 @@ export function createSharedServerClient({ origin, run, fetchImpl = fetch, timeo
   }
 
   async function request(method, path, body) {
+    const sessionImport = method === "POST" && typeof path === "string" && IMPORT_PATH.test(path);
     if (
       typeof method !== "string" ||
       typeof path !== "string" ||
-      !ALLOWED.has(`${method} ${path}`)
+      (!sessionImport && !ALLOWED.has(`${method} ${path}`))
     ) {
       throw new Error("This request to the shared server is not allowed.");
     }
     let payload;
-    if (method === "POST") {
+    if (sessionImport) {
+      // The shape the server validates in full (sessionTransfer.ts); here only
+      // what keeps the call from carrying anything but a session export.
+      const valid =
+        isPlainObject(body) &&
+        body.version === 1 &&
+        typeof body.localSessionId === "string" &&
+        typeof body.transcript === "string" &&
+        isPlainObject(body.meta) &&
+        isPlainObject(body.transfer);
+      if (!valid) throw new Error("This request to the shared server is not allowed.");
+      payload = JSON.stringify(body);
+      if (Buffer.byteLength(payload) > MAX_IMPORT_BYTES) {
+        throw new Error("This session is larger than 16 MB and cannot move to the shared server.");
+      }
+    } else if (method === "POST") {
       // Make shared only: { repo, ref? }, never the server-folder { path } form.
-      const plain =
-        body !== null &&
-        typeof body === "object" &&
-        !Array.isArray(body) &&
-        Object.getPrototypeOf(body) === Object.prototype;
+      const plain = isPlainObject(body);
       const keys = plain ? Object.keys(body) : [];
       const valid =
         plain &&

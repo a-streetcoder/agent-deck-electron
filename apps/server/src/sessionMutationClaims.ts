@@ -1,4 +1,4 @@
-export type SessionMutationKind = "history" | "delete" | "merge" | "attention" | "resume";
+export type SessionMutationKind = "history" | "delete" | "merge" | "attention" | "resume" | "share";
 
 /** Synchronous per-session transaction claim shared by routes and runtime resume. */
 export class SessionMutationClaims {

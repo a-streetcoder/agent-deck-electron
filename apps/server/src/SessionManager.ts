@@ -97,6 +97,13 @@ export class SessionCreationError extends Error {
 /** A4: spawned children per parent; the managed_parallel concurrency maximum. */
 export const MAX_DETACHED_SUBAGENTS = 8;
 
+/** SRV-12c1: what every refused action on a session moved to a shared server says. */
+export const SESSION_SHARED_ERROR =
+  "session_shared: This session continues on the shared server. Open it there, or continue locally.";
+/** SRV-12c1: what a prompt or delegation during the hand-off to the server says. */
+export const SESSION_MOVING_ERROR =
+  "session_moving: This session is moving to the shared server. Wait until the move finishes or is cancelled.";
+
 /** A4: spawn refused because the parent already runs MAX_DETACHED_SUBAGENTS children. */
 export class SubagentCapError extends Error {
   constructor() {
@@ -1116,6 +1123,8 @@ export class SessionManager {
     if (meta.lifecycle === "draft") {
       throw new Error("Send the first message to start this draft.");
     }
+    // SRV-12c1: a frozen pointer runs no Pi; the session continues on the server.
+    if (meta.sharedTo) throw new Error(SESSION_SHARED_ERROR);
     const inFlight = this.resuming.get(meta.id);
     if (inFlight) return await inFlight;
     // History owns a larger transaction that intentionally resumes its source.
@@ -1821,6 +1830,8 @@ export class SessionManager {
     signal?.throwIfAborted();
     const parent = this.sessions.get(parentSessionId);
     if (!parent) throw new Error(`unknown parent session: ${parentSessionId}`);
+    if (this.mutationClaims.owner(parentSessionId) === "share")
+      throw new Error(SESSION_MOVING_ERROR);
     return await parent.runChildAgent(task, agentName, toolPolicy, overrides, {
       source,
       ...(worktree ? { worktree: true } : {}),
@@ -1865,6 +1876,9 @@ export class SessionManager {
     options.signal?.throwIfAborted();
     const parent = this.sessions.get(parentSessionId);
     if (!parent) throw new Error(`unknown parent session: ${parentSessionId}`);
+    // SRV-12c1: nothing new starts while the session is being handed to the server.
+    if (this.mutationClaims.owner(parentSessionId) === "share")
+      throw new Error(SESSION_MOVING_ERROR);
     if (options.detached && parent.detachedSubagents >= MAX_DETACHED_SUBAGENTS) {
       throw new SubagentCapError();
     }

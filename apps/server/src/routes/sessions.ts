@@ -57,6 +57,8 @@ import {
   type GitWorktree,
 } from "../git.ts";
 import {
+  SESSION_MOVING_ERROR,
+  SESSION_SHARED_ERROR,
   SessionCreationError,
   SubagentTranscriptEvidenceError,
   type SessionAnnounce,
@@ -73,6 +75,12 @@ const mergeLocks = new Set<string>();
 const loopSession = (meta: SessionMeta): boolean =>
   Boolean(meta.loopReviewRunId || meta.agentName?.startsWith("Loop ·"));
 const LOOP_FORK_REFUSED = "A Loop session cannot be forked. Open its run from Loops instead.";
+// SRV-12c1: a frozen pointer is read-only. Every session mutation refuses it except
+// a plain fork (Continue locally), delete (removes only this copy), pin and attention.
+export const refuseShared = (reply: { status(code: number): { send(body: unknown): unknown } }) =>
+  reply
+    .status(409)
+    .send({ code: "session_shared", error: SESSION_SHARED_ERROR.replace(/^session_shared: /, "") });
 
 /** The verified creator (trusted proxy), as the identity shape persisted on SessionMeta. */
 function sessionCreator(raw: IncomingMessage): UserIdentity | undefined {
@@ -371,6 +379,11 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     return pinned ? { ...meta, launchPlan: { ...plan, ...pinned } } : meta;
   }
 
+  ctx.sessionModelGate = {
+    pin: (meta, owner) => pinForkModel(meta, owner),
+    refusal: (meta, owner) => forkModelRefusal(meta, owner),
+  };
+
   fastify.get("/sessions/:id/models", async (request, reply) => {
     const { id } = request.params as { id: string };
     const draft = ctx.sessionDrafts?.find(id);
@@ -544,6 +557,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const meta = live?.meta ?? index.find((s) => s.id === id);
     if (!meta) return reply.status(404).send({ error: "unknown session" });
     if (meta.lifecycle === "draft") return { session: meta };
+    // SRV-12c1: a pointer opens without Pi; it continues on the shared server.
+    if (meta.sharedTo) return { session: decorated(meta) };
     // A session with no pi session file never ran a turn (a draft, or an old
     // entry from before session files existed). It has nothing to restore, but
     // opening it should still work — sessions.resume launches a FRESH parent pi
@@ -597,6 +612,13 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       })
       .safeParse(request.body ?? {});
     if (!seen.success) return reply.status(400).send({ error: seen.error.message });
+    if (index.find((s) => s.id === id)?.sharedTo) return refuseShared(reply);
+    // SRV-12c1: no delegation starts while the session is handed to the server.
+    if (sessionMutations.owner(id) === "share")
+      return reply.status(409).send({
+        code: "session_moving",
+        error: SESSION_MOVING_ERROR.replace(/^session_moving: /, ""),
+      });
     const session = sessions.get(id);
     const dispatcher = ctx.planDispatcher;
     if (!session || !dispatcher) return reply.status(404).send({ error: "unknown session" });
@@ -637,6 +659,12 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const parsed = z.object({ title: z.string().trim().min(1).max(200) }).safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const { id } = request.params as { id: string };
+    if (index.find((s) => s.id === id)?.sharedTo) return refuseShared(reply);
+    if (sessionMutations.owner(id) === "share")
+      return reply.status(409).send({
+        code: "session_moving",
+        error: SESSION_MOVING_ERROR.replace(/^session_moving: /, ""),
+      });
     const live = sessions.get(id);
     if (live) {
       await live.rename(parsed.data.title);
@@ -1054,6 +1082,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   // every non-mutating preflight complete before auto-commit or checkout.
   fastify.post("/sessions/:id/merge", async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (index.find((s) => s.id === id)?.sharedTo) return refuseShared(reply);
     const releaseMutation = sessionMutations.tryClaim(id, "merge");
     if (!releaseMutation) {
       return reply.status(409).send({
@@ -1657,6 +1686,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       const forker = sessionCreator(request.raw);
       let fork: { owner?: UserIdentity; launchPlan?: unknown } | undefined;
       const source = sessions.get(id)?.meta ?? index.find((s) => s.id === id);
+      if (source?.sharedTo) return refuseShared(reply);
       if (action === "fork" && source) {
         const refuse = (error: string) =>
           reply.status(409).send({ code: "history_fork_refused", error });

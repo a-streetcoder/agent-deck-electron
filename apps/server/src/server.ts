@@ -128,6 +128,8 @@ import { registerMemoryRoutes } from "./routes/memory.ts";
 import { registerProjectRoutes } from "./routes/projects.ts";
 import { registerResourceRoutes } from "./routes/resources.ts";
 import { registerSessionRoutes } from "./routes/sessions.ts";
+import { registerSessionImportRoutes } from "./routes/sessionImport.ts";
+import { registerSessionShareRoutes } from "./routes/sessionShare.ts";
 import { registerSettingsRoutes } from "./routes/settings.ts";
 import { SessionManager, SubagentCapError } from "./SessionManager.ts";
 import { launchVerifier } from "./verifier.ts";
@@ -1598,6 +1600,7 @@ async function initServer(
     sessions,
     drafts: {
       find: (id) => ctx.sessionDrafts?.find(id),
+      sharedPointer: (id) => ctx.sessionDrafts?.sharedPointer?.(id),
       start: (id) => ctx.sessionDrafts!.start(id),
       setModel: (id, provider, modelId) => ctx.sessionDrafts!.setModel(id, provider, modelId),
       setThinking: (id, level) => ctx.sessionDrafts!.setThinking(id, level),
@@ -1715,6 +1718,7 @@ async function initServer(
     userAgentDirs,
     githubConnections,
     sharedServer: trustedProxy !== null,
+    importedSessionsDir: nodePath.join(dataDir, "imported-sessions"),
     withActivity,
     index,
     projects,
@@ -1792,6 +1796,8 @@ async function initServer(
   registerLoopRoutes(ctx);
   registerProjectRoutes(ctx);
   registerSessionRoutes(ctx);
+  registerSessionImportRoutes(ctx);
+  registerSessionShareRoutes(ctx);
   registerComposerDraftRoutes(ctx, composerDrafts);
   registerEventRoutes(fastify, eventLog, () => logReaders.openHuman());
   registerAgentProfileRoutes(fastify, profileSources);

@@ -21,6 +21,8 @@ export interface LaunchResourceConfigV1 {
   modelOverride?: string;
   extensionsOverride?: string[];
   skillsOverride?: string[];
+  /** SRV-12c1: fixed thinking level (an imported session's), above agent and default. */
+  thinkingOverride?: NonNullable<ReturnType<typeof asThinkingLevel>>;
 }
 
 export interface ResolvedLaunchResources {
@@ -251,7 +253,11 @@ export function resolveLaunchResources(
       promptTemplates: promptTemplates.length ? promptTemplates : undefined,
       provider,
       model: agent.model ?? model,
-      thinking: asThinkingLevel(agent.thinking) ?? ctx.settings.get().defaultThinking ?? undefined,
+      thinking:
+        config.thinkingOverride ??
+        asThinkingLevel(agent.thinking) ??
+        ctx.settings.get().defaultThinking ??
+        undefined,
     };
   } else {
     let skills = config.skillsOverride;
@@ -270,7 +276,7 @@ export function resolveLaunchResources(
       kind: "parent",
       provider,
       model,
-      thinking: ctx.settings.get().defaultThinking ?? undefined,
+      thinking: config.thinkingOverride ?? ctx.settings.get().defaultThinking ?? undefined,
       extensions: base.length ? base : undefined,
       skills,
       promptTemplates: promptTemplates.length ? promptTemplates : undefined,

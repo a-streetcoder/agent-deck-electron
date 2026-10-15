@@ -57,7 +57,7 @@ export interface SharedServerBridge {
   origin: string;
   request(
     method: "GET" | "POST",
-    path: "/projects" | "/me",
+    path: "/projects" | "/me" | `/projects/${string}/sessions/import`,
     body?: object,
   ): Promise<SharedServerResponse>;
   signIn(): Promise<{ ok: boolean; error?: string }>;
