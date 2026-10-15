@@ -1,6 +1,6 @@
 ---
 id: ade-t77e
-status: in_progress
+status: closed
 deps: [ade-wgkk]
 links: []
 created: 2026-10-15T07:37:06Z
@@ -30,3 +30,7 @@ Tests: Make shared with and without origin, non-GitHub origin refused, link stor
 **2026-10-15T13:18:45Z**
 
 2026-10-15 fix round: (1) server 409 sends projectId plus repoId only for the same repository (visible duplicate, post-clone race); folder held by another repository answers holderProjectId; client links a 409 only with projectId and a repoId from the body or the server list, repoId stored on every link path; runbook updated. (2) Unlink when sharedTo is set; a linked project missing from the loaded server list shows not on host any more with Unlink and Make shared. (3) ARCHITECT DEFAULT, owner may change: ?project=id opens a NEW draft session in that project for the visitor and never resumes an existing session (another member's Pi would start); unknown id keeps the notice. (4) GET /projects/:id/origin answers hasOrigin, github, topLevel (git rev-parse --show-toplevel realpath-compared, case-insensitive on win32), never the raw URL; client refuses a folder inside a larger repository. (5) shared-server.js: single-flight token lookup, a failed lookup or refused token holds until signIn succeeds, token redacted from the response text before parsing, non-JSON 403 reads as account not allowed, empty or whitespace repo, array, __proto__ and non-plain bodies refused. (6) shared-server:sign-in-cancel IPC and preload cancelSignIn, row shows Cancel while the sign-in runs. (7) Make shared re-reads the origin on every click; per-row origin lookups cached per project id for the screen lifetime, four at a time. (8) GitHub-related 409 text shown alone, others get a conditional private-repository hint; fixture uses connect GitHub first. (9) PATCH sharedTo answers 409 on a shared server. Tests: desktop shared-server + remote-server 17 passed; server projectSharedTo + repoProjects 26 passed; web ShareProjectControl, wsBridge.deepLink, ProjectsScreen, wsBridge.addProject, ProjectPicker 30 passed; tsc web and server clean; eslint and prettier clean. Open: an https origin with user info (user:token@github.com) is treated as non-GitHub and refused rather than parsed.
+
+**2026-10-15T13:21:29Z**
+
+2026-10-15 reviewed (contrarian + GPT), fix round merged as 644a9dc / merge 96de813, deployed (health 200). Architect defaults recorded: ?project= opens a new draft; matching by owner/name because local projects have no repoId. Not ticketed: a token revoked while cloudflared still caches it may loop on sign-in (same as remote mode); a project deleted on the server shows 'not on host any more' with Unlink.

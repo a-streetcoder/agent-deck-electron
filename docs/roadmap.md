@@ -56,7 +56,7 @@ ADR 0003 trust model; live setup in [`remote-server-poc.md`](remote-server-poc.m
 - ade-c7ad — PRV-01: one Claude entry per model (bridge as Claude, API key as API; direct sign-in hidden) — closed
 - ade-iq7c — UI-01: sessions panel main, Orchestrate pull-up with user row — closed
 - ade-vlld — SRV-15: tools to use shared sessions easily — closed 2026-10-15 (15a fork follows the forker, 15b status dots + member chips + deep link + fork provenance, 15c list_sessions/read_session; all deployed)
-- ade-aier — SRV-12 (epic): shared projects from a GitHub repository; local → shared; session move — sub-tickets ade-wgkk (12a repo projects), ade-t77e (12b Make shared), ade-shxc (12c1 snapshot move + frozen pointer), ade-iarr (12c2 live mirror), ade-k7s3 (12c3 return trip); tree approved 2026-10-15; 12a CLOSED (merged 6d844d7, deployed); 12b in development
+- ade-aier — SRV-12 (epic): shared projects from a GitHub repository; local → shared; session move — sub-tickets ade-wgkk (12a repo projects), ade-t77e (12b Make shared), ade-shxc (12c1 snapshot move + frozen pointer), ade-iarr (12c2 live mirror), ade-k7s3 (12c3 return trip); tree approved 2026-10-15; 12a CLOSED (merged 6d844d7, deployed); 12b CLOSED (merged 96de813, deployed); 12c1 in development
 - ade-s625 — FINAL: validation of the shared-server lane before pushing `poc/shared-server` — open
 - Logged, unticketed: session move between backends (export = Pi session file + meta + pushed
   branch; import = fetch, remap, register, resume); per-user isolation beyond attribution if the
