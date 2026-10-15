@@ -1,6 +1,6 @@
 ---
 id: ade-k7s3
-status: open
+status: in_progress
 deps: [ade-shxc, ade-gfs4]
 links: []
 created: 2026-10-15T07:37:07Z
