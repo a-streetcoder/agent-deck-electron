@@ -27,3 +27,7 @@ Each of the seven items has a regression test that fails on HEAD and passes afte
 **2026-10-15T19:11:39Z**
 
 2026-10-15 owner approved (exact word) all seven items. Dispatched in worktree E:\agent-deck-wt\ade-q0pz (wt/ade-q0pz).
+
+**2026-10-15T19:26:58Z**
+
+2026-10-15 round 1 (a389707) reviewed: GPT second pass (review47) NOT READY: blocker = transfer cleanup (discard, update-ref) still runs hooks; should-fix = tokenless shared-server pushes keep hooks, commit route returns raw hook stderr, revealArtifacts/revealWorktree IPCs still take server paths in remote mode, resource test exercises only the helper. Fix round 2 sent to the developer; contrarian pass still running.
