@@ -1201,7 +1201,10 @@ describe("loop route honesty gate", () => {
       "triage-Checkout Triage",
       "Configured Explorer",
       "configured",
-      expect.objectContaining({ defaultExpectedOutcome: "reportOnly" }),
+      expect.objectContaining({
+        defaultExpectedOutcome: "reportOnly",
+        defaultTools: ["read", "grep", "find", "ls"],
+      }),
     );
     expect(runSubagent).toHaveBeenNthCalledWith(
       5,
@@ -1209,7 +1212,10 @@ describe("loop route honesty gate", () => {
       "triage-Worktree Triage",
       "Configured Explorer",
       "configured",
-      expect.objectContaining({ defaultExpectedOutcome: "reportOnly" }),
+      expect.objectContaining({
+        defaultExpectedOutcome: "reportOnly",
+        defaultTools: ["read", "grep", "find", "ls"],
+      }),
     );
     expect(runSubagent.mock.calls.filter((call) => call[3] === "none")).toHaveLength(3);
     expect(createLoopWorktree).toHaveBeenCalledOnce();

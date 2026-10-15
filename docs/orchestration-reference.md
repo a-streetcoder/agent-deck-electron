@@ -23,12 +23,16 @@ Each Loop role child launches with a tool policy and a fallback outcome contract
 filtered by the policy; with no `tools:` the child gets the set in the table. An agent's own
 `defaultExpectedOutcome` always wins over the fallback outcome.
 
-| Role (loop write target)                                          | Tool policy  | No `tools:` frontmatter      | Fallback outcome      |
-| ----------------------------------------------------------------- | ------------ | ---------------------------- | --------------------- |
-| Maker / single agent, pipeline stage (checkout or worktree)       | `configured` | Pi defaults                  | `directProjectWrites` |
-| Triage (checkout or worktree)                                     | `configured` | Pi defaults                  | `reportOnly`          |
-| Checker; any role in an `artifactMarkdown` loop (branches always) | `readOnly`   | `read`, `grep`, `find`, `ls` | `reportOnly`          |
-| Evaluator                                                         | `none`       | none                         | `reportOnly`          |
+| Role (loop write target)                                                        | Tool policy  | No `tools:` frontmatter      | Fallback outcome      |
+| ------------------------------------------------------------------------------- | ------------ | ---------------------------- | --------------------- |
+| Maker / single agent, pipeline stage (checkout or worktree)                     | `configured` | Pi defaults                  | `directProjectWrites` |
+| Triage (checkout or worktree)                                                   | `configured` | `read`, `grep`, `find`, `ls` | `reportOnly`          |
+| Checker; any non-evaluator role in an `artifactMarkdown` loop (branches always) | `readOnly`   | `read`, `grep`, `find`, `ls` | `reportOnly`          |
+| Evaluator                                                                       | `none`       | none                         | `reportOnly`          |
+
+Pi's default `bash` and file tools are not sandboxed to the loop checkout or worktree: a child
+can reach the main checkout through absolute paths, and an authored `tools:` list is the way to
+narrow it.
 
 `managed_subagent` and `managed_parallel` children are unchanged: no policy, Pi defaults without
 `tools:`, and `reportOnly` when the agent sets no outcome.

@@ -60,7 +60,12 @@ describe("loop role launch defaults", () => {
         toolPolicy: "none",
         defaultExpectedOutcome: "reportOnly",
       });
-      expect(loopRoleLaunchDefaults("triage", target).defaultExpectedOutcome).toBe("reportOnly");
+      // Triage reads by default; editing needs an explicit `tools:` list.
+      expect(loopRoleLaunchDefaults("triage", target)).toEqual({
+        toolPolicy: "configured",
+        defaultExpectedOutcome: "reportOnly",
+        defaultTools: ["read", "grep", "find", "ls"],
+      });
     }
     for (const phase of ["maker", "stage", "branch"] as const) {
       expect(loopRoleLaunchDefaults(phase, "artifactMarkdown")).toEqual({

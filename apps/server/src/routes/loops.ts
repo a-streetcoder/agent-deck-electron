@@ -864,7 +864,7 @@ export function registerLoopRoutes(
           thinking,
         }) => {
           const { provider, modelId: model } = await roleModel(asked, askedModel);
-          const { toolPolicy, defaultExpectedOutcome } = loopRoleLaunchDefaults(
+          const { toolPolicy, defaultExpectedOutcome, defaultTools } = loopRoleLaunchDefaults(
             phase,
             loop.writeTarget,
           );
@@ -873,6 +873,7 @@ export function registerLoopRoutes(
             model,
             thinking: thinking as ThinkingLevel | undefined,
             defaultExpectedOutcome,
+            ...(defaultTools ? { defaultTools } : {}),
           });
         },
         cancel: () => sessions.destroy(parent!.meta.id),

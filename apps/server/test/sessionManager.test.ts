@@ -52,6 +52,7 @@ import {
   type ManagedSessionRuntime,
   type SpawnSessionParams,
 } from "../src/services/sessionManager.ts";
+import { loopRoleLaunchDefaults } from "../src/loopEngine.ts";
 
 /**
  * SessionManager service unit tests (Slice 5) against the scripted fake pi
@@ -1182,7 +1183,7 @@ describe("child tool capability policy", () => {
     const direct = managedNamedOutcomeContract("directProjectWrites", false);
     expect(direct).toContain("Direct project work in the current child working directory");
     expect(direct).toContain("does not grant any additional tool");
-    expect(direct).toContain("actual project checkout");
+    expect(direct).toContain("checkout or isolated worktree");
 
     const isolatedDirect = managedNamedOutcomeContract("directProjectWrites", true);
     expect(isolatedDirect).toContain(
@@ -1359,8 +1360,19 @@ describe("child tool capability policy", () => {
     expect(resolveChildTools(undefined, "configured", [])).toBeUndefined();
     expect(resolveChildTools(undefined, "readOnly", [])).toEqual(["read", "grep", "find", "ls"]);
     expect(resolveChildTools(undefined, "none", [])).toEqual([]);
-    // An authored empty list is still an explicit "no tools".
+    // An authored empty list is still an explicit "no tools", also for a loop maker.
     expect(resolveChildTools([], "configured", [])).toEqual([]);
+    expect(resolveChildTools([], "readOnly", [])).toEqual([]);
+    const maker = loopRoleLaunchDefaults("maker", "currentCheckout");
+    expect(resolveChildTools([], maker.toolPolicy, [])).toEqual([]);
+    // Loop triage without `tools:` gets its read-only default list.
+    const triage = loopRoleLaunchDefaults("triage", "currentCheckout");
+    expect(resolveChildTools(triage.defaultTools, triage.toolPolicy, [])).toEqual([
+      "read",
+      "grep",
+      "find",
+      "ls",
+    ]);
   });
 });
 
