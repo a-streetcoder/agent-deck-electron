@@ -18,6 +18,7 @@ import {
   deleteLoopFile as deleteLoopById,
   duplicateLoop as duplicateLoopById,
   loopsDir,
+  parseLoopFile,
   scanLoops,
   writeLoopFile as persistLoopFile,
 } from "../src/loops.ts";
@@ -946,6 +947,50 @@ describe("loop definition store", () => {
     writeFileSync(filePath, content.replace("kind: evaluator", "kind: judge"));
     expect(() => saveLoopFile(roots, { name: "graph", description: "again" })).toThrow(
       'Graph node "judge" has an unknown kind "judge".',
+    );
+  });
+
+  it("refuses a malformed graph on load instead of reading it as edgeless (A9)", () => {
+    const file = (graph: string[]) =>
+      ["---", "name: bad-graph", "structure: agentPipeline", ...graph, "---", "", "Goal.", ""].join(
+        "\n",
+      );
+    const nodes = [
+      "nodes:",
+      "  - { id: plan, kind: stage, agentName: A }",
+      "  - { id: e, kind: evaluator }",
+    ];
+    for (const [graph, message] of [
+      [[...nodes, "edges: plan -> e"], "Malformed loop graph: edges must be a list."],
+      [nodes, "Malformed loop graph: edges must be a list."],
+      [["nodes: {}", "edges: []"], "Malformed loop graph: nodes must be a list."],
+      [[...nodes, "edges:", "  - plan"], "Malformed loop graph: edges[0] must be a mapping."],
+      [
+        ["nodes:", "  - { id: 1, kind: stage }", "edges: []"],
+        "Malformed loop graph: nodes[0].id must be text.",
+      ],
+      [
+        [...nodes, "edges:", "  - { from: plan, to: e, budgeted: yes please }"],
+        "Malformed loop graph: edges[0].budgeted must be true or false.",
+      ],
+    ] as const) {
+      expect(() => parseLoopFile("bad.loop.md", file([...graph]))).toThrow(message);
+    }
+    // A scan hides the malformed file like any other malformed definition.
+    const home = makeHome();
+    const dir = loopsDir({ home });
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, "bad.loop.md"), file([...nodes, "edges: plan -> e"]));
+    expect(scanLoops({ home })).toEqual([]);
+
+    // Well-typed but wrong: an edge to an unknown node is refused by graph validation on save.
+    writeFileSync(
+      path.join(dir, "bad.loop.md"),
+      file([...nodes, "edges:", "  - { from: plan, to: nowhere }"]),
+    );
+    expect(scanLoops({ home })[0]!.graph?.edges).toEqual([{ from: "plan", to: "nowhere" }]);
+    expect(() => saveLoopFile({ home }, { name: "bad-graph", description: "x" })).toThrow(
+      "Graph edge plan -> nowhere names an unknown node.",
     );
   });
 

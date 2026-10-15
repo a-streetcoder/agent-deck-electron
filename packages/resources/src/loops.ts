@@ -85,28 +85,48 @@ function decodeJSONStringArrayLine(content: string, key: string): string[] | und
     return undefined;
   }
 }
-/** A9: hand-written `nodes`/`edges` frontmatter. Malformed entries are kept as they are so
- * graph validation refuses the definition instead of falling back to the flat template. */
+/** A9: hand-written `nodes`/`edges` frontmatter. Wrong container or field types are refused
+ * here (LoopDefinitionInvalidError; a scan hides the file like any malformed definition);
+ * well-typed graphs go to graph validation. Never a fallback to the flat template. */
 function asLoopGraph(frontmatter: Record<string, unknown>): LoopGraph | undefined {
   if (frontmatter.nodes === undefined && frontmatter.edges === undefined) return undefined;
-  const records = (value: unknown): Record<string, unknown>[] =>
-    Array.isArray(value)
-      ? value.map(
-          (item) => (item && typeof item === "object" ? item : {}) as Record<string, unknown>,
-        )
-      : [];
+  const refuse = (detail: string): never => {
+    throw new LoopDefinitionInvalidError(`Malformed loop graph: ${detail}.`);
+  };
+  const records = (key: "nodes" | "edges"): Record<string, unknown>[] => {
+    const value = frontmatter[key];
+    if (!Array.isArray(value)) return refuse(`${key} must be a list`);
+    return value.map((item, index) =>
+      item && typeof item === "object" && !Array.isArray(item)
+        ? (item as Record<string, unknown>)
+        : refuse(`${key}[${index}] must be a mapping`),
+    );
+  };
+  const text = (record: Record<string, unknown>, key: string, where: string): string =>
+    typeof record[key] === "string" ? record[key] : refuse(`${where}.${key} must be text`);
   return {
-    nodes: records(frontmatter.nodes).map((node) => ({
-      id: asString(node.id) ?? "",
-      kind: asString(node.kind) as LoopGraphNode["kind"],
-      ...(asString(node.agentName) ? { agentName: asString(node.agentName) } : {}),
-    })),
-    edges: records(frontmatter.edges).map((edge) => ({
-      from: asString(edge.from) ?? "",
-      to: asString(edge.to) ?? "",
-      ...(edge.when !== undefined ? { when: String(edge.when) as LoopGraphEdge["when"] } : {}),
-      ...(edge.budgeted === true ? { budgeted: true } : {}),
-    })),
+    nodes: records("nodes").map((node, index) => {
+      if (node.agentName !== undefined) text(node, "agentName", `nodes[${index}]`);
+      return {
+        id: text(node, "id", `nodes[${index}]`),
+        kind: text(node, "kind", `nodes[${index}]`) as LoopGraphNode["kind"],
+        ...(node.agentName ? { agentName: node.agentName as string } : {}),
+      };
+    }),
+    edges: records("edges").map((edge, index) => {
+      const where = `edges[${index}]`;
+      if (edge.budgeted !== undefined && typeof edge.budgeted !== "boolean") {
+        refuse(`${where}.budgeted must be true or false`);
+      }
+      return {
+        from: text(edge, "from", where),
+        to: text(edge, "to", where),
+        ...(edge.when !== undefined
+          ? { when: text(edge, "when", where) as LoopGraphEdge["when"] }
+          : {}),
+        ...(edge.budgeted === true ? { budgeted: true } : {}),
+      };
+    }),
   };
 }
 function asLaunchContextScope(value: unknown): LoopLaunchContextScope {

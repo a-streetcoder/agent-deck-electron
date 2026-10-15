@@ -72,7 +72,11 @@ cannot hold a `human` node nor use the `humanApproval` structure: a checkpoint i
 resolved only through the Human approval template.
 
 A hand-written graph goes in the `.loop.md` frontmatter and replaces the template; `structure`
-stays as the display label. Example, a pipeline with a checker after stage two:
+stays as the display label. The loader refuses wrong types (`nodes` or `edges` not a list, an
+entry not a mapping, a non-text `id`, `kind`, `agentName`, `from`, `to` or `when`, a non-boolean
+`budgeted`) with "Malformed loop graph: …"; a scan hides such a file like any malformed
+definition. A well-typed graph goes to the validation above. Example, a pipeline with a checker
+after stage two:
 
 ```yaml
 structure: agentPipeline
@@ -94,7 +98,9 @@ The Loops screen draws the graph in the run dialog (definition) and the run pane
 node's status from its latest-iteration child through `loopChildStatus`, the A2 tree's mapping;
 on a finished run a node that never ran, such as an evaluator skipped by a checker `FAIL`, shows
 "skipped"). The
-editor does not author graphs; editing a hand-written loop there keeps its `nodes`/`edges`.
+editor does not author graphs: for a hand-written loop it shows the graph and "Custom graph: edit
+nodes/edges in the file." in place of the structure form, and a save sends none of the
+per-structure fields, so the file keeps them and its `nodes`/`edges`.
 
 ## Agent coordination
 
