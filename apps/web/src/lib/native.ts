@@ -44,6 +44,26 @@ export interface DroppedPathItem {
   kind: "file" | "folder";
 }
 
+/** SRV-12b: an answer from the shared server, relayed by Electron main. */
+export type SharedServerResponse = {
+  status: number;
+  body?: unknown;
+  signInRequired?: true;
+  error?: string;
+};
+
+/** SRV-12b: allow-listed calls to the configured shared server (local mode only). */
+export interface SharedServerBridge {
+  origin: string;
+  request(
+    method: "GET" | "POST",
+    path: "/projects" | "/me",
+    body?: object,
+  ): Promise<SharedServerResponse>;
+  signIn(): Promise<{ ok: boolean; error?: string }>;
+  cancelSignIn(): Promise<boolean>;
+}
+
 export interface AgentDeckBridge {
   isElectron?: boolean;
   /** The shell is attached to a remote server; local file/folder pickers are wrong-machine. */
@@ -73,6 +93,7 @@ export interface AgentDeckBridge {
   openResourceFile?(request: NativeResourceFileRequest): Promise<boolean>;
   revealResourceFile?(request: NativeResourceFileRequest): Promise<boolean>;
   openExternal?(url: string): Promise<boolean>;
+  sharedServer?: SharedServerBridge;
   openAppMenu?(name: AppMenuName, anchor: { x: number; y: number }): Promise<boolean>;
   /** Subscribe to native-menu commands; returns an unsubscribe function. */
   onMenu?(handler: (action: NativeMenuAction) => void): () => void;
@@ -118,6 +139,12 @@ export function isRemoteServer(): boolean {
  */
 export function canPickLocalPaths(): boolean {
   return isElectron() && !isRemoteServer();
+}
+
+/** SRV-12b: the shared server Make shared talks to; undefined when not configured. */
+export function sharedServer(): SharedServerBridge | undefined {
+  const bridge = nativeBridge();
+  return isElectron() && bridge?.remote !== true ? bridge?.sharedServer : undefined;
 }
 
 /** Whether this renderer has the purpose-built desktop reveal capability. */

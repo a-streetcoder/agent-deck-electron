@@ -84,3 +84,48 @@ it("SRV-15b: an unknown or deleted id shows a notice and boots as usual", async 
 it("SRV-15b: the copied link opens the session on this server", () => {
   expect(sessionLink("a b")).toBe(`${window.location.origin}/?session=a%20b`);
 });
+
+it("SRV-12b: ?project=<id> opens a new draft in that project, never resuming a session", async () => {
+  window.history.replaceState(null, "", "/?project=shared-1");
+  const project = { id: "shared-1", path: "/srv/app", name: "app", createdAt: "now" };
+  const theirs = { ...session("theirs"), projectId: "shared-1" };
+  const draft = { ...session("draft-1"), projectId: "shared-1", lifecycle: "draft" as const };
+  let created: unknown;
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    const url = String(input);
+    if (url === "/projects") return json({ projects: [project] });
+    if (url === "/sessions" && init?.method === "POST") {
+      created = JSON.parse(String(init.body));
+      return json({ session: draft });
+    }
+    if (url.startsWith("/sessions")) return json({ sessions: [theirs] });
+    return new Response("{}", { status: 404 });
+  });
+
+  await connectAndBootstrap();
+  expect(window.location.search).toBe("");
+  expect(created).toEqual({ projectId: "shared-1" });
+  expect(useAppStore.getState().session?.id).toBe("draft-1");
+  const resumed = vi
+    .mocked(fetch)
+    .mock.calls.map(([input]) => String(input))
+    .filter((url) => url.endsWith("/resume"));
+  expect(resumed).toEqual([]);
+});
+
+it("SRV-12b: an unknown ?project= id shows a notice and boots as usual", async () => {
+  window.history.replaceState(null, "", "/?project=gone");
+  useAppStore.setState({ toasts: [] });
+  vi.mocked(fetch).mockImplementation(async (input) => {
+    const url = String(input);
+    if (url === "/projects") return json({ projects: [] });
+    if (url.startsWith("/sessions?") || url === "/sessions")
+      return json({ sessions: [session("current")] });
+    if (url === "/sessions/current/resume") return json({ session: session("current") });
+    return new Response("{}", { status: 404 });
+  });
+  await connectAndBootstrap();
+  expect(useAppStore.getState().toasts.map((toast) => toast.message)).toEqual([
+    "The shared project is not on this server.",
+  ]);
+});

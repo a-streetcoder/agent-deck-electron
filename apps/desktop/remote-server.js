@@ -13,16 +13,16 @@
  * when unset. Only https is accepted: the Access cookie must never travel in
  * clear, and the loopback case already has AGENT_DECK_SERVER_URL.
  */
-export function remoteServerOrigin(raw) {
+export function remoteServerOrigin(raw, variable = "AGENT_DECK_REMOTE_SERVER_URL") {
   if (!raw) return null;
   let url;
   try {
     url = new URL(raw);
   } catch {
-    throw new Error("AGENT_DECK_REMOTE_SERVER_URL must be an absolute https URL");
+    throw new Error(`${variable} must be an absolute https URL`);
   }
   if (url.protocol !== "https:" || url.username || url.password) {
-    throw new Error("AGENT_DECK_REMOTE_SERVER_URL must be an https URL without credentials");
+    throw new Error(`${variable} must be an https URL without credentials`);
   }
   return url.origin;
 }

@@ -5,6 +5,10 @@
 // type-a-path fallback it uses in a plain browser.
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
+// SRV-12b: main passes the configured shared server's origin (never a token).
+const sharedServerArg = process.argv.find((arg) => arg.startsWith("--agent-deck-shared-server="));
+const sharedServerOrigin = sharedServerArg?.slice("--agent-deck-shared-server=".length);
+
 contextBridge.exposeInMainWorld("agentDeck", {
   isElectron: true,
   platform: process.platform,
@@ -65,6 +69,20 @@ contextBridge.exposeInMainWorld("agentDeck", {
    * @param {"start" | "cancel"} action
    */
   remoteSignIn: (action) => ipcRenderer.invoke("remote-sign-in", action),
+  /**
+   * SRV-12b, local mode with a shared server configured: allow-listed calls to
+   * it made by main with the Access token. Resolves { status, body } or
+   * { status: 401, signInRequired: true }; signIn() opens the system browser.
+   */
+  sharedServer: sharedServerOrigin
+    ? {
+        origin: sharedServerOrigin,
+        request: (method, path, body) =>
+          ipcRenderer.invoke("shared-server:request", method, path, body),
+        signIn: () => ipcRenderer.invoke("shared-server:sign-in"),
+        cancelSignIn: () => ipcRenderer.invoke("shared-server:sign-in-cancel"),
+      }
+    : undefined,
   /** Open an allow-listed http(s) URL in the user's default browser. */
   openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
   /** Flush device-local drafts before main closes the renderer/backend. */

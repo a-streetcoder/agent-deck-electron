@@ -29,6 +29,7 @@ import {
   remoteServerOrigin,
   retryInSlots,
 } from "./remote-server.js";
+import { createSharedServerClient } from "./shared-server.js";
 import {
   catalogEndpoint,
   catalogListsPath,
@@ -95,6 +96,9 @@ let remoteServer = null;
 // ade-zvv5: set while a cloudflared launch has no cached token; the window then
 // opens on sign-in.html and this handles its "remote-sign-in" IPC.
 let remoteSignIn = null;
+// SRV-12b: local mode with AGENT_DECK_SHARED_SERVER_URL set; Make shared calls
+// that server through this client (the Access token stays in main).
+let sharedServer = null;
 let mainWindow = null;
 let draftsFlushedForQuit = false;
 let draftFlushRequest = null;
@@ -434,7 +438,11 @@ function createWindow() {
       sandbox: true,
       // Tells the preload (and so the renderer) that local pickers pick on the
       // wrong machine; the renderer then uses the server-side path flows.
-      additionalArguments: remoteServer ? ["--agent-deck-remote-server"] : [],
+      additionalArguments: remoteServer
+        ? ["--agent-deck-remote-server"]
+        : sharedServer
+          ? [`--agent-deck-shared-server=${sharedServer.origin}`]
+          : [],
       // Enable the <webview> tag so the Slice L2 general-purpose browser can
       // mount a REAL Chromium guest (not an iframe). The guest's own security
       // posture is force-hardened in the web-contents-created handler below —
@@ -782,6 +790,27 @@ ipcMain.handle("remote-sign-in", (event, action) => {
     return { ok: false, error: "Sign-in is not available." };
   }
   return remoteSignIn(action);
+});
+
+// SRV-12b: the app's own renderer asks main to call the shared server. The
+// client allow-lists the request and answers { status, body } or
+// { status: 401, signInRequired: true }; the token never crosses IPC.
+ipcMain.handle("shared-server:request", (event, method, pathname, body) => {
+  assertTrustedPickerSender(event, "The shared server is unavailable");
+  if (!sharedServer) throw new Error("The shared server is unavailable");
+  return sharedServer.request(method, pathname, body);
+});
+
+ipcMain.handle("shared-server:sign-in", (event) => {
+  assertTrustedPickerSender(event, "The shared server is unavailable");
+  if (!sharedServer) return { ok: false, error: "No shared server is configured." };
+  return sharedServer.signIn();
+});
+
+ipcMain.handle("shared-server:sign-in-cancel", (event) => {
+  assertTrustedPickerSender(event, "The shared server is unavailable");
+  sharedServer?.cancelSignIn();
+  return true;
 });
 
 /** Native folder chooser (the NSOpenPanel equivalent) for the project flow. */
@@ -1162,6 +1191,14 @@ ipcMain.on("attention:notify", (event, payload) => {
   });
 });
 
+/** `run(args, timeoutMs, signal)` for AGENT_DECK_CLOUDFLARED, or null when unset. */
+function cloudflaredRunner() {
+  const cloudflared = process.env.AGENT_DECK_CLOUDFLARED;
+  if (!cloudflared) return null;
+  return (args, timeout, signal) =>
+    execFileAsync(cloudflared, args, { timeout, signal, windowsHide: true }).then((r) => r.stdout);
+}
+
 async function bootstrap() {
   startupTrace("bootstrap started");
   try {
@@ -1177,12 +1214,8 @@ async function bootstrap() {
       // (system browser) and present the token as `cf-access-token` on every
       // request and WebSocket upgrade to the origin, so Access never shows its
       // login inside the window. Unset keeps the in-window login.
-      const cloudflared = process.env.AGENT_DECK_CLOUDFLARED;
-      if (cloudflared) {
-        const run = (args, timeout, signal) =>
-          execFileAsync(cloudflared, args, { timeout, signal, windowsHide: true }).then(
-            (r) => r.stdout,
-          );
+      const run = cloudflaredRunner();
+      if (run) {
         const { host } = new URL(remoteServer);
         // ponytail: token fixed for the run; mid-run expiry (168 h) needs an app restart.
         const attach = (accessToken) => {
@@ -1214,6 +1247,13 @@ async function bootstrap() {
         }
       }
     } else {
+      const sharedOrigin = remoteServerOrigin(
+        process.env.AGENT_DECK_SHARED_SERVER_URL,
+        "AGENT_DECK_SHARED_SERVER_URL",
+      );
+      if (sharedOrigin) {
+        sharedServer = createSharedServerClient({ origin: sharedOrigin, run: cloudflaredRunner() });
+      }
       const configuredPort = externalServerPort();
       serverPort = configuredPort ?? (await startServer());
       controlPlaneOrigin = `http://127.0.0.1:${serverPort}`;
@@ -1386,5 +1426,6 @@ app.on("before-quit", (event) => {
 app.on("will-quit", () => {
   // Kill a pending `cloudflared access login` so it does not outlive the app.
   void remoteSignIn?.("cancel");
+  sharedServer?.cancelSignIn();
   stopServer();
 });

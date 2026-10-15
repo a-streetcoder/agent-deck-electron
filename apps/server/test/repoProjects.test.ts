@@ -321,7 +321,7 @@ describe("POST /projects { repo } (SRV-12a)", () => {
     const first = (await h.post({ repo: "acme/open-repo" })).json() as { project: { id: string } };
     const again = await h.post({ repo: "acme/open-repo" });
     expect(again.statusCode).toBe(409);
-    expect(again.json()).toMatchObject({ projectId: first.project.id });
+    expect(again.json()).toMatchObject({ projectId: first.project.id, repoId: 7 });
     mkdirSync(path.join(h.root, "secret-repo"));
     const taken = await h.post({ repo: "acme/secret-repo" });
     expect(taken.statusCode).toBe(409);
@@ -359,7 +359,9 @@ describe("POST /projects { repo } (SRV-12a)", () => {
     const holder = both.projects.find((p) => p.path === path.join(both.root, "open-repo"));
     const refused = await both.post({ repo: "acme/open-repo" });
     expect(refused.statusCode).toBe(409);
-    expect(refused.json()).toMatchObject({ projectId: holder!.id });
+    // Another repository holds it: never `projectId`, which would mean "this repository".
+    expect(refused.json()).toMatchObject({ holderProjectId: holder!.id });
+    expect(refused.json()).not.toHaveProperty("projectId");
     expect(refused.json().error).toContain("another repository");
     expect(both.clones).toHaveLength(0);
   });
@@ -400,7 +402,8 @@ describe("POST /projects { repo } (SRV-12a)", () => {
     });
     const response = await h.post({ repo: "acme/open-repo" });
     expect(response.statusCode).toBe(409);
-    expect(response.json()).toMatchObject({ projectId: "other" });
+    expect(response.json()).toMatchObject({ holderProjectId: "other" });
+    expect(response.json()).not.toHaveProperty("projectId");
     expect(h.projects.list()).toHaveLength(1);
     expect(h.tempFolders()).toEqual([]);
   });

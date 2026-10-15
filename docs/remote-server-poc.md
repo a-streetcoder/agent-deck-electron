@@ -167,6 +167,12 @@ and from a signed-in browser: `https://deck.moretti.cc/me` shows your identity.
   toolbar project picker, the Projects screen's "Add Projects…" dialog, and the "Add project…"
   button next to the new-session Project dropdown (which also selects the new project for the
   draft). Skill-folder and prompt-file imports fall back to their typed-path inputs likewise.
+- **Desktop in local mode with a shared server** (SRV-12b): set
+  `AGENT_DECK_SHARED_SERVER_URL=https://deck.moretti.cc` (an https origin, validated like
+  `AGENT_DECK_REMOTE_SERVER_URL`) and `AGENT_DECK_CLOUDFLARED` (the cloudflared path) before
+  starting the local app. The Projects screen then offers **Make shared** on each local project
+  (see [Make shared from the desktop](#make-shared-from-the-desktop)). Unset, or in remote mode,
+  nothing of it is shown.
 - **Desktop over SSH** (`win\Agent Deck Remote (dev VM).cmd`) still works, but through the
   tunnel the server sees loopback requests with no assertion, so with the proxy mode on it
   answers 401. Use one mode or the other on the VM.
@@ -616,15 +622,53 @@ machines), `defaultBranch` and `createdBy`.
   the same folder while it clones is `409`. Leftover temporary folders from a crash are removed
   when the server starts.
 - **Conflicts.** The same repository again un-hides its project if it was hidden (`200`), else is
-  `409` with its `projectId`. When the folder is held by another repository's project (a fork, a
-  same-named repository), the clone goes to `<owner>-<name>` instead; if that is held too, `409`
-  names the holder. An unregistered folder of that name is `409`.
+  `409` with its `projectId` and `repoId`. When the folder is held by another repository's
+  project (a fork, a same-named repository), the clone goes to `<owner>-<name>` instead; if that
+  is held too, `409` names the holder as `holderProjectId` (never `projectId`, which always means
+  this repository). An unregistered folder of that name is `409`.
 - **Delete.** On a shared server, new projects (repository or Server folder) record their creator;
   removing one is allowed only for that person or the operator (`AGENT_DECK_OPERATOR_EMAIL`);
   others get `403`. Projects added before this (without a creator) stay removable by anyone.
 - **Long clones.** The request waits for the clone (up to 10 minutes). Cloudflare closes a
   response after about 100 s; the web then says the server is still cloning, and a reload a
   minute later shows the project.
+
+### Make shared from the desktop
+
+A local desktop app (its own backend, `AGENT_DECK_SHARED_SERVER_URL` set) turns a local project
+into a shared one. **Make shared** on a project row reads the project's `origin` remote through
+the local backend on every click (`GET /projects/:id/origin` answers `hasOrigin`, the GitHub
+`owner/name` of an https, `git@github.com:` or `ssh://` remote, and `topLevel`; never the remote
+URL, which may carry a credential). No remote shows "This project has no git remote", a
+non-GitHub remote "Only GitHub repositories can be shared", and a folder that is not the
+repository's root (`git rev-parse --show-toplevel`) is refused too: share the root. Otherwise the app sends `POST /projects { repo: "owner/name" }` to the shared
+server, which clones it as in [Shared projects from a repository](#shared-projects-from-a-repository).
+
+- **The token stays in Electron main.** The page asks main over IPC (`shared-server:request`),
+  which allows only `GET /projects`, `POST /projects { repo, ref? }` and `GET /me` to the
+  configured origin, adds `cf-access-token` from `cloudflared access token`, never follows a
+  redirect, and hands back only the status and the JSON body (with the token redacted should the
+  server echo it). Without a valid token (none cached, expired, or Access answers 401 or a login
+  redirect) the answer is "sign in required" until a sign-in succeeds (cloudflared is not asked
+  again on every call), and the row offers **Sign in to** the server: `cloudflared access login`
+  in the system browser, with Cancel while it waits, then one retry. An Access 403 page reads
+  "Your account is not allowed". Without `AGENT_DECK_CLOUDFLARED` the sign-in explains that it is
+  missing.
+- **The link.** A created project (201), a restored one (200) or the same repository already on
+  the server (409 with its `projectId` and `repoId`) is stored on the local project as
+  `sharedTo { serverOrigin, projectId, repoId, sharedAt }` (`PATCH /projects/:id`, `null`
+  unlinks; refused with 409 on a shared server) in the local `projects.json`. A 409 naming a
+  `holderProjectId` (another repository holds the folder) never links. The row shows
+  `shared on <host>`, **Open on server** and **Unlink**; when the server's list no longer has the
+  project it says `not on <host> any more` and offers Make shared again. Open on server opens
+  `<server>/?project=<id>` in the system browser, which opens a new draft session in the project
+  (never resuming an existing one, which may be another member's). Any other 409 shows the
+  server's text, followed by a hint to connect GitHub on the server unless the text is already
+  about GitHub.
+- **Side by side.** On the Projects screen the app reads the server's `GET /projects` once; a
+  local project whose GitHub `owner/name` matches a server project's `origin` shows the same
+  badge with **Link** (stores `sharedTo` without creating anything). Matching is by repository
+  name, case-insensitive: a renamed or transferred repository does not match until shared again.
 
 ## Security model
 

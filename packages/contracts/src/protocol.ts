@@ -332,6 +332,20 @@ export const ProjectMeta = Schema.mutable(
     defaultBranch: Schema.optional(Schema.String),
     /** SRV-12a: who added the shared project; only they or the operator may delete it. */
     createdBy: Schema.optional(UserIdentity),
+    /**
+     * SRV-12b, desktop only: this local project was made shared on (or linked
+     * to) a shared server. `projectId` is the server's project id.
+     */
+    sharedTo: Schema.optional(
+      Schema.mutable(
+        Schema.Struct({
+          serverOrigin: Schema.String,
+          projectId: Schema.String,
+          repoId: Schema.optional(Schema.Number),
+          sharedAt: Schema.String,
+        }),
+      ),
+    ),
   }),
 );
 export type ProjectMeta = typeof ProjectMeta.Type;

@@ -27,6 +27,10 @@ import { useAppStore } from "../state/store.ts";
 import { addProject, refreshProjects, updateProject } from "../state/wsBridge.ts";
 import { ServerFolderBrowser } from "../components/ServerFolderBrowser.tsx";
 import { ProjectSourcePicker } from "../components/ProjectSourcePicker.tsx";
+import {
+  ShareProjectControl,
+  useSharedServerProjects,
+} from "../components/ShareProjectControl.tsx";
 
 type Filter = "all" | "available" | "unavailable";
 
@@ -387,6 +391,7 @@ export function ProjectsScreen() {
   const [menuProjectId, setMenuProjectId] = useState<string | null>(null);
   const [imageProject, setImageProject] = useState<ProjectMeta | null>(null);
   const imageInput = useRef<HTMLInputElement>(null);
+  const sharedServerProjects = useSharedServerProjects();
 
   const normalizedSearch = search.trim().toLocaleLowerCase();
   const visible = projects.filter((project) => {
@@ -557,6 +562,7 @@ export function ProjectsScreen() {
                     >
                       {project.path}
                     </div>
+                    <ShareProjectControl project={project} shared={sharedServerProjects} />
                   </div>
                   <div
                     className="hidden min-w-0 max-w-[32%] flex-1 truncate text-right text-detail text-text-secondary lg:block"

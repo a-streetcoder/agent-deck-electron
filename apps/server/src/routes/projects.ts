@@ -110,7 +110,44 @@ const patchProjectBody = z.object({
   assignedMcpServers: z.array(RESOURCE_NAME).optional(),
   defaultAgentName: RESOURCE_NAME.nullable().optional(),
   enabled: z.boolean().optional(),
+  // SRV-12b: the shared-server link of a local project; null unlinks it.
+  sharedTo: z
+    .object({
+      serverOrigin: z
+        .string()
+        .max(300)
+        .refine((value) => {
+          try {
+            const url = new URL(value);
+            return url.protocol === "https:" && url.origin === value;
+          } catch {
+            return false;
+          }
+        }, "serverOrigin must be an https origin"),
+      projectId: z.string().min(1).max(200),
+      repoId: z.number().int().positive().optional(),
+      sharedAt: z.string().max(100).optional(),
+    })
+    .strict()
+    .nullable()
+    .optional(),
 });
+
+/**
+ * The GitHub `{ owner, name }` of an origin remote URL (https, scp-like ssh or
+ * ssh:// form), else null. Only the owner/repo charset survives, so a crafted
+ * local origin cannot smuggle anything into an API path or search qualifier.
+ */
+export function githubRepoOfOrigin(url: string): { owner: string; name: string } | null {
+  const match =
+    /^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(url) ??
+    /^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url) ??
+    /^ssh:\/\/git@github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url);
+  const SEG = /^[A-Za-z0-9_.-]+$/;
+  return match && SEG.test(match[1]!) && SEG.test(match[2]!)
+    ? { owner: match[1]!, name: match[2]! }
+    : null;
+}
 
 /**
  * Project registry routes — list/add/patch/hide, discovery roots + scan,
@@ -458,6 +495,7 @@ export function registerProjectRoutes(ctx: ServerContext): void {
       return reply.status(409).send({
         error: `This repository is already the project "${existing.name}".`,
         projectId: existing.id,
+        repoId,
       });
     // A folder held by another repository's project (a fork, a same-named repo)
     // falls back to <owner>-<name>.
@@ -478,7 +516,8 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     if (!dest)
       return reply.status(409).send({
         error: `The folder ${name} is held by another repository's project "${holder?.name ?? name}".`,
-        ...(holder ? { projectId: holder.id } : {}),
+        // SRV-12b: `projectId` means "this repository"; a holder is another one.
+        ...(holder ? { holderProjectId: holder.id } : {}),
       });
     const folderName = nodePath.basename(dest);
     if (cloningInto.has(dest))
@@ -510,12 +549,13 @@ export function registerProjectRoutes(ctx: ServerContext): void {
         });
       }
       // Someone may have registered the repository or the folder meanwhile.
-      const raced = sameRepo() ?? holderOf(dest);
+      const racedRepo = sameRepo();
+      const raced = racedRepo ?? holderOf(dest);
       if (raced) {
         dropTemp();
         return reply.status(409).send({
           error: `This repository or folder became the project "${raced.name}" meanwhile.`,
-          projectId: raced.id,
+          ...(racedRepo ? { projectId: racedRepo.id, repoId } : { holderProjectId: raced.id }),
         });
       }
       try {
@@ -589,6 +629,9 @@ export function registerProjectRoutes(ctx: ServerContext): void {
   fastify.patch("/projects/:id", async (request, reply) => {
     const parsed = patchProjectBody.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    // SRV-12b: a shared server's project is never a pointer to another server.
+    if (parsed.data.sharedTo !== undefined && ctx.sharedServer)
+      return reply.status(409).send({ error: "sharedTo is for local projects only" });
     const { id } = request.params as { id: string };
     const project = projects.find((p) => p.id === id);
     if (!project) return reply.status(404).send({ error: "unknown project" });
@@ -606,6 +649,13 @@ export function registerProjectRoutes(ctx: ServerContext): void {
       next.defaultAgentName = parsed.data.defaultAgentName ?? undefined;
     }
     if (parsed.data.enabled !== undefined) next.enabled = parsed.data.enabled;
+    if (parsed.data.sharedTo === null) delete next.sharedTo;
+    else if (parsed.data.sharedTo !== undefined) {
+      next.sharedTo = {
+        ...parsed.data.sharedTo,
+        sharedAt: parsed.data.sharedTo.sharedAt ?? new Date().toISOString(),
+      };
+    }
 
     const effectiveAgents = scanAgents(rootsFor(id)).filter(
       (agent) => !agent.shadowed && !agent.disabled,
@@ -837,26 +887,52 @@ export function registerProjectRoutes(ctx: ServerContext): void {
   const execFileAsync = promisify(execFile);
   // Each project's GitHub repo from its origin remote (https or ssh form);
   // null when there is none. Shared by the list + aggregate-search routes.
-  const repoOfProject = async (projectPath: string): Promise<string | null> => {
+  const originOfProject = async (projectPath: string): Promise<string | null> => {
     try {
       const { stdout } = await execFileAsync(
         "git",
         ["-C", projectPath, "remote", "get-url", "origin"],
         { timeout: 10_000 },
       );
-      const url = stdout.trim();
-      const match =
-        /^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url) ??
-        /^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url) ??
-        /^ssh:\/\/git@github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url);
-      // a shape-matched capture is still untrusted local config: only owner/repo
-      // charset survives, so a crafted origin can't smuggle a search qualifier
-      const SEG = /^[A-Za-z0-9_.-]+$/;
-      return match && SEG.test(match[1]!) && SEG.test(match[2]!) ? `${match[1]}/${match[2]}` : null;
+      return stdout.trim() || null;
     } catch {
       return null;
     }
   };
+  // SRV-12b: is the project folder the repository's root (not a folder inside one)?
+  const isRepositoryRoot = async (projectPath: string): Promise<boolean> => {
+    try {
+      const { stdout } = await execFileAsync(
+        "git",
+        ["-C", projectPath, "rev-parse", "--show-toplevel"],
+        { timeout: 10_000 },
+      );
+      const canonical = (value: string) => {
+        const real = realpathSync.native(value);
+        return process.platform === "win32" ? real.toLowerCase() : real;
+      };
+      return canonical(stdout.trim()) === canonical(projectPath);
+    } catch {
+      return false;
+    }
+  };
+  const repoOfProject = async (projectPath: string): Promise<string | null> => {
+    const url = await originOfProject(projectPath);
+    const repo = url ? githubRepoOfOrigin(url) : null;
+    return repo ? `${repo.owner}/${repo.name}` : null;
+  };
+  // SRV-12b: the desktop's Make shared reads the origin before asking the shared server.
+  fastify.get("/projects/:id/origin", async (request, reply) => {
+    const project = projects.find((p) => p.id === (request.params as { id: string }).id);
+    if (!project) return reply.status(404).send({ error: "unknown project" });
+    // Never the raw URL: a remote may carry user:token@.
+    const origin = await originOfProject(project.path);
+    return {
+      hasOrigin: origin !== null,
+      github: origin ? githubRepoOfOrigin(origin) : null,
+      topLevel: await isRepositoryRoot(project.path),
+    };
+  });
   fastify.get("/projects/:id/issues", async (request, reply) => {
     const project = projects.find((p) => p.id === (request.params as { id: string }).id);
     if (!project) return reply.status(404).send({ error: "unknown project" });

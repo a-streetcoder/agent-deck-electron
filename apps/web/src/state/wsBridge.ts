@@ -125,6 +125,16 @@ function takeLinkedSessionId(): string | null {
   return linked || null;
 }
 
+/** SRV-12b: take `?project=<id>` (Open on server from a desktop) off the URL. */
+function takeLinkedProjectId(): string | null {
+  const url = new URL(window.location.href);
+  const linked = url.searchParams.get("project");
+  if (linked === null) return null;
+  url.searchParams.delete("project");
+  window.history.replaceState(window.history.state, "", url);
+  return linked || null;
+}
+
 /** SRV-15b: open a shared link's session; false (with a notice) when it is unknown or deleted. */
 async function openLinkedSession(sessionId: string): Promise<boolean> {
   const generationsAtRequest = new Map(attentionMetaGeneration);
@@ -1457,6 +1467,7 @@ export async function updateProject(
     assignedMcpServers?: string[];
     defaultAgentName?: string | null;
     enabled?: boolean;
+    sharedTo?: Omit<NonNullable<ProjectMeta["sharedTo"]>, "sharedAt"> | null;
   },
 ): Promise<boolean> {
   const store = useAppStore.getState();
@@ -1481,6 +1492,13 @@ export async function updateProject(
               ? { defaultAgentName: patch.defaultAgentName ?? undefined }
               : {}),
             ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+            ...(patch.sharedTo !== undefined
+              ? {
+                  sharedTo: patch.sharedTo
+                    ? { ...patch.sharedTo, sharedAt: new Date().toISOString() }
+                    : undefined,
+                }
+              : {}),
           }
         : project,
     ),
@@ -1712,8 +1730,25 @@ export async function connectAndBootstrap(): Promise<void> {
     // SRV-15b: a shared link wins over the boot resume of the newest session, so
     // no other session's Pi is woken first and a failed boot resume cannot lose it.
     const linked = takeLinkedSessionId();
+    const linkedProject = takeLinkedProjectId();
     await refreshProjects();
     if (linked && (await openLinkedSession(linked))) return;
+    if (linkedProject) {
+      const project = useAppStore.getState().projects.find((p) => p.id === linkedProject);
+      if (project) {
+        // A NEW draft in that project, never a resume: the newest session may be
+        // another member's, and a resume would start its Pi (architect default).
+        const store = useAppStore.getState();
+        store.setSession(null);
+        store.setCurrentProject(project.id);
+        store.setCurrentAgent(project.defaultAgentName ?? null);
+        await newChat();
+        return;
+      }
+      useAppStore
+        .getState()
+        .pushToast({ kind: "info", message: "The shared project is not on this server." });
+    }
     await switchToProject(null);
   } catch (error) {
     useAppStore.getState().setError(String(error));
