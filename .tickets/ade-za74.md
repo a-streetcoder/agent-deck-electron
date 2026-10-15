@@ -34,3 +34,7 @@ Owner decision 2026-10-14: certificateProfileName is codemeter-profile (the Basi
 **2026-10-14T09:40:02Z**
 
 2026-10-14 Azure side done via local az CLI (owner's login): app registration agent-deck-release-signing (single tenant, no secret) + service principal; federated credential github-release-environment with subject repo:a-streetcoder/agent-deck-electron:environment:release; role Artifact Signing Certificate Profile Signer on codemeter-signing; repo variables AZURE_CLIENT_ID/TENANT_ID/SUBSCRIPTION_ID set with gh. Workflow job now runs in GitHub environment release (one subject for all v* tags). Still owner-only: push the v<version> tag once the branch is on main, check the draft release, install previous version, publish, Help > Check for Updates.
+
+**2026-10-15T19:17:57Z**
+
+2026-10-15 follow-up from ANA-01 (ade-1gaq): neither release workflow sets AGENT_DECK_POSTHOG_KEY, so packaged builds send no analytics until the public project key is added as a repository variable and passed to scripts/build-backend.mjs in release-windows.yml and release-macos.yml.

@@ -27,3 +27,7 @@ With a key set and analyticsEnabled true, a unit test with a fake transport asse
 **2026-10-15T18:56:26Z**
 
 2026-10-15 owner approved (exact word) with the default-on + one-time notice + opt-out scope. Dispatched to a developer in worktree E:\agent-deck-wt\ade-1gaq (wt/ade-1gaq).
+
+**2026-10-15T19:17:57Z**
+
+2026-10-15 review round 1: contrarian = no code blocker, acceptance gap (notice untested), deploy hazard (posthog-node must be installed on the VM), privacy gap (user-typed provider/model ids travel), model field mostly empty under the path-like rule, session_created counted at draft time, SDK console.error noise, AGENT_DECK_TEST not honoured; GPT (review46) = 1 blocker (same privacy gap) + 4 should-fix (subagent hook misses Loop children, SDK noise, Node engines 22.22 vs 22.19, notice untested). Consolidated fix round sent: catalog-checked provider/model else 'custom', session_created at launch, count at the spawn boundary, custom fetch silencing the SDK, engines >=22.22, capabilities.analytics flag gating notice and card, lazy import, AGENT_DECK_TEST guard, tests. PostHog project already has anonymize_ips on; key stored in the shared .env as AGENT_DECK_POSTHOG_KEY (Default project; the plan allows one project).
