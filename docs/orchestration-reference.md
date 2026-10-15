@@ -90,6 +90,43 @@ uses that teardown before disposing snapshot tracking, so the final snapshot and
 subsequent history restore contain stopped cards, not dead running work. This
 fix does not retroactively reinterpret older snapshots or change crash recovery.
 
+### Event log cut-over (A1d)
+
+The rule is **move readers, not stores**. A store keeps its own writes; its readers move to a
+projection of the event log (`<dataDir>/events/YYYY-MM-DD.jsonl`) one store at a time, and the
+store keeps supplying detail by id. Loop runs and subagent runs stay authoritative for run
+detail (outputs, validation stdio, definitionSnapshot, ownership proofs); checkpoints never move.
+
+- **Plan history** (`GET /sessions/:id/plan-events`) takes its membership from `projectPlans`,
+  without the store's 100-per-session cap. Items come from the store for the events it still
+  holds (the log copy is capped and redacted), from the log for older ones.
+- **Supervisor requests** (`list_supervisor_requests`) take membership and status from
+  `projectSupervisor`. The memory log still holds this process's requests and their full
+  text. The restart rule: a request still pending at a later `server.started` reads as
+  `interrupted`, so it is never offered for an answer again.
+- Both readers fall back to the store when the log is read-only (another process holds
+  `writer.lock`) or disabled (`apps/server/src/eventReaders.ts`).
+
+At startup the server logs one `[events] equivalence` line: the subagent and loop reconcile
+counts, `planReconciled` (store plan events the log lacked, imported with origin `reconcile`
+and their own time: history from before A1, or a lost append) and `mismatches`. A clean boot
+reports zero. The supervisor store is memory-only, so it has nothing to compare. A store is
+ready for its readers to move after 7 days of two-user use with zero mismatches.
+
+Measured on one synthetic busy day (`apps/server/test/eventCutover.test.ts`; 10 sessions,
+5,212 events of every kind written through the real log, Windows dev machine, 2026-10-15):
+
+| Measure                                                                     | Value                        |
+| --------------------------------------------------------------------------- | ---------------------------- |
+| Segment size                                                                | 3.6 MB (725 bytes per event) |
+| Replay of the whole log into the four projections                           | 156 ms                       |
+| Cold startup (open the log, reconcile both run stores and the plan history) | 341 ms                       |
+
+Startup replays all history (two passes: the run-store reconcile and the readers), so its cost
+grows with every day the log keeps. Projection snapshots become due when startup reconcile
+exceeds about 1 s: at this rate about 10 MB of log, or three busy days, well before the
+~50 MB first estimated.
+
 ## Collaboration
 
 The shared server (Cloudflare Access identity, per-user provider sign-in, credentials,

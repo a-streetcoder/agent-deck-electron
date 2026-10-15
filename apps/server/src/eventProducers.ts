@@ -42,7 +42,13 @@ export interface EventProducers {
   turnPrompted(sessionId: string, actor: EventActor, mode: PromptMode, text: string): PromptAttempt;
   /** The live session's turn boundaries and completions (SessionManager calls them). */
   turnHooks(meta: SessionMeta): SessionTurnEvents;
-  planChanged(sessionId: string, op: PlanChangeOperation, event: SessionPlanEvent): void;
+  /** origin reconcile: a store event the log missed (A1d import); keeps the store's `at`. */
+  planChanged(
+    sessionId: string,
+    op: PlanChangeOperation,
+    event: SessionPlanEvent,
+    origin?: "reconcile",
+  ): void;
   checkpointCreated(
     sessionId: string,
     record: CheckpointRecord,
@@ -271,7 +277,8 @@ export function createEventProducers(
       };
     },
 
-    planChanged(sessionId, op, event) {
+    planChanged(sessionId, op, event, origin) {
+      const system = op === "restore" || origin === "reconcile";
       append({
         // The store's own id: A1d compares the projection with the store exactly.
         id: event.id,
@@ -279,10 +286,12 @@ export function createEventProducers(
         sessionId,
         subject: { type: "plan", id: sessionId },
         // A restore republishes a plan the session already had (reopen or fork).
-        actor: op === "restore" ? SYSTEM : agentActor(sessionId),
-        ...(op === "restore" ? {} : causeOf(sessionId)),
+        actor: system ? SYSTEM : agentActor(sessionId),
+        ...(system ? {} : causeOf(sessionId)),
+        ...(origin ? { origin } : {}),
         payload: {
           kind: event.kind,
+          ...(origin ? { at: event.at } : {}),
           items: event.items.slice(0, MAX_PLAN_ITEMS).map((item) => ({
             id: capText(item.id, EVENT_LABEL_MAX_CHARS),
             title: clean(item.title, EVENT_LABEL_MAX_CHARS),

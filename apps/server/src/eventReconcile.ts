@@ -8,6 +8,7 @@
 // continues incrementally. Uses its own comparison over projections, never the
 // writer's id dedupe (ids are checked over two segments only).
 import { homedir } from "node:os";
+import type { SessionPlanEvent } from "@agent-deck/contracts";
 import {
   diffLoopRuns,
   diffSubagentRuns,
@@ -20,6 +21,7 @@ import {
   type PublicViewOptions,
 } from "@agent-deck/domain";
 import { MAX_EVENT_READ_LIMIT, type AppendResult, type EventLog } from "./eventLog.ts";
+import type { LogReaders } from "./eventReaders.ts";
 
 export interface DiffProducerStore<T> {
   /** Public view as loaded, before boot recovery. */
@@ -53,7 +55,7 @@ interface Projections {
 
 /** Fold the whole log into both projections one page at a time. */
 // ponytail: replays all history at every boot and every resync; projection snapshots
-// when this exceeds ~1 s (~50 MB), see A1d.
+// when startup exceeds ~1 s (about 10 MB of log, measured in A1d).
 export function projectLog(log: EventLog): Projections {
   let subagent = projectSubagentRuns([]);
   let loop = projectLoopRuns([]);
@@ -198,4 +200,51 @@ export function startEventProducers(
   } finally {
     stores.loopRuns.releaseBootRuns?.();
   }
+}
+
+/**
+ * A1d plan history: store events whose id the log lacks (history from before A1, or a
+ * crash between the store write and its append), written back with origin reconcile.
+ * Compares only the ids the store still holds (it keeps the last 100 per session).
+ * Undefined when the log cannot take writes.
+ */
+export function reconcilePlanHistory(
+  stored: Record<string, SessionPlanEvent[]>,
+  readers: LogReaders,
+  write: (event: SessionPlanEvent) => void,
+): number | undefined {
+  let written = 0;
+  for (const [sessionId, history] of Object.entries(stored)) {
+    const logged = readers.plans(sessionId);
+    if (!logged) return undefined;
+    const ids = new Set(logged.map((change) => change.id));
+    for (const event of history) {
+      if (ids.has(event.id)) continue;
+      write(event);
+      written += 1;
+    }
+  }
+  return written;
+}
+
+/**
+ * The startup equivalence report, logged once: per store, the entries the log lacked
+ * against the store as loaded (zero on a clean boot). Recovered counts are boot
+ * recovery (runs a restart interrupted), not mismatches. The supervisor store is
+ * memory-only, so it has nothing to compare: its restart rule lives in the projection.
+ */
+export interface EquivalenceReport extends ReconcileCounts {
+  planReconciled: number;
+  mismatches: number;
+}
+
+export function equivalenceReport(
+  counts: ReconcileCounts,
+  planReconciled: number,
+): EquivalenceReport {
+  return {
+    ...counts,
+    planReconciled,
+    mismatches: counts.subagentReconciled + counts.loopReconciled + planReconciled,
+  };
 }

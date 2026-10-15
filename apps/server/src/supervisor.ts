@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ProjectedSupervisorRequest } from "@agent-deck/domain";
 
 /**
  * The supervisor channel: a child subagent talks UP to its parent through the
@@ -15,7 +16,8 @@ export function isBlockingMethod(method: SupervisorMethod): boolean {
   return method === "need_decision" || method === "interview_request";
 }
 
-export type SupervisorStatus = "recorded" | "pending" | "answered" | "cancelled";
+/** interrupted: still pending when a later server started (read from the A1 log). */
+export type SupervisorStatus = "recorded" | "pending" | "answered" | "cancelled" | "interrupted";
 
 /** Keep model-facing request rows and the existing question card on one fallback. */
 export function supervisorRequestTitle(method: SupervisorMethod, title?: string): string {
@@ -38,6 +40,11 @@ export interface SupervisorRequest {
 
 export class SupervisorLog {
   private readonly entries: SupervisorRequest[] = [];
+
+  /** readLog: the A1 log's supervisor projection; undefined = this process's entries alone. */
+  constructor(
+    private readonly readLog?: () => ReadonlyMap<string, ProjectedSupervisorRequest> | undefined,
+  ) {}
 
   record(entry: {
     id?: string;
@@ -85,8 +92,34 @@ export class SupervisorLog {
 
   /** All recorded requests, optionally filtered to one parent session. */
   list(parentSessionId?: string): SupervisorRequest[] {
-    return parentSessionId
+    const own = parentSessionId
       ? this.entries.filter((e) => e.parentSessionId === parentSessionId)
       : [...this.entries];
+    const logged = this.readLog?.();
+    if (!logged) return own;
+    // The log decides membership across restarts: what an earlier process left pending
+    // reads as interrupted (the restart rule). This process's own entries stay exact
+    // (full text, live status), and one whose append failed still shows.
+    const mine = new Map(own.map((entry) => [entry.id, entry]));
+    const out: SupervisorRequest[] = [];
+    for (const request of logged.values()) {
+      if (parentSessionId && request.parentSessionId !== parentSessionId) continue;
+      const entry = mine.get(request.id);
+      mine.delete(request.id);
+      out.push(
+        entry ?? {
+          id: request.id,
+          parentSessionId: request.parentSessionId ?? "",
+          cellId: request.cellId ?? "",
+          method: (request.method ?? "progress_update") as SupervisorMethod,
+          ...(request.title ? { title: request.title } : {}),
+          message: request.message ?? "",
+          status: request.status,
+          ...(request.response !== undefined ? { response: request.response } : {}),
+          createdAt: request.createdAt ?? "",
+        },
+      );
+    }
+    return [...out, ...mine.values()];
   }
 }

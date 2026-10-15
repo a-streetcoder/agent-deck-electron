@@ -723,8 +723,9 @@ export interface ProjectedSupervisorRequest {
  */
 export function projectSupervisor(
   events: Iterable<ProjectedEvent>,
+  initial: Iterable<[string, ProjectedSupervisorRequest]> = [],
 ): Map<string, ProjectedSupervisorRequest> {
-  const state = new Map<string, ProjectedSupervisorRequest>();
+  const state = new Map<string, ProjectedSupervisorRequest>(initial);
   for (const event of events) {
     if (event.kind === "server.started") {
       for (const [id, request] of state) {
@@ -759,21 +760,34 @@ export interface ProjectedPlanChange {
   at?: string;
 }
 
-/** plan.changed, payload = SessionPlanEvent minus id/sessionId/at, grouped by session in log order. */
-export function projectPlans(events: Iterable<ProjectedEvent>): Map<string, ProjectedPlanChange[]> {
-  const state = new Map<string, ProjectedPlanChange[]>();
+/**
+ * plan.changed, payload = SessionPlanEvent minus id/sessionId (`at` only on reconcile
+ * imports, which keep the store's time), grouped by session in log order. Extends a
+ * copy of initial (arrays are copied on first touch).
+ */
+export function projectPlans(
+  events: Iterable<ProjectedEvent>,
+  initial: Iterable<[string, ProjectedPlanChange[]]> = [],
+): Map<string, ProjectedPlanChange[]> {
+  const state = new Map<string, ProjectedPlanChange[]>(initial);
+  const copied = new Set<string>();
   for (const event of events) {
     if (event.kind !== "plan.changed" || !event.sessionId) continue;
-    const payload = (event.payload ?? {}) as { kind?: string; items?: unknown[] };
+    const payload = (event.payload ?? {}) as { kind?: string; items?: unknown[]; at?: string };
     if (typeof payload.kind !== "string" || !Array.isArray(payload.items)) continue;
-    const history = state.get(event.sessionId) ?? [];
+    let history = state.get(event.sessionId);
+    if (!history || !copied.has(event.sessionId)) {
+      history = [...(history ?? [])];
+      copied.add(event.sessionId);
+      state.set(event.sessionId, history);
+    }
+    const at = typeof payload.at === "string" ? payload.at : event.ts;
     history.push({
       ...(event.id ? { id: event.id } : {}),
       kind: payload.kind,
       items: payload.items,
-      ...(event.ts ? { at: event.ts } : {}),
+      ...(at ? { at } : {}),
     });
-    state.set(event.sessionId, history);
   }
   return state;
 }
