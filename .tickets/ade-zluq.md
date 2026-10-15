@@ -26,3 +26,7 @@ Renderer tests: output at or under the caps and always well-formed; since round 
 **2026-10-15T09:28:35Z**
 
 2026-10-15 implemented as c3623cb (sessionTools.ts: list_sessions/read_session, stateless since/uptoSeq, caps 12,000/16,000, authoredText lines with a data header, Pi-file head by entry id, refs, Pi-file fallback for pre-log sessions, sessionTurns fold; not delegation-gated). Developer notes: whole Pi file read and whole log scan per call (ponytail), active-branch traversal only, member match case-insensitive. Contrarian + GPT review38 running.
+
+**2026-10-15T09:33:55Z**
+
+2026-10-15 contrarian on c3623cb: merge clean (also with A10). BLOCKER: rendered text not passed through redactSecrets (final-message head, fallback labels, titles) -> redact before capping. Fix before close: raw entry ids can break the line structure (whitelist /^[\w-]{1,64}$/); read_session scans the whole log from seq 0 synchronously per call (extend the countSessionTurn fold with per-session turn refs); pre-log sessions show only logged turns without a warning (use startedAt); docs on residual injection risk, case-insensitive member match, fallback turn boundaries; sessionId guard in sessionLogWindow. Follow-ups: memoise the parsed Pi file by path+size+mtime; cursor has no logId (same gap as A3); renamed members keep the last-seen name. Fix round sent.
