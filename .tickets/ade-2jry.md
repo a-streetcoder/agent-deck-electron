@@ -1,6 +1,6 @@
 ---
 id: ade-2jry
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-15T08:01:14Z
@@ -30,3 +30,7 @@ Server tests: forker's createdBy, PI_CODING_AGENT_DIR and GH_TOKEN env in the sp
 **2026-10-15T08:26:00Z**
 
 2026-10-15 fix round 27416f8 (ensureBridgeCatalog + new-session leniency via runtime.getModel, :max, responseErrorMessage, Loop fork button disabled, fork-point model + PRV-01 swap on message-level forks, merge/delete wording). GPT review34 of the first commit: remaining items sent as the final round: provider+model normalisation (openrouter/meta/llama form), thinking suffix in the bridge twin lookup, route-level success tests that do not need symlinks.
+
+**2026-10-15T08:34:15Z**
+
+2026-10-15 merged as 82a168a (04903a0 + 27416f8 + 9c3b678: bridge catalog ensured and new-session leniency, :max and provider-prefixed forms, thinking suffix kept through the bridge twin lookup, fork-point model and PRV-01 swap on message-level forks, raw-JSON 409 fixed, Loop fork button disabled, route-level fork tests on a fake Pi). Uncovered: route tests check the agent dir but not GH_TOKEN (SessionManager test covers it); previewLaunchModel still looks up the twin on the literal model; an exact provider/id Pi does not know is left to Pi.
