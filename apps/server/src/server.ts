@@ -129,6 +129,7 @@ import {
 } from "./trustedProxy.ts";
 import { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import { SubagentRunStore } from "./subagentRunStore.ts";
+import { createEventLog } from "./eventLog.ts";
 import { resolveTrustedDataDir } from "./trustedDataDir.ts";
 import { SupervisorLog } from "./supervisor.ts";
 import { createTerminalGateway } from "./terminalGateway.ts";
@@ -265,6 +266,9 @@ async function initServer(
   // Generated bridge extensions can embed resolved MCP credentials (PI-03b);
   // session exit removes them, this clears what a crash left.
   sweepStaleBridgeExtensions();
+  // A1 event log: opened before the stores, whose constructors already write on load.
+  const eventLog = createEventLog(dataDir);
+  console.info(`[events] log ${eventLog.logId} writable=${eventLog.writable}`);
   const receipts = new ReceiptBus(process.env.AGENT_DECK_TEST === "1");
   const index = new SessionIndex(dataDir);
   const composerDrafts = options.composerDraftStore ?? new FileComposerDraftStore(dataDir);
@@ -1550,6 +1554,7 @@ async function initServer(
         // app-data owner is allowed to remove it (notably on Windows).
         await step(() => subagentRuns.close());
         await step(() => sessionWorktreeStore.close());
+        await step(() => eventLog.close());
       } finally {
         // Dispose LAST, after the HTTP/WS surface is gone (see startServer).
         await effectRuntime.dispose();
