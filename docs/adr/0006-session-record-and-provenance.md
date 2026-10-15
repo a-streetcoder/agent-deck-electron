@@ -1,6 +1,6 @@
 # ADR 0006 — The session record: one versioned shape, provenance as a first-class relation
 
-- Status: **Proposed** (2026-10-16; implementation ticket pending the owner's `approved`)
+- Status: **Accepted** 2026-10-16 (owner `approved`; implementation ticket ade-os47)
 - Deciders: Ale (owner), architect session
 - Related: [ADR 0003](0003-shared-server-trust-model.md) (trust model), [ADR 0004](0004-orchestration-and-collaboration-direction.md) (event log as the runtime-state substrate), `VISION_ORCHESTRATION.md` principles 5, 7 and 9
 

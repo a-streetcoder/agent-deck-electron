@@ -1,6 +1,6 @@
 ---
 id: ade-os47
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-10-15T23:38:56Z
@@ -21,3 +21,9 @@ Order: (1) contracts + migration function + tests; (2) domain allowedOperations/
 
 A project with old records opens, migrates once and is written back once (test with a fixture of every old block); every existing fork/move/return/merge/worktree/pointer test passes on the new shape; allowedOperations has a table test covering every (lifecycle, location, actor) refusal the routes made before, and the routes contain no field-presence checks for these decisions; session-authors.json is no longer written and authors still render; lineage() feeds the fork chip and the pointer banner; typecheck, lint, format and design-system green; GPT review of the full diff before merge; VM deployed with the migration applied to the shared projects and health 200.
 
+
+## Notes
+
+**2026-10-15T23:39:29Z**
+
+2026-10-16 owner approved (exact word) ADR 0006 + this ticket. Started; worktree E:\agent-deck-wt\ade-os47 (wt/ade-os47).
