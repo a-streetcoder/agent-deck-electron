@@ -1,7 +1,7 @@
 ---
 id: ade-s625
 status: open
-deps: [ade-brgd, ade-63d3, ade-fr91, ade-1vjx, ade-gfs4, ade-fdjz, ade-nocm, ade-qr3v, ade-dnvi, ade-w87w]
+deps: [ade-brgd, ade-63d3, ade-fr91, ade-1vjx, ade-fdjz, ade-nocm, ade-qr3v, ade-dnvi, ade-w87w]
 links: []
 created: 2026-10-14T00:09:01Z
 type: task
@@ -20,3 +20,9 @@ GUARDRAILS (this checkout is mirrored live to the VM by Syncthing and is the ser
 
 All gates green or failures documented as environmental; review findings dispositioned; owner has the summary needed to say push.
 
+
+## Notes
+
+**2026-10-15T06:53:58Z**
+
+2026-10-15 owner decision: the push does not wait for SRV-06; remaining gates: SRV-03 Andrea round, Windows visual baselines regenerated, desktop-electron specs run on an Electron-capable machine, then the full validation and the cross-vendor review.

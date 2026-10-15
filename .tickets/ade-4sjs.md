@@ -30,3 +30,7 @@ Decision 5 added 2026-10-15: does the event log replace the loop-run and subagen
 **2026-10-14T23:54:55Z**
 
 Decisions 6 and 7 added 2026-10-15 (architect defaults applied, override if wanted): 6) the event log is one file set per data dir with projectId as a filter, not one file per project as ADR 0004 says literally; 7) retention: the log keeps task text and summaries forever and every authenticated user of the shared server sees them; deleting a session writes a tombstone but removes nothing from the log.
+
+**2026-10-15T06:53:57Z**
+
+2026-10-15 owner answers: (2) FINAL/push does NOT wait for SRV-06 (push after SRV-03 and the Playwright gate); (1) ANA-01: decide later; (5)(6)(7) event-log defaults: owner wants to discuss before further lane A work builds on them (left as applied); (4) D1: owner leans TypeScript rewrite but wants the pre-Rust TypeScript skill store checked for reuse and parity gaps first (archaeology dispatched). A6-A10 approved as a tree but held until the event-log discussion.
