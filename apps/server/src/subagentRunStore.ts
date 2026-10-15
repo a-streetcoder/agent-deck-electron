@@ -450,10 +450,9 @@ export class SubagentRunStore {
     return run ? { ...run } : undefined;
   }
 
+  /** Idempotent: a continuation of the same run starts a fresh live transcript. */
   registerLiveTranscript(id: string): void {
     if (!this.get(id)) throw new Error(`Unknown subagent run: ${id}`);
-    if (this.liveTranscripts.has(id))
-      throw new Error(`Subagent transcript already registered: ${id}`);
     this.liveTranscripts.set(id, emptyTranscript());
   }
 

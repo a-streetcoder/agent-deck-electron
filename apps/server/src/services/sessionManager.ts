@@ -2732,6 +2732,9 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
               : new Error(String(childOutcome.left));
           const persisted = durable
             ? yield* persistChildRun(() => {
+                // Release before the terminal write, which may wake an await_subagents
+                // whose continuation registers this run again before scope close.
+                unregisterTranscript();
                 claimOwnedSessionIfAvailable();
                 durable.writeOutput?.(runId, streamed, failure.message);
                 durable.update(runId, {
@@ -2773,6 +2776,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
         const result = childOutcome.right;
         const completionWrite = durable
           ? yield* persistChildRun(() => {
+              unregisterTranscript(); // before the terminal write, as on the failure path
               claimOwnedSessionIfAvailable();
               durable.writeOutput?.(runId, result);
               durable.update(runId, {

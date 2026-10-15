@@ -254,3 +254,75 @@ it("a parent abort cancels a spawned child that nobody awaits", async () => {
     },
   );
 });
+
+it("continues a spawned run with managed_subagent and a managed run with spawn_subagent", async () => {
+  await withParent(
+    {
+      toolCall: (_user, body) => {
+        if (isChild(body)) return null;
+        if (!JSON.stringify(body.tools ?? []).includes("spawn_subagent")) return null;
+        const results = toolTexts(body);
+        const spawned = runIdIn(results[0]);
+        const managed = runIdIn(results[3]);
+        switch (results.length) {
+          case 0:
+            return { name: "spawn_subagent", arguments: { task: "TASK_S1: report" } };
+          case 1:
+            // Await, then continue at once: the continuation lands right after the
+            // finish event, before the spawned child's scope has closed.
+            return { name: "await_subagents", arguments: { runIds: [spawned] } };
+          case 2:
+            return {
+              name: "managed_subagent",
+              arguments: { task: "TASK_S2: follow up", continueSubagentID: spawned },
+            };
+          case 3:
+            return { name: "managed_subagent", arguments: { task: "TASK_M1: report" } };
+          case 4:
+            return {
+              name: "spawn_subagent",
+              arguments: { task: "TASK_M2: follow up", continueSubagentID: managed },
+            };
+          case 5:
+            return { name: "await_subagents", arguments: { runIds: [managed] } };
+          default:
+            return null;
+        }
+      },
+      reply: (_user, body) => (isChild(body) ? "CHILD_TURN_DONE" : "parent finished"),
+    },
+    async ({ server, sessionId, dataDir, requests }) => {
+      await server.sessions.get(sessionId)!.prompt("Continue both ways");
+      const final = await vi.waitFor(
+        () => {
+          const request = requests.find((r) => !isChild(r) && toolTexts(r).length === 6);
+          expect(request).toBeDefined();
+          return request!;
+        },
+        { timeout: 90_000 },
+      );
+      const [spawnS, awaitS, continueS, managedM, spawnM, awaitM] = toolTexts(final);
+      const spawnedId = runIdIn(spawnS);
+      const managedId = runIdIn(managedM);
+      expect(JSON.parse(awaitS!).results[0]).toMatchObject({
+        id: spawnedId,
+        status: "completed",
+      });
+      expect(continueS).not.toContain("already registered");
+      expect(continueS).toContain("CHILD_TURN_DONE");
+      expect(runIdIn(continueS)).toBe(spawnedId);
+      expect(managedM).toContain("CHILD_TURN_DONE");
+      expect(JSON.parse(spawnM!)).toEqual({ runId: managedId });
+      expect(JSON.parse(awaitM!).results[0]).toMatchObject({
+        id: managedId,
+        status: "completed",
+      });
+      // Four child turns over two runs, both completed after their continuation.
+      expect(requests.filter(isChild).length).toBeGreaterThanOrEqual(4);
+      expect(Object.fromEntries(storedRuns(dataDir).map((r) => [r.id, r.status]))).toEqual({
+        [spawnedId]: "completed",
+        [managedId]: "completed",
+      });
+    },
+  );
+});

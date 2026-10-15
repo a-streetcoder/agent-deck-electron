@@ -629,6 +629,29 @@ describe("SubagentRunStore", () => {
     expect(() => store.updateLiveTranscript(run.id, transcript)).not.toThrow();
   });
 
+  it("re-registers a live transcript for a continuation and releases it on unregister", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-live-reregister-"));
+    const store = new SubagentRunStore(dataDir, vi.fn());
+    const run = record({ status: "running" });
+    store.create(run);
+    expect(() => store.registerLiveTranscript(randomUUID())).toThrow(/Unknown subagent run/);
+    store.registerLiveTranscript(run.id);
+    store.updateLiveTranscript(run.id, {
+      ...emptyTranscript(),
+      cells: [{ kind: "user" as const, id: "first-turn", text: "first turn" }],
+    });
+    // A continuation of the same run starts over instead of throwing.
+    store.registerLiveTranscript(run.id);
+    expect(store.liveTranscript(PARENT_A, run.id)?.cells).toEqual([]);
+    store.unregisterLiveTranscript(run.id);
+    expect(store.liveTranscript(PARENT_A, run.id)).toBeUndefined();
+    // Updates after release are dropped, not resurrected.
+    store.updateLiveTranscript(run.id, emptyTranscript());
+    expect(store.liveTranscript(PARENT_A, run.id)).toBeUndefined();
+    store.registerLiveTranscript(run.id);
+    expect(store.liveTranscript(PARENT_A, run.id)?.source).toBe("live");
+  });
+
   it.each([
     ["completed", "done"],
     ["failed", "error"],
