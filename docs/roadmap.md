@@ -55,7 +55,7 @@ ADR 0003 trust model; live setup in [`remote-server-poc.md`](remote-server-poc.m
 - ade-4lga / ade-n41e / ade-vdes / ade-mug8 — SRV-10/11/13/14: provider-key env guard, per-user Pi credentials, connect-a-provider guidance, runs-on-owner label — closed
 - ade-c7ad — PRV-01: one Claude entry per model (bridge as Claude, API key as API; direct sign-in hidden) — closed
 - ade-iq7c — UI-01: sessions panel main, Orchestrate pull-up with user row — closed
-- ade-vlld — SRV-15: tools to use shared sessions easily: team view, open/fork any member's session, list_sessions/read_session agent tools — approved 2026-10-15, in progress (starts after A6 and SRV-06 merge)
+- ade-vlld — SRV-15: tools to use shared sessions easily — approved 2026-10-15, design pass done; sub-tickets ade-2jry (15a fork follows the forker, in progress), ade-wruf (15b status + member chips + deep link, needsInput after A8), ade-zluq (15c list_sessions/read_session, after 15b)
 - ade-aier — SRV-12 (epic): shared projects from a GitHub repository; local → shared; session move — sub-tickets ade-wgkk (12a repo projects), ade-t77e (12b Make shared), ade-shxc (12c1 snapshot move + frozen pointer), ade-iarr (12c2 live mirror), ade-k7s3 (12c3 return trip); tree awaits approved; 12a after SRV-06
 - ade-s625 — FINAL: validation of the shared-server lane before pushing `poc/shared-server` — open
 - Logged, unticketed: session move between backends (export = Pi session file + meta + pushed
