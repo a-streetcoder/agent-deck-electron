@@ -1,6 +1,6 @@
 ---
 id: ade-c5j7
-status: in_progress
+status: closed
 deps: [ade-c5h8, ade-74y5]
 links: []
 created: 2026-10-15T07:25:22Z
@@ -30,3 +30,7 @@ Domain tests mapping each kind; server tests for the events and the timeout expi
 **2026-10-15T08:26:00Z**
 
 2026-10-15 GPT review33: items 1,3,4,8 already in the fix round; added writer.acquired as interruption boundary, a server read of open human nodes per project for the waiting list (tail-independent), loop approvals unreachable in the session-scoped tree (document), desktop notification for sessionless approvals only if the existing bridge carries it (no main.js change).
+
+**2026-10-15T08:36:53Z**
+
+2026-10-15 merged as 237c9b8 (293067b + fix round 2cf9058: Pi-settled UI requests closed on exit/turn end/own timeout, tail walk ignores restart rows, 4-minute cap below Pi's 300 s fetch limit, removed loop run cancels its approval, default respects allowFreeform with a defaulted marker, supervisorRequest row gives way to the human node, writer.acquired interrupts, GET /events/open-human feeds the waiting list). Conflicts resolved in server.ts (routes) and NodeTreeView.test.tsx (both tests kept); server/web/domain tsc clean; eventRoutes+humanNode 16, web tree+activity 11, domain 57 passed. Owner-decision limitations recorded in the docs: loop approvals get an in-app announcement only (Electron main notifies per session) and never appear in the session-scoped Run tree. Follow-ups: maker-checker ASK_HUMAN stop has no human node; extension inputs titled password/token could be withheld; requests opened outside a turn with no timeout stay open until answered or restart.
