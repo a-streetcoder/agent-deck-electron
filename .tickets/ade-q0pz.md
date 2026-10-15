@@ -1,6 +1,6 @@
 ---
 id: ade-q0pz
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-10-15T19:10:48Z
@@ -21,3 +21,9 @@ Worktree E:\agent-deck-wt\<ticket>; single test files only (apps/desktop node --
 
 Each of the seven items has a regression test that fails on HEAD and passes after; node --test apps/desktop/shared-server.test.js and the touched vitest files pass; typecheck of apps/server and apps/web clean; scripts/check-design-system.mjs and prettier clean on changed files; a second GPT pass on the diff of this ticket reports no remaining blocker; ade-s625 note records the disposition of all seven.
 
+
+## Notes
+
+**2026-10-15T19:11:39Z**
+
+2026-10-15 owner approved (exact word) all seven items. Dispatched in worktree E:\agent-deck-wt\ade-q0pz (wt/ade-q0pz).
