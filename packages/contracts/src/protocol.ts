@@ -331,8 +331,14 @@ export const SessionPlanItem = Schema.mutable(
     assignee: Schema.optional(Schema.String),
     /** A5: agent name that verifies the result; never the assignee (principle 4). */
     verifiedBy: Schema.optional(Schema.String),
+    /** A5: the assignee's prompt; absent = the title is the whole prompt. */
+    task: Schema.optional(Schema.String),
+    /** A5: run in its own worktree, alongside other isolated items. */
+    isolated: Schema.optional(Schema.Boolean),
     /** A5: server-owned: the Deck subagent run the item was last dispatched to. */
     runId: Schema.optional(Schema.String),
+    /** A5: server-owned: why the verifier rejected the result. */
+    note: Schema.optional(Schema.String),
   }),
 );
 export type SessionPlanItem = typeof SessionPlanItem.Type;

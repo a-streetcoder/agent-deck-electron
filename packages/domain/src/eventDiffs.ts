@@ -824,11 +824,16 @@ export function projectPlans(
 export interface ProjectedPlanDispatch {
   runId: string;
   agentName?: string;
+  /** The plan generation: id of the plan.changed that set the plan (set_session_plan). */
+  generation?: string;
   /** The dispatch event's id. */
   eventId?: string;
 }
 
-/** A5: plan.item.dispatched, latest per (session, item). Extends a copy of initial. */
+/**
+ * A5: plan.item.dispatched, latest per (session, item); readers ignore a dispatch of an
+ * older generation. Extends a copy of initial.
+ */
 export function projectPlanDispatches(
   events: Iterable<ProjectedEvent>,
   initial: Iterable<[string, Map<string, ProjectedPlanDispatch>]> = [],
@@ -841,6 +846,7 @@ export function projectPlanDispatches(
       itemId?: unknown;
       runId?: unknown;
       agentName?: unknown;
+      generation?: unknown;
     };
     if (typeof payload.itemId !== "string" || typeof payload.runId !== "string") continue;
     if (!copied.has(event.sessionId)) {
@@ -850,10 +856,24 @@ export function projectPlanDispatches(
     state.get(event.sessionId)!.set(payload.itemId, {
       runId: payload.runId,
       ...(typeof payload.agentName === "string" ? { agentName: payload.agentName } : {}),
+      ...(typeof payload.generation === "string" ? { generation: payload.generation } : {}),
       ...(event.id ? { eventId: event.id } : {}),
     });
   }
   return state;
+}
+
+/** A5: the current plan generation: the id of the latest plan event that set a whole plan. */
+export function planGeneration(
+  history: readonly ProjectedPlanChange[] | undefined,
+): string | undefined {
+  for (let i = (history?.length ?? 0) - 1; i >= 0; i -= 1) {
+    const change = history![i]!;
+    // Reconcile imports are history from before the log, never the current plan.
+    if (!change.imported && (change.kind === "created" || change.kind === "replaced"))
+      return change.id;
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------

@@ -354,19 +354,31 @@ export interface SessionPlanItem {
   assignee?: string;
   /** A5: the agent that verifies the assignee's result; never the assignee itself. */
   verifiedBy?: string;
+  /** A5: the assignee's prompt; absent = the title is the whole prompt. */
+  task?: string;
+  /** A5: run in its own worktree, alongside other isolated items. */
+  isolated?: boolean;
   /** A5: server-owned: the subagent run the item was last dispatched to. */
   runId?: string;
+  /** A5: server-owned: why the verifier rejected the result. */
+  note?: string;
 }
 
-/** A patch to one plan item, addressed by id (every other field optional). */
+/**
+ * A patch to one plan item, addressed by id (every other field optional). null clears
+ * an optional field.
+ */
 export interface SessionPlanUpdate {
   id: string;
   title?: string;
   status?: PlanItemStatus;
   dependsOn?: string[];
-  assignee?: string;
-  verifiedBy?: string;
+  assignee?: string | null;
+  verifiedBy?: string | null;
+  task?: string | null;
+  isolated?: boolean;
   runId?: string;
+  note?: string | null;
 }
 
 /** update_session_plan semantics: patch items by id; unknown ids are ignored. */
@@ -377,8 +389,12 @@ export function applyPlanUpdates(
   return plan.map((item) => {
     const patch = updates.find((u) => u.id === item.id);
     if (!patch) return item;
-    const defined = Object.entries(patch).filter(([, value]) => value !== undefined);
-    return { ...item, ...Object.fromEntries(defined) } as SessionPlanItem;
+    const next: Record<string, unknown> = { ...item };
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === null) delete next[key];
+      else if (value !== undefined) next[key] = value;
+    }
+    return next as unknown as SessionPlanItem;
   });
 }
 

@@ -119,32 +119,53 @@ any deferred resource refresh are armed again.
 
 ### Plan dependencies and dispatch
 
-A plan item may carry `dependsOn` (item ids), `assignee` and `verifiedBy` (agent names);
-`set_session_plan` / `update_session_plan` refuse a cycle, an unknown or self dependency, an
-unknown agent and `verifiedBy` equal to `assignee`. A plan without `dependsOn` is the old
-checklist. The graph logic is pure (`packages/domain/src/planScheduler.ts`): an item is ready
-when it is `todo` and every dependency is `done`; `skipped` is not done, so a skipped or
-blocked item marks its `todo` dependants `blocked`.
+A plan item may carry `dependsOn` (item ids), `assignee` and `verifiedBy` (agent names, compared
+case-insensitively), `task` (the assignee's prompt; without it the title is the whole prompt) and
+`isolated`. `set_session_plan` / `update_session_plan` refuse a cycle, an unknown or self
+dependency, an unknown agent, `verifiedBy` equal to `assignee`, a parent marking a `verifiedBy`
+item done (only its verifier's APPROVE does), and a new assignment while delegation is off or the
+event log is read-only. `update_session_plan` clears `assignee`, `verifiedBy` or `task` with
+`null`. A plan without `dependsOn` is the old checklist. The graph logic is pure
+(`packages/domain/src/planScheduler.ts`): an item is ready when it is `todo` and every dependency
+is `done` or `skipped` (skipped means not needed); a `blocked` item marks its `todo` dependants
+`blocked`.
 
-The dispatcher (`apps/server/src/planDispatcher.ts`) re-evaluates a session's plan on each
-`plan.changed`, `subagent.run.finished` and `subagent.run.removed` of that session. It
-spawns each ready assigned item through the `spawn_subagent` path (detached, the 8-child cap,
-the delegation setting), with the item title as the task plus the summaries of its
-dependencies (2,000 characters each), logs `plan.item.dispatched {itemId, runId, agentName}`
-caused by the event that made it ready, and sets the item `in_progress` with its `runId`.
-A completed run makes the item `done`; any other end (failed, stopped, interrupted by a
-restart, record gone) makes it `blocked`. With `verifiedBy`, a completed run is first reviewed
-by that agent with the Loop checker profile (read-only tools plus git-only `checker_shell`);
-`APPROVE` (D7 `parseVerdict`) makes it `done`, anything else `blocked`. Only plans the
-session's own agent set or updated in this process, or that already hold a dispatched item,
-are dispatched; a fork's inherited plan waits for its agent. Nothing is dispatched while the
-log is read-only. The plan panel draws a plan with dependencies as columns by depth.
+Plan generations: a plan event that sets a whole plan (`created`, `replaced`) starts a
+generation; `plan.item.dispatched {itemId, runId, agentName, generation}` counts only within its
+generation, so reused ids in a new plan start fresh. Re-sending an item with the same id, title,
+task and assignee and no stated status keeps its `done` (or running `in_progress`) state, runId
+and note, so adding an item does not re-run finished work and an in-flight run or verification
+survives the rewrite.
 
-Not covered: verifier runs are constrained children and are not durable, so a restart during
-verification runs the verifier again; reassigning a running item does not cancel its run (the
-result is discarded and the item re-dispatched to the new assignee once the run ends); an item
-whose agent changes the status while it runs keeps that status (a reset to `todo` is dispatched
-again once the run ends).
+The dispatcher (`apps/server/src/planDispatcher.ts`) runs a pass on each `plan.changed`,
+`subagent.run.finished` and `subagent.run.removed` of a session, when a detached child slot is
+released, when a plan is restored (reopen, fork, resume), and for every live session when the
+delegation setting changes. A pass first settles: a completed run makes the item `done`, any
+other end (failed, stopped, interrupted by a restart, record gone) `blocked`; with
+`verifiedBy`, a completed run is reviewed by that agent as a durable read-only run (the Loop
+checker profile: read-only tools plus git-only `checker_shell`; task `verify: <title>` with the
+item task, the producer's summary up to 4,000 characters and, for an isolated item, the files
+changed in its worktree), whose first-line verdict (D7 `parseVerdict`) is logged as
+`plan.item.verified {itemId, runId, producerRunId, verdict, reason}`: `APPROVE` makes the item
+`done`, anything else `blocked` with the reason as its `note`. A verdict for an item rewritten,
+reassigned or given another verifier meanwhile is discarded and recomputed. Then it dispatches
+the ready frontier through the `spawn_subagent` path (detached, the 8-child cap, the delegation
+setting): one assigned item at a time in the session's checkout, isolated items in their own
+worktrees alongside; the task is the item task plus its dependencies' summaries (2,000
+characters each, 20,000 in all). At the child cap it waits for the next pass; if the plan changed
+during the pass it leaves the rest to the next one. Server-written plan updates and dispatch
+events are `system` and caused by the event that triggered the pass.
+
+Only live intent dispatches: a session whose own agent set or updated the plan in this process.
+Restores, forks, reopens and restarts settle but spawn nothing, and a run the user stopped
+revokes it until the agent touches the plan again. The parent is not prompted when items finish:
+it reads the plan on its next turn. The plan panel groups a plan with dependencies by depth and
+shows each item's agents, verdict note and a Show run link (a toast when the card is hidden).
+
+Not covered: a verifier of an isolated item runs in the session's checkout and sees the
+worktree only through the listed files; reassigning a running item does not cancel its run (the
+result is discarded and the item re-dispatched once the run ends); a run launched just as the
+plan was replaced is recorded but not adopted by the new plan.
 
 ### Managed child provider settlement
 
@@ -231,7 +252,8 @@ only the disabled log (it could not open) falls back to the stores. The merges a
   imported entries sit after their store predecessor (recorded as `afterId`); no clock orders
   anything. Items come from the store for the events it still holds; older ones are the log's
   copy, marked `source: "log"` (titles capped at 200 characters, paths redacted; per item id,
-  title, status and, since A5, `dependsOn`, `assignee`, `verifiedBy` and `runId`).
+  title, status and, since A5, `dependsOn`, `assignee`, `verifiedBy`, `isolated` and `runId`;
+  an item's `task` and `note` stay out of the log).
 - **Supervisor requests** (`list_supervisor_requests`) take membership and status from
   `projectSupervisor`; this process's own requests stay exact (full text, live status), and
   one whose append failed is placed by `createdAt`. The restart rule: a request still pending

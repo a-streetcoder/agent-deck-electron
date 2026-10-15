@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { projectPlanDispatches } from "../src/eventDiffs.ts";
+import { planGeneration, projectPlanDispatches } from "../src/eventDiffs.ts";
 import {
+  carryPlanProgress,
   detectCycles,
   planDepths,
   propagateBlocked,
@@ -51,13 +52,14 @@ describe("readyFrontier", () => {
     ]);
   });
 
-  it("does not count a skipped dependency as done", () => {
-    expect(ids(readyFrontier([item("a", "skipped"), item("b", "todo", ["a"])]))).toEqual([]);
+  it("counts a skipped dependency as satisfied (not needed), a blocked one as not", () => {
+    expect(ids(readyFrontier([item("a", "skipped"), item("b", "todo", ["a"])]))).toEqual(["b"]);
+    expect(ids(readyFrontier([item("a", "blocked"), item("b", "todo", ["a"])]))).toEqual([]);
   });
 });
 
 describe("propagateBlocked", () => {
-  it("blocks every todo item downstream of a blocked or skipped one", () => {
+  it("blocks every todo item downstream of a blocked one; skipped satisfies", () => {
     const plan = [
       item("a", "blocked"),
       item("b", "todo", ["a"]),
@@ -73,7 +75,7 @@ describe("propagateBlocked", () => {
       b: "blocked",
       c: "blocked",
       s: "skipped",
-      t: "blocked",
+      t: "todo",
       free: "todo",
       running: "in_progress",
     });
@@ -95,7 +97,7 @@ describe("cycles and validation", () => {
     );
     expect(validatePlanGraph([item("a", "todo", ["a"])])).toMatch(/depends on itself/);
     expect(validatePlanGraph([item("a", "todo", ["zz"])])).toMatch(/unknown item zz/);
-    expect(validatePlanGraph([{ ...item("a"), assignee: "coder", verifiedBy: "coder" }])).toMatch(
+    expect(validatePlanGraph([{ ...item("a"), assignee: "coder", verifiedBy: "Coder" }])).toMatch(
       /verifiedBy must differ from assignee/,
     );
     expect(
@@ -107,7 +109,50 @@ describe("cycles and validation", () => {
   });
 });
 
+describe("carryPlanProgress", () => {
+  const done: SessionPlanItem = {
+    ...item("a", "done"),
+    assignee: "coder",
+    runId: "r1",
+    note: "kept",
+  };
+  it("keeps finished or running work of an unchanged item re-sent without a status", () => {
+    const resent = { ...item("a"), assignee: "coder" };
+    const running = { ...done, id: "b", status: "in_progress" as const, runId: "r2" };
+    expect(
+      carryPlanProgress(
+        [done, running],
+        [resent, { ...resent, id: "b", title: "A" }, item("new")],
+        new Set(),
+      ),
+    ).toEqual([done, { ...running }, item("new")]);
+  });
+  it("starts over when the model states a status or the item changed", () => {
+    const resent = { ...item("a"), assignee: "coder" };
+    expect(carryPlanProgress([done], [resent], new Set(["a"]))).toEqual([resent]);
+    const retitled = { ...resent, title: "Other" };
+    expect(carryPlanProgress([done], [retitled], new Set())).toEqual([retitled]);
+    const reassigned = { ...resent, assignee: "other" };
+    expect(carryPlanProgress([done], [reassigned], new Set())).toEqual([reassigned]);
+    const blocked = { ...done, status: "blocked" as const };
+    expect(carryPlanProgress([blocked], [resent], new Set())).toEqual([resent]);
+  });
+});
+
 describe("planDepths and dispatch projection", () => {
+  it("names the current plan generation: the latest live set, not an import", () => {
+    expect(
+      planGeneration([
+        { id: "g1", kind: "created", items: [] },
+        { id: "u1", kind: "updated", items: [] },
+        { id: "g2", kind: "replaced", items: [] },
+        { id: "old", kind: "created", items: [], imported: {} },
+        { id: "u2", kind: "updated", items: [] },
+      ]),
+    ).toBe("g2");
+    expect(planGeneration(undefined)).toBeUndefined();
+  });
+
   it("lays a diamond out in three lanes", () => {
     const depths = planDepths([
       item("d", "todo", ["b", "c"]),
@@ -124,11 +169,16 @@ describe("planDepths and dispatch projection", () => {
       kind: "plan.item.dispatched",
       sessionId: "s1",
       subject: { type: "plan", id: "s1" },
-      payload: { itemId, runId, agentName: "coder" },
+      payload: { itemId, runId, agentName: "coder", generation: "g1" },
     });
     const first = projectPlanDispatches([event("e1", "a", "r1"), event("e2", "b", "r2")]);
     const next = projectPlanDispatches([event("e3", "a", "r3")], first);
-    expect(next.get("s1")?.get("a")).toEqual({ runId: "r3", agentName: "coder", eventId: "e3" });
+    expect(next.get("s1")?.get("a")).toEqual({
+      runId: "r3",
+      agentName: "coder",
+      generation: "g1",
+      eventId: "e3",
+    });
     expect(next.get("s1")?.get("b")?.runId).toBe("r2");
     // The initial projection is not mutated.
     expect(first.get("s1")?.get("a")?.runId).toBe("r1");

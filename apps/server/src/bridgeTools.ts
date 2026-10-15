@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { applyPlanUpdates, validatePlanGraph, type SessionPlanItem } from "@agent-deck/domain";
+import {
+  applyPlanUpdates,
+  carryPlanProgress,
+  sameAgent,
+  validatePlanGraph,
+  type SessionPlanItem,
+} from "@agent-deck/domain";
 import { z } from "zod";
 import type { BridgeRegistry } from "./bridge.ts";
 import {
@@ -29,7 +35,9 @@ import { supervisorRequestTitle, type SupervisorLog } from "./supervisor.ts";
 export function registerDeckBridgeTools(
   bridge: BridgeRegistry,
   sessions: SessionManager,
-  events: Pick<EventLog, "subscribe"> = { subscribe: () => () => {} },
+  events: Pick<EventLog, "subscribe"> & Partial<Pick<EventLog, "writable">> = {
+    subscribe: () => () => {},
+  },
   // A3: a result hand-back moves the parent's delta cursor past the finished event.
   results: Pick<SubagentDeltaReader, "resultsDelivered"> = { resultsDelivered: () => {} },
 ): void {
@@ -483,10 +491,19 @@ export function registerDeckBridgeTools(
   // bus as domain state (plan_set / plan_update), so clients mirror it.
   const planStatus = z.enum(["todo", "in_progress", "done", "blocked", "skipped"]);
   // A5: the graph fields. dependsOn holds item ids; assignee / verifiedBy are agent names.
+  const agentName = z.string().trim().min(1).max(200);
+  const taskText = z
+    .string()
+    .trim()
+    .min(1)
+    .refine(
+      (value) => Buffer.byteLength(value, "utf8") <= MAX_MANAGED_SUBAGENT_TASK_BYTES,
+      `task cannot exceed ${MAX_MANAGED_SUBAGENT_TASK_BYTES} UTF-8 bytes`,
+    );
   const graphFields = {
     dependsOn: z.array(z.string().trim().min(1)).max(50).optional(),
-    assignee: z.string().trim().min(1).max(200).optional(),
-    verifiedBy: z.string().trim().min(1).max(200).optional(),
+    task: taskText.optional(),
+    isolated: z.boolean().optional(),
   };
   const setPlanParams = z.object({
     items: z
@@ -495,6 +512,8 @@ export function registerDeckBridgeTools(
           id: z.string().trim().min(1).optional(),
           title: z.string().trim().min(1),
           status: planStatus.optional(),
+          assignee: agentName.optional(),
+          verifiedBy: agentName.optional(),
           ...graphFields,
         }),
       )
@@ -507,29 +526,44 @@ export function registerDeckBridgeTools(
           id: z.string().trim().min(1),
           title: z.string().trim().min(1).optional(),
           status: planStatus.optional(),
+          // null clears the field.
+          assignee: agentName.nullable().optional(),
+          verifiedBy: agentName.nullable().optional(),
           ...graphFields,
+          task: taskText.nullable().optional(),
         }),
       )
       .min(1)
       .max(50),
   });
-  const graphSchema = {
-    dependsOn: {
-      type: "array",
-      items: { type: "string" },
-      maxItems: 50,
-      description: "Optional ids of the items this one waits for (no cycles).",
-    },
-    assignee: {
-      type: "string",
-      description:
-        "Optional installed agent name: Agent Deck runs the item as a subagent of that agent once every dependency is done.",
-    },
-    verifiedBy: {
-      type: "string",
-      description:
-        "Optional installed agent name that reviews the assignee's result read-only (APPROVE or REJECT); must differ from assignee.",
-    },
+  const graphSchema = (clearable: boolean) => {
+    const orNull = (schema: Record<string, unknown>) =>
+      clearable ? { anyOf: [schema, { type: "null" }] } : schema;
+    return {
+      dependsOn: {
+        type: "array",
+        items: { type: "string" },
+        maxItems: 50,
+        description: "Optional ids of the items this one waits for (no cycles).",
+      },
+      assignee: {
+        ...orNull({ type: "string" }),
+        description: `Optional installed agent name. Agent Deck runs an assigned item AUTOMATICALLY as a subagent of that agent once every dependency is done or skipped, spending the session owner's model budget, and marks it done or blocked from the result.${clearable ? " null clears it." : ""}`,
+      },
+      verifiedBy: {
+        ...orNull({ type: "string" }),
+        description: `Optional installed agent name that reviews the assignee's result read-only and answers APPROVE or REJECT; must differ from assignee. Only the server marks such an item done.${clearable ? " null clears it." : ""}`,
+      },
+      task: {
+        ...orNull({ type: "string" }),
+        description: "Optional prompt for the assignee; without it the title is the whole prompt.",
+      },
+      isolated: {
+        type: "boolean",
+        description:
+          "Optional. When true the assigned item runs in its own Git worktree and may run in parallel with other isolated items; otherwise assigned items run one at a time in the session's checkout.",
+      },
+    };
   };
   const renderPlan = (items: SessionPlanItem[]): string =>
     items.length === 0
@@ -540,15 +574,42 @@ export function registerDeckBridgeTools(
               it.dependsOn?.length ? `after ${it.dependsOn.join(", ")}` : "",
               it.assignee ? `assignee ${it.assignee}` : "",
               it.verifiedBy ? `verified by ${it.verifiedBy}` : "",
+              it.isolated ? "isolated" : "",
               it.runId ? `run ${it.runId}` : "",
+              it.note ? `note: ${it.note}` : "",
             ].filter(Boolean);
             return `- [${it.status}] ${it.id}: ${it.title}${graph.length ? ` (${graph.join("; ")})` : ""}`;
           })
           .join("\n");
-  /** The graph and every named agent must hold before a plan is stored. */
-  const planError = (sessionId: string, items: readonly SessionPlanItem[]): string | undefined => {
+  /** The graph, every named agent and the dispatch preconditions must hold before a plan is stored. */
+  const planError = (
+    sessionId: string,
+    items: readonly SessionPlanItem[],
+    previous: readonly SessionPlanItem[],
+  ): string | undefined => {
     const graph = validatePlanGraph(items);
     if (graph) return graph;
+    const before = new Map(previous.map((item) => [item.id, item]));
+    for (const item of items) {
+      // Principle 4: a verified item is marked done by the server after APPROVE only.
+      if (item.verifiedBy && item.status === "done" && before.get(item.id)?.status !== "done") {
+        return `plan item ${item.id} has verifiedBy: only its verifier's APPROVE marks it done`;
+      }
+    }
+    // A new or changed assignment must be able to run (an unchanged one may stay).
+    if (
+      items.some(
+        (item) => item.assignee && !sameAgent(before.get(item.id)?.assignee, item.assignee),
+      )
+    ) {
+      const meta = sessions.get(sessionId)?.meta;
+      if (meta && !sessions.delegationAllowed(meta)) {
+        return "assigned items need subagent delegation, which is turned off for this session (Settings)";
+      }
+      if (events.writable === false) {
+        return "assigned items cannot run now: another Agent Deck process owns the event log";
+      }
+    }
     for (const name of new Set(items.flatMap((it) => [it.assignee, it.verifiedBy]))) {
       const error = name ? sessions.agentResolutionError(sessionId, name) : undefined;
       if (error) return error;
@@ -560,7 +621,7 @@ export function registerDeckBridgeTools(
       name: "set_session_plan",
       label: "Set plan",
       description:
-        "Set (replace) this session's activity plan — a short checklist of the steps you'll take. Each item has a title and an optional status (todo/in_progress/done/blocked/skipped, default todo). Items may form a dependency graph: `dependsOn` lists the ids of items that must be done first (a skipped or blocked dependency blocks its dependants). An item with an `assignee` is run by Agent Deck as a subagent of that agent as soon as its dependencies are done, and marked done or blocked from the result; `verifiedBy` names a different agent that must APPROVE the result first. The result lists each item's assigned id; use those ids with update_session_plan.",
+        "Set (replace) this session's activity plan — a short checklist of the steps you'll take. Each item has a title and an optional status (todo/in_progress/done/blocked/skipped, default todo). Items may form a dependency graph: `dependsOn` lists the ids of items that must be done (or skipped) first; a blocked dependency blocks its dependants. An item with an `assignee` runs AUTOMATICALLY as a subagent of that agent once ready (its `task`, or else its title, is the whole prompt, plus its dependencies' results), spending the session owner's model budget; it is marked done or blocked from the result, and `verifiedBy` names a different agent that must APPROVE it first. Assigned items run one at a time unless `isolated`. Re-sending an unchanged item without a status keeps its done (or running) state. You are not prompted when items finish: read the plan on your next turn. The result lists each item's assigned id; use those ids with update_session_plan.",
       parameters: {
         type: "object",
         properties: {
@@ -576,7 +637,7 @@ export function registerDeckBridgeTools(
                   type: "string",
                   enum: ["todo", "in_progress", "done", "blocked", "skipped"],
                 },
-                ...graphSchema,
+                ...graphSchema(false),
               },
               required: ["title"],
               additionalProperties: false,
@@ -587,7 +648,7 @@ export function registerDeckBridgeTools(
         additionalProperties: false,
       },
       promptSnippet:
-        "set_session_plan — set/replace the session's activity plan (checklist, or a graph with dependsOn / assignee / verifiedBy).",
+        "set_session_plan — set/replace the session's activity plan (checklist, or a graph with dependsOn / assignee / verifiedBy; assigned items run automatically).",
     },
     (params, ctx) => {
       const parsed = setPlanParams.safeParse(params);
@@ -605,7 +666,8 @@ export function registerDeckBridgeTools(
       // dependsOn would silently point at the wrong item.
       const graph = parsed.data.items.some((it) => it.dependsOn?.length);
       const seen = new Set<string>();
-      const items: SessionPlanItem[] = [];
+      const stated = new Set<string>();
+      const sent: SessionPlanItem[] = [];
       for (const it of parsed.data.items) {
         let id = it.id ?? randomUUID();
         if (seen.has(id)) {
@@ -615,16 +677,21 @@ export function registerDeckBridgeTools(
           id = randomUUID();
         }
         seen.add(id);
-        items.push({
+        if (it.status) stated.add(id);
+        sent.push({
           id,
           title: it.title,
           status: it.status ?? "todo",
           ...(it.dependsOn?.length ? { dependsOn: [...new Set(it.dependsOn)] } : {}),
           ...(it.assignee ? { assignee: it.assignee } : {}),
           ...(it.verifiedBy ? { verifiedBy: it.verifiedBy } : {}),
+          ...(it.task ? { task: it.task } : {}),
+          ...(it.isolated ? { isolated: true } : {}),
         });
       }
-      const error = planError(ctx.sessionId, items);
+      const previous = session.plan;
+      const items = carryPlanProgress(previous, sent, stated);
+      const error = planError(ctx.sessionId, items, previous);
       if (error) return { content: `Invalid set_session_plan: ${error}.`, isError: true };
       session.setPlan(items);
       return { content: `Plan set (${items.length} item(s)):\n${renderPlan(items)}` };
@@ -635,7 +702,7 @@ export function registerDeckBridgeTools(
       name: "update_session_plan",
       label: "Update plan",
       description:
-        "Update items in this session's activity plan by id (from set_session_plan). Each update carries an id and a new status, title, dependsOn, assignee and/or verifiedBy. Unknown ids are ignored; an update that would create a dependency cycle is refused.",
+        "Update items in this session's activity plan by id (from set_session_plan). Each update carries an id and a new status, title, task, dependsOn, assignee, verifiedBy and/or isolated (null clears assignee, verifiedBy or task). Unknown ids are ignored; an update that would create a dependency cycle is refused, and an item with verifiedBy cannot be marked done here (its verifier's APPROVE does that). Assigned items run automatically when ready and spend the session owner's model budget.",
       parameters: {
         type: "object",
         properties: {
@@ -652,7 +719,7 @@ export function registerDeckBridgeTools(
                   type: "string",
                   enum: ["todo", "in_progress", "done", "blocked", "skipped"],
                 },
-                ...graphSchema,
+                ...graphSchema(true),
               },
               required: ["id"],
               additionalProperties: false,
@@ -663,7 +730,7 @@ export function registerDeckBridgeTools(
         additionalProperties: false,
       },
       promptSnippet:
-        "update_session_plan — patch plan items by id (status/title/dependsOn/assignee/verifiedBy).",
+        "update_session_plan — patch plan items by id (status/title/task/dependsOn/assignee/verifiedBy/isolated).",
     },
     (params, ctx) => {
       const parsed = updatePlanParams.safeParse(params);
@@ -675,7 +742,12 @@ export function registerDeckBridgeTools(
       }
       const session = sessions.get(ctx.sessionId);
       if (!session) return { content: "No such session for the plan.", isError: true };
-      const error = planError(ctx.sessionId, applyPlanUpdates(session.plan, parsed.data.updates));
+      const previous = session.plan;
+      const error = planError(
+        ctx.sessionId,
+        applyPlanUpdates(previous, parsed.data.updates),
+        previous,
+      );
       if (error) return { content: `Invalid update_session_plan: ${error}.`, isError: true };
       session.updatePlan(parsed.data.updates);
       return { content: `Plan updated.\n${renderPlan(session.plan)}` };

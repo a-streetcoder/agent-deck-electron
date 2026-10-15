@@ -93,6 +93,16 @@ export class SessionCreationError extends Error {
 /** A4: spawned children per parent; the managed_parallel concurrency maximum. */
 export const MAX_DETACHED_SUBAGENTS = 8;
 
+/** A4: spawn refused because the parent already runs MAX_DETACHED_SUBAGENTS children. */
+export class SubagentCapError extends Error {
+  constructor() {
+    super(
+      `at most ${MAX_DETACHED_SUBAGENTS} spawned subagents can run at once; await or cancel one first`,
+    );
+    this.name = "SubagentCapError";
+  }
+}
+
 export interface SpawnSubagentOptions {
   agentName?: string;
   continueSubagentId?: string;
@@ -453,8 +463,9 @@ export class ManagedSession {
     runSyncUnwrapped(this.rt.setPlan(items));
   }
 
-  updatePlan(updates: SessionPlanUpdate[]): void {
-    runSyncUnwrapped(this.rt.updatePlan(updates));
+  /** cause: a server-written update (A5 dispatcher), logged as system with its causation. */
+  updatePlan(updates: SessionPlanUpdate[], cause?: { causationId?: string }): void {
+    runSyncUnwrapped(this.rt.updatePlan(updates, cause));
   }
 
   restorePlan(items: SessionPlanItem[]): void {
@@ -1221,7 +1232,7 @@ export class SessionManager {
         // pi stays idle until the first prompt, so the buffer is near-empty.)
         // Final plan state is identical to legacy; only intermediate seq
         // numbering differs, which a snapshotting client never observes.
-        if (revived.plan && revived.plan.length > 0) session.restorePlan(revived.plan);
+        if (revived.plan && revived.plan.length > 0) this.restoreSessionPlan(session, revived.plan);
         // Now that history is seeded, start draining live events (buffered since
         // spawn) so they apply strictly after the seed.
         session.startIngestion();
@@ -1476,9 +1487,10 @@ export class SessionManager {
               op: PlanChangeOperation,
               before: readonly SessionPlanItem[],
               after: readonly SessionPlanItem[],
+              causationId?: string,
             ) => {
               try {
-                this.planEvents!.record(meta.id, op, before, after);
+                this.planEvents!.record(meta.id, op, before, after, causationId);
               } catch {
                 // The plan itself is already published by this point. A full
                 // disk or an unwritable data dir must cost the user their plan
@@ -1657,6 +1669,23 @@ export class SessionManager {
     return this.sessions.get(id);
   }
 
+  /**
+   * A5: called (the receiver defers its work) when a session's plan may need a pass: a
+   * detached child's slot was released, or the plan was restored (reopen, fork, resume),
+   * whose plan.changed the history suppresses once it holds events.
+   */
+  onPlanWake?: (sessionId: string) => void;
+
+  private restoreSessionPlan(session: ManagedSession, items: SessionPlanItem[]): void {
+    session.restorePlan(items);
+    this.onPlanWake?.(session.meta.id);
+  }
+
+  /** A5: ids of the live sessions (the dispatcher re-evaluates them on a setting change). */
+  liveSessionIds(): string[] {
+    return [...this.sessions.keys()];
+  }
+
   /** The session's effective delegation policy (see the subagentsEnabled launch param). */
   delegationAllowed(meta: Pick<SessionMeta, "subagentsEnabled">): boolean {
     const override: unknown = meta.subagentsEnabled;
@@ -1795,9 +1824,7 @@ export class SessionManager {
     const parent = this.sessions.get(parentSessionId);
     if (!parent) throw new Error(`unknown parent session: ${parentSessionId}`);
     if (options.detached && parent.detachedSubagents >= MAX_DETACHED_SUBAGENTS) {
-      throw new Error(
-        `at most ${MAX_DETACHED_SUBAGENTS} spawned subagents can run at once; await or cancel one first`,
-      );
+      throw new SubagentCapError();
     }
     const controller = new AbortController();
     const forward = (): void => controller.abort();
@@ -1834,6 +1861,8 @@ export class SessionManager {
       if (options.detached) {
         parent.detachedSubagents -= 1;
         this.resumeIdleWork(parentSessionId, parent);
+        // A5: a freed slot may let a waiting plan item start.
+        this.onPlanWake?.(parentSessionId);
       }
     };
     entry.done.then(settle, settle);
@@ -2062,7 +2091,7 @@ export class SessionManager {
       announced = true;
       // plan_set before startIngestion — safe for the same reason as resume()
       // (plans arrive only via bridge tools, never pi stdout).
-      if (meta.plan && meta.plan.length > 0) session.restorePlan(meta.plan);
+      if (meta.plan && meta.plan.length > 0) this.restoreSessionPlan(session, meta.plan);
       session.startIngestion();
       this.onMetaChange(meta);
       this.configureSessionParking(session);
@@ -2152,7 +2181,7 @@ export class SessionManager {
       await session.seedFromHistory();
       announce?.created(meta);
       announced = true;
-      if (meta.plan?.length) session.restorePlan(meta.plan);
+      if (meta.plan?.length) this.restoreSessionPlan(session, meta.plan);
       session.startIngestion();
       this.announceCreated(session);
       this.configureSessionParking(session);
@@ -2206,7 +2235,7 @@ export class SessionManager {
     try {
       session = this.launch(meta, plan, env, true);
       await session.seedFromHistory();
-      if (meta.plan?.length) session.restorePlan(meta.plan);
+      if (meta.plan?.length) this.restoreSessionPlan(session, meta.plan);
       session.startIngestion();
       session.clearFailure();
       session.publishMetaChanges();

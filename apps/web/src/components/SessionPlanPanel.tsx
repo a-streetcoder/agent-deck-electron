@@ -7,8 +7,9 @@ import { useAppStore } from "../state/store.ts";
  * The session's activity plan (native activity-sidebar "Plan" card), driven by a
  * parent agent via set_session_plan / update_session_plan. Shows a done-count,
  * a progress bar, and one row per item with a status glyph — mirroring the
- * native PiAgentCurrentPlanCard. A plan with dependencies (A5) renders as a DAG in
- * topological lanes instead: one column per depth, no graph library.
+ * native PiAgentCurrentPlanCard. A plan with dependencies (A5) is grouped by
+ * topological depth (one header per step, no graph library); assigned items show
+ * their agents, the verifier's note and a link to their run's card.
  */
 
 const STATUS_GLYPH: Record<PlanItemStatus, string> = {
@@ -33,6 +34,13 @@ function isComplete(status: PlanItemStatus): boolean {
 
 function PlanRow({ item }: { item: SessionPlanItem }) {
   const muted = isComplete(item.status);
+  const sessionId = useAppStore((state) => state.session?.id);
+  const requestCellNavigation = useAppStore((state) => state.requestCellNavigation);
+  const details = [
+    item.dependsOn?.length ? `after ${item.dependsOn.join(", ")}` : "",
+    item.assignee ? `by ${item.assignee}` : "",
+    item.verifiedBy ? `verified by ${item.verifiedBy}` : "",
+  ].filter(Boolean);
   return (
     <li
       className="flex items-start gap-2 text-label"
@@ -42,71 +50,51 @@ function PlanRow({ item }: { item: SessionPlanItem }) {
       <span aria-hidden style={{ color: STATUS_COLOR[item.status] }} className="leading-5">
         {STATUS_GLYPH[item.status]}
       </span>
-      <span
-        className={muted ? "text-text-muted line-through" : "text-text-primary"}
-        style={{ textDecorationColor: "var(--color-text-muted)" }}
-      >
-        {item.title}
-      </span>
-    </li>
-  );
-}
-
-/** Scroll the transcript to the dispatched run's subagent card (its cell id is the run id). */
-function showRun(runId: string): void {
-  [...document.querySelectorAll<HTMLElement>("[data-cell-id]")]
-    .find((element) => element.dataset.cellId === runId)
-    ?.scrollIntoView({ block: "start" });
-}
-
-function PlanNode({ item }: { item: SessionPlanItem }) {
-  const details = [
-    item.dependsOn?.length ? `after ${item.dependsOn.join(", ")}` : "",
-    item.assignee ? `by ${item.assignee}` : "",
-    item.verifiedBy ? `verified by ${item.verifiedBy}` : "",
-  ].filter(Boolean);
-  return (
-    <li
-      className="rounded-lg border px-2 py-1.5 text-label"
-      style={{ borderColor: "var(--color-border-strong)" }}
-      data-testid="plan-node"
-      data-status={item.status}
-    >
-      <div className="flex items-start gap-2">
-        <span aria-hidden style={{ color: STATUS_COLOR[item.status] }} className="leading-5">
-          {STATUS_GLYPH[item.status]}
-        </span>
-        <span className={isComplete(item.status) ? "text-text-muted" : "text-text-primary"}>
+      <div className="min-w-0">
+        <span
+          className={muted ? "text-text-muted line-through" : "text-text-primary"}
+          style={{ textDecorationColor: "var(--color-text-muted)" }}
+        >
           {item.title}
         </span>
+        {details.length ? (
+          <div className="text-caption text-text-muted">{details.join(" · ")}</div>
+        ) : null}
+        {item.note ? (
+          <div className="text-caption text-text-secondary" data-testid="plan-item-note">
+            {item.note}
+          </div>
+        ) : null}
+        {item.runId && sessionId ? (
+          <ControlButton
+            className="text-caption text-accent hover:underline"
+            // The run's subagent card has the run id as its cell id.
+            onClick={() => requestCellNavigation(item.runId!, sessionId)}
+          >
+            Show run
+          </ControlButton>
+        ) : null}
       </div>
-      {details.length ? (
-        <div className="text-caption text-text-muted">{details.join(" · ")}</div>
-      ) : null}
-      {item.runId ? (
-        <ControlButton
-          className="text-caption text-accent hover:underline"
-          onClick={() => showRun(item.runId!)}
-        >
-          Show run
-        </ControlButton>
-      ) : null}
     </li>
   );
 }
 
-function PlanLanes({ plan }: { plan: SessionPlanItem[] }) {
+/** A plan with dependencies: items grouped by topological depth, one header per step. */
+function PlanSteps({ plan }: { plan: SessionPlanItem[] }) {
   const depths = planDepths(plan);
-  const lanes: SessionPlanItem[][] = [];
-  for (const item of plan) (lanes[depths.get(item.id) ?? 0] ??= []).push(item);
+  const steps: SessionPlanItem[][] = [];
+  for (const item of plan) (steps[depths.get(item.id) ?? 0] ??= []).push(item);
   return (
-    <div className="mt-3 flex gap-3 overflow-x-auto" data-testid="plan-lanes">
-      {lanes.map((lane, depth) => (
-        <ol key={depth} className="min-w-40 flex-1 space-y-1.5" aria-label={`Step ${depth + 1}`}>
-          {lane.map((item) => (
-            <PlanNode key={item.id} item={item} />
-          ))}
-        </ol>
+    <div className="mt-3 space-y-2" data-testid="plan-steps">
+      {steps.map((step, depth) => (
+        <section key={depth} aria-label={`Step ${depth + 1}`}>
+          <div className="text-caption font-semibold text-text-muted">Step {depth + 1}</div>
+          <ul className="mt-1 space-y-1.5">
+            {step.map((item) => (
+              <PlanRow key={item.id} item={item} />
+            ))}
+          </ul>
+        </section>
       ))}
     </div>
   );
@@ -134,7 +122,7 @@ export function SessionPlanPanel() {
         </div>
       </div>
       {plan.some((item) => item.dependsOn?.length) ? (
-        <PlanLanes plan={plan} />
+        <PlanSteps plan={plan} />
       ) : (
         <ul className="mt-3 space-y-1.5">
           {plan.map((item) => (

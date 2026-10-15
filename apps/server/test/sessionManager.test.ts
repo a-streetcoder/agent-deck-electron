@@ -3571,15 +3571,25 @@ describe("subagent delegation policy", () => {
   });
 
   it("normalizes a malformed stored override to a denial", () => {
-    const source = readFileSync(path.join(process.cwd(), "src/SessionManager.ts"), "utf8");
-    const reader = source.slice(source.indexOf("subagentsEnabled: () => {"));
-
     // SessionIndex does not validate this field, so an imported, migrated or
     // hand-edited `"false"` arrives as a truthy string. `?? appDefault` would
     // hand it straight to a `=== false` test and fail OPEN; only genuine
-    // absence may fall through to the default (Codex).
-    expect(reader.slice(0, 300)).toContain("override === true");
-    expect(reader.slice(0, 300)).toContain("override === undefined");
+    // absence may fall through to the default (Codex). The launch param and the
+    // A5 dispatcher both read SessionManager.delegationAllowed.
+    const manager = new SessionManager(
+      undefined as unknown as ServerRuntime,
+      new ReceiptBus(false),
+    );
+    const allowed = (value: unknown) =>
+      manager.delegationAllowed({ subagentsEnabled: value as boolean | undefined });
+    expect(allowed(undefined)).toBe(true);
+    expect(allowed(true)).toBe(true);
+    expect(allowed(false)).toBe(false);
+    expect(allowed("false")).toBe(false);
+    expect(allowed("true")).toBe(false);
+    expect(allowed(1)).toBe(false);
+    const source = readFileSync(path.join(process.cwd(), "src/SessionManager.ts"), "utf8");
+    expect(source).toContain("subagentsEnabled: () => this.delegationAllowed(meta),");
   });
 
   it("does not corrupt the active-child count when it refuses", async () => {

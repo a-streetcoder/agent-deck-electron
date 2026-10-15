@@ -72,7 +72,7 @@ export interface SubagentDeltaDeps {
 
 const terminal = (status: string): boolean => status !== "starting" && status !== "running";
 
-async function filesChanged(
+export async function filesChanged(
   record: SubagentRunRecord,
   warn: (message: string, error?: unknown) => void,
 ): Promise<Partial<SubagentDeltaView>> {

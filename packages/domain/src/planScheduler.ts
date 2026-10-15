@@ -1,18 +1,26 @@
 // A5: the plan as a dependency graph (VISION_ORCHESTRATION principles 2, 4, 9): pure
 // functions over the plan items; the server only dispatches (planDispatcher.ts).
 //
-// Semantics: an item is ready when it is `todo` and every item it depends on is `done`.
-// `skipped` is NOT done: a skipped dependency blocks its dependants, exactly like a
-// `blocked` one (a failed run marks its item blocked). A plan without dependsOn is a flat
-// checklist: every todo item is ready.
+// Semantics: an item is ready when it is `todo` and every item it depends on is `done`
+// or `skipped`. A skipped dependency is SATISFIED (checklist semantics: the step is not
+// needed), not blocking. A `blocked` dependency (a failed or rejected run) blocks its
+// dependants. A plan without dependsOn is a flat checklist: every todo item is ready.
 import type { SessionPlanItem } from "./transcript.ts";
 
-/** The todo items whose dependencies are all done, in plan order. */
+const satisfied = (status: string | undefined): boolean =>
+  status === "done" || status === "skipped";
+
+/** Agent names compare case-insensitively (principle 4 must not be dodged by casing). */
+export function sameAgent(a: string | undefined, b: string | undefined): boolean {
+  return a !== undefined && b !== undefined && a.toLowerCase() === b.toLowerCase();
+}
+
+/** The todo items whose dependencies are all done or skipped, in plan order. */
 export function readyFrontier(items: readonly SessionPlanItem[]): SessionPlanItem[] {
   const status = new Map(items.map((item) => [item.id, item.status]));
   return items.filter(
     (item) =>
-      item.status === "todo" && (item.dependsOn ?? []).every((id) => status.get(id) === "done"),
+      item.status === "todo" && (item.dependsOn ?? []).every((id) => satisfied(status.get(id))),
   );
 }
 
@@ -49,7 +57,7 @@ export function validatePlanGraph(items: readonly SessionPlanItem[]): string | u
       if (dep === item.id) return `plan item ${item.id} depends on itself`;
       if (!ids.has(dep)) return `plan item ${item.id} depends on unknown item ${dep}`;
     }
-    if (item.verifiedBy !== undefined && item.verifiedBy === item.assignee) {
+    if (sameAgent(item.verifiedBy, item.assignee)) {
       return `plan item ${item.id}: verifiedBy must differ from assignee (the producer never grades itself)`;
     }
   }
@@ -58,13 +66,12 @@ export function validatePlanGraph(items: readonly SessionPlanItem[]): string | u
 }
 
 /**
- * Mark blocked every todo item downstream of a blocked or skipped one (transitively).
- * Running and finished items keep their status; unchanged items keep their identity.
+ * Mark blocked every todo item downstream of a blocked one (transitively). Skipped items
+ * satisfy their dependants; running and finished items keep their status; unchanged
+ * items keep their identity.
  */
 export function propagateBlocked(items: readonly SessionPlanItem[]): SessionPlanItem[] {
-  const blocked = new Set(
-    items.filter((i) => i.status === "blocked" || i.status === "skipped").map((i) => i.id),
-  );
+  const blocked = new Set(items.filter((i) => i.status === "blocked").map((i) => i.id));
   let changed = true;
   while (changed) {
     changed = false;
@@ -81,7 +88,34 @@ export function propagateBlocked(items: readonly SessionPlanItem[]): SessionPlan
   );
 }
 
-/** Topological depth per item id (0 = no dependencies): the plan panel's lanes. */
+/**
+ * set_session_plan re-sending finished work: an item with the same id, title, task and
+ * assignee as in the previous plan, for which the model stated no status, keeps a
+ * `done` status (or a dispatched `in_progress`, so a running or verifying item
+ * survives) with its runId and note. Everything else starts as sent.
+ */
+export function carryPlanProgress(
+  previous: readonly SessionPlanItem[],
+  next: readonly SessionPlanItem[],
+  statusStated: ReadonlySet<string>,
+): SessionPlanItem[] {
+  const before = new Map(previous.map((item) => [item.id, item]));
+  return next.map((item) => {
+    const old = before.get(item.id);
+    if (!old || statusStated.has(item.id) || !old.runId) return item;
+    if (old.title !== item.title || old.task !== item.task || old.assignee !== item.assignee)
+      return item;
+    if (old.status !== "done" && old.status !== "in_progress") return item;
+    return {
+      ...item,
+      status: old.status,
+      runId: old.runId,
+      ...(old.note !== undefined ? { note: old.note } : {}),
+    };
+  });
+}
+
+/** Topological depth per item id (0 = no dependencies): the plan panel's groups. */
 export function planDepths(items: readonly SessionPlanItem[]): Map<string, number> {
   const byId = new Map(items.map((item) => [item.id, item]));
   const depths = new Map<string, number>();

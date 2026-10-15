@@ -52,11 +52,25 @@ export interface EventProducers {
     op: PlanChangeOperation,
     event: SessionPlanEvent,
     reconcile?: { afterId?: string },
+    /** A5: a server-written update (op "system") names the event that caused it. */
+    causationId?: string,
   ): void;
   /** A5: the server dispatched a ready plan item to a subagent run; false when not logged. */
   planItemDispatched(
     sessionId: string,
-    dispatch: { itemId: string; runId: string; agentName: string },
+    dispatch: { itemId: string; runId: string; agentName: string; generation?: string },
+    causationId?: string,
+  ): boolean;
+  /** A5: a verifier's verdict on a plan item (runId: the verifier run). */
+  planItemVerified(
+    sessionId: string,
+    verified: {
+      itemId: string;
+      runId: string;
+      producerRunId: string;
+      verdict: "APPROVE" | "REJECT" | "missing";
+      reason: string;
+    },
     causationId?: string,
   ): boolean;
   checkpointCreated(
@@ -292,8 +306,8 @@ export function createEventProducers(
       };
     },
 
-    planChanged(sessionId, op, event, reconcile) {
-      const system = op === "restore" || reconcile !== undefined;
+    planChanged(sessionId, op, event, reconcile, causationId) {
+      const system = op === "restore" || op === "system" || reconcile !== undefined;
       append({
         // The store's own id: A1d compares the projection with the store exactly.
         id: event.id,
@@ -302,7 +316,7 @@ export function createEventProducers(
         subject: { type: "plan", id: sessionId },
         // A restore republishes a plan the session already had (reopen or fork).
         actor: system ? SYSTEM : agentActor(sessionId),
-        ...(system ? {} : causeOf(sessionId)),
+        ...(system ? (causationId ? { causationId } : {}) : causeOf(sessionId)),
         ...(reconcile ? { origin: "reconcile" as const } : {}),
         payload: {
           kind: event.kind,
@@ -322,6 +336,7 @@ export function createEventProducers(
               : {}),
             ...(item.assignee ? { assignee: capText(item.assignee, ACTOR_FIELD_MAX) } : {}),
             ...(item.verifiedBy ? { verifiedBy: capText(item.verifiedBy, ACTOR_FIELD_MAX) } : {}),
+            ...(item.isolated ? { isolated: true } : {}),
             ...(item.runId ? { runId: capText(item.runId, EVENT_LABEL_MAX_CHARS) } : {}),
           })),
         },
@@ -333,13 +348,31 @@ export function createEventProducers(
         kind: "plan.item.dispatched",
         sessionId,
         subject: { type: "plan", id: sessionId },
-        // On behalf of the agent that set the plan (the dispatcher only runs its plans).
-        actor: agentActor(sessionId),
+        // The server dispatches; the cause is the event that made the item ready.
+        actor: SYSTEM,
         ...(causationId ? { causationId } : {}),
         payload: {
           itemId: capText(dispatch.itemId, EVENT_LABEL_MAX_CHARS),
           runId: dispatch.runId,
           agentName: capText(dispatch.agentName, ACTOR_FIELD_MAX),
+          ...(dispatch.generation ? { generation: dispatch.generation } : {}),
+        },
+      }).ok;
+    },
+
+    planItemVerified(sessionId, verified, causationId) {
+      return log.append({
+        kind: "plan.item.verified",
+        sessionId,
+        subject: { type: "plan", id: sessionId },
+        actor: SYSTEM,
+        ...(causationId ? { causationId } : {}),
+        payload: {
+          itemId: capText(verified.itemId, EVENT_LABEL_MAX_CHARS),
+          runId: verified.runId,
+          producerRunId: verified.producerRunId,
+          verdict: verified.verdict,
+          reason: clean(verified.reason, EVENT_TEXT_MAX_CHARS),
         },
       }).ok;
     },

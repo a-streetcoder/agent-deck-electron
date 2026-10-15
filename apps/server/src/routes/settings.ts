@@ -598,6 +598,8 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     // {command,key} shape is safe to store as KeybindingBinding[].
     if (d.keybindings !== undefined) patch.keybindings = d.keybindings as KeybindingBinding[];
     const updated = settings.update(patch);
+    // A5: a plan item waiting on delegation (dispatch or verification) can move now.
+    if (d.subagentsEnabled !== undefined) void ctx.planDispatcher?.evaluateAll();
     if (d.semanticMemoryEnabled !== undefined) {
       // Preference mutation is intentionally passive: update only the lifecycle
       // snapshot. Initialization belongs to search or the explicit check route.

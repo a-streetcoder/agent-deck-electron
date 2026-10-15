@@ -90,6 +90,23 @@ export function Transcript() {
       return;
     }
     consumedNavigationToken.current = navigationRequest.token;
+    if (navigationRequest.cellId !== undefined) {
+      const cellId = navigationRequest.cellId;
+      const element = visibleCells.some((cell) => cell.id === cellId)
+        ? cellRefs.current.get(cellId)
+        : undefined;
+      completeQuestionNavigation(navigationRequest.token);
+      if (!element) {
+        useAppStore.getState().pushToast({
+          kind: "info",
+          message: "That run's card is not shown in the transcript (hidden or not loaded).",
+        });
+        return;
+      }
+      pinnedToBottom.current = false;
+      element.scrollIntoView({ block: "start" });
+      return;
+    }
     const target = questionNavigationTarget(
       visibleCells,
       navigationRequest.direction,
@@ -175,7 +192,6 @@ export function Transcript() {
                   ? questionNavigationLabel(cell, position, navigationCells.length)
                   : undefined
               }
-              data-cell-id={cell.id}
               data-question-navigation-cell={navigable ? cell.id : undefined}
               className={navigable ? "question-navigation-target" : undefined}
             >

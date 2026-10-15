@@ -335,6 +335,8 @@ export interface SpawnSessionParams {
     op: PlanChangeOperation,
     before: readonly SessionPlanItem[],
     after: readonly SessionPlanItem[],
+    /** A5: a server-written update (op "system") names the event that caused it. */
+    causationId?: string,
   ) => void;
   /**
    * Live-read delegation policy (native `areSubagentsEnabledForNewSessions`
@@ -445,7 +447,11 @@ export interface ManagedSessionRuntime {
 
   // Synthetic domain-event emitters (synchronous, stamped onto the bus in order).
   readonly setPlan: (items: SessionPlanItem[]) => Effect.Effect<void>;
-  readonly updatePlan: (updates: SessionPlanUpdate[]) => Effect.Effect<void>;
+  /** cause: a server-written update (A5 dispatcher), logged as system with its causation. */
+  readonly updatePlan: (
+    updates: SessionPlanUpdate[],
+    cause?: { causationId?: string },
+  ) => Effect.Effect<void>;
   readonly restorePlan: (items: SessionPlanItem[]) => Effect.Effect<void>;
   readonly appendSubagentProgress: (cellId: string, message: string) => Effect.Effect<void>;
   readonly openSupervisorQuestion: (req: {
@@ -1753,13 +1759,14 @@ export const makeManagedSessionRuntime = (
           params.recordPlanEvent?.("set", before, transcript.plan);
           scheduleTitleRefresh();
         }),
-      updatePlan: (updates) =>
+      updatePlan: (updates, cause) =>
         Effect.sync(() => {
           const before = transcript.plan;
           emit({ type: "plan_update", updates });
           meta.plan = transcript.plan;
           onMetaChange(meta);
-          params.recordPlanEvent?.("update", before, transcript.plan);
+          if (cause) params.recordPlanEvent?.("system", before, transcript.plan, cause.causationId);
+          else params.recordPlanEvent?.("update", before, transcript.plan);
           scheduleTitleRefresh();
         }),
       restorePlan: (items) =>
@@ -2070,6 +2077,8 @@ export interface ChildLaunchOverrides {
   defaultTools?: string[];
   /** Loop checker: add `checker_shell` (read-only git, checkerShell.ts) to a readOnly child. */
   checkerShell?: boolean;
+  /** A5 plan verifier: record this constrained child in the run store like a managed one. */
+  durable?: boolean;
 }
 
 export interface ChildRunOptions {
@@ -2225,7 +2234,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
     const childSessionId = randomUUID();
     // Loop/constrained executions retain their dedicated snapshot ownership.
     // Generic managed_subagent/managed_parallel runs use this first-class store.
-    const durable = toolPolicy === undefined ? params.childRuns : undefined;
+    const durable = toolPolicy === undefined || overrides?.durable ? params.childRuns : undefined;
     const createdAt = new Date().toISOString();
     let artifactSessionsDirectory: string | undefined;
     let childCwd = meta.cwd;
@@ -2438,7 +2447,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
         }
         // Artifact evidence receives only authoredSystemPrompt above. Memory is
         // volatile launch context and is appended afterwards, never persisted.
-        if (durable && params.recallChildMemory) {
+        if (durable && toolPolicy === undefined && params.recallChildMemory) {
           childMemoryContext = yield* Effect.tryPromise({
             try: () =>
               params.recallChildMemory!({
