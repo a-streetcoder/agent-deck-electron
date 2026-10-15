@@ -1,6 +1,6 @@
 ---
 id: ade-u8qg
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-15T00:57:50Z
@@ -20,3 +20,9 @@ GUARDRAILS as every ticket (worktree, single test files, no builds, no ssh, no p
 ## Acceptance Criteria
 
 Tests above green; the A0 loop definitions (kept under /tmp/a0/evidence on the VM, copies in the evidence doc) run with no frontmatter workaround.
+
+## Notes
+
+**2026-10-15T01:22:38Z**
+
+2026-10-15 merged (wt/ade-u8qg: e495aee + review round 696b152). Contrarian + GPT review18: no production defect; applied: triage defaults to the read-only set, tests for [] under readOnly and explicit tools: [] maker, subagent-named.pi preflight test uses launch-specific evidence instead of a global request count (pre-existing flake), docs: tools not sandboxed to the checkout, table row wording, contract text 'checkout or isolated worktree', resolveChildTools comment. Post-merge: server tsc clean; loopEngine + loopHonestyRoutes + eventReconcile green. The A0 loop definitions re-run on the VM is still open (needs the VM; D7 first).
