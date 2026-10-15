@@ -129,6 +129,7 @@ import { registerProjectRoutes } from "./routes/projects.ts";
 import { registerResourceRoutes } from "./routes/resources.ts";
 import { registerSessionRoutes } from "./routes/sessions.ts";
 import { registerSessionImportRoutes } from "./routes/sessionImport.ts";
+import { registerSessionReturnRoutes } from "./routes/sessionReturn.ts";
 import { registerSessionShareRoutes } from "./routes/sessionShare.ts";
 import { registerSettingsRoutes } from "./routes/settings.ts";
 import { SessionManager, SubagentCapError } from "./SessionManager.ts";
@@ -1802,6 +1803,7 @@ async function initServer(
   registerSessionRoutes(ctx);
   registerSessionImportRoutes(ctx);
   registerSessionShareRoutes(ctx);
+  registerSessionReturnRoutes(ctx);
   registerComposerDraftRoutes(ctx, composerDrafts);
   registerEventRoutes(fastify, eventLog, () => logReaders.openHuman());
   registerAgentProfileRoutes(fastify, profileSources);

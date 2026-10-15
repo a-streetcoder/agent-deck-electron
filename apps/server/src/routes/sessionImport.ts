@@ -3,32 +3,22 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import nodePath from "node:path";
 import type { SessionMeta } from "@agent-deck/contracts";
 import { redactSecrets } from "@agent-deck/domain";
-import type { LaunchPlan } from "@agent-deck/pi-host";
 import { z } from "zod";
-import { envDefaults, type ServerContext } from "../context.ts";
+import type { ServerContext } from "../context.ts";
 import { userActor } from "../eventProducers.ts";
-import {
-  createSessionWorktreeWithBranchRetries,
-  gitCommitParents,
-  gitDeleteOwnedWorktreeBranch,
-  gitDeleteTransferRef,
-  gitErrorText,
-  gitFetchTransfer,
-  gitResetMixedTo,
-  gitWorktreePrune,
-  gitWorktreeRegistrationMatches,
-  SessionWorktreeAddError,
-  type GitWorktree,
-} from "../git.ts";
+import { gitDeleteTransferRef, gitErrorText } from "../git.ts";
 import { githubEnv, noCredentialHelperEnv } from "../githubConnections.ts";
-import { resolveLaunchResources } from "../launchResources.ts";
 import { serverLog } from "../serverLog.ts";
 import {
   appendImportNotice,
   checkPiTranscript,
+  createTransferWorktree,
+  fetchTransferSnapshot,
   MAX_TRANSFER_BYTES,
   rewriteTranscriptCwd,
-  transcriptThinkingLevel,
+  TransferFetchError,
+  resolveTransferLaunch,
+  TransferModelError,
   transferEnvelopeSchema,
 } from "../sessionTransfer.ts";
 import { requestUser } from "../trustedProxy.ts";
@@ -43,7 +33,7 @@ import { requestUser } from "../trustedProxy.ts";
  * imported transcript.
  */
 export function registerSessionImportRoutes(ctx: ServerContext): void {
-  const { fastify, projects, index, sessionWorktreeStore, worktreesRoot, broadcast } = ctx;
+  const { fastify, projects, index, worktreesRoot, broadcast } = ctx;
   /** Imports in flight, by requester and device session (see the duplicate check). */
   const importing = new Set<string>();
 
@@ -76,6 +66,12 @@ export function registerSessionImportRoutes(ctx: ServerContext): void {
         });
       }
       const envelope = parsed.data;
+      // SRV-12c3: a return goes to a device (import-return), never into a server project.
+      if (envelope.direction === "return")
+        return reply.status(400).send({
+          code: "invalid_envelope",
+          error: "The session export is not valid: a returned session is not imported here.",
+        });
       try {
         checkPiTranscript(envelope.transcript);
       } catch (error) {
@@ -90,11 +86,15 @@ export function registerSessionImportRoutes(ctx: ServerContext): void {
       // requester plus the session id (the device name is the device's word),
       // reserved before the first await so two concurrent posts cannot both pass.
       const key = `${user.id}\u0000${envelope.localSessionId}`;
+      // SRV-12c3: a copy that went back to the device is not the session any more;
+      // moving it here again makes a new copy.
       const earlier = index
         .list()
         .find(
           (s) =>
-            s.sharedFrom?.localSessionId === envelope.localSessionId && s.createdBy?.id === user.id,
+            s.sharedFrom?.localSessionId === envelope.localSessionId &&
+            s.createdBy?.id === user.id &&
+            !s.sharedTo,
         );
       // The export's identity: a retry of the same move sends the same transcript.
       const exportSha256 = createHash("sha256").update(envelope.transcript).digest("hex");
@@ -137,57 +137,40 @@ export function registerSessionImportRoutes(ctx: ServerContext): void {
         const owner = { id: user!.id, ...(user!.name ? { name: user!.name } : {}) };
 
         // Fetch first (oracle): nothing is allocated until the snapshot is here.
-        let startPoint: string | undefined;
         if (transfer.mode === "snapshot") {
-          let fetched: string;
           try {
-            fetched = await gitFetchTransfer(project!.path, transfer.ref, gitEnv);
+            await fetchTransferSnapshot(project!.path, transfer, gitEnv);
           } catch (error) {
+            if (!(error instanceof TransferFetchError) || error.code === "transfer_mismatch")
+              return reply.status(409).send({
+                code: "transfer_mismatch",
+                error: "The fetched snapshot is not the one this session sent.",
+              });
             return reply.status(409).send({
               code: "transfer_fetch_failed",
               error: token
-                ? `The device's snapshot could not be fetched: ${redact(gitErrorText(error)).slice(-1_000)}`
+                ? `The device's snapshot could not be fetched: ${redact(error.message).slice(-1_000)}`
                 : "The device's snapshot could not be fetched. If the repository is private, connect GitHub first.",
             });
           }
-          const parents = await gitCommitParents(project!.path, fetched).catch(() => []);
-          if (
-            fetched !== transfer.commit ||
-            parents.length !== 1 ||
-            parents[0] !== transfer.baseHead
-          ) {
-            return reply.status(409).send({
-              code: "transfer_mismatch",
-              error: "The fetched snapshot is not the one this session sent.",
-            });
-          }
-          startPoint = fetched;
         }
 
         const id = randomUUID();
-        const suffix = randomUUID().slice(0, 8);
-        const target = nodePath.join(worktreesRoot, suffix);
         const transcriptDir =
           ctx.importedSessionsDir ?? nodePath.join(nodePath.dirname(worktreesRoot), "imported");
         const transcriptFile = nodePath.join(transcriptDir, `${id}.jsonl`);
-        let reservation: string | undefined;
-        let worktree: GitWorktree | undefined;
+        let made: Awaited<ReturnType<typeof createTransferWorktree>> | undefined;
         let meta: SessionMeta;
         try {
           // The same allocation as an isolated session, always: the snapshot must
           // never land in the project's main checkout.
-          reservation = sessionWorktreeStore.reserveWorktree(target);
-          worktree = await createSessionWorktreeWithBranchRetries(
+          made = await createTransferWorktree(
+            ctx,
             project!.path,
-            target,
-            `agent-deck/session-${suffix}`,
-            reservation,
-            50,
-            startPoint,
+            transfer.mode === "snapshot" ? transfer : undefined,
           );
-          // --mixed (not --soft): the device's edits come back as unstaged changes
-          // and its untracked files as untracked, as they were before the snapshot.
-          if (transfer.mode === "snapshot") await gitResetMixedTo(target, transfer.baseHead);
+          const { worktree } = made;
+          const target = worktree.path;
 
           // The header cwd is the only rewrite (Pi resumes in it); a conversation
           // move also tells the model the device's edits did not come along.
@@ -201,45 +184,17 @@ export function registerSessionImportRoutes(ctx: ServerContext): void {
           mkdirSync(transcriptDir, { recursive: true, mode: 0o700 });
           writeFileSync(transcriptFile, transcript, { flag: "wx", mode: 0o600 });
 
-          const defaults = envDefaults();
-          // The level the session ran at is durable launch configuration: no
-          // server default or agent level replaces it on this or any later resume.
-          const thinking = transcriptThinkingLevel(envelope.transcript);
-          const resolve = (choice: { provider?: string; model?: string }, agentName?: string) =>
-            resolveLaunchResources(
-              ctx,
-              {
-                cwd: target,
-                projectId: project!.id,
-                ...choice,
-                ...(agentName ? { agentName } : {}),
-              },
-              defaults,
-              {
-                version: 1,
-                ...(choice.provider ? { providerOverride: choice.provider } : {}),
-                ...(choice.model ? { modelOverride: choice.model } : {}),
-                ...(thinking ? { thinkingOverride: thinking } : {}),
-              },
-            );
-          const choice = {
-            ...(envelope.meta.provider ? { provider: envelope.meta.provider } : {}),
-            ...(envelope.meta.model ? { model: envelope.meta.model } : {}),
-          };
-          let agentName = envelope.meta.agentName;
-          let resolved;
-          try {
-            resolved = resolve(choice, agentName);
-          } catch {
-            // An agent this server does not have (or disabled): continue as a plain chat.
-            if (!agentName)
-              throw new Error("The session's launch settings are not available here.");
-            agentName = undefined;
-            dropped.push("agent");
-            resolved = resolve(choice);
-          }
-          // The thinking level is not a launch flag here: Pi restores it on every
-          // resume from the transcript's own thinking_level_change entries.
+          // The level the session ran at, its agent and model: the same
+          // resolution a return uses (sessionTransfer.ts), checked against the
+          // requester's providers (SRV-15a, as for a fork).
+          const launch = await resolveTransferLaunch(
+            ctx,
+            envelope,
+            { id, cwd: target, projectId: project!.id, sessionFile: transcriptFile },
+            owner,
+          );
+          if (launch.droppedAgent) dropped.push("agent");
+          const agentName = launch.agentName;
           const now = new Date().toISOString();
           meta = {
             id,
@@ -257,9 +212,9 @@ export function registerSessionImportRoutes(ctx: ServerContext): void {
             ...(envelope.meta.subagentsEnabled !== undefined
               ? { subagentsEnabled: envelope.meta.subagentsEnabled }
               : {}),
-            launchPlan: resolved.plan,
-            launchResourceConfig: resolved.config,
-            launchResourceFingerprint: resolved.fingerprint,
+            launchPlan: launch.launchPlan,
+            launchResourceConfig: launch.launchResourceConfig,
+            launchResourceFingerprint: launch.launchResourceFingerprint,
             worktreePath: worktree.path,
             ...(worktree.identityToken ? { worktreeIdentity: worktree.identityToken } : {}),
             worktreeBranch: worktree.branch,
@@ -272,28 +227,6 @@ export function registerSessionImportRoutes(ctx: ServerContext): void {
               exportSha256,
             },
           };
-          // SRV-15a, as for a fork: the copy runs on the requester's providers, so
-          // the model it inherits must be one they are offered.
-          const gate = ctx.sessionModelGate;
-          if (gate) {
-            let pinned: SessionMeta;
-            try {
-              pinned = await gate.pin(meta, owner);
-            } catch (error) {
-              throw Object.assign(new Error((error as Error).message), { statusCode: 409 });
-            }
-            const refusal = await gate.refusal(pinned, owner);
-            if (refusal) throw Object.assign(new Error(refusal), { statusCode: 409 });
-            const plan = pinned.launchPlan as LaunchPlan;
-            const before = meta.launchPlan as LaunchPlan;
-            if (plan.provider !== before.provider || plan.model !== before.model) {
-              // A refused model moved to its twin: record it like a launch override.
-              const repinned = resolve({ provider: plan.provider, model: plan.model }, agentName);
-              meta.launchPlan = repinned.plan;
-              meta.launchResourceConfig = repinned.config;
-              meta.launchResourceFingerprint = repinned.fingerprint;
-            }
-          }
           // Re-keyed under the new id; the paste store re-checks every turn.
           try {
             ctx.sessionPastes.importTurns(id, envelope.pastes);
@@ -320,26 +253,11 @@ export function registerSessionImportRoutes(ctx: ServerContext): void {
             // Best effort: the session id was never published.
           }
           rmSync(transcriptFile, { force: true });
-          // A failed `git worktree add` still owns the branch it created.
-          const attempt =
-            worktree ?? (error instanceof SessionWorktreeAddError ? error.worktree : undefined);
-          if (reservation) {
-            const removed = await sessionWorktreeStore
-              .deleteWorktree(target, reservation)
-              .then(() => true)
-              .catch(() => false);
-            if (removed && attempt) {
-              // Prune only a registration proven to be this attempt's.
-              const registered = await gitWorktreeRegistrationMatches(
-                project!.path,
-                target,
-                attempt.branch,
-              ).catch(() => false);
-              if (registered) await gitWorktreePrune(project!.path).catch(() => {});
-              await gitDeleteOwnedWorktreeBranch(project!.path, attempt).catch(() => {});
-            }
-          }
-          const status = (error as { statusCode?: unknown }).statusCode;
+          await made?.discard();
+          const status =
+            error instanceof TransferModelError
+              ? 409
+              : (error as { statusCode?: unknown }).statusCode;
           if (status === 400)
             return reply
               .status(400)

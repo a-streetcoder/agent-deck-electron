@@ -16,6 +16,12 @@ import { Sparkles, Tag } from "lucide-react";
 import { useAppStore } from "../state/store.ts";
 import { mergeWorktreeSession } from "../state/wsBridge.ts";
 import { useGitHubStatus } from "../components/GitHubConnectionCard.tsx";
+import {
+  mergeButtonLabel,
+  PullRequestLink,
+  ReturnedPrWarning,
+  useMergeAsPullRequest,
+} from "../components/MergePullRequest.tsx";
 
 /**
  * Git screen (native GitRepositoryService): the current project's working-tree
@@ -125,7 +131,10 @@ function GitProjectScreen({
   const pushToast = useAppStore((state) => state.pushToast);
   // SRV-06: pushes from this screen use the viewer's GitHub connection.
   const sharedServer = useAppStore((state) => state.me !== null);
+  // SRV-12c3: on a shared server Merge is "Push and open PR"; then it shows the PR.
+  const { pr: mergePr, returnedPr } = useMergeAsPullRequest();
   const { status: github } = useGitHubStatus(sharedServer);
+
   // Whether this project's push remote uses the GitHub connection at all
   // (SSH host aliases, explicit pushurls and other hosts do not); null: no remote.
   const [pushRemoteGitHub, setPushRemoteGitHub] = useState<boolean | null | undefined>(undefined);
@@ -378,8 +387,17 @@ function GitProjectScreen({
     setMerging(true);
     setError(null);
     try {
-      const { sourceBranch, commits, cleanup } = await mergeWorktreeSession(session.id);
+      const result = await mergeWorktreeSession(session.id);
       if (!mounted.current || useAppStore.getState().session?.id !== session.id) return;
+      if (result.outcome === "pr") {
+        pushToast({
+          kind: "success",
+          message: `Pushed ${result.branch} and ${result.code === "merge_pr_updated" ? "updated" : "opened"} pull request #${result.pr.number}`,
+        });
+        void load();
+        return;
+      }
+      const { sourceBranch, commits, cleanup } = result;
       if (cleanup.status === "failed") {
         // Recovery can require stopping Pi or deleting the session; keep the
         // one coherent merge+cleanup message in the persistent alert banner.
@@ -949,16 +967,20 @@ function GitProjectScreen({
             brings its commits back into{" "}
             <span className="font-mono text-text-primary">{session.worktreeSourceBranch}</span>.
           </div>
-          <Button
-            size="sm"
-            variant="primary"
-            data-testid="git-merge"
-            disabled={merging || agentRunning}
-            title={agentRunning ? "Wait for the current turn to finish" : undefined}
-            onClick={() => void merge()}
-          >
-            {merging ? "Merging…" : `Merge to ${session.worktreeSourceBranch}`}
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            {mergePr ? <PullRequestLink pr={mergePr} /> : null}
+            {!sharedServer && returnedPr ? <ReturnedPrWarning pr={returnedPr} /> : null}
+            <Button
+              size="sm"
+              variant="primary"
+              data-testid="git-merge"
+              disabled={merging || agentRunning}
+              title={agentRunning ? "Wait for the current turn to finish" : undefined}
+              onClick={() => void merge()}
+            >
+              {mergeButtonLabel(sharedServer, mergePr, merging, session.worktreeSourceBranch)}
+            </Button>
+          </div>
         </div>
       ) : null}
 

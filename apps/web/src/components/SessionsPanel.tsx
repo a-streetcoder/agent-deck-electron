@@ -233,7 +233,10 @@ export function SessionRow({
             className="mt-0.5 truncate text-detail text-text-muted"
             data-testid={`chat-shared-${session.id}`}
           >
-            on {hostOf(session.sharedTo.serverOrigin)}
+            on{" "}
+            {session.sharedTo.serverOrigin
+              ? hostOf(session.sharedTo.serverOrigin)
+              : (session.sharedTo.device ?? "a device")}
           </span>
         ) : null}
         {session.status === "failed" ? (

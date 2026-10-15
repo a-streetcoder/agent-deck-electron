@@ -55,7 +55,8 @@ export interface EventProducers {
     meta: Pick<SessionMeta, "id" | "projectId">,
     actor: EventActor,
     share: {
-      direction: "out" | "in";
+      /** SRV-12c3: "return" on both sides when the server copy goes back to its device. */
+      direction: "out" | "in" | "return";
       mode: "snapshot" | "conversation";
       serverOrigin?: string;
       serverSessionId?: string;

@@ -25,6 +25,13 @@ const MIRROR_READS = [
   new RegExp(String.raw`^/events\?sessionId=${UUID}&afterSeq=\d{1,15}&limit=\d{1,4}$`),
 ];
 const PROMPT_PATH = new RegExp(`^/sessions/${UUID}/prompt$`);
+/** SRV-12c3: bringing one moved session back (preflight and snapshot, abort, confirmation). */
+const RETURN_PATH = new RegExp(`^/sessions/${UUID}/return$`);
+const RETURN_ABORT_PATH = new RegExp(`^/sessions/${UUID}/return/abort$`);
+const RETURNED_PATH = new RegExp(`^/sessions/${UUID}/returned$`);
+const UUID_ONLY = new RegExp(`^${UUID}$`);
+/** The untracked file list a return may name at most (as the server checks it). */
+const MAX_RETURN_FILES = 100_000;
 /** The forwarded prompt's text at most, as the server's prompt route checks it. */
 export const MAX_PROMPT_CHARS = 32_000;
 /** The session export the server accepts at most; checked here before it travels. */
@@ -68,17 +75,59 @@ export function createSharedServerClient({ origin, run, fetchImpl = fetch, timeo
   async function request(method, path, body) {
     const sessionImport = method === "POST" && typeof path === "string" && IMPORT_PATH.test(path);
     const prompt = method === "POST" && typeof path === "string" && PROMPT_PATH.test(path);
+    const sessionReturn = method === "POST" && typeof path === "string" && RETURN_PATH.test(path);
+    const returnAbort =
+      method === "POST" && typeof path === "string" && RETURN_ABORT_PATH.test(path);
+    const returned = method === "PATCH" && typeof path === "string" && RETURNED_PATH.test(path);
     const mirrorRead =
       method === "GET" && typeof path === "string" && MIRROR_READS.some((read) => read.test(path));
     if (
       typeof method !== "string" ||
       typeof path !== "string" ||
-      (!sessionImport && !prompt && !mirrorRead && !ALLOWED.has(`${method} ${path}`))
+      (!sessionImport &&
+        !prompt &&
+        !mirrorRead &&
+        !sessionReturn &&
+        !returnAbort &&
+        !returned &&
+        !ALLOWED.has(`${method} ${path}`))
     ) {
       throw new Error("This request to the shared server is not allowed.");
     }
     let payload;
-    if (prompt) {
+    const only = (keys) =>
+      isPlainObject(body) && Object.keys(body).every((key) => keys.includes(key));
+    const refused = () => {
+      throw new Error("This request to the shared server is not allowed.");
+    };
+    if (sessionReturn) {
+      // {} (preflight) or exactly { confirmedUntracked: [file names] }.
+      const files = isPlainObject(body) ? body.confirmedUntracked : undefined;
+      const valid =
+        only(["confirmedUntracked"]) &&
+        (files === undefined ||
+          (Array.isArray(files) &&
+            files.length <= MAX_RETURN_FILES &&
+            files.every((name) => typeof name === "string" && name.length <= 4096)));
+      if (!valid) refused();
+      payload = JSON.stringify(files === undefined ? {} : { confirmedUntracked: files });
+    } else if (returnAbort) {
+      const handoff = isPlainObject(body) ? body.handoff : undefined;
+      const valid =
+        only(["handoff"]) &&
+        (handoff === undefined || (typeof handoff === "string" && UUID_ONLY.test(handoff)));
+      if (!valid) refused();
+      payload = JSON.stringify(handoff === undefined ? {} : { handoff });
+    } else if (returned) {
+      const valid =
+        only(["deviceSessionId", "handoff"]) &&
+        typeof body.deviceSessionId === "string" &&
+        typeof body.handoff === "string" &&
+        UUID_ONLY.test(body.deviceSessionId) &&
+        UUID_ONLY.test(body.handoff);
+      if (!valid) refused();
+      payload = JSON.stringify({ deviceSessionId: body.deviceSessionId, handoff: body.handoff });
+    } else if (prompt) {
       // A forwarded prompt is text only: no images, files, steering or other keys.
       const valid =
         isPlainObject(body) &&

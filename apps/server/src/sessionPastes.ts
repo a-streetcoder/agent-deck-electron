@@ -415,7 +415,13 @@ export class SessionPasteStore {
 
   /** SRV-12c1: an imported session's turns, untrusted: each is checked as on read. */
   importTurns(sessionId: string, turns: readonly unknown[]): void {
-    const checked = turns.map((turn) => {
+    const checked = this.checkTurns(turns);
+    if (checked.length > 0) this.write(sessionId, checked);
+  }
+
+  /** SRV-12c3: the checks importTurns runs, without writing; throws on an invalid turn. */
+  checkTurns(turns: readonly unknown[]): StoredPasteTurn[] {
+    return turns.map((turn) => {
       if (!isStoredPasteTurn(turn) || turn.entryId === undefined) {
         throw new Error("invalid paste turn");
       }
@@ -429,7 +435,6 @@ export class SessionPasteStore {
         ...(turn.cellId !== undefined ? { cellId: turn.cellId } : {}),
       };
     });
-    if (checked.length > 0) this.write(sessionId, checked);
   }
 
   deleteSession(sessionId: string): void {

@@ -166,13 +166,13 @@ export function registerComposerDraftRoutes(ctx: ServerContext, store: ComposerD
       if (ctx.sessions.mutationClaims.owner(id) === "share")
         return reply.status(409).send({
           code: "session_moving",
-          error: "This session is moving to the shared server.",
+          error: "This session is moving between a device and the shared server.",
         });
       // SRV-12c1: a pointer has no composer; its unsent message moved with it.
       if (ctx.index.find((session) => session.id === id)?.sharedTo)
         return reply.status(409).send({
           code: "session_shared",
-          error: "This session continues on the shared server.",
+          error: "This session continues on another copy.",
         });
       const parsed = z.object({ draft: composerDraftSchema.nullable() }).safeParse(request.body);
       if (!parsed.success)

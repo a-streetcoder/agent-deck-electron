@@ -449,6 +449,19 @@ export interface MergeResult {
   cleanup: MergeCleanup;
 }
 
+/** SRV-12c3: the shared server's merge pushes the branch and opens a pull request. */
+export interface PullRequestResult {
+  ok: true;
+  /** merge_pr_updated: the push updated the PR an earlier merge opened. */
+  code: "merge_pr_opened" | "merge_pr_updated";
+  outcome: "pr";
+  pr: { url: string; number: number };
+  branch: string;
+  base: string;
+  commits: number;
+  worktreeCommitted: boolean;
+}
+
 export type MergeFailureOutcome =
   | "dirty"
   | "busy"
@@ -456,6 +469,7 @@ export type MergeFailureOutcome =
   | "conflict"
   | "nothing_to_merge"
   | "read_only"
+  | "pr_open"
   | "failed";
 
 const mergeFailureDiscriminants: Readonly<Record<string, MergeFailureOutcome>> = {
@@ -480,6 +494,11 @@ const mergeFailureDiscriminants: Readonly<Record<string, MergeFailureOutcome>> =
   merge_conflict: "conflict",
   merge_active_failure: "failed",
   merge_failed: "failed",
+  merge_forbidden: "failed",
+  merge_github_missing: "failed",
+  merge_push_failed: "failed",
+  merge_pr_failed: "failed",
+  merge_pr_open: "pr_open",
 };
 
 interface MergeFailureBody {
@@ -545,6 +564,25 @@ function parseMergeSuccess(value: unknown): MergeResult | null {
   return body as unknown as MergeResult;
 }
 
+function parsePullRequest(value: unknown): PullRequestResult | null {
+  const body = record(value);
+  const pr = record(body?.pr);
+  if (
+    !body ||
+    body.ok !== true ||
+    (body.code !== "merge_pr_opened" && body.code !== "merge_pr_updated") ||
+    body.outcome !== "pr" ||
+    typeof pr?.url !== "string" ||
+    !/^https:\/\//.test(pr.url) ||
+    !Number.isSafeInteger(pr.number) ||
+    typeof body.branch !== "string" ||
+    typeof body.worktreeCommitted !== "boolean"
+  ) {
+    return null;
+  }
+  return body as unknown as PullRequestResult;
+}
+
 function clearMergedSessionDiff(sessionId: string): void {
   if (sessionId === currentSessionId) {
     useAppStore.getState().setDiffState({ repo: true, files: [], truncated: false });
@@ -599,7 +637,9 @@ export class MergeWorktreeError extends Error {
  * the next turn boundary recomputes the now-empty set instead of replaying the
  * stale pre-merge one — the optimistic clear and the server invalidation agree.
  */
-export async function mergeWorktreeSession(sessionId: string): Promise<MergeResult> {
+export async function mergeWorktreeSession(
+  sessionId: string,
+): Promise<MergeResult | PullRequestResult> {
   mergeRequests.add(sessionId);
   let response: Response;
   try {
@@ -630,7 +670,8 @@ export async function mergeWorktreeSession(sessionId: string): Promise<MergeResu
     if (body.worktreeCommitted) clearMergedSessionDiff(sessionId);
     throw new MergeWorktreeError(body.code, body.outcome, body.worktreeCommitted, body.error);
   }
-  const result = parseMergeSuccess(await response.json().catch(() => null));
+  const parsed = await response.json().catch(() => null);
+  const result = parseMergeSuccess(parsed) ?? parsePullRequest(parsed);
   if (!result) {
     mergeRequests.delete(sessionId);
     const deferredExit = deferredMergeExits.get(sessionId);
@@ -647,7 +688,9 @@ export async function mergeWorktreeSession(sessionId: string): Promise<MergeResu
   mergeRequests.delete(sessionId);
   const deferredExit = deferredMergeExits.get(sessionId);
   deferredMergeExits.delete(sessionId);
-  if (result.cleanup.runtimeStopped) {
+  if (result.outcome === "pr") {
+    if (deferredExit) useAppStore.getState().setError(deferredExit);
+  } else if (result.cleanup.runtimeStopped) {
     // Usually the awaited stop has already delivered the deferred exit. Keep a
     // one-shot marker for the narrow response-before-push race.
     if (!deferredExit && sessionId === currentSessionId) expectedCleanupExits.add(sessionId);

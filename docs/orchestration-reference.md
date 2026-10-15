@@ -332,6 +332,12 @@ the assistant stop-reason inference stays as the fallback.
 
 ### Session merge cleanup
 
+On a shared server, for a session with an owner in a GitHub-backed project, the merge is a
+push and a pull request as the session owner instead
+(SRV-12c3, [remote-server-poc.md](remote-server-poc.md#merge-on-the-shared-server-push-and-pull-request)):
+nothing is merged into the server's checkout and none of the cleanup below runs; the worktree
+and branch stay for the pull request.
+
 When merge retention is off, a committed merge stops the parent runtime and waits
 for its children, then reaps owned child worktrees **before** removing the session
 checkout used as their Git ownership anchor. Merge cleanup retains child history,

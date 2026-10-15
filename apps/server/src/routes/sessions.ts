@@ -17,6 +17,10 @@ import { createSessionDraftGateway } from "../sessionDrafts.ts";
 import { requestUser } from "../trustedProxy.ts";
 import { userActor } from "../eventProducers.ts";
 import { coAuthorTrailers, gitIdentityEnv, withTrailers } from "../gitIdentity.ts";
+import { githubEnv } from "../githubConnections.ts";
+import { openSessionPullRequest } from "../mergePr.ts";
+import { parseGitHubRepo } from "./projects.ts";
+
 import { API_KEY_ONLY_PROVIDERS, listProjectFiles } from "@agent-deck/resources";
 import {
   ANTHROPIC_NEEDS_API_KEY,
@@ -367,9 +371,10 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     meta: SessionMeta,
     forker: UserIdentity | undefined,
     entryId?: string,
+    localCatalog = false,
   ) {
     const plan = (meta.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
-    if (!forker || plan.kind === "helper") return undefined;
+    if ((!forker && !localCatalog) || plan.kind === "helper") return undefined;
     try {
       // ctx.discoveredModels is in memory: list claude-bridge again after a restart.
       await ensureBridgeCatalog(ctx);
@@ -409,7 +414,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
 
   ctx.sessionModelGate = {
     pin: (meta, owner) => pinForkModel(meta, owner),
-    refusal: (meta, owner) => forkModelRefusal(meta, owner),
+    refusal: (meta, owner, localCatalog) =>
+      forkModelRefusal(meta, owner, undefined, localCatalog === true),
   };
 
   fastify.get("/sessions/:id/models", async (request, reply) => {
@@ -1215,6 +1221,41 @@ export function registerSessionRoutes(ctx: ServerContext): void {
           worktreeCommitted: false,
         });
       }
+      // SRV-12c3: on the shared server a session of a GitHub project with an
+      // owner merges as a push and a pull request as that owner, so only the
+      // owner (or the operator) starts it. Folder projects, other hosts and
+      // sessions without an owner keep the local merge below.
+      const prProject = meta.projectId ? projects.find((p) => p.id === meta.projectId) : undefined;
+      const asPullRequest =
+        ctx.sharedServer === true &&
+        meta.createdBy !== undefined &&
+        prProject?.origin !== undefined &&
+        parseGitHubRepo(prProject.origin) !== undefined;
+      let ownerGithubEnv: Record<string, string> = {};
+      if (asPullRequest) {
+        const user = requestUser(request.raw);
+        const permitted =
+          !!user &&
+          ((meta.createdBy !== undefined && user.id === meta.createdBy.id) ||
+            ctx.userAgentDirs?.isOperator(user) === true);
+        if (!permitted)
+          return reply.status(403).send({
+            code: "merge_forbidden",
+            outcome: "failed",
+            error:
+              "Only the person who owns this session, or the operator, can open its pull request.",
+            worktreeCommitted: false,
+          });
+        ownerGithubEnv = githubEnv(meta.createdBy, ctx.githubConnections);
+        if (!ownerGithubEnv.GH_TOKEN)
+          return reply.status(409).send({
+            code: "merge_github_missing",
+            outcome: "failed",
+            error:
+              "Connect GitHub first: the session's branch is pushed and its pull request opened with the owner's GitHub connection.",
+            worktreeCommitted: false,
+          });
+      }
 
       const worktreeDependent = index
         .list()
@@ -1411,6 +1452,36 @@ export function registerSessionRoutes(ctx: ServerContext): void {
             "stale_ownership",
             "Git no longer registers this exact worktree, branch, and project repository.",
           );
+        }
+        if (asPullRequest) {
+          // Never a merge into the server's checkout; the worktree stays for the PR.
+          const result = await openSessionPullRequest({
+            ...(meta.mergePr
+              ? { existing: { url: meta.mergePr.url, number: meta.mergePr.number } }
+              : {}),
+            sessionId: id,
+            title: meta.title,
+            worktreePath,
+            branch: worktreeBranch,
+            sourceBranch: worktreeSourceBranch,
+            base: project.defaultBranch ?? worktreeSourceBranch,
+            origin: project.origin,
+            identityEnv: ownerEnv,
+            coAuthors,
+            githubEnv: ownerGithubEnv,
+          });
+          if (result.worktreeCommitted) dropDiffCache(id);
+          if (result.pr && result.pr.number !== meta.mergePr?.number) {
+            // A new PR (the first, or the earlier one was merged or closed).
+            const mergePr = { ...result.pr, openedAt: new Date().toISOString() };
+            const live = sessions.get(id);
+            if (live) live.meta.mergePr = mergePr;
+            const latest = live?.meta ?? index.find((s) => s.id === id) ?? meta;
+            const next = { ...latest, mergePr };
+            index.upsert(next);
+            broadcast({ type: "session_meta", session: decorated(next) });
+          }
+          return reply.status(result.status).send(result.body);
         }
         try {
           await gitLocalBranchRef(project.path, worktreeSourceBranch);
