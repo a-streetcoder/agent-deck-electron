@@ -30,3 +30,7 @@ Domain tests for sessionActivity (turn open + not live = idle; parked = idle; op
 **2026-10-15T08:58:13Z**
 
 2026-10-15 implemented as cf04aa2 (sessionActivity in domain, activity on /sessions and session_meta pushes, idle-edge re-push, member chips shared with ActivityList, ?session= deep link after the first subscription, Copy link, Fork/Re-run hidden for non-owners, forkedFrom on plain forks with provenance and Activity row). Architect decisions on the developer's questions: parked stays "parked" (legible, never running); agent/system Activity rows count for the owner of their session. Contrarian + GPT review36 running.
+
+**2026-10-15T09:04:49Z**
+
+2026-10-15 contrarian on cf04aa2: nothing blocks (merge clean, status truthfulness table holds across Pi crash and VM restart). Fix before close: waiting list must not be filtered by the member chip (loop approvals vanish); REST replies without activity overwrite the computed dot (pin, draft PATCH); catchUp per session_meta push copies every projection (use the human subscriber's waiting set); deep link before the boot resume + unknown-id notice + Copy link on the shared server only; docs wording (buttons hidden, route open; needsAttention shared; forkedFrom justification); forkedFrom shape validated; aria-label with activity. Follow-ups: checkpoint rollback still shown on another member's session (same harm as Fork/Re-run); provider auto-retry gap shows idle briefly; causationId-based member attribution later.
