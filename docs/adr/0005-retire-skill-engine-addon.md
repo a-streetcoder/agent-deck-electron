@@ -1,6 +1,6 @@
 # ADR 0005 — Retire the Syncr skill-engine addon: skill writes, recoveries and git import move to TypeScript
 
-- **Status:** Accepted (2026-10-15, owner decision: "if we have too many things on that seam we can also move away from it")
+- **Status:** Accepted (2026-10-15, owner decision: "if we have too many things on that seam we can also move away from it"); **option B (vendor the Rust crate) chosen** the same day, see [Outcome](#outcome-option-b-chosen)
 - **Supersedes:** [ADR 0002](0002-consolidate-skill-engine.md) (consolidate on the shared skill engine) and the lift posture of [`docs/sync-seams.md`](../sync-seams.md)
 - **Follows:** [ADR 0004](0004-orchestration-and-collaboration-direction.md), which removed Syncr as the coordination plane but kept the addon as a code dependency
 - **Ticket:** ade-0v9e (design pass first); docs follow-up ade-dwji
@@ -51,9 +51,25 @@ for byte wherever a collection already exists. Two ways to honour this ADR:
   the native build stays (it stays for `loop-catalog-native` regardless). Event-loop blocking
   and per-user git credentials are then fixed in Rust.
 
-The owner chooses between A and B (D4). Until then D1 holds; inventory of real stores: this PC
-and the VM hold no collections and no recoveries, so compatibility is a one-time concern only
-where a collection is created later.
+Inventory of real stores: this PC and the VM hold no collections and no recoveries, so
+compatibility is a one-time concern only where a collection is created later.
+
+## Outcome: option B chosen
+
+On 2026-10-15 the owner chose **B**. The crates `skill-engine` and `skill-engine-napi` are vendored
+unchanged from Syncr tag `engine-v0.2.0` (commit `76ec7d48251beeeb5f72641cfe05f4029d946c71`,
+2026-08-27) into `packages/skill-engine-native` (`@agent-deck/skill-engine-native`; provenance in its
+`VENDORED.md`). `pnpm build:native` builds it next to `loop-catalog-native` for the same four
+targets; electron-builder ships it as an extraResource. The private registry, the `@a-streetcoder`
+scope in `.npmrc`, the CI `packages: read` permission and the `GITHUB_TOKEN` install secret are
+gone. The NAPI surface and `RESOURCE_*` codes are identical, so `EngineSkillStore` did not change.
+
+Decision points 1 and 3 are therefore met differently: the code dependency on Syncr ends, but
+storage stays in Rust behind the seam, and `docs/skill-store-contract.md` stays the live contract
+(now for the vendored crate). The first Consequence below (no native addon for skills) does not
+apply under B. Follow-ups, in Rust: move NAPI calls off the event loop, and add a git timeout
+and per-user credentials. The archaeology of the pre-engine TypeScript store (ticket ade-0v9e)
+stays on record for a later port.
 
 ## Consequences
 

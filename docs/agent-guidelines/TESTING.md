@@ -23,8 +23,9 @@ Run `pnpm test:pi` for Pi launch, protocol, streaming, tools, extensions, resour
 
 Run `pnpm test:e2e` for user-visible workflows, renderer/backend integration, preload or Electron behavior, and changes to existing end-to-end paths. Add or update focused tests near the changed behavior rather than relying only on broad suites.
 
-Skill-engine compatibility changes require the pinned real addon, not only `EngineSkillStore` fakes. Keep these guards in the affected test set:
+Skill-engine compatibility changes require the real addon built from `packages/skill-engine-native` (`pnpm build:native`), not only `EngineSkillStore` fakes. Keep these guards in the affected test set:
 
+- `cargo test --locked` in `packages/skill-engine-native` for the engine's own Rust tests.
 - `apps/server/test/skillEngineLoader.test.ts` for the direct `.node` loader and stable NAPI method surface.
 - `apps/server/test/skill-git-conflict.acceptance.test.ts` for HTTP → store → real-addon git/conflict behavior and `RESOURCE_*` mappings.
 - `apps/server/test/skill-engine-pi-roundtrip.test.ts` for engine-written bytes through Pi's real skill loader.

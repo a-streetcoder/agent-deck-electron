@@ -106,8 +106,7 @@ It expects:
   `codemeter-signing`. The job runs in the GitHub environment `release` so that one subject
   covers every `v*` tag and manual dispatch (a tag-type credential would need one entry per
   tag); GitHub creates the environment on the first run.
-- The built-in `GITHUB_TOKEN` (the workflow asks for `contents: write` and `id-token: write`);
-  optional secret `PACKAGES_READ_TOKEN` as in the other workflows, for the private package.
+- The built-in `GITHUB_TOKEN` (the workflow asks for `contents: write` and `id-token: write`).
 
 ## Installer and SmartScreen
 
