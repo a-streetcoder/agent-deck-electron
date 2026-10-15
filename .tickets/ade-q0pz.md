@@ -43,3 +43,7 @@ Each of the seven items has a regression test that fails on HEAD and passes afte
 **2026-10-15T19:58:28Z**
 
 2026-10-15 round 3 (e2f4423): snapshot capture (gitWorkTreeCommit, also checkpoints) under withoutHooks; release fetch/status/tag push/rollback hook-free on the shared server (no LFS refusal for releases: the push is leased to a commit the remote has); fetch-failure text redacted at the source; gitPushCarriesLfs scans checkout + HEAD + up to 200 outgoing commits; moves/returns of LFS checkouts refused; KEYED_SECRET extended. Round 4 sent: preflight reports lfs instead of refusing, dialog falls back to conversation-only.
+
+**2026-10-15T20:07:35Z**
+
+2026-10-15 round 4 (704c492): preflight reports lfs, dialog offers the conversation-only move, snapshot share and return refused. Final verification (review50) NOT READY: blocker = gitSharePlan status and gitWorkingTreeClean in the in-place restore can refresh the index with hooks on; should-fix = LFS range scan fails open (no upstream, >200 commits), snapshot transfers skip history/untracked LFS detection and detection errors pass, connection-string values only partly redacted, a styling assertion in the web test. Round 5 sent (attribute-aware range scan, fail-closed detection, check-attr on consented untracked files, whole-value redaction for connection strings). Reviewer's accidental server-suite run showed two return timeouts and two Windows symlink-permission failures: environmental on this machine, to be confirmed on the owner's full run.
