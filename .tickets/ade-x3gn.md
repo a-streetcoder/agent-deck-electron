@@ -1,6 +1,6 @@
 ---
 id: ade-x3gn
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-14T23:54:52Z
@@ -24,3 +24,9 @@ GUARDRAILS: worktree E:/agent-deck-wt/<ticket> on wt/<ticket>; never git checkou
 ## Acceptance Criteria
 
 Domain tests: envelope round-trip and rejection of malformed lines; splitJsonl on a torn tail; truncation helper. Server tests: append/read with afterSeq/limit/projectId; segment change at a UTC day boundary with an injected clock and a continuous cursor across files; seq restored after a restart; torn last line skipped and truncated; duplicate id ignored; second writer refused by the lock (writable=false) and a dead-pid lock taken over; subscriber ordering and no re-entrant append; files 0600 (skip the mode assertion on Windows, note it for the VM run). tsc + eslint + prettier clean in domain and server.
+
+## Notes
+
+**2026-10-15T00:21:53Z**
+
+2026-10-15 merged (wt/ade-x3gn: 91034e6, ff7f2c5, 1adae4a). Contrarian + GPT review14 rounds: heartbeat lock (pid+token, temp+link create, rename takeover, ownership-checked release, 30 s read-only retry with promotion), lenient seq recovery, atomic log.json before the lock, read-only lastSeq follows disk, append returns a discriminated result (throws only under AGENT_DECK_TEST), no ftruncate on Windows, ring holds the written line's parse, ringComplete fixed, paged bounded reads (limit cap 1,000, two segments per call, continuation cursor), POSIX permission tightening, no-op log fallback when it cannot open, close on init failure, late-bound projectOf, explicit projectId on drafts, oversized payload replaced by {truncated, originalBytes}. Tests: domain events 7, server eventLog 13 (+1 POSIX mode test for the VM). Known: a fresh lock held by a reused pid blocks promotion for up to 2.5 min; promotion keeps the boot logId; duplicate ids checked over two segments.

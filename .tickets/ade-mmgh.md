@@ -1,6 +1,6 @@
 ---
 id: ade-mmgh
-status: open
+status: in_progress
 deps: [ade-x3gn]
 links: []
 created: 2026-10-14T23:54:52Z
