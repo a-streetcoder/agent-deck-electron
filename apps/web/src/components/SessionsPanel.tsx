@@ -87,6 +87,18 @@ export function SessionRow({
   const [draft, setDraft] = useState(session.title ?? "");
   const rowRef = useRef<HTMLDivElement>(null);
   const pinControlRef = useRef<HTMLButtonElement>(null);
+  // SRV-15a: a fork shares the checkout's worktree and blocks its merge while it
+  // exists; say so when that checkout belongs to another member.
+  const checkoutOwner = useAppStore((state) => {
+    const ownerId = session.worktreeOwnerSessionId ?? (session.worktreePath ? session.id : null);
+    const owner = state.sessions.find((item) => item.id === ownerId)?.createdBy;
+    return owner && state.me && owner.id !== state.me.id ? userDisplayName(owner) : null;
+  });
+  const forkTitle = !session.piSessionFile
+    ? "Nothing to duplicate yet"
+    : checkoutOwner
+      ? `Duplicate (shares ${checkoutOwner}'s checkout and blocks its merge while it exists)`
+      : "Duplicate";
 
   const commitRename = (): void => {
     const title = draft.trim();
@@ -261,7 +273,7 @@ export function SessionRow({
         <ControlButton
           data-testid={`chat-fork-${session.id}`}
           className="rounded p-0.5 text-text-muted enabled:hover:text-text-primary disabled:opacity-30"
-          title={session.piSessionFile ? "Duplicate" : "Nothing to duplicate yet"}
+          title={forkTitle}
           disabled={!session.piSessionFile}
           onClick={(event) => {
             event.stopPropagation();

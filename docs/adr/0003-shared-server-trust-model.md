@@ -58,6 +58,8 @@ runs that host:
    Pi as Claude Code, is no longer offered or accepted, and `anthropic/*` needs an API key.
    This applies on every server, desktop and loopback included, not only on the shared host:
    the owner's instruction and the terms problem are not specific to the shared deployment.
+   _Amended 2026-10-15 (SRV-15a):_ a fork of another member's session belongs to the forker and
+   runs on the forker's credentials.
 5. **A "Linux target" for distribution may mean this headless server deploy**, not a desktop
    package. Register rows DST-05 and DST-06 are re-scoped in the DST epic, not here.
 

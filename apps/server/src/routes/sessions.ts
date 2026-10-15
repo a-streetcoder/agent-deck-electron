@@ -28,6 +28,7 @@ import {
   ownerRuntime,
   ownerTransport,
   previewLaunchModel,
+  unofferedLaunchModel,
 } from "../claudeTransport.ts";
 import { z } from "zod";
 import {
@@ -66,6 +67,12 @@ import { LaunchResourceResolutionError, resolveLaunchResources } from "../launch
 import { assembleSlashUniverseForSession } from "../slashUniverse.ts";
 
 const mergeLocks = new Set<string>();
+
+// SRV-15a: a Loop session's fork would be a writable session inside its read-only
+// review worktree (plain fork) or break the diff gateway (history fork).
+const loopSession = (meta: SessionMeta): boolean =>
+  Boolean(meta.loopReviewRunId || meta.agentName?.startsWith("Loop ·"));
+const LOOP_FORK_REFUSED = "A Loop session cannot be forked. Open its run from Loops instead.";
 
 /** The verified creator (trusted proxy), as the identity shape persisted on SessionMeta. */
 function sessionCreator(raw: IncomingMessage): UserIdentity | undefined {
@@ -312,6 +319,28 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       );
     }
     return models;
+  }
+
+  // SRV-15a: on a shared server a fork belongs to the forker, so the model it
+  // inherits must be in their catalog; refused otherwise.
+  async function forkModelRefusal(meta: SessionMeta, forker: UserIdentity | undefined) {
+    const plan = (meta.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
+    if (!forker || plan.kind === "helper") return undefined;
+    try {
+      const missing = unofferedLaunchModel(
+        ctx,
+        forker,
+        plan,
+        { cwd: meta.cwd, sessionFile: meta.piSessionFile },
+        await ownerModels(forker),
+      );
+      return (
+        missing &&
+        `This session runs on ${missing}, which your providers do not offer. Pick a model: connect its provider under Settings > Providers, or start a new session.`
+      );
+    } catch (error) {
+      return (error as Error).message;
+    }
   }
 
   fastify.get("/sessions/:id/models", async (request, reply) => {
@@ -1546,12 +1575,22 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         });
       }
       const { id } = request.params as { id: string };
+      const forker = sessionCreator(request.raw);
+      if (action === "fork") {
+        const source = sessions.get(id)?.meta ?? index.find((s) => s.id === id);
+        const refusal =
+          source &&
+          (loopSession(source) ? LOOP_FORK_REFUSED : await forkModelRefusal(source, forker));
+        if (refusal)
+          return reply.status(409).send({ code: "history_fork_refused", error: refusal });
+      }
       try {
         const result = await historyActions.run(
           id,
           parsed.data.entryId,
           action,
           action === "fork" ? forkAnnounce(request.raw, id) : undefined,
+          action === "fork" ? forker : undefined,
         );
         return reply.status(result.outcome === "forked" ? 201 : 200).send(result);
       } catch (error) {
@@ -1576,6 +1615,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const live = sessions.get(id);
     const meta = live?.meta ?? index.find((s) => s.id === id);
     if (!meta) return reply.status(404).send({ error: "unknown session" });
+    if (loopSession(meta)) return reply.status(409).send({ error: LOOP_FORK_REFUSED });
     if (!meta.piSessionFile || !existsSync(meta.piSessionFile)) {
       return reply.status(409).send({ error: "session has no history to fork yet" });
     }
@@ -1599,13 +1639,16 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     do {
       copyTo = nodePath.join(dir, `${base}-fork-${randomUUID()}${ext}`);
     } while (existsSync(copyTo));
+    // SRV-15a: on a shared server the fork belongs to the forker (their
+    // credentials); without an identity it keeps the source owner.
+    const forker = sessionCreator(request.raw);
     // PRV-01: a fork is a new session, so a refused anthropic/* model (from its
     // plan or its history) moves to the claude-bridge twin, or the fork is refused.
     let source = meta;
     const sourcePlan = (meta.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
     if (sourcePlan.kind !== "helper") {
       try {
-        const pinned = await claudeLaunchModel(ctx, meta.createdBy, sourcePlan, {
+        const pinned = await claudeLaunchModel(ctx, forker ?? meta.createdBy, sourcePlan, {
           cwd: meta.cwd,
           sessionFile: meta.piSessionFile,
         });
@@ -1614,6 +1657,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         return reply.status(409).send({ error: (error as Error).message });
       }
     }
+    const refusal = await forkModelRefusal(source, forker);
+    if (refusal) return reply.status(409).send({ error: refusal });
     try {
       const session = await sessions.fork(
         source,
@@ -1621,6 +1666,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         copyTo,
         envDefaults().env,
         forkAnnounce(request.raw, meta.id),
+        forker,
       );
       index.upsert(session.meta);
       return reply.status(201).send({ session: session.meta });

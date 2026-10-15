@@ -4,7 +4,7 @@ import path from "node:path";
 import type * as PiHost from "@agent-deck/pi-host";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import { claudeChoice, discoveredUsable } from "../src/claudeTransport.ts";
+import { claudeChoice, discoveredUsable, unofferedLaunchModel } from "../src/claudeTransport.ts";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 // The extension-discovered catalog (claude-bridge), without spawning Pi.
@@ -259,6 +259,47 @@ describe("PRV-01 launch and set_model choices", () => {
     await discover([]);
     expect(await draftModel()).toBeNull();
     writeAuth(API_KEY);
+  });
+});
+
+describe("SRV-15a the model a fork inherits", () => {
+  const catalog = [
+    { provider: "anthropic", id: "claude-x" },
+    { provider: "openrouter", id: "meta/llama" },
+  ];
+  // Every case resolves a model before Pi settings, so no context is read.
+  const unoffered = (chosen: { provider?: string; model?: string }, sessionFile?: string) =>
+    unofferedLaunchModel({} as never, undefined, chosen, { cwd: dataDir, sessionFile }, catalog);
+
+  it("names the plan's model when the catalog lacks it, ignoring the thinking suffix", () => {
+    expect(unoffered({ provider: "openai-codex", model: "gpt-5:high" })).toBe("openai-codex/gpt-5");
+    expect(unoffered({ provider: "anthropic", model: "claude-x:high" })).toBeUndefined();
+    expect(unoffered({ model: "claude-x" })).toBeUndefined();
+    expect(unoffered({ model: "openrouter/meta/llama" })).toBeUndefined();
+    expect(unoffered({ model: "meta/llama" })).toBeUndefined();
+    expect(unoffered({ model: "gpt-5" })).toBe("gpt-5");
+  });
+
+  it("falls back to the model the session file was last on", () => {
+    const file = path.join(dataDir, "srv15a-history.jsonl");
+    const at = new Date().toISOString();
+    writeFileSync(
+      file,
+      [
+        { type: "session", version: 3, id: "s", timestamp: at, cwd: dataDir },
+        {
+          type: "model_change",
+          id: "m1",
+          parentId: null,
+          timestamp: at,
+          provider: "openai-codex",
+          modelId: "gpt-5",
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n"),
+    );
+    expect(unoffered({}, file)).toBe("openai-codex/gpt-5");
   });
 });
 

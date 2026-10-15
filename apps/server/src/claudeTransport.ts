@@ -312,6 +312,30 @@ export async function claudeLaunchModel(
 }
 
 /**
+ * SRV-15a: the model a resumed launch would run on (as Pi picks it), as
+ * `provider/model`, when it is NOT in `available` (the owner's catalog);
+ * undefined when it is, or when nothing is resolvable (Pi's own fallback).
+ */
+export function unofferedLaunchModel(
+  ctx: Ctx,
+  owner: UserIdentity | undefined,
+  chosen: { provider?: string; model?: string },
+  where: { cwd: string; sessionFile?: string },
+  available: readonly { provider: string; id: string }[],
+): string | undefined {
+  const { provider, model } = launchChoice(ctx, owner, chosen, where, new Set());
+  if (!model) return undefined;
+  // A `--model` pattern may carry the `:<thinking>` suffix; a bare id may be `provider/id`.
+  const id = model.replace(/:(off|minimal|low|medium|high|xhigh)$/, "");
+  const offered = available.some((entry) =>
+    provider
+      ? entry.provider === provider && entry.id === id
+      : entry.id === id || `${entry.provider}/${entry.id}` === id,
+  );
+  return offered ? undefined : provider ? `${provider}/${id}` : id;
+}
+
+/**
  * The model a draft's launch will run on (claudeLaunchModel's choice, without
  * bridge discovery), among `available` (the owner's catalog). Null when nothing
  * is resolvable before the launch (Pi's own fallback, an unmatched bare id, a

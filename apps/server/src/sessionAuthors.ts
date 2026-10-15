@@ -104,6 +104,13 @@ export class SessionAuthorStore {
     return [...byId.values()];
   }
 
+  /** SRV-15a: a fork keeps the source's bound turns, so inherited messages keep
+   * their author. Staged, unclaimed turns stay with the source. */
+  fork(sourceSessionId: string, targetSessionId: string): void {
+    const turns = this.turns(sourceSessionId).filter((turn) => turn.claimed || turn.entryId);
+    if (turns.length > 0) this.index.upsert({ id: targetSessionId, turns });
+  }
+
   /** The session is gone (DELETE /sessions/:id): its authors go with it. */
   deleteSession(sessionId: string): void {
     this.index.remove(sessionId);
