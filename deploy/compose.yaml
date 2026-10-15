@@ -1,0 +1,71 @@
+# Agent Deck shared server (SRV-17b). Runbook: docs/remote-server-poc.md, "Install on a server".
+# Copy this file and .env.example (as .env) into one folder, fill .env, then
+# `docker compose pull && docker compose up -d`.
+#
+# The server binds 127.0.0.1 and trusts Cloudflare Access assertions only from a loopback
+# peer, so cloudflared shares its network namespace and reaches it on 127.0.0.1:4200. The
+# namespace belongs to the `net` service, so a server restart (crash, OOM) does not strand
+# cloudflared in a dead one. No port is published: the only way in is the tunnel.
+
+# Fixed project name: the volume is agent-deck_agent-deck-data whatever the folder is called.
+name: agent-deck
+
+services:
+  net:
+    # Owns the shared network namespace and does nothing else.
+    image: registry.k8s.io/pause:3.10
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+
+  agent-deck:
+    # Published by .github/workflows/server-image.yml to ghcr.io/<repository owner>; the owner
+    # here is the GitHub account of this repository (github.com/a-streetcoder/agent-deck-electron).
+    image: ghcr.io/a-streetcoder/agent-deck-server:${AGENT_DECK_IMAGE_TAG:-latest}
+    network_mode: service:net
+    env_file: ./.env
+    environment:
+      # Fixed here, overriding .env: authentication cannot be switched off from .env, and the
+      # tunnel's service URL is http://127.0.0.1:4200.
+      AGENT_DECK_TRUSTED_PROXY: cloudflare
+      PORT: "4200"
+      # .env also feeds cloudflared; keep the tunnel token out of the server and its agents.
+      TUNNEL_TOKEN: ""
+    volumes:
+      # Sessions, worktrees, per-user credentials, project clones and the home (/data/home).
+      - agent-deck-data:/data
+    # Pi bridge extensions, prompt files and skill merges go to /tmp; exec so agent builds
+    # and test binaries placed there can run. Its contents count against mem_limit.
+    tmpfs:
+      - /tmp:exec,size=1g
+    # The server writes only to /data and /tmp (HOME is /data/home).
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    # Sized for a small VM; raise both on a bigger host. cpus must not exceed the host's
+    # CPU count, or `up` fails.
+    mem_limit: 4g
+    cpus: 2
+    # Healthcheck: the image's HEALTHCHECK on /health.
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.10.1
+    # Token-based tunnel: the public hostname and its service, http://127.0.0.1:4200, are set
+    # in the Cloudflare dashboard. cloudflared reads the token from TUNNEL_TOKEN; metrics stay
+    # on loopback.
+    command: tunnel --no-autoupdate --metrics 127.0.0.1:20241 run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN in .env}
+    network_mode: service:net
+    depends_on:
+      agent-deck:
+        condition: service_healthy
+        restart: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+
+volumes:
+  agent-deck-data:

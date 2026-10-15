@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -7,6 +7,7 @@ import { claudeBridgeProviderExtensions } from "@agent-deck/pi-host";
 import { resolveBindHost } from "./bindHost.ts";
 import { isMainModule } from "./mainModule.ts";
 import { startServer } from "./server.ts";
+import { ensureStartupDirs } from "./startupDirs.ts";
 
 export { startServer, type AgentDeckServer, type StartServerOptions } from "./server.ts";
 export { SessionManager, ManagedSession, type CreateSessionOptions } from "./SessionManager.ts";
@@ -38,17 +39,9 @@ export {
 if (isMainModule(import.meta.url, process.argv[1])) {
   const port = Number(process.env.PORT ?? 4200);
 
-  // Pi's agent dir, skills, gh and git config all live under HOME. The server
-  // image puts HOME inside the data volume (/data/home); an existing volume or
-  // bind mount gets no first-mount copy of it, so create it here.
-  const home = homedir();
-  if (!existsSync(home)) {
-    try {
-      mkdirSync(home, { recursive: true, mode: 0o700 });
-    } catch (error) {
-      console.warn(`Could not create the home directory ${home}:`, error);
-    }
-  }
+  // Pi's agent dir, skills, gh and git config live under HOME (/data/home in
+  // the image); shared-project clones under AGENT_DECK_PROJECT_ROOT.
+  ensureStartupDirs(homedir(), process.env);
 
   // Claude models through the user's own Claude Code install. Done at the real
   // entry point only: embedders and tests calling startServer() stay hermetic.
@@ -74,7 +67,6 @@ if (isMainModule(import.meta.url, process.argv[1])) {
   let host: string | undefined;
   try {
     const bind = resolveBindHost(process.env);
-    for (const warning of bind.warnings) console.warn(warning);
     host = bind.host;
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);

@@ -531,6 +531,9 @@ describe("GET /fs/dirs", () => {
       );
       expect(file.status).toBe(404);
       expect((await fetch(endpoint("/fs/dirs"))).status).toBe(401);
+
+      process.env.AGENT_DECK_PROJECT_ROOT = path.join(browseRoot, "missing");
+      expect((await fetch(endpoint("/fs/dirs"), { headers: ale })).status).toBe(404);
     } finally {
       delete process.env.AGENT_DECK_PROJECT_ROOT;
       if (process.platform !== "win32") rmSync(browseRoot, { recursive: true, force: true });

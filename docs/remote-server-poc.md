@@ -14,18 +14,18 @@ prompt, and the UI shows it.
 
 Server (`apps/server`):
 
-| Variable                            | Example                                        | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ----------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AGENT_DECK_TRUSTED_PROXY`          | `cloudflare`                                   | Turns the mode on. Every HTTP request and `/rpc` upgrade must then carry a valid Access assertion (except `GET /health` and the Pi tool bridge `/bridge`, which has its own per-session token).                                                                                                                                                                                                                                                                         |
-| `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`  | `streetcoding-collective.cloudflareaccess.com` | Access team domain. Issuer is `https://<team-domain>`, JWKS is fetched from `https://<team-domain>/cdn-cgi/access/certs`.                                                                                                                                                                                                                                                                                                                                               |
-| `AGENT_DECK_CF_ACCESS_AUD`          | `<application audience tag>`                   | The Access application's AUD tag (Zero Trust dashboard, application overview).                                                                                                                                                                                                                                                                                                                                                                                          |
-| `AGENT_DECK_PUBLIC_ORIGIN`          | `https://deck.moretti.cc`                      | Browser origin accepted by the WebSocket origin guard in addition to loopback.                                                                                                                                                                                                                                                                                                                                                                                          |
-| `AGENT_DECK_PROJECT_ROOT`           | `/home/deck`                                   | Root that `GET /fs/dirs` may browse (default: the server user's home).                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `AGENT_DECK_HOST`                   | `0.0.0.0`                                      | Bind address (default `127.0.0.1`). Only loopback values (`::1` and `localhost` bind as `127.0.0.1`) or the wildcards `0.0.0.0` / `::` (dual-stack in Node) since the Pi tool bridge always calls `127.0.0.1`; a wildcard refuses to start unless `AGENT_DECK_TRUSTED_PROXY=cloudflare` or `AGENT_DECK_ALLOW_UNAUTHENTICATED_HOST=1` (local smoke tests only). A `AGENT_DECK_TRUSTED_PROXY` value other than exactly `cloudflare` logs a warning: the mode is then off. |
-| `AGENT_DECK_CF_ACCESS_JWKS_URL`     | _(unset)_                                      | Override of the JWKS URL. Tests and staging only.                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `AGENT_DECK_DESKTOP_RECOVERY_TOKEN` | _(any secret)_                                 | Pre-existing. Set the same value on the VM and in the desktop launcher so the shell's "reveal" calls are accepted.                                                                                                                                                                                                                                                                                                                                                      |
-| `AGENT_DECK_OPERATOR_EMAIL`         | `operator@example.com`                         | The Access email whose sessions keep using the shared `~/.pi/agent` (see [Credentials](#credentials)). Unset: every user, the operator included, gets an own agent dir.                                                                                                                                                                                                                                                                                                 |
-| `AGENT_DECK_GITHUB_CLIENT_ID`       | `Ov23li...`                                    | GitHub OAuth App client id for per-user GitHub connections (see [GitHub](#github-connection)). Unset: connecting answers 409 "GitHub app not configured".                                                                                                                                                                                                                                                                                                               |
+| Variable                            | Example                                        | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AGENT_DECK_TRUSTED_PROXY`          | `cloudflare`                                   | Turns the mode on. Every HTTP request and `/rpc` upgrade must then carry a valid Access assertion (except `GET /health` and the Pi tool bridge `/bridge`, which has its own per-session token).                                                                                                                                                                                                                                                                                                |
+| `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`  | `streetcoding-collective.cloudflareaccess.com` | Access team domain. Issuer is `https://<team-domain>`, JWKS is fetched from `https://<team-domain>/cdn-cgi/access/certs`.                                                                                                                                                                                                                                                                                                                                                                      |
+| `AGENT_DECK_CF_ACCESS_AUD`          | `<application audience tag>`                   | The Access application's AUD tag (Zero Trust dashboard, application overview).                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `AGENT_DECK_PUBLIC_ORIGIN`          | `https://deck.moretti.cc`                      | Browser origin accepted by the WebSocket origin guard in addition to loopback.                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `AGENT_DECK_PROJECT_ROOT`           | `/home/deck`                                   | Root that `GET /fs/dirs` may browse (default: the server user's home).                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `AGENT_DECK_HOST`                   | `0.0.0.0`                                      | Bind address (default `127.0.0.1`). Only loopback values (`::1` and `localhost` bind as `127.0.0.1`) or the wildcards `0.0.0.0` / `::` (dual-stack in Node) since the Pi tool bridge always calls `127.0.0.1`; a wildcard refuses to start unless `AGENT_DECK_TRUSTED_PROXY=cloudflare` or `AGENT_DECK_ALLOW_UNAUTHENTICATED_HOST=1` (local smoke tests only). A non-empty `AGENT_DECK_TRUSTED_PROXY` other than exactly `cloudflare` refuses to start (a typo would turn authentication off). |
+| `AGENT_DECK_CF_ACCESS_JWKS_URL`     | _(unset)_                                      | Override of the JWKS URL. Tests and staging only.                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `AGENT_DECK_DESKTOP_RECOVERY_TOKEN` | _(any secret)_                                 | Pre-existing. Set the same value on the VM and in the desktop launcher so the shell's "reveal" calls are accepted.                                                                                                                                                                                                                                                                                                                                                                             |
+| `AGENT_DECK_OPERATOR_EMAIL`         | `operator@example.com`                         | The Access email whose sessions keep using the shared `~/.pi/agent` (see [Credentials](#credentials)). Unset: every user, the operator included, gets an own agent dir.                                                                                                                                                                                                                                                                                                                        |
+| `AGENT_DECK_GITHUB_CLIENT_ID`       | `Ov23li...`                                    | GitHub OAuth App client id for per-user GitHub connections (see [GitHub](#github-connection)). Unset: connecting answers 409 "GitHub app not configured".                                                                                                                                                                                                                                                                                                                                      |
 
 Desktop (`apps/desktop/main.js`):
 
@@ -69,7 +69,133 @@ unchanged and mutually exclusive with `AGENT_DECK_REMOTE_SERVER_URL`.
   terminals and project-level commits from the Git panel are unchanged. A session without
   `createdBy` (no trusted proxy) keeps the machine's git config.
 
-## VM setup (Linux, shared OS user)
+## Install on a server
+
+The shared server is the published image ([Container image](#container-image)) run by Docker
+Compose from [`deploy/compose.yaml`](../deploy/compose.yaml) with a `cloudflared` sidecar. The
+server binds `127.0.0.1` and trusts Access assertions only from a loopback peer, so `cloudflared`
+shares the server container's network namespace (`network_mode: service:net` on both) and reaches
+it on `127.0.0.1:4200`; the namespace belongs to a placeholder `net` service (the `pause` image), so
+a server restart does not strand `cloudflared`. No port is published on the host: the only way in
+is the tunnel.
+
+### Prerequisites
+
+Created once:
+
+- A Linux x64 host with Docker Engine and the Compose plugin (`docker compose version`, 2.17 or
+  later), and outbound access: https (443) to GHCR, Cloudflare, GitHub and the model providers, and
+  port 7844 (UDP for QUIC, or TCP) to Cloudflare for the tunnel.
+- A published release: the image exists on GHCR only after the first `v*` tag (a manual run of
+  the workflow publishes `sha-<short>` only). The package is private by default: either make it
+  public (GitHub, the package's settings), or run `docker login ghcr.io` on the host with a token
+  that has `read:packages`.
+- A Cloudflare tunnel created in the dashboard (Zero Trust > Networks > Tunnels > Create, type
+  Cloudflared). Copy its token (the `--token` value of the install command) for `TUNNEL_TOKEN`, and
+  add a public hostname (for example `deck.example.com`) with service `http://127.0.0.1:4200`.
+  Use `127.0.0.1`, not `localhost`: the server does not listen on `::1`.
+- GitHub as an Access login method (Zero Trust > Settings > Authentication), which needs its own
+  GitHub OAuth App with callback URL `https://<team>.cloudflareaccess.com/cdn-cgi/access/callback`
+  and a client secret. Then an Access self-hosted application for the hostname with a policy listing
+  the allowed emails. Note the team domain (`<team>.cloudflareaccess.com`) and the application's
+  AUD tag.
+- A second GitHub OAuth App, with device flow enabled, for per-user GitHub connections; note its
+  client id (see [GitHub connection](#github-connection)).
+
+### Install
+
+1. Copy `deploy/compose.yaml` and `deploy/.env.example` into a folder on the host, for example
+   `~/agent-deck/`, and rename the template to `.env` (`chmod 600 .env`: it holds secrets).
+2. Fill `.env`. Every variable has a one-line comment there. `AGENT_DECK_TRUSTED_PROXY=cloudflare`
+   and `PORT=4200` are fixed in `compose.yaml`, so authentication cannot be switched off from
+   `.env`. `cpus` in `compose.yaml` must not exceed the host's CPU count (`nproc`).
+3. Start it:
+
+   ```sh
+   docker compose pull
+   docker compose up -d
+   docker compose ps      # agent-deck "healthy", cloudflared "running"
+   ```
+
+4. One-off setup inside the container (it persists in the volume; the server creates
+   `AGENT_DECK_PROJECT_ROOT` itself):
+
+   ```sh
+   docker compose exec agent-deck git config --global user.name "Agent Deck"
+   docker compose exec agent-deck git config --global user.email "agent-deck@example.com"
+   ```
+
+   The git identity is for sessions without an owner; owned sessions commit as their owner. For
+   `git@` remotes copy a key into `/data/home/.ssh` as the server user, so it is owned by
+   `agentdeck` with mode 600 in a 700 folder (root in the container has no capabilities to fix
+   ownership later):
+
+   ```sh
+   docker compose exec -T agent-deck sh -c 'umask 077 && mkdir -p ~/.ssh && cat > ~/.ssh/id_ed25519' < ./id_ed25519
+   docker compose exec agent-deck sh -c 'ssh-keyscan github.com >> ~/.ssh/known_hosts'
+   ```
+
+   Or use https with each user's GitHub connection, or `docker compose exec agent-deck gh auth login`.
+
+5. Open the public URL: Access asks for the GitHub login, then the UI loads; `/me` shows your
+   identity. Each user signs in to model providers under Settings > Providers.
+
+### Upgrade and rollback
+
+Back up the volume first (below): a newer version may migrate the data in a way an older one does
+not read.
+
+To upgrade, set `AGENT_DECK_IMAGE_TAG` in `.env` to the new version, then:
+
+```sh
+docker compose pull && docker compose up -d
+```
+
+To roll back, set `AGENT_DECK_IMAGE_TAG` in `.env` to the previous version and run
+`docker compose up -d` again (restore the backup if the newer version changed the data). Pin
+`AGENT_DECK_IMAGE_TAG` rather than running `latest`, so you always know which version to go back
+to. If `cloudflared` ever loses the server (Cloudflare 502 while `agent-deck` is healthy), recreate
+the stack: `docker compose up -d --force-recreate`.
+
+### Backup and restore
+
+All state is in the named volume `agent-deck-data`, mounted at `/data`: the session index and
+server state, session worktrees, per-user Pi agent dirs and GitHub tokens (`users/`), project clones
+(`projects/`) and the home (`home/`: Pi transcripts, settings, skills, `gh` login, `.gitconfig`,
+`.ssh`). See the volume table under [Container image](#container-image). Compose prefixes the
+volume with the project name, fixed to `agent-deck` in `compose.yaml`: the volume is
+`agent-deck_agent-deck-data`.
+
+```sh
+docker compose stop
+docker run --rm -v agent-deck_agent-deck-data:/data -v "$PWD":/backup debian:bookworm-slim \
+  sh -c "umask 077 && tar czf /backup/agent-deck-data-$(date +%F).tgz -C /data ."
+docker compose start
+```
+
+Restore into an empty `/data`, with the stack stopped, so no file of the current state is left
+mixed with the backup:
+
+```sh
+docker compose down                          # removes the containers, keeps the volume
+docker run --rm -v agent-deck_agent-deck-data:/data -v "$PWD":/backup debian:bookworm-slim \
+  sh -c "find /data -mindepth 1 -delete && tar xzf /backup/agent-deck-data-<date>.tgz -C /data"
+docker compose up -d
+```
+
+The archive holds every user's credentials: store it like a secret.
+
+### Logs
+
+```sh
+docker compose logs -f agent-deck
+docker compose logs -f cloudflared    # "Registered tunnel connection" lines = healthy
+docker compose exec agent-deck node -e "fetch('http://127.0.0.1:4200/health').then(r=>r.text()).then(console.log)"
+```
+
+## Legacy: source checkout on the VM
+
+How the VM ran before the container package; 17c (ade-siqi) retires it.
 
 Checkout and dependencies as in the development guide (`pnpm install`, `pnpm build:native`,
 `pnpm build:web` so the server serves the UI). Then two **user** services.
@@ -229,6 +355,9 @@ generic setup above in two places: the checkout is `~/ai-playground/a-streetcodi
   they use whatever `gh auth login` or git credentials the VM has.
 
 ### Dev loop and deploy
+
+A server installed from the image upgrades as in [Install on a server](#upgrade-and-rollback);
+what follows is the legacy source-checkout loop.
 
 Syncthing mirrors saves from the PC checkout to the VM checkout in about 5–15 s; `.git` metadata
 lags by minutes, so never run git on the VM copy. `node_modules` are not synced.
@@ -640,15 +769,9 @@ agent can read every token, so this is attribution, not an authorization boundar
   user tokens expire after 8 hours and this server does not refresh them): github.com,
   Settings > Developer settings > OAuth Apps > New OAuth App (an organization's OAuth App works
   too), any homepage and callback URL (the device flow does not use the callback), then tick
-  **Enable Device Flow**. No client secret is needed. Put the client id in the systemd drop-in
-  and restart:
-
-  ```ini
-  # ~/.config/systemd/user/agent-deck-server.service.d/remote.conf
-  Environment=AGENT_DECK_GITHUB_CLIENT_ID=<client id>
-  ```
-
-  `systemctl --user daemon-reload && systemctl --user restart agent-deck-server`. For an
+  **Enable Device Flow**. No client secret is needed. Put the client id in `.env` as
+  `AGENT_DECK_GITHUB_CLIENT_ID=<client id>` and run `docker compose up -d` (see
+  [Install on a server](#install-on-a-server)). For an
   organization that restricts OAuth Apps, an org owner must also approve the app.
 
 - **Device flow.** Settings > Providers > GitHub > Connect calls `POST /runtime/github/connect`,
@@ -1064,7 +1187,8 @@ curl -s http://127.0.0.1:4299/projects    # {"projects":[]}
 docker stop ad-test
 ```
 
-For the Compose setup (SRV-17b):
+What any other way of running the image must keep (`deploy/compose.yaml`, see
+[Install on a server](#install-on-a-server), does all of it):
 
 - Compose must run `cloudflared` in the server's network namespace (`network_mode: service:<server>`)
   or use host networking: the server binds loopback and trusts only loopback peers, so it cannot be
