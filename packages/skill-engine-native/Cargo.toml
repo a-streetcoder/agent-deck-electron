@@ -10,6 +10,7 @@ name = "skill-engine-napi"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88.0"
+license = "MIT"
 publish = false
 description = "NAPI binding for the vendored skill engine — implements agent-deck's SkillStore seam."
 
