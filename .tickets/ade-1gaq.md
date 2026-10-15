@@ -1,6 +1,6 @@
 ---
 id: ade-1gaq
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-10-15T18:49:40Z
@@ -21,3 +21,9 @@ AppSettings.analyticsEnabled: boolean (default true) + PATCH /settings {analytic
 
 With a key set and analyticsEnabled true, a unit test with a fake transport asserts the exact payload of session_created contains only {provider, model, appVersion, platform} and the distinct_id is the install id; with analyticsEnabled false or on the shared server or NODE_ENV=test, zero requests; the allow-list test shows a path-like value is dropped; the switch persists through PATCH /settings; the first-run notice shows once; docs list every event and field; pnpm lint and the design-system check pass; single test files only on this machine.
 
+
+## Notes
+
+**2026-10-15T18:56:26Z**
+
+2026-10-15 owner approved (exact word) with the default-on + one-time notice + opt-out scope. Dispatched to a developer in worktree E:\agent-deck-wt\ade-1gaq (wt/ade-1gaq).
