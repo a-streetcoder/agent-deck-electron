@@ -276,7 +276,7 @@ describe("managed_subagent{agent}: named delegation", () => {
     expect(childSystem).toContain(
       "Effective outcome: Direct project work in the current child working directory",
     );
-    expect(childSystem).toContain("actual project checkout");
+    expect(childSystem).toContain("checkout or isolated worktree");
     expect(childSystem).toContain("does not grant any additional tool");
     expect(childSystem).toContain("# Named agent output advisory");
     expect(childSystem).toContain('Configured output: "Concise quoted review summary"');
@@ -591,7 +591,9 @@ describe("managed_subagent{agent}: named delegation", () => {
     });
     expect(disabled.status).toBe(200);
     try {
-      const parentRequestsBefore = mock.requests.length;
+      // Identity, not a global tally (b33398f): async title helpers of earlier
+      // sessions can land requests here; none may carry this agent's persona.
+      const requestsBefore = mock.requests.length;
       const parent = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -599,14 +601,15 @@ describe("managed_subagent{agent}: named delegation", () => {
       });
       expect(parent.status).toBe(409);
       expect(await parent.text()).toContain("review-checklist");
-      expect(mock.requests).toHaveLength(parentRequestsBefore);
-
       const id = await startSession();
-      const childRequestsBefore = mock.requests.filter(isChildRequest).length;
       await expect(
         server.sessions.get(id)!.runChildAgent("Review the diff.", "reviewer-bot"),
       ).rejects.toThrow(/review-checklist.*disabled/i);
-      expect(mock.requests.filter(isChildRequest)).toHaveLength(childRequestsBefore);
+      expect(
+        mock.requests
+          .slice(requestsBefore)
+          .filter((item) => systemText(item).includes(PERSONA_SENTINEL)),
+      ).toEqual([]);
     } finally {
       await fetch(`http://127.0.0.1:${server.port}/settings`, {
         method: "PATCH",

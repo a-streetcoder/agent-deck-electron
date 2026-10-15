@@ -15,7 +15,7 @@ import path from "node:path";
 import { cwd } from "node:process";
 import { type LoopChildRecord, type LoopDefinition } from "@agent-deck/domain";
 import { describe, expect, it, vi } from "vitest";
-import { LoopEngine, runValidationCommand } from "../src/loopEngine.ts";
+import { LoopEngine, loopRoleLaunchDefaults, runValidationCommand } from "../src/loopEngine.ts";
 
 /**
  * Loop engine control flow, hermetic: the agent executor is injected (no pi),
@@ -42,6 +42,39 @@ function makeLoop(overrides: Partial<LoopDefinition> = {}): LoopDefinition {
     launchContextScope: overrides.launchContextScope ?? "firstIterationOnly",
   };
 }
+
+describe("loop role launch defaults", () => {
+  it("lets makers and stages edit a checkout while judges stay report-only", () => {
+    for (const target of ["currentCheckout", "newWorktree"] as const) {
+      for (const phase of ["maker", "stage"] as const) {
+        expect(loopRoleLaunchDefaults(phase, target)).toEqual({
+          toolPolicy: "configured",
+          defaultExpectedOutcome: "directProjectWrites",
+        });
+      }
+      expect(loopRoleLaunchDefaults("checker", target)).toEqual({
+        toolPolicy: "readOnly",
+        defaultExpectedOutcome: "reportOnly",
+      });
+      expect(loopRoleLaunchDefaults("evaluator", target)).toEqual({
+        toolPolicy: "none",
+        defaultExpectedOutcome: "reportOnly",
+      });
+      // Triage reads by default; editing needs an explicit `tools:` list.
+      expect(loopRoleLaunchDefaults("triage", target)).toEqual({
+        toolPolicy: "configured",
+        defaultExpectedOutcome: "reportOnly",
+        defaultTools: ["read", "grep", "find", "ls"],
+      });
+    }
+    for (const phase of ["maker", "stage", "branch"] as const) {
+      expect(loopRoleLaunchDefaults(phase, "artifactMarkdown")).toEqual({
+        toolPolicy: "readOnly",
+        defaultExpectedOutcome: "reportOnly",
+      });
+    }
+  });
+});
 
 describe("Loop worktree decision recovery", () => {
   it("converts an in-flight apply to uncertain on restart and never retries it", async () => {

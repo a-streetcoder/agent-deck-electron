@@ -687,7 +687,7 @@ export function managedNamedOutcomeContract(
         "Effective outcome: Direct project work in the current child working directory.",
         hasRetainedWorktree
           ? "The current child working directory is a retained isolated worktree, so any configured file tools operate there rather than in the parent checkout."
-          : "The current child working directory is the run's actual project checkout.",
+          : "The current child working directory is the run's checkout or isolated worktree.",
         "Use only the tools already configured for this named agent; this outcome does not grant any additional tool or filesystem capability. Keep changes within the delegated task and list changed paths in the final response.",
       );
       break;
@@ -718,15 +718,19 @@ export function resolveChildTools(
   toolPolicy: ChildToolPolicy | undefined,
   bridgeToolNames: readonly string[] = [],
 ): string[] | undefined {
-  // No authored allowlist means Pi defaults. Generated extension tools remain
+  // No authored allowlist means Pi defaults, for managed children and loop
+  // makers/stages alike ("configured"). Generated extension tools remain
   // available under those defaults without inventing a restrictive allowlist.
-  if (configured === undefined && toolPolicy === undefined) return undefined;
+  // A read-only role without an allowlist gets the read-only built-ins.
+  // Returning undefined drops bridgeToolNames; no "configured" caller has a bridge.
+  if (configured === undefined && (toolPolicy === undefined || toolPolicy === "configured"))
+    return undefined;
   const allowed = configured?.filter((tool) => !CHILD_FORBIDDEN_TOOLS.has(tool));
   const tools =
     toolPolicy === "none"
       ? []
       : toolPolicy === "readOnly"
-        ? (allowed ?? []).filter((tool) => CHILD_READ_ONLY_TOOLS.has(tool))
+        ? (allowed ?? [...CHILD_READ_ONLY_TOOLS]).filter((tool) => CHILD_READ_ONLY_TOOLS.has(tool))
         : (allowed ?? []);
   return [...new Set([...tools, ...bridgeToolNames])];
 }
@@ -2043,6 +2047,11 @@ export interface ChildLaunchOverrides {
   provider?: string;
   model?: string;
   thinking?: ThinkingLevel;
+  /** Outcome used when the named agent authors no `defaultExpectedOutcome`
+   * (loop makers/stages); managed_subagent omits it and keeps `reportOnly`. */
+  defaultExpectedOutcome?: SubagentExpectedOutcome;
+  /** Tool list used when the named agent has no `tools:` frontmatter (loop triage). */
+  defaultTools?: string[];
 }
 
 export interface ChildRunOptions {
@@ -2184,7 +2193,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
     });
     const outcomeContract = resolved
       ? `\n\n${managedNamedOutcomeContract(
-          resolved.defaultExpectedOutcome ?? "reportOnly",
+          resolved.defaultExpectedOutcome ?? overrides?.defaultExpectedOutcome ?? "reportOnly",
           runOptions?.worktree === true,
         )}`
       : "";
@@ -2482,7 +2491,11 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
         const childTools =
           runOptions?.worktree && !resolved
             ? [...new Set([...ANONYMOUS_WORKTREE_TOOLS, ...(childBridge?.toolNames ?? [])])]
-            : resolveChildTools(resolved?.tools, toolPolicy, childBridge?.toolNames);
+            : resolveChildTools(
+                resolved?.tools ?? overrides?.defaultTools,
+                toolPolicy,
+                childBridge?.toolNames,
+              );
 
         // Read Pi, not the frozen launch plan: picker changes, restored sessions,
         // and Pi-selected defaults all live here. Keep this inside the child scope

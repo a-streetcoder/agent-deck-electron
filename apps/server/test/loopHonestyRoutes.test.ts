@@ -604,6 +604,7 @@ describe("loop route honesty gate", () => {
       provider: "provider-b",
       model: "shared-model",
       thinking: undefined,
+      defaultExpectedOutcome: "reportOnly",
     });
   });
 
@@ -658,6 +659,7 @@ describe("loop route honesty gate", () => {
       provider: "claude-bridge",
       model: "claude-m",
       thinking: undefined,
+      defaultExpectedOutcome: "reportOnly",
     });
   });
 
@@ -1194,6 +1196,7 @@ describe("loop route honesty gate", () => {
       "triage-Artifact Triage",
       "Configured Explorer",
       "readOnly",
+      expect.objectContaining({ defaultExpectedOutcome: "reportOnly" }),
     );
     expect(runSubagent).toHaveBeenNthCalledWith(
       3,
@@ -1201,6 +1204,10 @@ describe("loop route honesty gate", () => {
       "triage-Checkout Triage",
       "Configured Explorer",
       "configured",
+      expect.objectContaining({
+        defaultExpectedOutcome: "reportOnly",
+        defaultTools: ["read", "grep", "find", "ls"],
+      }),
     );
     expect(runSubagent).toHaveBeenNthCalledWith(
       5,
@@ -1208,6 +1215,10 @@ describe("loop route honesty gate", () => {
       "triage-Worktree Triage",
       "Configured Explorer",
       "configured",
+      expect.objectContaining({
+        defaultExpectedOutcome: "reportOnly",
+        defaultTools: ["read", "grep", "find", "ls"],
+      }),
     );
     expect(runSubagent.mock.calls.filter((call) => call[3] === "none")).toHaveLength(3);
     expect(createLoopWorktree).toHaveBeenCalledOnce();
@@ -1316,13 +1327,21 @@ describe("loop route honesty gate", () => {
     });
     await options.executeRole({ prompt: "branch", agentName: "A", phase: "branch" });
     await options.executeRole({ prompt: "evaluate", phase: "evaluator" });
-    expect(runSubagent).toHaveBeenNthCalledWith(1, "parallel-parent", "branch", "A", "readOnly");
+    expect(runSubagent).toHaveBeenNthCalledWith(
+      1,
+      "parallel-parent",
+      "branch",
+      "A",
+      "readOnly",
+      expect.objectContaining({ defaultExpectedOutcome: "reportOnly" }),
+    );
     expect(runSubagent).toHaveBeenNthCalledWith(
       2,
       "parallel-parent",
       "evaluate",
       undefined,
       "none",
+      expect.objectContaining({ defaultExpectedOutcome: "reportOnly" }),
     );
     expect(createLoopWorktree).not.toHaveBeenCalled();
   });
@@ -1384,13 +1403,21 @@ describe("loop route honesty gate", () => {
     const artifactOptions = startEngine.mock.calls[0]![2];
     await artifactOptions.executeRole({ prompt: "stage", agentName: "A", phase: "stage" });
     await artifactOptions.executeRole({ prompt: "evaluate", phase: "evaluator" });
-    expect(runSubagent).toHaveBeenNthCalledWith(1, "pipeline-parent-1", "stage", "A", "readOnly");
+    expect(runSubagent).toHaveBeenNthCalledWith(
+      1,
+      "pipeline-parent-1",
+      "stage",
+      "A",
+      "readOnly",
+      expect.objectContaining({ defaultExpectedOutcome: "reportOnly" }),
+    );
     expect(runSubagent).toHaveBeenNthCalledWith(
       2,
       "pipeline-parent-1",
       "evaluate",
       undefined,
       "none",
+      expect.objectContaining({ defaultExpectedOutcome: "reportOnly" }),
     );
 
     const checkout = await fastify.inject({
@@ -1401,7 +1428,14 @@ describe("loop route honesty gate", () => {
     expect(checkout.statusCode).toBe(201);
     const checkoutOptions = startEngine.mock.calls[1]![2];
     await checkoutOptions.executeRole({ prompt: "stage", agentName: "B", phase: "stage" });
-    expect(runSubagent).toHaveBeenNthCalledWith(3, "pipeline-parent-2", "stage", "B", "configured");
+    expect(runSubagent).toHaveBeenNthCalledWith(
+      3,
+      "pipeline-parent-2",
+      "stage",
+      "B",
+      "configured",
+      expect.objectContaining({ defaultExpectedOutcome: "directProjectWrites" }),
+    );
   });
 
   it("rejects concurrent current-checkout runs before a second Pi allocation and releases after cleanup", async () => {

@@ -59,6 +59,7 @@ import {
   ownerRuntime,
   ownerTransport,
 } from "../claudeTransport.ts";
+import { loopRoleLaunchDefaults } from "../loopEngine.ts";
 
 export function canonicalCheckoutLockKey(
   candidate: string,
@@ -872,25 +873,17 @@ export function registerLoopRoutes(
           thinking,
         }) => {
           const { provider, modelId: model } = await roleModel(asked, askedModel);
-          const toolPolicy =
-            phase === "evaluator"
-              ? "none"
-              : phase === "checker" || loop.writeTarget === "artifactMarkdown"
-                ? "readOnly"
-                : "configured";
-          const overrides =
-            provider || model || thinking
-              ? { provider, model, thinking: thinking as ThinkingLevel | undefined }
-              : undefined;
-          return overrides
-            ? sessions.runSubagent(
-                parent!.meta.id,
-                prompt,
-                agentName || undefined,
-                toolPolicy,
-                overrides,
-              )
-            : sessions.runSubagent(parent!.meta.id, prompt, agentName || undefined, toolPolicy);
+          const { toolPolicy, defaultExpectedOutcome, defaultTools } = loopRoleLaunchDefaults(
+            phase,
+            loop.writeTarget,
+          );
+          return sessions.runSubagent(parent!.meta.id, prompt, agentName || undefined, toolPolicy, {
+            provider,
+            model,
+            thinking: thinking as ThinkingLevel | undefined,
+            defaultExpectedOutcome,
+            ...(defaultTools ? { defaultTools } : {}),
+          });
         },
         cancel: () => sessions.destroy(parent!.meta.id),
       });

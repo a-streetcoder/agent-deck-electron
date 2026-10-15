@@ -680,7 +680,8 @@ async function initServer(
         mcpServers: agent.mcpServers,
         skillDirs: agent.skillDirs,
         defaultReads: agent.defaultReads,
-        defaultExpectedOutcome: agent.defaultExpectedOutcome ?? "reportOnly",
+        // Unset stays unset: the child launch picks the role default.
+        defaultExpectedOutcome: agent.defaultExpectedOutcome,
         output: agent.output,
         extensions: agent.extensions,
       };
@@ -891,7 +892,7 @@ async function initServer(
         extensions: enabledExtensionPaths(projectId, agent.extensions),
         mcpServers: agent.mcpServers ?? [],
         defaultReads: agent.defaultReads,
-        defaultExpectedOutcome: agent.defaultExpectedOutcome ?? "reportOnly",
+        defaultExpectedOutcome: agent.defaultExpectedOutcome,
         output: agent.output,
       },
     };
