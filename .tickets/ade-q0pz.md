@@ -39,3 +39,7 @@ Each of the seven items has a regression test that fails on HEAD and passes afte
 **2026-10-15T19:48:54Z**
 
 2026-10-15 round 2 (fb9c637) verified by GPT (review49): cleanup hooks, tokenless push, remote guard order and resource test check out; NOT READY: new blocker = the snapshot capture (temporary index read-tree/add) still runs hooks; should-fix = release push/rollback hook-enabled on the shared server, synchronization.blocker.message unredacted, LFS check only on the current checkout and bypassed by transfer pushes, KEYED_SECRET not extended like SECRET_KEY. Fix round 3 sent.
+
+**2026-10-15T19:58:28Z**
+
+2026-10-15 round 3 (e2f4423): snapshot capture (gitWorkTreeCommit, also checkpoints) under withoutHooks; release fetch/status/tag push/rollback hook-free on the shared server (no LFS refusal for releases: the push is leased to a commit the remote has); fetch-failure text redacted at the source; gitPushCarriesLfs scans checkout + HEAD + up to 200 outgoing commits; moves/returns of LFS checkouts refused; KEYED_SECRET extended. Round 4 sent: preflight reports lfs instead of refusing, dialog falls back to conversation-only.
