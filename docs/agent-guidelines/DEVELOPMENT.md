@@ -11,6 +11,8 @@ pnpm build
 
 `pnpm dev` runs the normal full-stack loop: Vite hot-reloads renderer changes, the server restarts under `node --watch` with the tsx loader, and Electron restarts for main-process or preload changes.
 
+Server warnings and errors go through `apps/server/src/serverLog.ts` (fastify runs with `logger: false`) as one `[scope]` line on stderr: the terminal locally, `journalctl --user -u agent-deck-server` on the VM. Set `AGENT_DECK_DEBUG=1` to add stacks.
+
 Useful focused commands:
 
 ```sh

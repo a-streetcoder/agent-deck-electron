@@ -12,6 +12,7 @@ import { SubagentArtifactCapabilityError } from "@agent-deck/loop-catalog-native
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { LaunchPlan } from "@agent-deck/pi-host";
 import type { IncomingMessage } from "node:http";
+import { serverLog } from "../serverLog.ts";
 import { createSessionDraftGateway } from "../sessionDrafts.ts";
 import { requestUser } from "../trustedProxy.ts";
 import { userActor } from "../eventProducers.ts";
@@ -203,7 +204,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
             error: "The child session evidence could not be safely revalidated.",
           });
         }
-        request.log.warn({ err: error, runId }, "child transcript reconstruction failed");
+        serverLog.warn("sessions", `child transcript reconstruction failed (run ${runId})`, error);
         return reply.status(502).send({
           code: "SUBAGENT_TRANSCRIPT_READER_FAILED",
           error:
@@ -1554,7 +1555,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
             .status(error.code === "history_source_missing" ? 404 : 409)
             .send({ code: error.code, error: error.message });
         }
-        request.log.warn({ err: error, sessionId: id, action }, "history action failed");
+        serverLog.warn("sessions", `history action ${action} failed (session ${id})`, error);
         return reply.status(500).send({
           code: "history_failed",
           error: "The history action failed. Reopen the session and try again.",
@@ -1739,9 +1740,10 @@ export function registerSessionRoutes(ctx: ServerContext): void {
               .deleteWorktree(target, reservationIdentity)
               .then(() => true)
               .catch((cleanupError) => {
-                fastify.log.warn(
-                  { err: cleanupError },
+                serverLog.warn(
+                  "sessions",
                   "failed to clean reserved session worktree",
+                  cleanupError,
                 );
                 return false;
               })
@@ -1787,9 +1789,10 @@ export function registerSessionRoutes(ctx: ServerContext): void {
           .deleteWorktree(worktree.path, worktree.identityToken!)
           .then(() => true)
           .catch((cleanupError) => {
-            fastify.log.warn(
-              { err: cleanupError },
+            serverLog.warn(
+              "sessions",
               "failed to clean session worktree after resource preflight",
+              cleanupError,
             );
             return false;
           });
@@ -1875,18 +1878,20 @@ export function registerSessionRoutes(ctx: ServerContext): void {
           .deleteWorktree(worktree.path, worktree.identityToken!)
           .then(() => true)
           .catch((cleanupError) => {
-            fastify.log.warn(
-              { err: cleanupError },
+            serverLog.warn(
+              "sessions",
               "failed to remove session worktree after startup",
+              cleanupError,
             );
             return false;
           });
         if (physicallyRemoved) {
           await gitWorktreePrune(project.path).catch(() => {});
           await gitDeleteOwnedWorktreeBranch(project.path, worktree).catch((cleanupError) => {
-            fastify.log.warn(
-              { err: cleanupError, branch: worktree?.branch },
-              "failed to remove generated session branch after startup",
+            serverLog.warn(
+              "sessions",
+              `failed to remove generated session branch after startup ${worktree?.branch}`,
+              cleanupError,
             );
           });
         }

@@ -46,6 +46,7 @@ import {
   type GitWorktree,
   type OwnedLoopWorktreeProof,
 } from "../git.ts";
+import { serverLog } from "../serverLog.ts";
 import { SessionCreationError } from "../SessionManager.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
 import { finalizeExtensions } from "./shared.ts";
@@ -327,7 +328,7 @@ export function registerLoopRoutes(
         bridgeTokens.delete(launch.sessionId);
         loopEngine.markSessionReconciled(run.id);
       } catch (error) {
-        fastify.log.warn({ err: error, runId: run.id }, "failed to reconcile Loop parent session");
+        serverLog.warn("loops", `failed to reconcile Loop parent session (run ${run.id})`, error);
       }
     }
   });
@@ -899,7 +900,7 @@ export function registerLoopRoutes(
         // The normal settled-finally path is installed only after announcement
         // succeeds below, so rollback remains exactly once.
         await loopEngine.settled(run.id).catch((cleanupError) => {
-          fastify.log.warn({ err: cleanupError }, "failed waiting for Loop startup rollback");
+          serverLog.warn("loops", "failed waiting for Loop startup rollback", cleanupError);
         });
         loopEngine.rollbackStart(run.id);
       }
@@ -950,7 +951,7 @@ export function registerLoopRoutes(
             : undefined,
         );
       } catch (auditError) {
-        fastify.log.error({ err: auditError }, "failed to persist Loop startup failure audit");
+        serverLog.error("loops", "failed to persist Loop startup failure audit", auditError);
       }
       return reply.status(500).send({
         code: "loop_start_failed",
@@ -966,7 +967,7 @@ export function registerLoopRoutes(
         bridgeTokens.delete(parent.meta.id);
         loopEngine.markSessionReconciled(run.id);
       } catch (cleanupError) {
-        fastify.log.warn({ err: cleanupError }, "failed to reconcile settled Loop parent");
+        serverLog.warn("loops", "failed to reconcile settled Loop parent", cleanupError);
       } finally {
         stopSnapshotTracking?.();
         releaseCheckoutLock();
