@@ -47,3 +47,7 @@ Each of the seven items has a regression test that fails on HEAD and passes afte
 **2026-10-15T20:07:35Z**
 
 2026-10-15 round 4 (704c492): preflight reports lfs, dialog offers the conversation-only move, snapshot share and return refused. Final verification (review50) NOT READY: blocker = gitSharePlan status and gitWorkingTreeClean in the in-place restore can refresh the index with hooks on; should-fix = LFS range scan fails open (no upstream, >200 commits), snapshot transfers skip history/untracked LFS detection and detection errors pass, connection-string values only partly redacted, a styling assertion in the web test. Round 5 sent (attribute-aware range scan, fail-closed detection, check-attr on consented untracked files, whole-value redaction for connection strings). Reviewer's accidental server-suite run showed two return timeouts and two Windows symlink-permission failures: environmental on this machine, to be confirmed on the owner's full run.
+
+**2026-10-15T20:17:20Z**
+
+2026-10-15 round 5 (5e4038d): share-plan status and in-place restore clean check hook-free (mtime-touch tests); gitCarriesLfs: checkout + consented untracked (check-attr) + tip + every outgoing commit touching an attributes file (no cap; range upstream..HEAD or tip --not --remotes), fail-closed with its own refusal text; assertNoLfs on gitPush/gitPushBranch; prepareSessionExport runs the full detection before gitPushTransfer (share and return); CONNECTION_SECRET redacts whole connection-string values; styling assertion dropped. Verification review51 launched.
