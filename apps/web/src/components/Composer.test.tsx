@@ -262,16 +262,17 @@ describe("composer drop target", () => {
 });
 
 describe("composer model chip", () => {
-  it("shows the real model for a draft, after its first send starts Pi, and after a reload", async () => {
-    let model: { provider: string; id: string } | null = null;
+  type Model = { provider: string; id: string };
+  // Per-call controllable /state and /models responses.
+  function stubSession(handlers: { state: () => Promise<Model | null>; models: () => Model[] }) {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
         const body = url.endsWith("/state")
-          ? { state: { model, thinkingLevel: "off" } }
+          ? { state: { model: await handlers.state(), thinkingLevel: "off" } }
           : url.endsWith("/models")
-            ? { models: [] }
+            ? { models: handlers.models() }
             : url.includes("/resources/agents")
               ? { agents: [] }
               : { files: [] };
@@ -281,21 +282,49 @@ describe("composer model chip", () => {
         });
       }),
     );
-    const draft = { id: "drop-session", cwd: "/tmp", createdAt: "now" };
-    model = { provider: "mock", id: "draft-model" };
+  }
+  const draft = { id: "drop-session", cwd: "/tmp", createdAt: "now" };
+  const label = () => screen.getByTestId("model-chip-label").textContent;
+
+  it("shows the real model for a draft, after its first send starts Pi, and on a fresh mount", async () => {
+    let model: Model = { provider: "mock", id: "draft-model" };
+    let models: Model[] = [];
+    stubSession({ state: async () => model, models: () => models });
     useAppStore.setState({ session: { ...draft, lifecycle: "draft" } });
     const view = render(<Composer />);
-    const label = () => screen.getByTestId("model-chip-label").textContent;
     await waitFor(() => expect(label()).toBe("draft-model"));
 
-    // First send: the server starts Pi under the same id and re-announces the meta.
+    // First send: the server starts Pi under the same id and re-announces the meta;
+    // the chip and the picker both re-read the running session.
     model = { provider: "mock", id: "mock-model" };
+    models = [model];
     useAppStore.getState().upsertSessionMeta({ ...draft, lifecycle: "started" });
     await waitFor(() => expect(label()).toBe("mock-model"));
+    fireEvent.click(screen.getByTestId("model-chip"));
+    await waitFor(() => expect(screen.getByTestId("model-option-mock-model")).toBeTruthy());
 
-    // Reload: a fresh mount of the started session reads Pi's live state.
     view.unmount();
     render(<Composer />);
     await waitFor(() => expect(label()).toBe("mock-model"));
+  });
+
+  it("does not let a draft preview still in flight overwrite the started state", async () => {
+    const pending: Array<(model: Model) => void> = [];
+    stubSession({
+      state: () => new Promise((resolve) => pending.push(resolve)),
+      models: () => [],
+    });
+    useAppStore.setState({ session: { ...draft, lifecycle: "draft" } });
+    render(<Composer />);
+    await waitFor(() => expect(pending.length).toBeGreaterThan(0));
+    const drafted = pending.length;
+    useAppStore.getState().upsertSessionMeta({ ...draft, lifecycle: "started" });
+    await waitFor(() => expect(pending.length).toBe(drafted + 1));
+    pending[drafted]!({ provider: "mock", id: "mock-model" });
+    await waitFor(() => expect(label()).toBe("mock-model"));
+    for (const resolve of pending.slice(0, drafted))
+      resolve({ provider: "mock", id: "draft-model" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(label()).toBe("mock-model");
   });
 });

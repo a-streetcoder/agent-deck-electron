@@ -27,6 +27,7 @@ import {
   ownerCatalog,
   ownerRuntime,
   ownerTransport,
+  previewLaunchModel,
 } from "../claudeTransport.ts";
 import { z } from "zod";
 import {
@@ -222,16 +223,15 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     if (draft) {
       const plan = draft.launchPlan as LaunchPlan;
       const models = await draftModels(draft.createdBy);
-      // A model outside the owner's catalog (an extension provider before a
-      // Models refresh) still launches as planned: report it unless refused.
-      const refused = (await ownerTransport(ctx, await ownerRuntime(ctx, draft.createdBy))).refused;
+      const preview = await previewLaunchModel(ctx, draft.createdBy, plan, draft, models);
       return {
         state: {
           model:
-            models.find((model) => model.provider === plan.provider && model.id === plan.model) ??
-            (plan.provider && plan.model && !refused.has(plan.provider)
-              ? { provider: plan.provider, id: plan.model }
-              : null),
+            (preview &&
+              models.find(
+                (model) => model.provider === preview.provider && model.id === preview.id,
+              )) ??
+            preview,
           thinkingLevel:
             draft.draftThinkingLevel ?? ("thinking" in plan ? plan.thinking : undefined) ?? "off",
           isStreaming: false,
