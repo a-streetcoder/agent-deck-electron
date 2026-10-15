@@ -1,6 +1,6 @@
 ---
 id: ade-mmgh
-status: in_progress
+status: closed
 deps: [ade-x3gn]
 links: []
 created: 2026-10-14T23:54:52Z
@@ -20,3 +20,9 @@ GUARDRAILS: worktree E:/agent-deck-wt/<ticket> on wt/<ticket>; never git checkou
 ## Acceptance Criteria
 
 One unit test per producer; a real-Pi run records packages/domain/test/fixtures/events/plan.jsonl (plan + turn + checkpoint events) kept as a fixture for A2/A3; the child-session turn question answered in the note; the secrets scan test; tsc/eslint/prettier clean.
+
+## Notes
+
+**2026-10-15T01:13:29Z**
+
+2026-10-15 merged (wt/ade-mmgh: cc5f7e9, review fixes b53ce4f, merge + after-merge cb54be4). Contrarian + GPT review17 applied: steer/follow_up join the active turn (streamingBehavior), turn boundaries by last reported entry id, queued-until-accepted turns with turn.rejected, causation snapshot at the idle edge / child spawn, redactSecrets + A1b2's redactPaths on every free text, 80-char prompt labels, child get_entries capped at 5 s with partial: true, session.created for route and history forks before the plan restore and session.removed on launch failure, loop parent announced after startup, supervisor.progress.recorded kind, cancelled carries response, plan.changed reuses the store id, server.started without pid, ctx.events required, capture callback guarded, shared stableFixtureText and CAPABILITY_FIELDS import, plan.jsonl re-recorded (13 events incl. subagent.run.*). Post-merge: domain 34, server event tests 52 (+1 POSIX skip), web tsc clean. Child-turn answer: children never reached the idle reconcile; get_entries after agent_settled added. Known: ~/ paths and bare paths outside roots not redacted; turn boundary falls back to the last user message after rollback/history rewrite; causation memory lost on restart.

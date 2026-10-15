@@ -1,6 +1,6 @@
 ---
 id: ade-ajw7
-status: open
+status: in_progress
 deps: [ade-mmgh, ade-qy2d, ade-dwdc]
 links: []
 created: 2026-10-14T23:54:53Z
