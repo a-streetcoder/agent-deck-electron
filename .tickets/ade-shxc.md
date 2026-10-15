@@ -1,6 +1,6 @@
 ---
 id: ade-shxc
-status: in_progress
+status: closed
 deps: [ade-wgkk, ade-t77e]
 links: []
 created: 2026-10-15T07:37:07Z
@@ -34,3 +34,7 @@ Real-Pi test: export then import on a second server instance, the imported sessi
 **2026-10-15T14:46:37Z**
 
 2026-10-15 fix round 2 (eda106b): 1 snapshot bound to consent: throwaway index stages add -u plus exactly the consented untracked paths (pathspec-from-file, NUL, literal pathspecs), then diff --cached --no-renames --diff-filter=A must add exactly that set, else 409 share_plan_changed before write-tree and no push (test: a late untracked file is not in the snapshot tree, a missing consented file refuses). 2 no upstream reads as every commit not on the remote travels, zero shows nothing. 3 thinking: the transcript's last thinking_level_change on the active chain is stored as launchResourceConfig.thinkingOverride (contracts and persistence), which the resolver puts above agent and default, so refresh and every resume keep it (tests: import at high on a server set to low; real-Pi resume plan equals the level the device ran at with a different server default). 4 an import still running answers session_already_imported with pending true and no sessionId; the web keeps the move and says retry later. 5 sharedFrom.exportSha256 (sha256 of the transcript); a differing retry answers 409 export_changed with the earlier sessionId, the web never links and offers Cancel the move. 6 shared-to marks the hand-off finalizing before its awaits and re-checks the token after each; expiry, abort and a replacing share give way (409 share_in_progress); test: concurrent link and replacing share, exactly one wins and the pointer exists exactly when the link won. 7 a replacing share deletes the earlier move's pushed ref first or refuses with share_in_progress. 8 rename and composer-draft PUT answer session_moving during the hand-off. 9 pointer transcript read asynchronously and cached per session by mtime and size (bounded, 32). Tests: sessionMove.test.ts 14 passed; sessionTransfer.test.ts 14 passed; web SessionShare.test.tsx 15 passed; sessionMove.pi.test.ts 1 passed; rpcHandler 82, sessionResourceRefresh 8, persistence-roundtrip 17 passed; launchResources 13 passed 1 failed on the symlink EPERM case (Windows without Developer Mode); tsc server, web, contracts clean; eslint and prettier clean.
+
+**2026-10-15T14:49:11Z**
+
+2026-10-15 reviewed (contrarian + GPT, two fix rounds, GPT verification pass), merged as f2ad262 / merge 90ea1f7, deployed (health 200). Owner live check still open: GitHub acceptance of refs/agent-deck/* push, fetch and delete from a real device (branch fallback covers a refusal). Not ticketed: tracked files edited after preflight travel with their new content (count-only consent for tracked changes); an export_changed copy stays on the server; the 15-minute hand-off expiry runs only while the app runs.
