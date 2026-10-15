@@ -1,4 +1,4 @@
-import { DEFAULT_KEYBINDINGS } from "@agent-deck/contracts";
+import { DEFAULT_KEYBINDINGS, isKeybindingCommand } from "@agent-deck/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { COMMAND_DEFINITIONS, runCommand } from "./commands.ts";
 import { useAppStore } from "./store.ts";
@@ -32,6 +32,12 @@ describe("resource command catalog", () => {
         COMMAND_DEFINITIONS.filter((definition) => definition.command === command),
       ).toHaveLength(1);
       expect(DEFAULT_KEYBINDINGS.some((binding) => binding.command === command)).toBe(false);
+    }
+  });
+
+  it("registers every palette command as a bindable keybinding command", () => {
+    for (const { command } of COMMAND_DEFINITIONS) {
+      expect(isKeybindingCommand(command), command).toBe(true);
     }
   });
 

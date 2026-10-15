@@ -31,6 +31,7 @@ import { McpScreen } from "./screens/McpScreen.tsx";
 import { MemoryScreen } from "./screens/MemoryScreen.tsx";
 import { ModelsScreen } from "./screens/ModelsScreen.tsx";
 import { PerformanceScreen } from "./screens/PerformanceScreen.tsx";
+import { TeamServerScreen } from "./screens/TeamServerScreen.tsx";
 import { ThemesScreen } from "./screens/ThemesScreen.tsx";
 import { GitScreen } from "./screens/GitScreen.tsx";
 import { LoopsScreen } from "./screens/LoopsScreen.tsx";
@@ -286,6 +287,8 @@ export function App() {
                   <PromptsScreen />
                 ) : view === "performance" ? (
                   <PerformanceScreen />
+                ) : view === "team-server" ? (
+                  <TeamServerScreen />
                 ) : view === "themes" ? (
                   <ThemesScreen />
                 ) : view === "models" ? (

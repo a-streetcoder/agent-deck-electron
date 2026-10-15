@@ -31,6 +31,11 @@ import {
   retryInSlots,
 } from "./remote-server.js";
 import { createSharedServerClient } from "./shared-server.js";
+import {
+  createTeamServerHandlers,
+  nextSharedServerClient,
+  restartGate,
+} from "./team-server-settings.js";
 import { localShellActionsAllowed, resolveResourceFile } from "./resource-file-request.js";
 import { checkForUpdates } from "./update-check.js";
 import {
@@ -93,9 +98,13 @@ let remoteServer = null;
 // ade-zvv5: set while a cloudflared launch has no cached token; the window then
 // opens on sign-in.html and this handles its "remote-sign-in" IPC.
 let remoteSignIn = null;
-// SRV-12b: local mode with AGENT_DECK_SHARED_SERVER_URL set; Make shared calls
+// SRV-12b: local mode with a team server configured (SRV-16a: the Settings
+// value, or AGENT_DECK_SHARED_SERVER_URL as a dev override); Make shared calls
 // that server through this client (the Access token stays in main).
 let sharedServer = null;
+// The origin the main window's preload was given (fixed per window): after the
+// setting changes, renderer calls are refused until a restart picks it up.
+let windowSharedOrigin = null;
 let mainWindow = null;
 let draftsFlushedForQuit = false;
 let draftFlushRequest = null;
@@ -413,6 +422,7 @@ function checkRemoteHealth() {
 function createWindow() {
   const { width: workAreaWidth } = screen.getPrimaryDisplay().workAreaSize;
   const initialWidth = Math.max(940, Math.round(workAreaWidth * 0.6));
+  windowSharedOrigin = remoteServer ? null : (sharedServer?.origin ?? null);
   mainWindow = new BrowserWindow({
     width: initialWidth,
     height: 860,
@@ -439,8 +449,8 @@ function createWindow() {
       // wrong machine; the renderer then uses the server-side path flows.
       additionalArguments: remoteServer
         ? ["--agent-deck-remote-server"]
-        : sharedServer
-          ? [`--agent-deck-shared-server=${sharedServer.origin}`]
+        : windowSharedOrigin
+          ? [`--agent-deck-shared-server=${windowSharedOrigin}`]
           : [],
       // Enable the <webview> tag so the Slice L2 general-purpose browser can
       // mount a REAL Chromium guest (not an iframe). The guest's own security
@@ -765,14 +775,20 @@ ipcMain.handle("remote-sign-in", (event, action) => {
 // SRV-12b: the app's own renderer asks main to call the shared server. The
 // client allow-lists the request and answers { status, body } or
 // { status: 401, signInRequired: true }; the token never crosses IPC.
+// SRV-16a: a changed setting answers a soft restart error (checked first, so
+// clearing a configured server says restart too).
 ipcMain.handle("shared-server:request", (event, method, pathname, body) => {
   assertTrustedPickerSender(event, "The shared server is unavailable");
+  const restart = restartGate(sharedServer, windowSharedOrigin);
+  if (restart) return { status: 0, error: restart };
   if (!sharedServer) throw new Error("The shared server is unavailable");
   return sharedServer.request(method, pathname, body);
 });
 
 ipcMain.handle("shared-server:sign-in", (event) => {
   assertTrustedPickerSender(event, "The shared server is unavailable");
+  const restart = restartGate(sharedServer, windowSharedOrigin);
+  if (restart) return { ok: false, error: restart };
   if (!sharedServer) return { ok: false, error: "No shared server is configured." };
   return sharedServer.signIn();
 });
@@ -781,6 +797,35 @@ ipcMain.handle("shared-server:sign-in-cancel", (event) => {
   assertTrustedPickerSender(event, "The shared server is unavailable");
   sharedServer?.cancelSignIn();
   return true;
+});
+
+// SRV-16a: the team server setting (userData/team-server.json); refused in remote mode.
+const teamServerHandlers = createTeamServerHandlers({
+  context: () => ({
+    dir: app.getPath("userData"),
+    env: process.env.AGENT_DECK_SHARED_SERVER_URL,
+    remote: Boolean(remoteServer),
+    windowOrigin: windowSharedOrigin,
+  }),
+  apply: applyTeamServerSetting,
+});
+
+/** Point the shared-server client at the configured origin (none in remote mode). */
+function applyTeamServerSetting() {
+  const origin = remoteServer ? null : teamServerHandlers.state().origin;
+  sharedServer = nextSharedServerClient(sharedServer, origin, (next) =>
+    createSharedServerClient({ origin: next, run: cloudflaredRunner() }),
+  );
+}
+
+ipcMain.handle("team-server:get", (event) => {
+  assertTrustedPickerSender(event, "Team server settings are unavailable");
+  return teamServerHandlers.get();
+});
+
+ipcMain.handle("team-server:set", (event, input) => {
+  assertTrustedPickerSender(event, "Team server settings are unavailable");
+  return teamServerHandlers.set(input);
 });
 
 /** Native folder chooser (the NSOpenPanel equivalent) for the project flow. */
@@ -1234,13 +1279,8 @@ async function bootstrap() {
         }
       }
     } else {
-      const sharedOrigin = remoteServerOrigin(
-        process.env.AGENT_DECK_SHARED_SERVER_URL,
-        "AGENT_DECK_SHARED_SERVER_URL",
-      );
-      if (sharedOrigin) {
-        sharedServer = createSharedServerClient({ origin: sharedOrigin, run: cloudflaredRunner() });
-      }
+      // SRV-16a: the Settings value, or the env dev override (an invalid one fails startup).
+      applyTeamServerSetting();
       const configuredPort = externalServerPort();
       serverPort = configuredPort ?? (await startServer());
       controlPlaneOrigin = `http://127.0.0.1:${serverPort}`;

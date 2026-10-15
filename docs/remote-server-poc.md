@@ -28,11 +28,13 @@ Server (`apps/server`):
 
 Desktop (`apps/desktop/main.js`):
 
-| Variable                            | Example                                        | Meaning                                                                                                        |
-| ----------------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `AGENT_DECK_REMOTE_SERVER_URL`      | `https://deck.moretti.cc`                      | Attach to this origin: spawn no server, load the renderer from it, treat it as the control plane.              |
-| `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`  | `streetcoding-collective.cloudflareaccess.com` | Optional. Pins the in-window login round-trip to this team's Access pages (else any `*.cloudflareaccess.com`). |
-| `AGENT_DECK_DESKTOP_RECOVERY_TOKEN` | _(same as the VM)_                             | Optional. Honored instead of a random per-launch token.                                                        |
+| Variable                            | Example                                        | Meaning                                                                                                                                  |
+| ----------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `AGENT_DECK_REMOTE_SERVER_URL`      | `https://deck.moretti.cc`                      | Attach to this origin: spawn no server, load the renderer from it, treat it as the control plane.                                        |
+| `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`  | `streetcoding-collective.cloudflareaccess.com` | Optional. Pins the in-window login round-trip to this team's Access pages (else any `*.cloudflareaccess.com`).                           |
+| `AGENT_DECK_DESKTOP_RECOVERY_TOKEN` | _(same as the VM)_                             | Optional. Honored instead of a random per-launch token.                                                                                  |
+| `AGENT_DECK_SHARED_SERVER_URL`      | `https://deck.moretti.cc`                      | Dev override of **Settings > Team server** (local mode). Set, it wins over the stored setting and the screen says so.                    |
+| `AGENT_DECK_CLOUDFLARED`            | `C:\Tools\cloudflared.exe`                     | Dev override: the cloudflared binary used to sign in to the team server. Needed today; SRV-16c brings discovery and a verified download. |
 
 `AGENT_DECK_SERVER_URL` (loopback attach, used by `pnpm dev` and the SSH-tunnel launcher) is
 unchanged and mutually exclusive with `AGENT_DECK_REMOTE_SERVER_URL`.
@@ -167,12 +169,24 @@ and from a signed-in browser: `https://deck.moretti.cc/me` shows your identity.
   toolbar project picker, the Projects screen's "Add Projects…" dialog, and the "Add project…"
   button next to the new-session Project dropdown (which also selects the new project for the
   draft). Skill-folder and prompt-file imports fall back to their typed-path inputs likewise.
-- **Desktop in local mode with a shared server** (SRV-12b): set
-  `AGENT_DECK_SHARED_SERVER_URL=https://deck.moretti.cc` (an https origin, validated like
-  `AGENT_DECK_REMOTE_SERVER_URL`) and `AGENT_DECK_CLOUDFLARED` (the cloudflared path) before
-  starting the local app. The Projects screen then offers **Make shared** on each local project
-  (see [Make shared from the desktop](#make-shared-from-the-desktop)). Unset, or in remote mode,
-  nothing of it is shown.
+- **Desktop in local mode with a shared server** (SRV-12b, SRV-16a): open **Settings > Team
+  server**, enter the server address (`https://deck.moretti.cc`) and Save. Only a bare https
+  origin is accepted (no path, query, credentials or port 0; plain host name labels, an IPv4 or
+  a bracketed IPv6 literal); an empty field clears it. The value is stored per machine in
+  Electron userData (`team-server.json`, `{ serverUrl, cloudflaredPath? }`; `cloudflaredPath`
+  is reserved for SRV-16c and unused today; keys the app does not know are kept on Save; a
+  missing or corrupt file reads as not configured) and the status line reads "Not configured",
+  "Configured, sign-in pending", or "Set by AGENT_DECK_SHARED_SERVER_URL (dev override)" when
+  that variable is set: it is a dev override and wins over the setting. Saving a different
+  address replaces main's shared-server client (its token and sign-in state start over; an
+  empty address drops it, so no network call is made), but the page keeps the server it
+  started with: Make shared and the mirror refuse with "Restart Agent Deck" until the app is
+  restarted. `AGENT_DECK_CLOUDFLARED` (the cloudflared path) is still needed to sign in. With a
+  server set, the Projects screen offers **Make shared** on each local project (see
+  [Make shared from the desktop](#make-shared-from-the-desktop)). Not configured, the app looks
+  exactly like local Agent Deck (the setting is reached from Settings or the command palette).
+  In remote mode none of it is shown, and main refuses `team-server:get`/`set` (that page comes
+  from the server).
 - **Desktop over SSH** (`win\Agent Deck Remote (dev VM).cmd`) still works, but through the
   tunnel the server sees loopback requests with no assertion, so with the proxy mode on it
   answers 401. Use one mode or the other on the VM.
@@ -635,7 +649,7 @@ machines), `defaultBranch` and `createdBy`.
 
 ### Make shared from the desktop
 
-A local desktop app (its own backend, `AGENT_DECK_SHARED_SERVER_URL` set) turns a local project
+A local desktop app (its own backend, a team server set in Settings) turns a local project
 into a shared one. **Make shared** on a project row reads the project's `origin` remote through
 the local backend on every click (`GET /projects/:id/origin` answers `hasOrigin`, the GitHub
 `owner/name` of an https, `git@github.com:` or `ssh://` remote, and `topLevel`; never the remote

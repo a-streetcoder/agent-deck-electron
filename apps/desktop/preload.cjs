@@ -8,6 +8,7 @@ const { contextBridge, ipcRenderer, webUtils } = require("electron");
 // SRV-12b: main passes the configured shared server's origin (never a token).
 const sharedServerArg = process.argv.find((arg) => arg.startsWith("--agent-deck-shared-server="));
 const sharedServerOrigin = sharedServerArg?.slice("--agent-deck-shared-server=".length);
+const remote = process.argv.includes("--agent-deck-remote-server");
 
 contextBridge.exposeInMainWorld("agentDeck", {
   isElectron: true,
@@ -17,7 +18,7 @@ contextBridge.exposeInMainWorld("agentDeck", {
    * native file/folder pickers would choose paths on THIS machine, not the one
    * running the agents, so the renderer must use server-side path flows.
    */
-  remote: process.argv.includes("--agent-deck-remote-server"),
+  remote,
   /**
    * Open the native folder chooser. Resolves to the selected absolute path(s),
    * or [] if the user cancels.
@@ -83,6 +84,18 @@ contextBridge.exposeInMainWorld("agentDeck", {
         cancelSignIn: () => ipcRenderer.invoke("shared-server:sign-in-cancel"),
       }
     : undefined,
+  /**
+   * SRV-16a: the team server setting. get() resolves
+   * { serverUrl, overridden, origin, restartRequired }; set({ serverUrl })
+   * resolves { ok: false, error } or { ok: true, ...the new state }. Absent in
+   * remote mode: that page comes from the server and must not set it.
+   */
+  teamServer: remote
+    ? undefined
+    : {
+        get: () => ipcRenderer.invoke("team-server:get"),
+        set: (input) => ipcRenderer.invoke("team-server:set", input),
+      },
   /** Open an allow-listed http(s) URL in the user's default browser. */
   openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
   /** Flush device-local drafts before main closes the renderer/backend. */
