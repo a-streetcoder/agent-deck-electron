@@ -141,7 +141,7 @@ export interface ServerContext {
   /** SUB-14: durable per-session plan history (read side + delete cleanup). */
   planEvents: PlanEventServiceShape;
   /** A5: re-evaluate live plans (the delegation setting changed); A10: retry an item. */
-  planDispatcher?: Pick<PlanDispatcher, "evaluateAll" | "retry">;
+  planDispatcher?: Pick<PlanDispatcher, "evaluateAll" | "retry" | "checkRetry">;
   /** A1 event log producers (tests: createEventProducers(disabledEventLog())). */
   events: EventProducers;
   sessionImages: SessionImageStore;

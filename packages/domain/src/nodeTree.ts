@@ -72,9 +72,23 @@ export interface ExecutionNode {
   human?: HumanNodeFacts;
   /** checkpoint (A10): its capture index and the node it belongs to (absent on a safety
    * checkpoint). A later rollback that truncated it marks the node `removed`. */
-  checkpoint?: { turnIndex: number; node?: StoredNodeRef };
-  /** plan (A10): the latest plan's items (id, status, run), for the blocked ones. */
-  planItems?: { id: string; status: string; runId?: string }[];
+  checkpoint?: {
+    turnIndex: number;
+    node?: StoredNodeRef;
+    /** The fold position of the latest rollback to it: what began after it was cut off. */
+    rolledBackAt?: number;
+  };
+  /** plan (A10): the latest plan's items, for the blocked ones and their runs. */
+  planItems?: {
+    id: string;
+    status: string;
+    title?: string;
+    runId?: string;
+    dependsOn?: string[];
+    isolated?: true;
+  }[];
+  /** plan (A5): the current generation, the id of the latest event that set a whole plan. */
+  planGeneration?: string;
 }
 
 /** What the tree keeps of a human node: the request and how it settled. */
@@ -107,6 +121,7 @@ export interface NodeTreeEvent {
   parent?: StoredNodeRef;
   causationId?: string;
   actor: EventActor;
+  origin?: "reconcile";
   payload: unknown;
 }
 
@@ -210,7 +225,7 @@ export function projectNodeTree(
   // Event id -> the subject it was about: a causationId points at an event.
   const subjectOfEvent = new Map<string, string>();
   // The node order at each server.started: placeholders older than one are interrupted.
-  const restarts: { order: number; ts: string }[] = [];
+  const restarts: { order: number; ts: string; position: number }[] = [];
   let order = 0;
   let position = 0;
 
@@ -236,11 +251,12 @@ export function projectNodeTree(
     node.updatedAt = event.ts;
     return node;
   };
-  const setStatus = (node: Draft, status: NodeStatus, ts: string): void => {
+  /** at: the fold position of the event that set it (the current one while folding). */
+  const setStatus = (node: Draft, status: NodeStatus, ts: string, at = position): void => {
     node.status = status;
     if (TERMINAL.has(status)) {
       node.endedAt = ts;
-      node.endEvent = position;
+      node.endEvent = at;
     } else {
       delete node.endedAt;
       delete node.endEvent;
@@ -282,7 +298,7 @@ export function projectNodeTree(
     switch (event.kind) {
       case "server.started":
         node.label = "Server started";
-        restarts.push({ order: node.order, ts });
+        restarts.push({ order: node.order, ts, position });
         // The restart rule: memory-only work open at a restart never completes.
         for (const other of drafts.values()) {
           if (other.ref.type === "supervisorRequest" && other.status === "pending") {
@@ -352,14 +368,47 @@ export function projectNodeTree(
       }
       case "plan.changed": {
         node.label = "Plan";
+        // A5 generation: the latest event that set a whole plan (reconcile imports are
+        // history from before the log), as planGeneration reads it.
+        if (
+          (payload.kind === "created" || payload.kind === "replaced") &&
+          event.origin !== "reconcile"
+        ) {
+          node.planGeneration = event.id;
+        }
         const items = Array.isArray(payload.items)
-          ? (payload.items as { id?: unknown; status?: unknown; runId?: unknown }[])
+          ? (payload.items as {
+              id?: unknown;
+              status?: unknown;
+              title?: unknown;
+              runId?: unknown;
+              dependsOn?: unknown;
+              isolated?: unknown;
+            }[])
           : [];
         const open = items.some((item) => item.status !== "done" && item.status !== "skipped");
         node.planItems = items.flatMap((item) => {
           const id = str(item.id);
           const runId = str(item.runId);
-          return id ? [{ id, status: String(item.status), ...(runId ? { runId } : {}) }] : [];
+          const title = str(item.title);
+          return id
+            ? [
+                {
+                  id,
+                  status: String(item.status),
+                  ...(title ? { title } : {}),
+                  ...(runId ? { runId } : {}),
+                  ...(Array.isArray(item.dependsOn)
+                    ? {
+                        dependsOn: item.dependsOn.filter(
+                          (dep): dep is string => typeof dep === "string",
+                        ),
+                      }
+                    : {}),
+                  ...(item.isolated === true ? { isolated: true as const } : {}),
+                },
+              ]
+            : [];
         });
         setStatus(node, open ? "running" : "done", ts);
         break;
@@ -376,6 +425,9 @@ export function projectNodeTree(
         }
         // A rollback makes its target current again (the node ends here) and truncates
         // the later captures, except the safety one it took first.
+        if (event.kind === "checkpoint.rolledBack" && node.checkpoint) {
+          node.checkpoint.rolledBackAt = position;
+        }
         if (event.kind === "checkpoint.rolledBack" && turnIndex !== undefined) {
           for (const other of drafts.values()) {
             const index = other.checkpoint?.turnIndex;
@@ -579,13 +631,15 @@ export function projectNodeTree(
       placeholder.children.length > 0 &&
       placeholder.children.every((child) => TERMINAL.has(child.status));
     const restart = restarts.find((entry) => entry.order > placeholder.order);
+    // A10: a placeholder ends at the event that closed it, not at the end of the fold.
     if (root !== placeholder && TERMINAL.has(root.status)) {
-      setStatus(placeholder, "done", root.endedAt ?? root.updatedAt);
+      setStatus(placeholder, "done", root.endedAt ?? root.updatedAt, root.endEvent);
     } else if (childrenDone) {
       const cut = placeholder.children.some((child) => child.status === "interrupted");
-      setStatus(placeholder, cut ? "interrupted" : "done", placeholder.updatedAt);
+      const last = Math.max(...placeholder.children.map((child) => child.endEvent ?? position));
+      setStatus(placeholder, cut ? "interrupted" : "done", placeholder.updatedAt, last);
     } else if (restart) {
-      setStatus(placeholder, "interrupted", restart.ts);
+      setStatus(placeholder, "interrupted", restart.ts, restart.position);
     }
   }
   for (const node of sorted) {

@@ -82,18 +82,40 @@ export interface PlanDispatcherDeps {
   warn: (message: string, error?: unknown) => void;
 }
 
+/**
+ * A10: the plan as the person saw it when they clicked. A field that is present must
+ * still match (null: there was none); another member replacing the plan or re-running the
+ * item meanwhile makes the intent stale.
+ */
+export interface PlanRetrySeen {
+  generation?: string | null;
+  runId?: string | null;
+}
+
 export interface PlanDispatcher {
   /** Recompute one session now; resolves when the pass is done. */
   evaluate(sessionId: string, causationId?: string): Promise<void>;
   /** Recompute every live session (the delegation setting changed). */
   evaluateAll(): Promise<void>;
   /**
-   * A10 retry from node: a person's click is live intent. A blocked item and its blocked
-   * dependants go back to todo (caused by the logged retry event), the session's plan is
-   * owned again (also after a Stop revoked it) and a pass re-dispatches them. False when
-   * the item is not blocked.
+   * A10 retry from node: a person's click is live intent for what it names, and only
+   * that. A blocked item and its blocked dependants go back to todo and may be dispatched
+   * (and verified) again, also after a Stop revoked the plan; the rest of the plan stays
+   * as owned or revoked as it was. `record` logs the intent once the retry is accepted and
+   * returns the event's id (the cause of what follows), or undefined when it could not.
    */
-  retry(sessionId: string, itemId: string, causationId: string): Promise<boolean>;
+  retry(
+    sessionId: string,
+    itemId: string,
+    seen: PlanRetrySeen,
+    record: (itemIds: string[]) => string | undefined,
+  ): Promise<"retried" | "notBlocked" | "stale" | "unrecorded">;
+  /** A10: what a retry would reopen (no change), or why it would be refused. */
+  checkRetry(
+    sessionId: string,
+    itemId: string,
+    seen: PlanRetrySeen,
+  ): string[] | "notBlocked" | "stale";
   close(): void;
 }
 
@@ -111,6 +133,13 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
   let closed = false;
   /** Sessions whose own agent set or updated a plan in this process, not since stopped. */
   const owned = new Set<string>();
+  /** A10: per session, the items a person's retry named (live intent for those alone). */
+  const retried = new Map<string, Set<string>>();
+  /** A Stop is the latest human act: it revokes the plan and every earlier retry. */
+  const revoke = (sessionId: string): void => {
+    owned.delete(sessionId);
+    retried.delete(sessionId);
+  };
   /** Producer runs whose verifier is running in this process. */
   const verifying = new Set<string>();
   /** The last event that could make an item ready (a finish, the agent's plan change). */
@@ -177,7 +206,7 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
     const settle = (verdict: SubagentVerdict["decision"], reason: string): void => {
       verifying.delete(producerRunId);
       if (closed) return;
-      if (deps.run(sessionId, spawned.runId)?.status === "stopped") owned.delete(sessionId);
+      if (deps.run(sessionId, spawned.runId)?.status === "stopped") revoke(sessionId);
       // Applies only to the item as it was verified: a rewrite, reassignment or new
       // verifier meanwhile discards the verdict, and the next pass recomputes.
       if (asVerified(sessionId, item, producerRunId)) {
@@ -211,7 +240,9 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
     if (!items?.some((item) => item.assignee)) return;
     const generation = deps.generation(sessionId);
     const cause = trigger ?? lastCause.get(sessionId);
-    const may = (): boolean => !closed && owned.has(sessionId) && deps.writable();
+    const can = (): boolean => !closed && deps.writable();
+    const may = (itemId: string): boolean =>
+      owned.has(sessionId) || retried.get(sessionId)?.has(itemId) === true;
     let slots = deps.slots(sessionId);
     const updates: SessionPlanUpdate[] = [];
     const toVerify: { item: SessionPlanItem; runId: string }[] = [];
@@ -225,7 +256,7 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
       const patch: SessionPlanUpdate = { id: item.id };
       if (item.runId !== dispatch.runId) patch.runId = dispatch.runId;
       const run = deps.run(sessionId, dispatch.runId);
-      if (run?.status === "stopped") owned.delete(sessionId);
+      if (run?.status === "stopped") revoke(sessionId);
       if (runActive(run) || verifying.has(dispatch.runId)) {
         // Still running (or being verified).
       } else if (dispatch.agentName !== undefined && dispatch.agentName !== item.assignee) {
@@ -252,7 +283,8 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
 
     // 3. Verify and dispatch: only the plan owner's live intent, only when it can be logged.
     for (const { item, runId } of toVerify) {
-      if (!may() || slots <= 0) return;
+      if (!can() || slots <= 0) return;
+      if (!may(item.id)) continue;
       let started: "started" | "wait";
       try {
         started = await verify(sessionId, item, runId, cause);
@@ -287,7 +319,8 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
         dispatchOf(sessionId, item, generation),
     );
     for (const item of readyFrontier(next)) {
-      if (!may() || slots <= 0) return;
+      if (!can() || slots <= 0) return;
+      if (!may(item.id)) continue;
       if (!item.assignee || (!item.isolated && checkoutBusy)) continue;
       const previous = dispatchOf(sessionId, item, generation);
       if (previous && runActive(deps.run(sessionId, previous.runId))) continue;
@@ -302,7 +335,12 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
         );
       };
       if (!unchanged()) return;
-      const task = `${itemTask(item)}${dependencyContext(sessionId, next, item, generation)}`;
+      // A10: a retried item hears why its last attempt was blocked.
+      const lastBlock =
+        item.note && retried.get(sessionId)?.has(item.id)
+          ? `\n\nA previous attempt at this item was blocked: ${item.note}`
+          : "";
+      const task = `${itemTask(item)}${lastBlock}${dependencyContext(sessionId, next, item, generation)}`;
       let spawned: Awaited<ReturnType<PlanDispatcherDeps["spawn"]>>;
       try {
         spawned = await deps.spawn(sessionId, task, {
@@ -335,6 +373,23 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
     }
   };
 
+  const checkRetry = (
+    sessionId: string,
+    itemId: string,
+    seen: PlanRetrySeen,
+  ): string[] | "notBlocked" | "stale" => {
+    const items = deps.plan(sessionId) ?? [];
+    const item = items.find((candidate) => candidate.id === itemId);
+    if (
+      (seen.generation !== undefined && seen.generation !== (deps.generation(sessionId) ?? null)) ||
+      (seen.runId !== undefined && seen.runId !== (item?.runId ?? null))
+    ) {
+      return "stale";
+    }
+    const updates = closed ? [] : retryPlanItemUpdates(items, itemId);
+    return updates.length ? updates.map((update) => update.id) : "notBlocked";
+  };
+
   // One pass at a time per session: a pass awaits spawns, and the plan updates it makes
   // trigger the next pass, which must see them.
   const schedule = (sessionId: string, trigger?: string): Promise<void> => {
@@ -355,7 +410,10 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
       event.kind === "plan.changed" &&
       event.actor.type === "agent" &&
       event.actor.sessionId === sessionId;
-    if (agentPlan) owned.add(sessionId);
+    if (agentPlan) {
+      owned.add(sessionId);
+      retried.delete(sessionId);
+    }
     if (agentPlan || event.kind === "subagent.run.finished") lastCause.set(sessionId, event.id);
     if (
       event.kind !== "plan.changed" &&
@@ -374,14 +432,20 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
     evaluateAll: async () => {
       await Promise.all(deps.liveSessions().map((sessionId) => schedule(sessionId)));
     },
-    retry: async (sessionId, itemId, causationId) => {
+    checkRetry,
+    retry: async (sessionId, itemId, seen, record) => {
+      const itemIds = checkRetry(sessionId, itemId, seen);
+      if (typeof itemIds === "string") return itemIds;
       const updates = retryPlanItemUpdates(deps.plan(sessionId) ?? [], itemId);
-      if (closed || updates.length === 0) return false;
-      owned.add(sessionId);
+      const causationId = record(itemIds);
+      if (!causationId) return "unrecorded";
+      const named = retried.get(sessionId) ?? new Set<string>();
+      for (const id of itemIds) named.add(id);
+      retried.set(sessionId, named);
       lastCause.set(sessionId, causationId);
       deps.updatePlan(sessionId, updates, causationId);
       await schedule(sessionId, causationId);
-      return true;
+      return "retried";
     },
     close() {
       closed = true;

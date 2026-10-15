@@ -55,6 +55,7 @@ import {
   type LoopRouteTestDependencies,
 } from "../src/routes/loops.ts";
 import { SessionCreationError } from "../src/SessionManager.ts";
+import { setRequestUser } from "../src/trustedProxy.ts";
 
 const servers: ReturnType<typeof Fastify>[] = [];
 
@@ -108,6 +109,7 @@ function makeRoutes(
   const acknowledgeCheckoutRecovery = vi.fn();
   const resolveHumanApproval = vi.fn();
   const getEngine = vi.fn();
+  const listEngine = vi.fn((): unknown[] => []);
   const broadcast = vi.fn();
   const resolveNamedAgent = vi.fn<ServerContext["resolveNamedAgent"]>((name: string) =>
     name.startsWith("Missing")
@@ -178,7 +180,7 @@ function makeRoutes(
           markSessionReconciled,
           acknowledgeCheckoutRecovery,
           resolveHumanApproval,
-          list: () => [],
+          list: listEngine,
           get: getEngine,
         } as unknown as ServerContext["loopEngine"]),
       bridgeTokens,
@@ -221,6 +223,7 @@ function makeRoutes(
     acknowledgeCheckoutRecovery,
     resolveHumanApproval,
     getEngine,
+    listEngine,
     findProject,
     broadcast,
     resolveNamedAgent,
@@ -1959,19 +1962,42 @@ describe("loop route honesty gate", () => {
     });
     expect(affectedRegion(tree, failure!.key)?.affected).toContain(`loopRun:${failed.id}`);
 
-    const { fastify, createSession, startEngine, settledEngine, getEngine } = makeRoutes(home);
+    const events = createEventProducers(disabledEventLog());
+    const started = vi.spyOn(events, "loopUserAction");
+    const { fastify, createSession, startEngine, settledEngine, getEngine, listEngine } =
+      makeRoutes(home, undefined, undefined, { events });
+    // Behind Access: the retry runs as the member who asked. Only the request carrying the
+    // (stand-in) assertion is authenticated, as an internal re-request without it would not be.
+    fastify.addHook("onRequest", async (request) => {
+      if (request.headers["x-test-member"] !== "ale@example.test") return;
+      setRequestUser(request.raw, { id: "ale@example.test", email: "ale@example.test" });
+    });
     getEngine.mockImplementation((id) => engine.get(id));
     createSession.mockReturnValue({
       meta: { id: "retry-parent", cwd: home, createdAt: failed.startedAt, projectId: "project" },
     });
     settledEngine.mockReturnValue(new Promise<void>(() => {}));
     startEngine.mockReturnValue({ ...failed, id: "retry-run", status: "running", iterations: [] });
-    const retry = await fastify.inject({
-      method: "POST",
-      url: `/loops/runs/${(failure!.retry as { runId: string }).runId}/retry`,
-    });
-    expect(retry.statusCode).toBe(201);
+    const retry = () =>
+      fastify.inject({
+        method: "POST",
+        url: `/loops/runs/${(failure!.retry as { runId: string }).runId}/retry`,
+        headers: { "x-test-member": "ale@example.test" },
+        payload: { fromNode: true },
+      });
+    const first = await retry();
+    expect(first.statusCode).toBe(201);
     expect(startEngine.mock.calls[0]![2]).toMatchObject({ retryOf: failed.id });
+    expect(started).toHaveBeenCalledWith("retry-run", "project", "start", {
+      type: "user",
+      id: "ale@example.test",
+    });
+    // A run that already has a retry is dealt with: the node action does not start another.
+    listEngine.mockReturnValue([{ id: "retry-run", retryOf: failed.id }]);
+    const second = await retry();
+    expect(second.statusCode).toBe(409);
+    expect(second.json()).toMatchObject({ code: "loop_already_retried" });
+    expect(startEngine).toHaveBeenCalledTimes(1);
   });
 
   it("preflights both valid Maker+Checker roles and preserves their selected names", async () => {

@@ -103,6 +103,8 @@ describe("affectedRegion over the recorded trees", () => {
       {
         key: "subagentRun:r2",
         reason: "rejected",
+        ran: true,
+        restores: true,
         retry: { kind: "turn", key: "turn:t2", sessionId: SESSION },
       },
     ]);
@@ -193,7 +195,15 @@ describe("affectedRegion over the recorded trees", () => {
       {
         key: "subagentRun:rb",
         reason: "rejected",
-        retry: { kind: "planItem", key: "subagentRun:rb", sessionId: SESSION, itemId: "b" },
+        ran: true,
+        restores: true,
+        retry: {
+          kind: "planItem",
+          key: `plan:${SESSION}`,
+          sessionId: SESSION,
+          itemId: "b",
+          runId: "rb",
+        },
       },
     ]);
     const region = affectedRegion(late, "subagentRun:rb")!;
@@ -233,6 +243,8 @@ describe("affectedRegion over the recorded trees", () => {
       {
         key: `loopIteration:${uuid(4)}`,
         reason: "checkerFail",
+        ran: true,
+        restores: false,
         retry: { kind: "loopRun", key: `loopRun:${uuid(1)}`, runId: uuid(1) },
       },
     ]);
@@ -244,5 +256,133 @@ describe("affectedRegion over the recorded trees", () => {
     expect([...checker.trusted]).toEqual([`loopChild:${uuid(6)}`]);
     expect(checker.affected).toContain(`loopChild:${uuid(22)}`);
     expect(checker.affected).toContain(`loopIteration:${uuid(4)}`);
+
+    // Once a run in view is its retry, the failure is dealt with.
+    const retry = ev(
+      "loop.run.started",
+      { type: "loopRun", id: "retry-run" },
+      {
+        parent: { type: "session", id: "retry-session" },
+        sessionId: "retry-session",
+        payload: {
+          run: { id: "retry-run", loopName: "again", retryOf: uuid(1), status: "running" },
+        },
+      },
+    );
+    expect(failedVerifications(projectNodeTree([...failed, retry]))).toEqual([]);
+  });
+});
+
+describe("failures that were dealt with or never ran (A10)", () => {
+  it("a turn a rollback cut off is not a failure any more; nothing stays affected", () => {
+    const log = [
+      ...planLog(),
+      ...rejectedSecondTurn(),
+      ev(
+        "checkpoint.created",
+        { type: "checkpoint", id: `${SESSION}/2` },
+        { ...underSession, payload: { turnIndex: 2 } },
+      ),
+      ev(
+        "checkpoint.rolledBack",
+        { type: "checkpoint", id: `${SESSION}/0` },
+        { actor: { type: "user" }, payload: { turnIndex: 0, safetyTurnIndex: 2 } },
+      ),
+      // The re-run turn and a later one both succeed.
+      ev("turn.prompted", { type: "turn", id: "t2b" }, underSession),
+      ev("session.turn.completed", { type: "turn", id: "t2b" }),
+      ev("turn.prompted", { type: "turn", id: "t3" }, underSession),
+      ev("session.turn.completed", { type: "turn", id: "t3" }),
+    ];
+    expect(failedVerifications(projectNodeTree(log, { sessionId: SESSION }))).toEqual([]);
+    // A rollback to a checkpoint taken after the turn began does not cut it off.
+    const later = [
+      ...planLog(),
+      ...rejectedSecondTurn(),
+      ev(
+        "checkpoint.rolledBack",
+        { type: "checkpoint", id: `${SESSION}/1` },
+        { payload: { turnIndex: 1 } },
+      ),
+    ];
+    expect(failedVerifications(projectNodeTree(later, { sessionId: SESSION }))).toHaveLength(1);
+  });
+
+  it("an item blocked before its run launched sits on the plan node, its dependant with it", () => {
+    const created = ev(
+      "plan.changed",
+      { type: "plan", id: SESSION },
+      { payload: { kind: "created", items: [] } },
+    );
+    const log = [
+      ev("session.created", { type: "session", id: SESSION }),
+      created,
+      ev(
+        "plan.changed",
+        { type: "plan", id: SESSION },
+        {
+          payload: {
+            kind: "updated",
+            items: [
+              { id: "a", title: "Build", status: "blocked", isolated: true },
+              { id: "b", title: "Ship", status: "blocked", dependsOn: ["a"] },
+            ],
+          },
+        },
+      ),
+    ];
+    const tree = projectNodeTree(log, { sessionId: SESSION });
+    expect(failedVerifications(tree)).toEqual([
+      {
+        key: `plan:${SESSION}`,
+        reason: "blocked",
+        ran: false,
+        restores: false,
+        retry: {
+          kind: "planItem",
+          key: `plan:${SESSION}`,
+          sessionId: SESSION,
+          itemId: "a",
+          title: "Build",
+          generation: created.id,
+        },
+      },
+    ]);
+  });
+
+  it("an isolated item's run wrote to its own worktree: nothing to restore", () => {
+    const log = [
+      ev("session.created", { type: "session", id: SESSION }),
+      ev("subagent.run.created", runRef("ri"), { ...underSession, payload: run("ri", "running") }),
+      ev("subagent.run.finished", runRef("ri"), { payload: run("ri", "failed") }),
+      ev(
+        "plan.changed",
+        { type: "plan", id: SESSION },
+        {
+          payload: {
+            kind: "set",
+            items: [{ id: "i", status: "blocked", runId: "ri", isolated: true }],
+          },
+        },
+      ),
+    ];
+    const [failure] = failedVerifications(projectNodeTree(log, { sessionId: SESSION }));
+    expect(failure).toMatchObject({ key: "subagentRun:ri", ran: true, restores: false });
+  });
+
+  it("a placeholder ends at the event that closed it, so a later failure trusts it", () => {
+    const recorded = events("managed-subagent");
+    const child = recorded[0]!.sessionId!;
+    const later = ev(
+      "turn.prompted",
+      { type: "turn", id: "later" },
+      { sessionId: child, parent: { type: "session", id: child } },
+    );
+    const tree = projectNodeTree([...recorded, later], { sessionId: child });
+    const placeholder = `toolCall:${child}/call_mock_1`;
+    expect(tree.nodes.get(placeholder)?.placeholder).toBe(true);
+    const region = affectedRegion(tree, "turn:later")!;
+    expect(region.trusted).toContain(placeholder);
+    expect(region.trusted).toContain(`subagentRun:${uuid(1)}`);
   });
 });

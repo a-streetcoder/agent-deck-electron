@@ -23,17 +23,37 @@ export interface AffectedRegion {
 export type NodeRetry =
   /** Roll back to the frontier, then prompt the turn's task again. */
   | { kind: "turn"; key: string; sessionId: string }
-  /** The A5 dispatcher re-dispatches the item and its blocked dependants. */
-  | { kind: "planItem"; key: string; sessionId: string; itemId: string }
+  /**
+   * The A5 dispatcher re-dispatches the item and its blocked dependants. generation and
+   * runId are what the person saw: the server refuses the retry when the plan moved on.
+   */
+  | {
+      kind: "planItem";
+      key: string;
+      sessionId: string;
+      itemId: string;
+      title?: string;
+      runId?: string;
+      generation?: string;
+    }
   /** The existing loop retry (the run again, from its definition snapshot). */
   | { kind: "loopRun"; key: string; runId: string };
 
 export interface FailedVerification {
-  /** The failed node: the run a verifier rejected, a blocked item's run, a FAIL iteration. */
+  /**
+   * The failed node: the run a verifier rejected, a blocked item's run (the plan node for
+   * an item blocked before its run launched), a FAIL iteration.
+   */
   key: string;
   reason: "rejected" | "blocked" | "checkerFail";
+  /** False when nothing ran (no region to mark, nothing to restore). */
+  ran: boolean;
+  /** The failed work wrote to the session's checkout, so its frontier may be restored. */
+  restores: boolean;
   retry: NodeRetry;
 }
+
+type PlanItem = NonNullable<ExecutionNode["planItems"]>[number];
 
 const ancestorsOf = (tree: NodeTree, node: ExecutionNode): Set<string> => {
   const seen = new Set<string>();
@@ -108,58 +128,104 @@ export function affectedRegion(tree: NodeTree, failedNodeId: string): AffectedRe
   };
 }
 
+/** A turn a later rollback cut off: a checkpoint taken before it was restored after it began. */
+const cutOff = (tree: NodeTree, turn: ExecutionNode): boolean =>
+  [...tree.nodes.values()].some(
+    (node) =>
+      node.sessionId === turn.sessionId &&
+      node.checkpoint?.rolledBackAt !== undefined &&
+      node.firstEvent < turn.firstEvent &&
+      node.checkpoint.rolledBackAt > turn.firstEvent,
+  );
+
 /**
- * The failed verifications in the tree, in tree order: a run its verifier rejected (A7),
- * a blocked plan item's run (A5), the first checker FAIL iteration of a loop run that can
- * be retried (A9). A rejected run outside a plan re-runs its turn; one with no turn above
- * it has nothing to re-run and is left out.
+ * The failed verifications in the tree that nothing has dealt with yet, in tree order:
+ *
+ * - a run its verifier rejected (A7). Outside a plan it re-runs its turn, unless a later
+ *   rollback cut that turn off; with no turn above it there is nothing to re-run;
+ * - a blocked plan item (A5), while it is still blocked: on its run's node, or on the plan
+ *   node when it was blocked before a run launched (`ran: false`);
+ * - the first checker FAIL iteration of a loop run that can be retried (A9), unless a run
+ *   in view is its retry (`retryOf`).
  */
 export function failedVerifications(tree: NodeTree): FailedVerification[] {
-  const planRuns = new Map<string, { sessionId: string; itemId: string; status: string }>();
+  const planRuns = new Map<string, { plan: ExecutionNode; item: PlanItem }>();
+  const retriedLoops = new Set<string>();
   for (const node of tree.nodes.values()) {
+    if (node.loopRun?.retryOf) retriedLoops.add(node.loopRun.retryOf);
     if (node.ref.type !== "plan") continue;
-    for (const item of node.planItems ?? []) {
-      if (item.runId)
-        planRuns.set(item.runId, { sessionId: node.ref.id, itemId: item.id, status: item.status });
-    }
+    for (const item of node.planItems ?? [])
+      if (item.runId) planRuns.set(item.runId, { plan: node, item });
   }
+  const planRetry = (plan: ExecutionNode, item: PlanItem): NodeRetry => ({
+    kind: "planItem",
+    key: plan.key,
+    sessionId: plan.ref.id,
+    itemId: item.id,
+    ...(item.title ? { title: item.title } : {}),
+    ...(item.runId ? { runId: item.runId } : {}),
+    ...(plan.planGeneration ? { generation: plan.planGeneration } : {}),
+  });
   const out: FailedVerification[] = [];
   for (const node of tree.nodes.values()) {
     if (node.ref.type === "subagentRun" && node.subagentRun?.role !== "verify") {
-      const item = planRuns.get(node.ref.id);
-      if (item) {
-        if (item.status !== "blocked") continue;
-        const rejected = node.subagentRun?.verdict?.decision === "REJECT";
+      const planned = planRuns.get(node.ref.id);
+      const rejected = node.subagentRun?.verdict?.decision === "REJECT";
+      if (planned) {
+        if (planned.item.status !== "blocked") continue;
         out.push({
           key: node.key,
           reason: rejected ? "rejected" : "blocked",
-          retry: {
-            kind: "planItem",
-            key: node.key,
-            sessionId: item.sessionId,
-            itemId: item.itemId,
-          },
+          ran: true,
+          // An isolated item ran in its own worktree: the session's checkout holds nothing of it.
+          restores: planned.item.isolated !== true,
+          retry: planRetry(planned.plan, planned.item),
         });
-      } else if (node.subagentRun?.verdict?.decision === "REJECT") {
+      } else if (rejected) {
         let turn: ExecutionNode | undefined;
         for (let up = node.parent; up && !turn; up = tree.nodes.get(up)?.parent) {
           const candidate = tree.nodes.get(up);
           if (candidate?.ref.type === "turn") turn = candidate;
         }
-        if (turn?.sessionId) {
+        if (turn?.sessionId && !cutOff(tree, turn)) {
           out.push({
             key: node.key,
             reason: "rejected",
+            ran: true,
+            restores: true,
             retry: { kind: "turn", key: turn.key, sessionId: turn.sessionId },
           });
         }
       }
-    } else if (node.ref.type === "loopRun" && node.loopRun && canRetryLoopRun(node.loopRun)) {
+    } else if (node.ref.type === "plan") {
+      // Blocked before any run launched (the dispatch itself failed): nothing ran.
+      for (const item of node.planItems ?? []) {
+        if (item.status !== "blocked" || item.runId) continue;
+        // A dependant blocked by a blocked dependency runs again with that one's retry.
+        const status = new Map(node.planItems!.map((other) => [other.id, other.status]));
+        if ((item.dependsOn ?? []).some((id) => status.get(id) === "blocked")) continue;
+        out.push({
+          key: node.key,
+          reason: "blocked",
+          ran: false,
+          restores: false,
+          retry: planRetry(node, item),
+        });
+      }
+    } else if (
+      node.ref.type === "loopRun" &&
+      node.loopRun &&
+      canRetryLoopRun(node.loopRun) &&
+      !retriedLoops.has(node.ref.id)
+    ) {
       const fail = node.children.find((child) => child.loopIteration?.checkerDecision === "FAIL");
       if (fail) {
         out.push({
           key: fail.key,
           reason: "checkerFail",
+          ran: true,
+          // A loop runs in its own session: the open session's checkpoints are not its own.
+          restores: false,
           retry: { kind: "loopRun", key: node.key, runId: node.ref.id },
         });
       }

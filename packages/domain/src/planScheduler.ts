@@ -136,8 +136,9 @@ export function planDepths(items: readonly SessionPlanItem[]): Map<string, numbe
 
 /**
  * A10 retry from node: a blocked item and its blocked dependants (transitively) back to
- * `todo` with their notes cleared, so the dispatcher's next pass re-dispatches them in
- * dependency order. Empty when the item is not blocked.
+ * `todo`, so the dispatcher's next pass re-dispatches them in dependency order. Notes are
+ * kept: the dispatcher hands a retried item the reason its last attempt was blocked.
+ * Empty when the item is not blocked.
  */
 export function retryPlanItemUpdates(
   items: readonly SessionPlanItem[],
@@ -158,5 +159,5 @@ export function retryPlanItemUpdates(
   }
   return items
     .filter((item) => again.has(item.id))
-    .map((item) => ({ id: item.id, status: "todo", note: null }));
+    .map((item) => ({ id: item.id, status: "todo" }));
 }

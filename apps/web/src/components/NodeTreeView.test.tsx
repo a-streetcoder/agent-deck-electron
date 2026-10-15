@@ -96,9 +96,10 @@ const cells: TranscriptCell[] = [
 ];
 
 let served: EventEnvelope[] = [];
+let postReply: { status: number; body: object } = { status: 200, body: {} };
 const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), "http://x");
-  if (init?.method === "POST") return Response.json({ itemIds: ["b"] });
+  if (init?.method === "POST") return Response.json(postReply.body, { status: postReply.status });
   const after = Number(url.searchParams.get("afterSeq"));
   const limit = Number(url.searchParams.get("limit"));
   const rest = served.filter((event) => event.seq > after);
@@ -352,13 +353,34 @@ describe("A10 retry from node", () => {
     event(
       "subagent.run.verified",
       { type: "subagentRun", id },
-      run(id, "completed", {
-        decision: "REJECT",
-        reason: "no tests",
-        verifierRunId: `v-${id}`,
-      }),
+      run(id, "completed", { decision: "REJECT", reason: "no tests", verifierRunId: `v-${id}` }),
     );
   const underSession = { parent: { type: "session", id: SESSION } };
+  const turn = (id: string, label: string, calls: string[] = []) => [
+    event("turn.prompted", { type: "turn", id }, { ...underSession, payload: { label } }),
+    ...calls.flatMap((call) => [
+      event(
+        "subagent.run.created",
+        { type: "subagentRun", id: `run-${call}` },
+        { parent: { type: "toolCall", id: call }, ...run(`run-${call}`, "running") },
+      ),
+      rejected(`run-${call}`),
+    ]),
+    event(
+      "session.turn.completed",
+      { type: "turn", id },
+      {
+        payload: {
+          toolCalls: calls.map((call) => ({ id: call, name: "managed_subagent" })),
+          label,
+        },
+      },
+    ),
+  ];
+  /** After the recorded turn (checkpoint 0): a second turn whose delegated run is rejected. */
+  const rejectedSecondTurn = () => [...recorded, ...turn("t2", "Second prompt", ["call_t2"])];
+  const plan = (items: object[], kind = "set") =>
+    event("plan.changed", { type: "plan", id: SESSION }, { payload: { kind, items } });
   const rowOf = (type: string, label: string) =>
     screen
       .getAllByTestId("tree-node")
@@ -370,46 +392,20 @@ describe("A10 retry from node", () => {
   const ownMark = (row: HTMLElement) =>
     within(row.querySelector("summary, div") as HTMLElement).queryByTestId("tree-node-mark")
       ?.textContent;
+  const posts = () =>
+    fetchMock.mock.calls.filter(([, init]) => init?.method === "POST").map(([url]) => String(url));
 
   beforeEach(() => {
     vi.stubGlobal(
       "confirm",
       vi.fn(() => true),
     );
+    postReply = { status: 200, body: { itemIds: ["b"] } };
+    useAppStore.setState({ toasts: [] });
   });
 
   it("a run rejected in a later turn: marks the region and restores, then re-prompts", async () => {
-    served = [
-      ...recorded,
-      event(
-        "turn.prompted",
-        { type: "turn", id: "t2" },
-        {
-          parent: { type: "session", id: SESSION },
-          payload: { label: "Second prompt" },
-        },
-      ),
-      // Delegated by the second turn's tool call: that turn is what runs again.
-      event(
-        "subagent.run.created",
-        { type: "subagentRun", id: "r2" },
-        {
-          parent: { type: "toolCall", id: "call_t2" },
-          ...run("r2", "running"),
-        },
-      ),
-      rejected("r2"),
-      event(
-        "session.turn.completed",
-        { type: "turn", id: "t2" },
-        {
-          payload: {
-            toolCalls: [{ id: "call_t2", name: "managed_subagent" }],
-            label: "Second prompt",
-          },
-        },
-      ),
-    ];
+    served = [...rejectedSecondTurn(), ...turn("t3", "Third prompt")];
     render(<NodeTreeView />);
     const button = await waitFor(() => screen.getByTestId("retry-from-node"));
     expect(button.closest("[data-type]")?.getAttribute("data-type")).toBe("subagentRun");
@@ -419,75 +415,144 @@ describe("A10 retry from node", () => {
 
     act(() => button.click());
     await waitFor(() => expect(sendPrompt).toHaveBeenCalledWith(SESSION, "Second prompt"));
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('"Plan and delegate"'));
+    // The confirm says what is dropped and that only the first dropped prompt is re-sent.
+    expect(window.confirm).toHaveBeenCalledWith(
+      'Retry from node: restore the checkpoint "Plan and delegate" (2 later turns and the file changes after it are discarded), then send the first dropped prompt again (only that one: the 1 after it are not replayed).',
+    );
     expect(rollbackToCheckpoint).toHaveBeenCalledWith(0);
   });
 
-  it("never restores files while another run is still working", async () => {
+  it("after the rollback and a successful re-run, nothing is marked any more", async () => {
     served = [
-      ...recorded,
-      event("turn.prompted", { type: "turn", id: "t2" }, underSession),
+      ...rejectedSecondTurn(),
       event(
-        "subagent.run.created",
-        { type: "subagentRun", id: "r2" },
-        {
-          parent: { type: "toolCall", id: "call_t2" },
-          ...run("r2", "running"),
-        },
+        "checkpoint.created",
+        { type: "checkpoint", id: `${SESSION}/1` },
+        { ...underSession, payload: { turnIndex: 1 } },
       ),
-      rejected("r2"),
       event(
-        "session.turn.completed",
-        { type: "turn", id: "t2" },
-        {
-          payload: { toolCalls: [{ id: "call_t2", name: "managed_subagent" }] },
-        },
+        "checkpoint.rolledBack",
+        { type: "checkpoint", id: `${SESSION}/0` },
+        { actor: { type: "user" }, payload: { turnIndex: 0, safetyTurnIndex: 1 } },
       ),
+      ...turn("t2b", "Second prompt again"),
+      ...turn("t3", "Third prompt"),
+    ];
+    render(<NodeTreeView />);
+    await waitFor(() => expect(rowOf("turn", "Third prompt")).toBeDefined());
+    expect(screen.queryByTestId("retry-from-node")).toBeNull();
+    expect(screen.queryAllByTestId("tree-node-mark")).toEqual([]);
+  });
+
+  it("never restores files while another run is still working, also once the confirm closes", async () => {
+    served = [
+      ...rejectedSecondTurn(),
       event(
         "subagent.run.created",
         { type: "subagentRun", id: "busy" },
-        {
-          ...underSession,
-          ...run("busy", "running"),
-        },
+        { ...underSession, ...run("busy", "running") },
       ),
     ];
-    render(<NodeTreeView />);
+    const { unmount } = render(<NodeTreeView />);
     const button = await waitFor(() => screen.getByTestId("retry-from-node"));
     expect(button).toHaveProperty("disabled", true);
     expect(button.getAttribute("title")).toMatch(/^Wait for the running subagents/);
+    unmount();
+
+    // A turn starts while the dialog is open: nothing is restored.
+    served = rejectedSecondTurn();
+    render(<NodeTreeView />);
+    const ready = await waitFor(() => screen.getByTestId("retry-from-node"));
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => {
+        useAppStore.setState({
+          transcript: { ...useAppStore.getState().transcript, agentStatus: "running" },
+        });
+        return true;
+      }),
+    );
+    act(() => ready.click());
+    await waitFor(() =>
+      expect(useAppStore.getState().toasts.map((toast) => toast.message)).toContain(
+        "Wait for the running turn to finish.",
+      ),
+    );
+    expect(rollbackToCheckpoint).not.toHaveBeenCalled();
   });
 
-  it("a blocked plan item asks the dispatcher; a rejected first turn has nothing to restore", async () => {
-    const plan = (items: object[]) =>
-      event("plan.changed", { type: "plan", id: SESSION }, { payload: { kind: "set", items } });
+  it("a blocked plan item: asks before restoring, and a refusal restores nothing", async () => {
     served = [
-      recorded[0]!,
-      recorded[1]!,
-      plan([{ id: "b", title: "B", status: "todo" }]),
+      ...recorded,
       event(
         "subagent.run.created",
         { type: "subagentRun", id: "rb" },
-        {
-          parent: { type: "session", id: SESSION },
-          ...run("rb", "running"),
-        },
+        { ...underSession, ...run("rb", "running") },
       ),
       event("subagent.run.finished", { type: "subagentRun", id: "rb" }, run("rb", "failed")),
       plan([{ id: "b", title: "B", status: "blocked", runId: "rb" }]),
     ];
-    const { unmount } = render(<NodeTreeView />);
+    postReply = { status: 409, body: { error: "The plan changed since you looked at it." } };
+    render(<NodeTreeView />);
     const button = await waitFor(() => screen.getByTestId("retry-from-node"));
     act(() => button.click());
     await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(`/sessions/${SESSION}/plan/items/b/retry`, {
-        method: "POST",
+      expect(useAppStore.getState().toasts.map((toast) => toast.message)).toContain(
+        "The plan changed since you looked at it.",
+      ),
+    );
+    // Only the dry run went out, with what the person saw; no rollback followed.
+    expect(posts()).toEqual([`/sessions/${SESSION}/plan/items/b/retry?dryRun=1`]);
+    expect(fetchMock.mock.calls.find(([, init]) => init?.method === "POST")?.[1]?.body).toBe(
+      JSON.stringify({
+        // The recorded plan was created by this event: the generation the person saw.
+        generation: recorded.find((event) => event.kind === "plan.changed")!.id,
+        runId: "rb",
       }),
     );
     expect(rollbackToCheckpoint).not.toHaveBeenCalled();
-    unmount();
+  });
 
-    // The recorded run, rejected inside the session's first turn: no checkpoint before it.
+  it("an isolated item restores nothing; an item blocked before its run has its own action", async () => {
+    const created = plan([], "created");
+    served = [
+      recorded[0]!,
+      recorded[1]!,
+      created,
+      event(
+        "subagent.run.created",
+        { type: "subagentRun", id: "ri" },
+        { ...underSession, ...run("ri", "running") },
+      ),
+      event("subagent.run.finished", { type: "subagentRun", id: "ri" }, run("ri", "failed")),
+      plan(
+        [
+          { id: "i", title: "Isolated", status: "blocked", runId: "ri", isolated: true },
+          { id: "n", title: "Never ran", status: "blocked" },
+        ],
+        "updated",
+      ),
+    ];
+    render(<NodeTreeView />);
+    await waitFor(() => expect(screen.getAllByTestId("retry-from-node")).toHaveLength(2));
+    const buttons = screen.getAllByTestId("retry-from-node");
+    const never = buttons.find((b) => b.textContent === "Retry from node Never ran");
+    const isolated = buttons.find((b) => b.textContent === "Retry from node");
+    expect(never && isolated).toBeTruthy();
+    act(() => isolated!.click());
+    await waitFor(() => expect(posts()).toEqual([`/sessions/${SESSION}/plan/items/i/retry`]));
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("no checkpoint is restored"),
+    );
+    act(() => never!.click());
+    await waitFor(() => expect(posts()).toHaveLength(2));
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")[1]?.[1]?.body).toBe(
+      JSON.stringify({ generation: created.id, runId: null }),
+    );
+    expect(rollbackToCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("a rejected first turn has nothing to restore", async () => {
     served = [...recorded, rejected(`00000000-0000-4000-8000-000000000009`)];
     render(<NodeTreeView />);
     const disabled = await waitFor(() => screen.getByTestId("retry-from-node"));

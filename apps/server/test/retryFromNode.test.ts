@@ -1,9 +1,10 @@
-import type { SessionPlanItem } from "@agent-deck/domain";
+import { retryPlanItemUpdates, type SessionPlanItem } from "@agent-deck/domain";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerContext } from "../src/context.ts";
 import { disabledEventLog } from "../src/eventLog.ts";
 import { createEventProducers } from "../src/eventProducers.ts";
+import type { PlanDispatcher } from "../src/planDispatcher.ts";
 import { registerSessionRoutes } from "../src/routes/sessions.ts";
 import { SessionMutationClaims } from "../src/sessionMutationClaims.ts";
 
@@ -17,7 +18,22 @@ afterEach(async () => {
 function routes(plan: SessionPlanItem[], events = createEventProducers(disabledEventLog())) {
   const fastify = Fastify();
   servers.push(fastify);
-  const retry = vi.fn(async () => true);
+  // The dispatcher's contract: refuse stale or unblocked intent, else record, then act.
+  const acted: string[][] = [];
+  const checkRetry = vi.fn<PlanDispatcher["checkRetry"]>((_s, itemId, seen) => {
+    const item = plan.find((candidate) => candidate.id === itemId);
+    if (seen.generation !== undefined && seen.generation !== "gen-1") return "stale";
+    if (seen.runId !== undefined && seen.runId !== (item?.runId ?? null)) return "stale";
+    const itemIds = retryPlanItemUpdates(plan, itemId).map((update) => update.id);
+    return itemIds.length ? itemIds : "notBlocked";
+  });
+  const retry = vi.fn<PlanDispatcher["retry"]>(async (s, itemId, seen, record) => {
+    const itemIds = checkRetry(s, itemId, seen);
+    if (typeof itemIds === "string") return itemIds;
+    if (!record(itemIds)) return "unrecorded";
+    acted.push(itemIds);
+    return "retried";
+  });
   const ctx = {
     fastify,
     sessions: {
@@ -31,13 +47,17 @@ function routes(plan: SessionPlanItem[], events = createEventProducers(disabledE
     askUser: { cancelSession: vi.fn() },
     broadcast: vi.fn(),
     dropDiffCache: vi.fn(),
-    planDispatcher: { retry, evaluateAll: vi.fn() },
+    planDispatcher: { retry, checkRetry, evaluateAll: vi.fn() },
     events,
   } as unknown as ServerContext;
   registerSessionRoutes(ctx);
-  const post = (itemId: string, session = "s1") =>
-    fastify.inject({ method: "POST", url: `/sessions/${session}/plan/items/${itemId}/retry` });
-  return { post, retry };
+  const post = (itemId: string, session = "s1", query = "", seen: object = {}) =>
+    fastify.inject({
+      method: "POST",
+      url: `/sessions/${session}/plan/items/${itemId}/retry${query}`,
+      payload: seen,
+    });
+  return { post, retry, acted };
 }
 
 const plan: SessionPlanItem[] = [
@@ -47,32 +67,60 @@ const plan: SessionPlanItem[] = [
 ];
 
 describe("A10 plan item retry route", () => {
-  it("logs the person's retry, then hands it to the dispatcher as the cause", async () => {
+  it("logs the person's retry once the dispatcher accepts it, as the cause", async () => {
     const events = createEventProducers(disabledEventLog());
     const recorded = vi.spyOn(events, "planItemRetried").mockReturnValue("retry-event");
-    const { post, retry } = routes(plan, events);
-    const response = await post("a");
+    const { post, acted } = routes(plan, events);
+    const response = await post("a", "s1", "", { generation: "gen-1", runId: "run-1" });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ itemIds: ["a", "b"] });
     // Anonymous on a loopback server; the member on the shared one.
-    expect(recorded).toHaveBeenCalledWith(
-      "s1",
-      { itemId: "a", itemIds: ["a", "b"] },
-      {
-        type: "user",
-      },
-    );
-    expect(retry).toHaveBeenCalledWith("s1", "a", "retry-event");
+    const anonymous = { type: "user" };
+    expect(recorded).toHaveBeenCalledWith("s1", { itemId: "a", itemIds: ["a", "b"] }, anonymous);
+    expect(acted).toEqual([["a", "b"]]);
+  });
+
+  it("a dry run only answers whether the retry would run (asked before any restore)", async () => {
+    const events = createEventProducers(disabledEventLog());
+    const recorded = vi.spyOn(events, "planItemRetried");
+    const { post, retry } = routes(plan, events);
+    expect((await post("a", "s1", "?dryRun=1")).json()).toEqual({ itemIds: ["a", "b"] });
+    expect((await post("c", "s1", "?dryRun=1")).statusCode).toBe(409);
+    expect(retry).not.toHaveBeenCalled();
+    expect(recorded).not.toHaveBeenCalled();
+  });
+
+  it("refuses stale intent: another member replaced the plan or re-ran the item meanwhile", async () => {
+    const events = createEventProducers(disabledEventLog());
+    const recorded = vi.spyOn(events, "planItemRetried");
+    const { post, acted } = routes(plan, events);
+    for (const seen of [{ generation: "gen-0" }, { runId: "run-old" }, { generation: null }]) {
+      const dry = await post("a", "s1", "?dryRun=1", seen);
+      expect(dry.json()).toMatchObject({ code: "plan_retry_stale" });
+      const real = await post("a", "s1", "", seen);
+      expect(real.statusCode).toBe(409);
+      expect(real.json()).toMatchObject({ code: "plan_retry_stale" });
+    }
+    // A run-less item is named with runId null.
+    expect((await post("b", "s1", "?dryRun=1", { runId: null })).json()).toEqual({
+      itemIds: ["b"],
+    });
+    expect(recorded).not.toHaveBeenCalled();
+    expect(acted).toEqual([]);
   });
 
   it("refuses an item that is not blocked, an unknown session and an unlogged retry", async () => {
-    const { post, retry } = routes(plan);
+    const events = createEventProducers(disabledEventLog());
+    const recorded = vi.spyOn(events, "planItemRetried");
+    const { post, acted } = routes(plan, events);
     expect((await post("c")).json()).toMatchObject({ code: "plan_item_not_blocked" });
+    // Nothing is logged for a refused retry.
+    expect(recorded).not.toHaveBeenCalled();
     expect((await post("a", "nope")).statusCode).toBe(404);
     // The disabled log refuses the append: without the intent on record nothing moves.
     const unlogged = await post("a");
     expect(unlogged.statusCode).toBe(409);
     expect(unlogged.json()).toMatchObject({ code: "plan_retry_not_recorded" });
-    expect(retry).not.toHaveBeenCalled();
+    expect(acted).toEqual([]);
   });
 });

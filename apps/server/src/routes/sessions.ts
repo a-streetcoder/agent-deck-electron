@@ -15,7 +15,6 @@ import type { IncomingMessage } from "node:http";
 import { serverLog } from "../serverLog.ts";
 import { createSessionDraftGateway } from "../sessionDrafts.ts";
 import { requestUser } from "../trustedProxy.ts";
-import { retryPlanItemUpdates } from "@agent-deck/domain";
 import { userActor } from "../eventProducers.ts";
 import { coAuthorTrailers, gitIdentityEnv, withTrailers } from "../gitIdentity.ts";
 import { API_KEY_ONLY_PROVIDERS, listProjectFiles } from "@agent-deck/resources";
@@ -580,35 +579,50 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   });
 
   // A10 retry from node: a person re-runs a blocked plan item and the dependants it
-  // blocked. The click is the live intent the dispatcher waits for, logged with its actor
-  // before anything moves; the Run tree restores the frontier checkpoint first, if any.
+  // blocked. The click is the live intent the dispatcher waits for, for those items only,
+  // logged with its actor once the dispatcher accepts it. The body names the plan
+  // generation and run the person saw: stale intent is refused. `?dryRun=1` only says
+  // whether it would run: the Run tree asks before it restores the frontier checkpoint.
   fastify.post("/sessions/:id/plan/items/:itemId/retry", async (request, reply) => {
     const { id, itemId } = request.params as { id: string; itemId: string };
+    const dryRun = (request.query as { dryRun?: string } | undefined)?.dryRun === "1";
+    const seen = z
+      .object({
+        generation: z.string().max(500).nullable().optional(),
+        runId: z.string().max(500).nullable().optional(),
+      })
+      .safeParse(request.body ?? {});
+    if (!seen.success) return reply.status(400).send({ error: seen.error.message });
     const session = sessions.get(id);
-    if (!session || !ctx.planDispatcher)
-      return reply.status(404).send({ error: "unknown session" });
-    const itemIds = retryPlanItemUpdates(session.plan, itemId).map((update) => update.id);
-    if (itemIds.length === 0) {
-      return reply.status(409).send({
-        code: "plan_item_not_blocked",
-        error: "Only a blocked plan item can be retried.",
-      });
+    const dispatcher = ctx.planDispatcher;
+    if (!session || !dispatcher) return reply.status(404).send({ error: "unknown session" });
+    const refused = (outcome: "notBlocked" | "stale") =>
+      reply.status(409).send(
+        outcome === "stale"
+          ? {
+              code: "plan_retry_stale",
+              error: "The plan changed since you looked at it; nothing was retried.",
+            }
+          : { code: "plan_item_not_blocked", error: "Only a blocked plan item can be retried." },
+      );
+    if (dryRun) {
+      const itemIds = dispatcher.checkRetry(id, itemId, seen.data);
+      return typeof itemIds === "string" ? refused(itemIds) : { itemIds };
     }
-    const cause = ctx.events.planItemRetried(
-      id,
-      { itemId, itemIds },
-      userActor(requestUser(request.raw)),
-    );
-    if (!cause) {
+    let itemIds: string[] = [];
+    const outcome = await dispatcher.retry(id, itemId, seen.data, (named) => {
+      itemIds = named;
+      return ctx.events.planItemRetried(
+        id,
+        { itemId, itemIds: named },
+        userActor(requestUser(request.raw)),
+      );
+    });
+    if (outcome === "notBlocked" || outcome === "stale") return refused(outcome);
+    if (outcome === "unrecorded") {
       return reply.status(409).send({
         code: "plan_retry_not_recorded",
         error: "The retry could not be recorded in the event log, so nothing was dispatched.",
-      });
-    }
-    if (!(await ctx.planDispatcher.retry(id, itemId, cause))) {
-      return reply.status(409).send({
-        code: "plan_item_not_blocked",
-        error: "Only a blocked plan item can be retried.",
       });
     }
     return { itemIds };

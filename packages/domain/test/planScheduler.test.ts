@@ -95,9 +95,9 @@ describe("retryPlanItemUpdates (A10)", () => {
       item("after", "done", ["b"]),
     ];
     expect(retryPlanItemUpdates(plan, "b")).toEqual([
-      { id: "b", status: "todo", note: null },
-      { id: "c", status: "todo", note: null },
-      { id: "d", status: "todo", note: null },
+      { id: "b", status: "todo" },
+      { id: "c", status: "todo" },
+      { id: "d", status: "todo" },
     ]);
     expect(retryPlanItemUpdates(plan, "a")).toEqual([]);
     expect(retryPlanItemUpdates(plan, "missing")).toEqual([]);

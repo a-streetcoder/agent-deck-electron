@@ -90,6 +90,15 @@ export interface CheckpointRollbackGateway {
   }): Promise<CheckpointRollbackResult>;
 }
 
+/** The transcript says a turn is running; a fake or torn session without one is not. */
+const turnRunning = (session: ManagedSession): boolean => {
+  try {
+    return session.snapshot().state.agentStatus === "running";
+  } catch {
+    return false;
+  }
+};
+
 export function makeCheckpointRollback(deps: CheckpointRollbackDeps): CheckpointRollbackGateway {
   const { sessions, checkpoints, receipts, reopen, events } = deps;
 
@@ -100,6 +109,16 @@ export function makeCheckpointRollback(deps: CheckpointRollbackDeps): Checkpoint
       const meta = session.meta;
       if (!meta.piSessionFile) {
         throw new Error("this session has no conversation to roll back to");
+      }
+      // A10: never rewind under running work: a turn would race the restore, and a
+      // detached child writing to the checkout would lose its files (the Checkpoints panel
+      // and the Run tree's Retry from node both come through here).
+      // A10: a turn is running (isRunning would only say that pi is alive).
+      if (turnRunning(session)) {
+        throw new Error("The session is running a turn; roll back once it is idle.");
+      }
+      if (session.detachedSubagents > 0) {
+        throw new Error("Subagents are still running for this session; roll back once they end.");
       }
       const cwd = meta.worktreePath ?? meta.cwd;
       const sessionFile = meta.piSessionFile;

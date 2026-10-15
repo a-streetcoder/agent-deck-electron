@@ -365,4 +365,41 @@ describe("makeCheckpointRollback", () => {
       /unknown session/,
     );
   });
+
+  it("A10: refuses while a turn runs or detached subagents work, before mutating anything", async () => {
+    const dataDir = makeTempDir("agent-deck-rb-data3-");
+    const checkpoints = makeCheckpointService({ dataDir });
+    const meta = {
+      id: "busy",
+      cwd: dataDir,
+      createdAt: new Date().toISOString(),
+      piSessionFile: path.join(dataDir, "s.jsonl"),
+    } as SessionMeta;
+    let live: Partial<ManagedSession> = {};
+    const destroyed: string[] = [];
+    const sessions = {
+      get: () => ({ meta, ...live }) as ManagedSession,
+      destroy: async (id: string) => {
+        destroyed.push(id);
+      },
+    } as unknown as SessionManager;
+    const rollback = makeCheckpointRollback({
+      sessions,
+      checkpoints,
+      receipts: new ReceiptBus(false),
+      reopen: async (m) => ({ meta: m }) as ManagedSession,
+    });
+    live = {
+      snapshot: () => ({ seq: 0, state: { agentStatus: "running" } }),
+    } as unknown as Partial<ManagedSession>;
+    await expect(rollback.rollback({ sessionId: "busy", turnIndex: 0 })).rejects.toThrow(
+      /running a turn/,
+    );
+    live = { detachedSubagents: 1 } as Partial<ManagedSession>;
+    await expect(rollback.rollback({ sessionId: "busy", turnIndex: 0 })).rejects.toThrow(
+      /Subagents are still running/,
+    );
+    expect(destroyed).toEqual([]);
+    expect(await checkpoints.records("busy")).toEqual([]);
+  });
 });
