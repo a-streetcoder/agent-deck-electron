@@ -891,6 +891,64 @@ describe("loop definition store", () => {
     },
   );
 
+  it("reads a hand-written graph from nodes/edges frontmatter and keeps it on edit (A9)", () => {
+    const home = makeHome();
+    const roots = { home };
+    const dir = loopsDir(roots);
+    mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, "graph.loop.md");
+    const content = [
+      "---",
+      "name: graph",
+      "structure: agentPipeline",
+      "checkerRubric: Evidence.",
+      "nodes:",
+      "  - { id: plan, kind: stage, agentName: Planner }",
+      "  - { id: build, kind: stage, agentName: Builder }",
+      "  - { id: review, kind: checker, agentName: Reviewer }",
+      "  - { id: judge, kind: evaluator }",
+      "edges:",
+      "  - { from: plan, to: build }",
+      "  - { from: build, to: review }",
+      "  - { from: review, to: judge }",
+      "  - { from: judge, to: plan, when: CONTINUE, budgeted: true }",
+      "---",
+      "",
+      "Ship it.",
+      "",
+    ].join("\n");
+    writeFileSync(filePath, content);
+    const [loop] = scanLoops(roots);
+    expect(loop!.graph).toEqual({
+      nodes: [
+        { id: "plan", kind: "stage", agentName: "Planner" },
+        { id: "build", kind: "stage", agentName: "Builder" },
+        { id: "review", kind: "checker", agentName: "Reviewer" },
+        { id: "judge", kind: "evaluator" },
+      ],
+      edges: [
+        { from: "plan", to: "build" },
+        { from: "build", to: "review" },
+        { from: "review", to: "judge" },
+        { from: "judge", to: "plan", when: "CONTINUE", budgeted: true },
+      ],
+    });
+    expect(readFileSync(filePath, "utf8")).toBe(content);
+    saveLoopFile(roots, { name: "graph", description: "edited" });
+    expect(scanLoops(roots)[0]!.graph).toEqual(loop!.graph);
+
+    // A flat definition has no graph: the engine normalises its structure instead.
+    saveLoopFile(roots, { name: "flat", goal: "g" });
+    expect(scanLoops(roots).find((candidate) => candidate.name === "flat")).not.toHaveProperty(
+      "graph",
+    );
+    // A malformed graph is refused, never replaced by the flat template.
+    writeFileSync(filePath, content.replace("kind: evaluator", "kind: judge"));
+    expect(() => saveLoopFile(roots, { name: "graph", description: "again" })).toThrow(
+      'Graph node "judge" has an unknown kind "judge".',
+    );
+  });
+
   it("rejects a different name that collides on the same slug", () => {
     const home = makeHome();
     const roots = { home };

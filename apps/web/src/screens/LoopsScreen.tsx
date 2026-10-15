@@ -39,6 +39,7 @@ import {
   type LoopRequiredAgentRole,
   type LoopRun,
 } from "@agent-deck/domain";
+import { LoopGraphView } from "../components/LoopGraphView.tsx";
 import { SkeletonRows } from "../components/Skeleton.tsx";
 import { useAppStore } from "../state/store.ts";
 import { useAgentsCatalog } from "../state/useAgents.ts";
@@ -1397,6 +1398,12 @@ export function LoopsScreen() {
               ) : null}
             </div>
           ) : null}
+          {activeRun.definitionSnapshot ? (
+            <LoopGraphView
+              loop={activeRun.definitionSnapshot}
+              runChildren={activeRun.iterations.at(-1)?.children ?? []}
+            />
+          ) : null}
           {activeRun.iterations.length > 0 ? (
             <ol
               className="mt-2 space-y-2"
@@ -2645,6 +2652,7 @@ export function LoopsScreen() {
                 ? "No iteration limit"
                 : `Up to ${launchDraft.loop.maxIterations} iterations`}
             </p>
+            <LoopGraphView loop={launchDraft.loop} />
             <label className="block text-caption font-medium text-text-muted">
               Run goal
               <ControlTextArea

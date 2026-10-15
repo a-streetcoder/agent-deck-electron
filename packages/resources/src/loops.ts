@@ -14,6 +14,9 @@ import {
   LOOP_WRITE_TARGETS,
   type LoopDefinition,
   type LoopDefinitionAvailability,
+  type LoopGraph,
+  type LoopGraphEdge,
+  type LoopGraphNode,
   type LoopLaunchContextScope,
   type LoopSuccessConditionSource,
   type LoopStructure,
@@ -81,6 +84,30 @@ function decodeJSONStringArrayLine(content: string, key: string): string[] | und
   } catch {
     return undefined;
   }
+}
+/** A9: hand-written `nodes`/`edges` frontmatter. Malformed entries are kept as they are so
+ * graph validation refuses the definition instead of falling back to the flat template. */
+function asLoopGraph(frontmatter: Record<string, unknown>): LoopGraph | undefined {
+  if (frontmatter.nodes === undefined && frontmatter.edges === undefined) return undefined;
+  const records = (value: unknown): Record<string, unknown>[] =>
+    Array.isArray(value)
+      ? value.map(
+          (item) => (item && typeof item === "object" ? item : {}) as Record<string, unknown>,
+        )
+      : [];
+  return {
+    nodes: records(frontmatter.nodes).map((node) => ({
+      id: asString(node.id) ?? "",
+      kind: asString(node.kind) as LoopGraphNode["kind"],
+      ...(asString(node.agentName) ? { agentName: asString(node.agentName) } : {}),
+    })),
+    edges: records(frontmatter.edges).map((edge) => ({
+      from: asString(edge.from) ?? "",
+      to: asString(edge.to) ?? "",
+      ...(edge.when !== undefined ? { when: String(edge.when) as LoopGraphEdge["when"] } : {}),
+      ...(edge.budgeted === true ? { budgeted: true } : {}),
+    })),
+  };
 }
 function asLaunchContextScope(value: unknown): LoopLaunchContextScope {
   return value === "everyIteration" ? "everyIteration" : "firstIterationOnly";
@@ -171,6 +198,7 @@ export function parseLoopFile(filePath: string, content: string): LoopDefinition
     body,
   );
   const evaluatorModel = asString(frontmatter.evaluatorModel)?.trim() || undefined;
+  const graph = asLoopGraph(frontmatter);
   const projectPaths =
     decodeJSONStringArrayLine(content, "projectPathsJSON") ??
     asProjectPaths(frontmatter.projectPaths) ??
@@ -198,6 +226,7 @@ export function parseLoopFile(filePath: string, content: string): LoopDefinition
       asStructure(frontmatter.structure) === "humanApproval"
         ? normalizeLoopCheckpointPrompt(nativeLineFrontmatterValue(content, "checkpointPrompt"))
         : asString(frontmatter.checkpointPrompt) || undefined,
+    ...(graph ? { graph } : {}),
     launchContext: normalizeLoopLaunchContext(launchContext),
     launchContextScope: asLaunchContextScope(frontmatter.launchContextScope),
     maxIterations: clampMaxIterations(
@@ -401,6 +430,7 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
       edit.checkpointPrompt ?? persistedCheckpointPrompt ?? asString(frontmatter.checkpointPrompt),
     ),
     writeTarget: edit.writeTarget ?? asWriteTarget(frontmatter.writeTarget),
+    graph: asLoopGraph(frontmatter),
   });
   if (validationError) throw new LoopDefinitionInvalidError(validationError);
 

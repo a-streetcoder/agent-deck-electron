@@ -14,6 +14,69 @@ Loop structures, `managed_parallel` and the session plan are listed in
 `apps/server/src/bridgeTools.ts`. How a Loop's children end and what its snapshots keep is under
 [Stopped child cards and Loop snapshots](#stopped-child-cards-and-loop-snapshots).
 
+### Loops as graphs (A9)
+
+A Loop definition is a graph: `nodes[]` (`id`, `kind`, `agentName`) and `edges[]` (`from`, `to`,
+`when`, `budgeted`). Kinds are `maker`, `checker`, `evaluator`, `stage`, `branch`, `triage` and
+`human`; `when` is a `LoopCheckerDecision`. The six structures are builtin templates:
+`loopGraph` (`packages/domain/src/loops.ts`) normalises a flat `.loop.md` to its template on
+load, and the file is never rewritten. The engine (`execute` in `apps/server/src/loopEngine.ts`)
+runs one interpreter over the depth columns `loopGraphColumns` returns.
+
+| Structure         | Template                                                                       |
+| ----------------- | ------------------------------------------------------------------------------ |
+| `singleAgent`     | maker → evaluator; evaluator `CONTINUE` back to maker                          |
+| `makerChecker`    | maker → checker → evaluator; checker `FAIL` and evaluator `CONTINUE` back      |
+| `agentPipeline`   | `stage-1` → … → `stage-n` → evaluator; evaluator `CONTINUE` back to stage 1    |
+| `parallelAgents`  | `branch-1` … `branch-n` (one column, two workers) → evaluator; `CONTINUE` back |
+| `discoveryTriage` | triage → evaluator; evaluator `CONTINUE` back to triage                        |
+| `humanApproval`   | one `human` node: the checkpoint is recorded at start, no Pi call              |
+
+Interpreter rules, the same for every graph:
+
+- Forward edges carry no condition; every node runs, column by column. A column of branches runs
+  in parallel; other columns run their nodes in order.
+- Validation runs once per iteration, before the first judge (checker or evaluator). A broken
+  validation tool (`spawnError`, `timeout`) ends the run before a checker; before an evaluator,
+  the evaluator still judges first (as in the flat structures).
+- A budgeted edge leads back to the entry and starts the next iteration; `maxIterations` is the
+  cycle budget (0 is unlimited). Only two budgeted edges exist: the evaluator's on `CONTINUE`
+  and the checker's on `FAIL` (taken only against a passed validation, see
+  [Loop checker and verdicts](#loop-checker-and-verdicts)). An evaluator without one makes a
+  single-pass loop.
+- The checker's `ASK_HUMAN` stops the run after a continuing evaluator; prompts, artifacts and
+  feedback per role are those of the matching template.
+
+`loopGraphColumns` refuses a graph unless: ids are unique, kinds known; cycles go only through
+budgeted edges, which lead back to the entry; there is exactly one entry node (or one column of
+parallel branches, which start together), so every node is reachable; there is one evaluator,
+alone in the last column; there is at most one maker, checker and triage; and a `human` node is
+the whole graph. A graph node other than the evaluator needs an agent, a checker needs the loop's
+`checkerRubric`, and branches need the `artifactMarkdown` write target.
+
+A hand-written graph goes in the `.loop.md` frontmatter and replaces the template; `structure`
+stays as the display label. Example, a pipeline with a checker after stage two:
+
+```yaml
+structure: agentPipeline
+checkerRubric: Require concrete evidence.
+nodes:
+  - { id: plan, kind: stage, agentName: Planner }
+  - { id: build, kind: stage, agentName: Builder }
+  - { id: review, kind: checker, agentName: Reviewer }
+  - { id: judge, kind: evaluator }
+edges:
+  - { from: plan, to: build }
+  - { from: build, to: review }
+  - { from: review, to: judge }
+  - { from: review, to: plan, when: FAIL, budgeted: true }
+  - { from: judge, to: plan, when: CONTINUE, budgeted: true }
+```
+
+The Loops screen draws the graph in the run dialog (definition) and the run panel (run, with each
+node's status from its latest-iteration child, mapped as the A2 tree maps a loop child). The
+editor does not author graphs; editing a hand-written loop there keeps its `nodes`/`edges`.
+
 ## Agent coordination
 
 ### Loop role launch defaults
