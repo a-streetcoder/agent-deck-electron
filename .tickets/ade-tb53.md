@@ -36,3 +36,7 @@ docker compose config validates in CI (workflow step); .env.example complete; ru
 **2026-10-15T22:54:18Z**
 
 2026-10-15 implemented as f2be30c (compose hardened, cloudflared 2026.10.1 in the server's namespace, TUNNEL_TOKEN blanked for agent-deck, .env.example with safe pre-fills, CI compose-config step, runbook 'Install on a server', legacy retitle, roadmap DST line). docker compose config validated on the VM; the stack has never run (first run is 17c). Image owner a-streetcoder matches the GitHub remote. Contrarian + GPT (review58) running.
+
+**2026-10-15T23:02:08Z**
+
+2026-10-16 reviews: GPT (review58) = backup umask, restore into an empty volume, port 7844 docs, DST stub (done by the architect); contrarian = no first-up blocker, but a restarted agent-deck strands cloudflared in a dead namespace (fix: pause container owning the namespace), image not yet published (runbook prerequisites), upgrade command does nothing on a pinned tag, auth switchable from .env (hard-code proxy + PORT in compose, fatal typo in bindHost), hardening never exercised (CI smoke with the flags), missing project root 500s (server creates it), Cloudflare GitHub login method prerequisite, recovery token useless on the shared server, cloudflared metrics on 0.0.0.0. Consolidated fix round sent.
