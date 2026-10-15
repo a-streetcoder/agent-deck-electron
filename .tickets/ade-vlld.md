@@ -1,6 +1,6 @@
 ---
 id: ade-vlld
-status: in_progress
+status: closed
 deps: [ade-2jry, ade-wruf, ade-zluq]
 links: []
 created: 2026-10-15T07:25:28Z
@@ -30,3 +30,7 @@ Owner 2026-10-15: 'Approved on what you were waiting' (this ticket was the only 
 **2026-10-15T08:01:16Z**
 
 2026-10-15 design pass (contrarian) done; findings: fork keeps the source owner today by SRV-11 design (to be reversed per this ticket, ADR 0003 d4 amendment); model-catalog check missing on fork; authors not copied; Loop session forks broken; fork shares the owner's checkout; no status for other sessions in the client and the log alone would show stale 'running' after restarts (compute server-side); no top-level transcript route and the log has no content (read_session = projection + Pi file heads + refs); session.opened would be noise (cut); share = ?session= deep link. Split: ade-2jry (15a fork follows the forker, no deps, started), ade-wruf (15b status + member chips + deep link, needsInput after A8), ade-zluq (15c list_sessions/read_session, after 15b).
+
+**2026-10-15T09:43:46Z**
+
+2026-10-15 all three sub-tickets closed and deployed: 15a ade-2jry (fork follows the forker), 15b ade-wruf (status on every row, member chips, ?session= deep link, fork provenance), 15c ade-zluq (list_sessions/read_session). Remaining follow-ups live on the sub-tickets (checkpoint rollback still offered on another member's session; Pi file memoisation; cursor logId). Epic closed.
