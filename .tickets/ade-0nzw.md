@@ -1,0 +1,22 @@
+---
+id: ade-0nzw
+status: open
+deps: [ade-m5ku, ade-bfxw]
+links: []
+created: 2026-10-15T07:25:23Z
+type: feature
+priority: 2
+assignee: almoretti
+---
+# A9: loops as graphs: nodes[]/edges[] in .loop.md, the six structures as builtin templates, one interpreter (legibility scope only)
+
+
+Lane A row A9, re-scoped by A0: LEGIBILITY ONLY (no new topologies for their own sake). Introduce a graph form for loop definitions:  (kind = the existing LoopRunPhase / LoopAgentRole: maker, checker, evaluator, stage, branch, triage, human) and  with conditions = LoopCheckerDecision values; the six existing structures become builtin templates normalised into that graph; the engine runs ONE interpreter over the graph (the six code paths collapse);  becomes a cycle budget; existing .loop.md files keep working unchanged (flat frontmatter is normalised to the graph on load; the file is not rewritten). UI: the Loops screen shows the graph of a definition and of a run (small, depth columns like A5's plan panel, status per node from the A2 tree). Writing new shapes by hand ("pipeline with a checker after stage two") becomes possible but is not promoted in the UI yet.
+
+## Design
+
+GUARDRAILS: worktree E:/agent-deck-wt/<ticket> on wt/<ticket>; never git checkout/switch/stash/reset in the main checkout (Syncthing-mirrored to the VM); single vitest files, eslint, prettier, per-package tsc only (low memory: no pnpm build, no full suites, no Playwright; real-Pi files one at a time with --config vitest.pi.config.ts); no ssh, no push; stage only touched paths. Principles in VISION_ORCHESTRATION.md bind the implementation (2 pure logic in domain, 7 legibility before depth, 8 evidence first, 9 files only); contrarian pass before signoff; GPT review before merge. Owner stance 2026-10-15: on the shared server everything is visible to every co-worker by design and that visibility is the advantage; secrets and capability tokens stay out of the log, content does not need hiding. Depends on A5 and A7. Pure normalisation and interpretation helpers in packages/domain (template -> graph, graph validation: cycles only through the budgeted edges, one entry node, every node reachable); the engine delegates to them. Parity gate: every loops.pi and loopEngine test passes unchanged against the normalised templates; the recorded loop fixture (A1b2) replays identically.
+
+## Acceptance Criteria
+
+Domain tests for normalisation of all six templates and graph validation; loopEngine + loops.pi green with no fixture change; a hand-written graph loop (pipeline + checker after stage two) runs end to end in one real-Pi test; web test for the graph view; docs/orchestration-reference.md updated; tsc, eslint, prettier clean.

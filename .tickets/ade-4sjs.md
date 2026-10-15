@@ -34,3 +34,7 @@ Decisions 6 and 7 added 2026-10-15 (architect defaults applied, override if want
 **2026-10-15T06:53:57Z**
 
 2026-10-15 owner answers: (2) FINAL/push does NOT wait for SRV-06 (push after SRV-03 and the Playwright gate); (1) ANA-01: decide later; (5)(6)(7) event-log defaults: owner wants to discuss before further lane A work builds on them (left as applied); (4) D1: owner leans TypeScript rewrite but wants the pre-Rust TypeScript skill store checked for reuse and parity gaps first (archaeology dispatched). A6-A10 approved as a tree but held until the event-log discussion.
+
+**2026-10-15T07:25:26Z**
+
+2026-10-15 event-log discussion closed with the owner: on the shared server everything is visible to every co-worker by design, and that visibility is the advantage, not a risk ('we should have tools to use those sessions more easily, not try to hide them'). Consequences: keep one log per data dir; keep facts-and-references as the STORAGE rule (no duplicated outputs, capability tokens never in the log) while the UI shows full detail from the stores; NO redaction on session delete (tombstone only), no retention ticket; A6-A10 unblocked. New draft ticket SRV-15 captures the 'tools to use shared sessions' request.

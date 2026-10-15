@@ -30,6 +30,17 @@ server "is where I see a team work together"; graph engineering "is the directio
 from the current orchestration"; the t3code orchestrator comment "is a first start in that
 direction".
 
+## Amendment 2026-10-15 (after A1)
+
+Decision 3 stands with one clarification agreed with the owner after the event log shipped: the
+log is the source of truth for **facts and references** (what ran, when, by whom, with which
+outcome, and where the detail lives); the loop-run and subagent-run stores stay authoritative
+for run **detail** (outputs, validation output, ownership proofs), which the UI fetches when a
+member opens a node. The log is one file set per data directory with the project as a filter.
+Nothing is hidden from co-workers on the shared server: visibility is the point of the server,
+so the stream carries everything except credentials and capability tokens, and deleting a
+session only writes a tombstone.
+
 ## Decision
 
 1. **The shared Agent Deck server is the collaboration model.** The room where a team's humans
