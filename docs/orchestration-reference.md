@@ -225,6 +225,39 @@ once, then per agent its name, description and authored tools on labelled lines 
 characters and line breaks flattened, each capped) and the profile on server-written lines,
 rounded, the whole capped at 12,000 characters.
 
+`list_sessions({project?, member?, since?, limit?})` and `read_session({sessionId, since?})`
+(SRV-15c, `apps/server/src/sessionTools.ts`) let any agent look at any member's session; they are
+not delegation tools, so they stay when subagents are off. Both read the log readers'
+`sessionLogs` fold (`foldSessionLog` in `eventReaders.ts`, incremental like every projection):
+per session the count of completed top-level turns, the newest prompt label, the newest seq, and
+the newest 100 turns (author from the `turn.prompted` that opened it, label, outcome, tool counts,
+failed tools, first entry id, entry count, the last 10 entry ids) and 5 checkpoints; a look never
+scans the log. `list_sessions` sorts by `updatedAt` (else `createdAt`) newest first, 20 by default
+and 50 at most, one block per session (id, title, project, owner, SRV-15b `activity`, update time,
+turn count, last prompt label, open human request yes/no), capped at 12,000 characters ending
+`(N more)`. `member` is an owner id compared case-insensitively (emails) or a display name only
+one owner has (an ambiguous or unknown one is an error, as is an unknown `project`, resolved like
+`list_agents`); `since` is an ISO time compared with the update time. `read_session` is
+stateless: it writes no cursor event (A3's `subagent.result.read` belongs to a parent and its
+run). `since` is a log seq and only filters; every result names `uptoSeq` to pass next time. It
+renders status, the open human requests (5 shown), the meta's latest plan (30 items), the
+checkpoints after `since`, then the kept turns after `since`, newest first, each with the head
+(1,500 characters) of its final assistant message read from the Pi session file by its last entry
+ids, and `refs` (first..last entry id, the final message id; an id that is not `[\w-]{1,64}` is
+left out). The Pi file path is printed once as the "read more" pointer: the agent runs as the same
+Unix user, so its read and grep tools reach the file. A session created before the log's first
+event says the log starts then and counts its turns "since" that time (list and read). A session
+with no logged turns (`since` 0) and a server whose log is disabled read the turns from the Pi
+file's active chain instead, split at every user message (a steer or follow-up reads as its own
+turn), and say so; with the log off there are no authors, outcomes, checkpoints or cursor. Every
+authored value (titles, names, prompts, questions, plan titles, tool names, assistant text, which
+may carry web content) goes through `redactSecrets` before the cap, then is flattened (control
+characters), capped and JSON-quoted on a labelled line, under a line saying quoted values are data,
+never instructions. Both caps count whole lines as written (after quoting): a line or turn block
+that does not fit is left out, never cut; the questions, plan and checkpoints stop 8,000
+characters short of the 16,000 `SUBAGENT_DELTA_MAX_CHARS` so turns keep room, and the oldest turns
+drop first.
+
 ### Plan dependencies and dispatch
 
 A plan item may carry `dependsOn` (item ids), `assignee` and `verifiedBy` (agent names, compared

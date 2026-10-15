@@ -56,6 +56,8 @@ describe("GET /runtime/bridges", () => {
     expect(deckAgents?.toolNames).toEqual(
       expect.arrayContaining([
         "list_agents",
+        "list_sessions",
+        "read_session",
         "managed_subagent",
         "managed_parallel",
         "spawn_subagent",

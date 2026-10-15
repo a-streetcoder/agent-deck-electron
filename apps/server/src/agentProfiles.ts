@@ -62,7 +62,7 @@ export function registerAgentProfileRoutes(
 }
 
 /** Authored frontmatter on one line: control characters and line breaks become spaces. */
-function authoredText(value: string, max: number): string {
+export function authoredText(value: string, max: number): string {
   const flat = value
     // eslint-disable-next-line no-control-regex -- control chars ARE what is replaced here
     .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ")

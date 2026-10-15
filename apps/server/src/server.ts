@@ -153,6 +153,7 @@ import {
   registerAgentProfileRoutes,
   registerListAgentsTool,
 } from "./agentProfiles.ts";
+import { registerSessionTools } from "./sessionTools.ts";
 import { createEventLog, disabledEventLog, type EventLog } from "./eventLog.ts";
 import { createEventProducers } from "./eventProducers.ts";
 import { createPlanDispatcher } from "./planDispatcher.ts";
@@ -1115,16 +1116,18 @@ async function initServer(
     subagentRuns: () => subagentRuns.publicRuns(),
     loopRuns: () => loopEngine.publicRuns(),
   };
+  // An id first; a name only when exactly one project has it.
+  const findProject = (wanted: string) => {
+    const named = projects.list().filter((item) => item.name === wanted);
+    return (
+      projects.find((item) => item.id === wanted) ?? (named.length === 1 ? named[0] : undefined)
+    );
+  };
   registerListAgentsTool(bridge, {
     agents: (sessionId, wanted) => {
       const own = projectOfSession(sessionId);
-      // An id first; a name only when exactly one project has it.
-      const named = (name: string) => {
-        const matches = projects.list().filter((item) => item.name === name);
-        return matches.length === 1 ? matches[0] : undefined;
-      };
       const project = wanted
-        ? (projects.find((item) => item.id === wanted) ?? named(wanted))
+        ? findProject(wanted)
         : own
           ? projects.find((item) => item.id === own)
           : undefined;
@@ -1134,6 +1137,19 @@ async function initServer(
       );
     },
     profiles: () => currentProfiles(profileSources),
+  });
+  // SRV-15c: every member's sessions, listed and read (not delegation: always on).
+  registerSessionTools(bridge, {
+    sessions: () => {
+      const live = sessions.list();
+      const liveIds = new Set(live.map((meta) => meta.id));
+      return withActivity([...index.list().filter((meta) => !liveIds.has(meta.id)), ...live]);
+    },
+    project: findProject,
+    projectName: (id) => projects.find((item) => item.id === id)?.name,
+    sessionLogs: () => logReaders.sessionLogs(),
+    logStartedAt: () => logReaders.startedAt(),
+    openHuman: openHumanNow,
   });
   // A5: run assigned plan items through the A4 spawn path as they become ready.
   const planDispatcher = createPlanDispatcher({
