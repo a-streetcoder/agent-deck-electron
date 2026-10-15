@@ -13,8 +13,12 @@ import {
 } from "node:fs";
 import path from "node:path";
 import {
+  diffSubagentRuns,
   emptyTranscript,
+  toPublicSubagentRun,
   type ChildTranscriptSnapshot,
+  type EventDraft,
+  type PublicSubagentRun,
   type SubagentCell,
   type TranscriptCell,
   type TranscriptState,
@@ -65,6 +69,8 @@ export type SubagentRunStatus =
 export interface SubagentRunRecord {
   id: string;
   parentSessionId: string;
+  /** Additive: the managed_subagent / managed_parallel tool call that created the run. */
+  parentToolCallId?: string;
   task: string;
   agent?: string;
   status: SubagentRunStatus;
@@ -102,6 +108,7 @@ const runSchema = z
   .object({
     id: z.string().uuid(),
     parentSessionId: z.string().uuid(),
+    parentToolCallId: z.string().min(1).max(500).optional(),
     task: z.string().max(MAX_TASK_BYTES),
     agent: z.string().max(500).optional(),
     status: z.enum(["starting", "running", "completed", "failed", "stopped", "interrupted"]),
@@ -282,6 +289,10 @@ export class SubagentRunStore {
   private state: StoreState = { version: 4, runs: [] };
   /** Runtime-only projections. Pi's existing child event consumer is the sole writer. */
   private readonly liveTranscripts = new Map<string, TranscriptState>();
+  /** A1 event log: the public view as loaded, before boot recovery (startup reconcile). */
+  private readonly bootPublic: PublicSubagentRun[];
+  private eventSink?: (drafts: EventDraft[]) => void;
+  private lastPublic: PublicSubagentRun[] = [];
 
   constructor(
     dataDir: string,
@@ -294,6 +305,7 @@ export class SubagentRunStore {
     this.artifacts = new SubagentArtifactStore(dataDir);
     this.worktrees = new SessionWorktreeStore(dataDir);
     this.load();
+    this.bootPublic = this.publicRuns();
     this.interruptActiveRuns();
     this.reconcileArtifacts();
   }
@@ -312,6 +324,21 @@ export class SubagentRunStore {
     }
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, "subagent run store close failed");
+  }
+
+  bootPublicRuns(): PublicSubagentRun[] {
+    return this.bootPublic;
+  }
+
+  /** Every run as the event log may see it (no capability fields). */
+  publicRuns(): PublicSubagentRun[] {
+    return this.state.runs.map(toPublicSubagentRun);
+  }
+
+  /** From now on every commit hands the diff of the public view to sink. */
+  attachEventSink(sink: (drafts: EventDraft[]) => void): void {
+    this.lastPublic = this.publicRuns();
+    this.eventSink = sink;
   }
 
   list(parentSessionId: string): SubagentRunRecord[] {
@@ -1076,6 +1103,7 @@ export class SubagentRunStore {
       // durability failure, so a later write cannot rebuild from stale state
       // and erase the successfully renamed record.
       this.state = next;
+      this.emitEvents();
       // POSIX needs the containing directory synced for the rename itself to
       // survive power loss. The shared helper narrowly tolerates only the
       // directory-fsync operations Windows/libuv does not support.
@@ -1089,6 +1117,20 @@ export class SubagentRunStore {
         }
       }
       rmSync(temp, { force: true });
+    }
+  }
+
+  private emitEvents(): void {
+    if (!this.eventSink) return;
+    const next = this.publicRuns();
+    const drafts = diffSubagentRuns(this.lastPublic, next);
+    this.lastPublic = next;
+    if (drafts.length === 0) return;
+    try {
+      this.eventSink(drafts);
+    } catch (error) {
+      // The store stays authoritative: a log failure never fails the commit.
+      this.warn("could not record subagent run events", error);
     }
   }
 

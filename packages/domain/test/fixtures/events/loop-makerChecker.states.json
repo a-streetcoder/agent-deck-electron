@@ -1,0 +1,1584 @@
+[
+  [],
+  [
+    {
+      "id": "c6f36597-d76c-4801-a4e3-f2d0bce6c048",
+      "sessionId": "46d40d06-9f06-4a74-b4eb-02b03d6c3aa2",
+      "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+      "artifactDirectoryId": "6c523581-cea9-4c06-9878-275eee7c415b",
+      "loopName": "maker-checker-events",
+      "structure": "makerChecker",
+      "launchContextScope": "firstIterationOnly",
+      "projectId": "020609f0-897e-4098-8473-49193421191f",
+      "status": "running",
+      "currentIteration": 0,
+      "maxIterations": 2,
+      "startedAt": "2026-10-15T00:33:50.340Z",
+      "updatedAt": "2026-10-15T00:33:50.340Z",
+      "writeTarget": "artifactMarkdown",
+      "iterations": []
+    }
+  ],
+  [
+    {
+      "id": "c6f36597-d76c-4801-a4e3-f2d0bce6c048",
+      "sessionId": "46d40d06-9f06-4a74-b4eb-02b03d6c3aa2",
+      "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+      "artifactDirectoryId": "6c523581-cea9-4c06-9878-275eee7c415b",
+      "loopName": "maker-checker-events",
+      "structure": "makerChecker",
+      "launchContextScope": "firstIterationOnly",
+      "projectId": "020609f0-897e-4098-8473-49193421191f",
+      "status": "running",
+      "currentIteration": 1,
+      "maxIterations": 2,
+      "startedAt": "2026-10-15T00:33:50.340Z",
+      "updatedAt": "2026-10-15T00:33:50.345Z",
+      "writeTarget": "artifactMarkdown",
+      "iterations": [
+        {
+          "id": "f283b7d2-5cd3-45cd-8375-24631fa3615c",
+          "index": 1,
+          "startedAt": "2026-10-15T00:33:50.342Z",
+          "validationPassed": null,
+          "timeline": [],
+          "children": [],
+          "artifacts": []
+        }
+      ]
+    }
+  ],
+  [
+    {
+      "id": "c6f36597-d76c-4801-a4e3-f2d0bce6c048",
+      "sessionId": "46d40d06-9f06-4a74-b4eb-02b03d6c3aa2",
+      "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+      "artifactDirectoryId": "6c523581-cea9-4c06-9878-275eee7c415b",
+      "loopName": "maker-checker-events",
+      "structure": "makerChecker",
+      "launchContextScope": "firstIterationOnly",
+      "projectId": "020609f0-897e-4098-8473-49193421191f",
+      "status": "running",
+      "currentIteration": 1,
+      "maxIterations": 2,
+      "startedAt": "2026-10-15T00:33:50.340Z",
+      "updatedAt": "2026-10-15T00:33:50.350Z",
+      "writeTarget": "artifactMarkdown",
+      "iterations": [
+        {
+          "id": "f283b7d2-5cd3-45cd-8375-24631fa3615c",
+          "index": 1,
+          "startedAt": "2026-10-15T00:33:50.342Z",
+          "validationPassed": null,
+          "timeline": [
+            {
+              "id": "8390ef8f-6c13-40ed-af57-f720946f15a7",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker started",
+              "timestamp": "2026-10-15T00:33:50.347Z"
+            }
+          ],
+          "children": [
+            {
+              "id": "0424edc3-ac52-4cfe-a21e-4f4548031907",
+              "phase": "maker",
+              "agentName": "Maker",
+              "status": "running",
+              "startedAt": "2026-10-15T00:33:50.347Z"
+            }
+          ],
+          "artifacts": []
+        }
+      ]
+    }
+  ],
+  [
+    {
+      "id": "c6f36597-d76c-4801-a4e3-f2d0bce6c048",
+      "sessionId": "46d40d06-9f06-4a74-b4eb-02b03d6c3aa2",
+      "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+      "artifactDirectoryId": "6c523581-cea9-4c06-9878-275eee7c415b",
+      "loopName": "maker-checker-events",
+      "structure": "makerChecker",
+      "launchContextScope": "firstIterationOnly",
+      "projectId": "020609f0-897e-4098-8473-49193421191f",
+      "status": "running",
+      "currentIteration": 1,
+      "maxIterations": 2,
+      "startedAt": "2026-10-15T00:33:50.340Z",
+      "updatedAt": "2026-10-15T00:33:51.782Z",
+      "writeTarget": "artifactMarkdown",
+      "iterations": [
+        {
+          "id": "f283b7d2-5cd3-45cd-8375-24631fa3615c",
+          "index": 1,
+          "startedAt": "2026-10-15T00:33:50.342Z",
+          "validationPassed": null,
+          "timeline": [
+            {
+              "id": "8390ef8f-6c13-40ed-af57-f720946f15a7",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker started",
+              "timestamp": "2026-10-15T00:33:50.347Z"
+            },
+            {
+              "id": "a24cefa5-e511-4c03-9708-9bc793f61513",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker completed",
+              "timestamp": "2026-10-15T00:33:51.779Z"
+            }
+          ],
+          "children": [
+            {
+              "id": "0424edc3-ac52-4cfe-a21e-4f4548031907",
+              "phase": "maker",
+              "agentName": "Maker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:50.347Z",
+              "endedAt": "2026-10-15T00:33:51.779Z"
+            }
+          ],
+          "artifacts": []
+        }
+      ]
+    }
+  ],
+  [
+    {
+      "id": "c6f36597-d76c-4801-a4e3-f2d0bce6c048",
+      "sessionId": "46d40d06-9f06-4a74-b4eb-02b03d6c3aa2",
+      "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+      "artifactDirectoryId": "6c523581-cea9-4c06-9878-275eee7c415b",
+      "loopName": "maker-checker-events",
+      "structure": "makerChecker",
+      "launchContextScope": "firstIterationOnly",
+      "projectId": "020609f0-897e-4098-8473-49193421191f",
+      "status": "running",
+      "currentIteration": 1,
+      "maxIterations": 2,
+      "startedAt": "2026-10-15T00:33:50.340Z",
+      "updatedAt": "2026-10-15T00:33:51.787Z",
+      "writeTarget": "artifactMarkdown",
+      "iterations": [
+        {
+          "id": "f283b7d2-5cd3-45cd-8375-24631fa3615c",
+          "index": 1,
+          "startedAt": "2026-10-15T00:33:50.342Z",
+          "validationPassed": null,
+          "timeline": [
+            {
+              "id": "8390ef8f-6c13-40ed-af57-f720946f15a7",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker started",
+              "timestamp": "2026-10-15T00:33:50.347Z"
+            },
+            {
+              "id": "a24cefa5-e511-4c03-9708-9bc793f61513",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker completed",
+              "timestamp": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "9950e5e2-f1b9-4169-aedc-4527b5c588b6",
+              "phase": "maker",
+              "roleName": "maker",
+              "note": "Saved report artifact: iteration-1-maker.md",
+              "timestamp": "2026-10-15T00:33:51.785Z"
+            }
+          ],
+          "children": [
+            {
+              "id": "0424edc3-ac52-4cfe-a21e-4f4548031907",
+              "phase": "maker",
+              "agentName": "Maker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:50.347Z",
+              "endedAt": "2026-10-15T00:33:51.779Z"
+            }
+          ],
+          "artifacts": [
+            {
+              "id": "1cc110b6-ee51-4c21-8893-3ca33fc0707d",
+              "phase": "maker",
+              "filename": "iteration-1-maker.md",
+              "bytes": 63,
+              "createdAt": "2026-10-15T00:33:51.785Z"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  [
+    {
+      "id": "c6f36597-d76c-4801-a4e3-f2d0bce6c048",
+      "sessionId": "46d40d06-9f06-4a74-b4eb-02b03d6c3aa2",
+      "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+      "artifactDirectoryId": "6c523581-cea9-4c06-9878-275eee7c415b",
+      "loopName": "maker-checker-events",
+      "structure": "makerChecker",
+      "launchContextScope": "firstIterationOnly",
+      "projectId": "020609f0-897e-4098-8473-49193421191f",
+      "status": "running",
+      "currentIteration": 1,
+      "maxIterations": 2,
+      "startedAt": "2026-10-15T00:33:50.340Z",
+      "updatedAt": "2026-10-15T00:33:51.791Z",
+      "writeTarget": "artifactMarkdown",
+      "iterations": [
+        {
+          "id": "f283b7d2-5cd3-45cd-8375-24631fa3615c",
+          "index": 1,
+          "startedAt": "2026-10-15T00:33:50.342Z",
+          "validationPassed": null,
+          "timeline": [
+            {
+              "id": "8390ef8f-6c13-40ed-af57-f720946f15a7",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker started",
+              "timestamp": "2026-10-15T00:33:50.347Z"
+            },
+            {
+              "id": "a24cefa5-e511-4c03-9708-9bc793f61513",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker completed",
+              "timestamp": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "9950e5e2-f1b9-4169-aedc-4527b5c588b6",
+              "phase": "maker",
+              "roleName": "maker",
+              "note": "Saved report artifact: iteration-1-maker.md",
+              "timestamp": "2026-10-15T00:33:51.785Z"
+            },
+            {
+              "id": "224b7d05-71ee-4241-9982-f3f9f9bf1ced",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker started",
+              "timestamp": "2026-10-15T00:33:51.788Z"
+            }
+          ],
+          "children": [
+            {
+              "id": "0424edc3-ac52-4cfe-a21e-4f4548031907",
+              "phase": "maker",
+              "agentName": "Maker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:50.347Z",
+              "endedAt": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "cd8ceb3f-a01b-4b5b-a42c-7b5ac5f99fb9",
+              "phase": "checker",
+              "agentName": "Checker",
+              "status": "running",
+              "startedAt": "2026-10-15T00:33:51.788Z"
+            }
+          ],
+          "artifacts": [
+            {
+              "id": "1cc110b6-ee51-4c21-8893-3ca33fc0707d",
+              "phase": "maker",
+              "filename": "iteration-1-maker.md",
+              "bytes": 63,
+              "createdAt": "2026-10-15T00:33:51.785Z"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  [
+    {
+      "id": "c6f36597-d76c-4801-a4e3-f2d0bce6c048",
+      "sessionId": "46d40d06-9f06-4a74-b4eb-02b03d6c3aa2",
+      "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+      "artifactDirectoryId": "6c523581-cea9-4c06-9878-275eee7c415b",
+      "loopName": "maker-checker-events",
+      "structure": "makerChecker",
+      "launchContextScope": "firstIterationOnly",
+      "projectId": "020609f0-897e-4098-8473-49193421191f",
+      "status": "running",
+      "currentIteration": 1,
+      "maxIterations": 2,
+      "startedAt": "2026-10-15T00:33:50.340Z",
+      "updatedAt": "2026-10-15T00:33:52.661Z",
+      "writeTarget": "artifactMarkdown",
+      "iterations": [
+        {
+          "id": "f283b7d2-5cd3-45cd-8375-24631fa3615c",
+          "index": 1,
+          "startedAt": "2026-10-15T00:33:50.342Z",
+          "validationPassed": null,
+          "timeline": [
+            {
+              "id": "8390ef8f-6c13-40ed-af57-f720946f15a7",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker started",
+              "timestamp": "2026-10-15T00:33:50.347Z"
+            },
+            {
+              "id": "a24cefa5-e511-4c03-9708-9bc793f61513",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker completed",
+              "timestamp": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "9950e5e2-f1b9-4169-aedc-4527b5c588b6",
+              "phase": "maker",
+              "roleName": "maker",
+              "note": "Saved report artifact: iteration-1-maker.md",
+              "timestamp": "2026-10-15T00:33:51.785Z"
+            },
+            {
+              "id": "224b7d05-71ee-4241-9982-f3f9f9bf1ced",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker started",
+              "timestamp": "2026-10-15T00:33:51.788Z"
+            },
+            {
+              "id": "ebcd6c82-df61-45a7-b183-46fba05d9309",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker completed",
+              "timestamp": "2026-10-15T00:33:52.659Z"
+            }
+          ],
+          "children": [
+            {
+              "id": "0424edc3-ac52-4cfe-a21e-4f4548031907",
+              "phase": "maker",
+              "agentName": "Maker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:50.347Z",
+              "endedAt": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "cd8ceb3f-a01b-4b5b-a42c-7b5ac5f99fb9",
+              "phase": "checker",
+              "agentName": "Checker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:51.788Z",
+              "endedAt": "2026-10-15T00:33:52.659Z"
+            }
+          ],
+          "artifacts": [
+            {
+              "id": "1cc110b6-ee51-4c21-8893-3ca33fc0707d",
+              "phase": "maker",
+              "filename": "iteration-1-maker.md",
+              "bytes": 63,
+              "createdAt": "2026-10-15T00:33:51.785Z"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  [
+    {
+      "id": "c6f36597-d76c-4801-a4e3-f2d0bce6c048",
+      "sessionId": "46d40d06-9f06-4a74-b4eb-02b03d6c3aa2",
+      "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+      "artifactDirectoryId": "6c523581-cea9-4c06-9878-275eee7c415b",
+      "loopName": "maker-checker-events",
+      "structure": "makerChecker",
+      "launchContextScope": "firstIterationOnly",
+      "projectId": "020609f0-897e-4098-8473-49193421191f",
+      "status": "running",
+      "currentIteration": 1,
+      "maxIterations": 2,
+      "startedAt": "2026-10-15T00:33:50.340Z",
+      "updatedAt": "2026-10-15T00:33:52.666Z",
+      "writeTarget": "artifactMarkdown",
+      "iterations": [
+        {
+          "id": "f283b7d2-5cd3-45cd-8375-24631fa3615c",
+          "index": 1,
+          "startedAt": "2026-10-15T00:33:50.342Z",
+          "validationPassed": null,
+          "timeline": [
+            {
+              "id": "8390ef8f-6c13-40ed-af57-f720946f15a7",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker started",
+              "timestamp": "2026-10-15T00:33:50.347Z"
+            },
+            {
+              "id": "a24cefa5-e511-4c03-9708-9bc793f61513",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker completed",
+              "timestamp": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "9950e5e2-f1b9-4169-aedc-4527b5c588b6",
+              "phase": "maker",
+              "roleName": "maker",
+              "note": "Saved report artifact: iteration-1-maker.md",
+              "timestamp": "2026-10-15T00:33:51.785Z"
+            },
+            {
+              "id": "224b7d05-71ee-4241-9982-f3f9f9bf1ced",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker started",
+              "timestamp": "2026-10-15T00:33:51.788Z"
+            },
+            {
+              "id": "ebcd6c82-df61-45a7-b183-46fba05d9309",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker completed",
+              "timestamp": "2026-10-15T00:33:52.659Z"
+            },
+            {
+              "id": "e25fb878-3ce9-4552-87ca-95089bd5febd",
+              "phase": "checker",
+              "roleName": "checker",
+              "note": "Saved report artifact: iteration-1-checker.md",
+              "timestamp": "2026-10-15T00:33:52.664Z"
+            }
+          ],
+          "children": [
+            {
+              "id": "0424edc3-ac52-4cfe-a21e-4f4548031907",
+              "phase": "maker",
+              "agentName": "Maker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:50.347Z",
+              "endedAt": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "cd8ceb3f-a01b-4b5b-a42c-7b5ac5f99fb9",
+              "phase": "checker",
+              "agentName": "Checker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:51.788Z",
+              "endedAt": "2026-10-15T00:33:52.659Z"
+            }
+          ],
+          "artifacts": [
+            {
+              "id": "1cc110b6-ee51-4c21-8893-3ca33fc0707d",
+              "phase": "maker",
+              "filename": "iteration-1-maker.md",
+              "bytes": 63,
+              "createdAt": "2026-10-15T00:33:51.785Z"
+            },
+            {
+              "id": "f3cd4c26-1767-49f8-9ed4-bb9fd20976c7",
+              "phase": "checker",
+              "filename": "iteration-1-checker.md",
+              "bytes": 60,
+              "createdAt": "2026-10-15T00:33:52.664Z"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  [
+    {
+      "id": "c6f36597-d76c-4801-a4e3-f2d0bce6c048",
+      "sessionId": "46d40d06-9f06-4a74-b4eb-02b03d6c3aa2",
+      "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+      "artifactDirectoryId": "6c523581-cea9-4c06-9878-275eee7c415b",
+      "loopName": "maker-checker-events",
+      "structure": "makerChecker",
+      "launchContextScope": "firstIterationOnly",
+      "projectId": "020609f0-897e-4098-8473-49193421191f",
+      "status": "running",
+      "currentIteration": 1,
+      "maxIterations": 2,
+      "startedAt": "2026-10-15T00:33:50.340Z",
+      "updatedAt": "2026-10-15T00:33:52.670Z",
+      "writeTarget": "artifactMarkdown",
+      "iterations": [
+        {
+          "id": "f283b7d2-5cd3-45cd-8375-24631fa3615c",
+          "index": 1,
+          "startedAt": "2026-10-15T00:33:50.342Z",
+          "checkerDecision": "APPROVE",
+          "validationPassed": null,
+          "timeline": [
+            {
+              "id": "8390ef8f-6c13-40ed-af57-f720946f15a7",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker started",
+              "timestamp": "2026-10-15T00:33:50.347Z"
+            },
+            {
+              "id": "a24cefa5-e511-4c03-9708-9bc793f61513",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker completed",
+              "timestamp": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "9950e5e2-f1b9-4169-aedc-4527b5c588b6",
+              "phase": "maker",
+              "roleName": "maker",
+              "note": "Saved report artifact: iteration-1-maker.md",
+              "timestamp": "2026-10-15T00:33:51.785Z"
+            },
+            {
+              "id": "224b7d05-71ee-4241-9982-f3f9f9bf1ced",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker started",
+              "timestamp": "2026-10-15T00:33:51.788Z"
+            },
+            {
+              "id": "ebcd6c82-df61-45a7-b183-46fba05d9309",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker completed",
+              "timestamp": "2026-10-15T00:33:52.659Z"
+            },
+            {
+              "id": "e25fb878-3ce9-4552-87ca-95089bd5febd",
+              "phase": "checker",
+              "roleName": "checker",
+              "note": "Saved report artifact: iteration-1-checker.md",
+              "timestamp": "2026-10-15T00:33:52.664Z"
+            },
+            {
+              "id": "b027c7b9-1f8d-4fe4-a225-9f4d09d59877",
+              "phase": "validation",
+              "roleName": "Validation",
+              "note": "validation started",
+              "timestamp": "2026-10-15T00:33:52.668Z"
+            }
+          ],
+          "children": [
+            {
+              "id": "0424edc3-ac52-4cfe-a21e-4f4548031907",
+              "phase": "maker",
+              "agentName": "Maker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:50.347Z",
+              "endedAt": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "cd8ceb3f-a01b-4b5b-a42c-7b5ac5f99fb9",
+              "phase": "checker",
+              "agentName": "Checker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:51.788Z",
+              "endedAt": "2026-10-15T00:33:52.659Z"
+            }
+          ],
+          "artifacts": [
+            {
+              "id": "1cc110b6-ee51-4c21-8893-3ca33fc0707d",
+              "phase": "maker",
+              "filename": "iteration-1-maker.md",
+              "bytes": 63,
+              "createdAt": "2026-10-15T00:33:51.785Z"
+            },
+            {
+              "id": "f3cd4c26-1767-49f8-9ed4-bb9fd20976c7",
+              "phase": "checker",
+              "filename": "iteration-1-checker.md",
+              "bytes": 60,
+              "createdAt": "2026-10-15T00:33:52.664Z"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  [
+    {
+      "id": "c6f36597-d76c-4801-a4e3-f2d0bce6c048",
+      "sessionId": "46d40d06-9f06-4a74-b4eb-02b03d6c3aa2",
+      "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+      "artifactDirectoryId": "6c523581-cea9-4c06-9878-275eee7c415b",
+      "loopName": "maker-checker-events",
+      "structure": "makerChecker",
+      "launchContextScope": "firstIterationOnly",
+      "projectId": "020609f0-897e-4098-8473-49193421191f",
+      "status": "running",
+      "currentIteration": 1,
+      "maxIterations": 2,
+      "startedAt": "2026-10-15T00:33:50.340Z",
+      "updatedAt": "2026-10-15T00:33:52.718Z",
+      "writeTarget": "artifactMarkdown",
+      "iterations": [
+        {
+          "id": "f283b7d2-5cd3-45cd-8375-24631fa3615c",
+          "index": 1,
+          "startedAt": "2026-10-15T00:33:50.342Z",
+          "checkerDecision": "APPROVE",
+          "validationPassed": null,
+          "validation": {
+            "classification": "completed",
+            "exitCode": 0,
+            "durationMs": 43,
+            "passed": true
+          },
+          "timeline": [
+            {
+              "id": "8390ef8f-6c13-40ed-af57-f720946f15a7",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker started",
+              "timestamp": "2026-10-15T00:33:50.347Z"
+            },
+            {
+              "id": "a24cefa5-e511-4c03-9708-9bc793f61513",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker completed",
+              "timestamp": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "9950e5e2-f1b9-4169-aedc-4527b5c588b6",
+              "phase": "maker",
+              "roleName": "maker",
+              "note": "Saved report artifact: iteration-1-maker.md",
+              "timestamp": "2026-10-15T00:33:51.785Z"
+            },
+            {
+              "id": "224b7d05-71ee-4241-9982-f3f9f9bf1ced",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker started",
+              "timestamp": "2026-10-15T00:33:51.788Z"
+            },
+            {
+              "id": "ebcd6c82-df61-45a7-b183-46fba05d9309",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker completed",
+              "timestamp": "2026-10-15T00:33:52.659Z"
+            },
+            {
+              "id": "e25fb878-3ce9-4552-87ca-95089bd5febd",
+              "phase": "checker",
+              "roleName": "checker",
+              "note": "Saved report artifact: iteration-1-checker.md",
+              "timestamp": "2026-10-15T00:33:52.664Z"
+            },
+            {
+              "id": "b027c7b9-1f8d-4fe4-a225-9f4d09d59877",
+              "phase": "validation",
+              "roleName": "Validation",
+              "note": "validation started",
+              "timestamp": "2026-10-15T00:33:52.668Z"
+            },
+            {
+              "id": "89daae2c-a634-4142-84ba-017f5a28e94f",
+              "phase": "validation",
+              "roleName": "Validation",
+              "note": "validation passed",
+              "timestamp": "2026-10-15T00:33:52.715Z"
+            }
+          ],
+          "children": [
+            {
+              "id": "0424edc3-ac52-4cfe-a21e-4f4548031907",
+              "phase": "maker",
+              "agentName": "Maker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:50.347Z",
+              "endedAt": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "cd8ceb3f-a01b-4b5b-a42c-7b5ac5f99fb9",
+              "phase": "checker",
+              "agentName": "Checker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:51.788Z",
+              "endedAt": "2026-10-15T00:33:52.659Z"
+            }
+          ],
+          "artifacts": [
+            {
+              "id": "1cc110b6-ee51-4c21-8893-3ca33fc0707d",
+              "phase": "maker",
+              "filename": "iteration-1-maker.md",
+              "bytes": 63,
+              "createdAt": "2026-10-15T00:33:51.785Z"
+            },
+            {
+              "id": "f3cd4c26-1767-49f8-9ed4-bb9fd20976c7",
+              "phase": "checker",
+              "filename": "iteration-1-checker.md",
+              "bytes": 60,
+              "createdAt": "2026-10-15T00:33:52.664Z"
+            },
+            {
+              "id": "e82bcd8e-d40b-4f93-9f4b-d0ad143c0ad9",
+              "phase": "validation",
+              "filename": "25c84f1a-0fae-4e9f-9b06-763b9755608e-stdout.txt",
+              "bytes": 0,
+              "createdAt": "2026-10-15T00:33:52.715Z"
+            },
+            {
+              "id": "9ce8cbb3-723c-4157-a730-f69373ebba19",
+              "phase": "validation",
+              "filename": "05c8788a-0a59-4304-965e-564e4f3df5db-stderr.txt",
+              "bytes": 0,
+              "createdAt": "2026-10-15T00:33:52.715Z"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  [
+    {
+      "id": "c6f36597-d76c-4801-a4e3-f2d0bce6c048",
+      "sessionId": "46d40d06-9f06-4a74-b4eb-02b03d6c3aa2",
+      "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+      "artifactDirectoryId": "6c523581-cea9-4c06-9878-275eee7c415b",
+      "loopName": "maker-checker-events",
+      "structure": "makerChecker",
+      "launchContextScope": "firstIterationOnly",
+      "projectId": "020609f0-897e-4098-8473-49193421191f",
+      "status": "running",
+      "currentIteration": 1,
+      "maxIterations": 2,
+      "startedAt": "2026-10-15T00:33:50.340Z",
+      "updatedAt": "2026-10-15T00:33:52.722Z",
+      "writeTarget": "artifactMarkdown",
+      "iterations": [
+        {
+          "id": "f283b7d2-5cd3-45cd-8375-24631fa3615c",
+          "index": 1,
+          "startedAt": "2026-10-15T00:33:50.342Z",
+          "checkerDecision": "APPROVE",
+          "validationPassed": true,
+          "validation": {
+            "classification": "completed",
+            "exitCode": 0,
+            "durationMs": 43,
+            "passed": true
+          },
+          "timeline": [
+            {
+              "id": "8390ef8f-6c13-40ed-af57-f720946f15a7",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker started",
+              "timestamp": "2026-10-15T00:33:50.347Z"
+            },
+            {
+              "id": "a24cefa5-e511-4c03-9708-9bc793f61513",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker completed",
+              "timestamp": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "9950e5e2-f1b9-4169-aedc-4527b5c588b6",
+              "phase": "maker",
+              "roleName": "maker",
+              "note": "Saved report artifact: iteration-1-maker.md",
+              "timestamp": "2026-10-15T00:33:51.785Z"
+            },
+            {
+              "id": "224b7d05-71ee-4241-9982-f3f9f9bf1ced",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker started",
+              "timestamp": "2026-10-15T00:33:51.788Z"
+            },
+            {
+              "id": "ebcd6c82-df61-45a7-b183-46fba05d9309",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker completed",
+              "timestamp": "2026-10-15T00:33:52.659Z"
+            },
+            {
+              "id": "e25fb878-3ce9-4552-87ca-95089bd5febd",
+              "phase": "checker",
+              "roleName": "checker",
+              "note": "Saved report artifact: iteration-1-checker.md",
+              "timestamp": "2026-10-15T00:33:52.664Z"
+            },
+            {
+              "id": "b027c7b9-1f8d-4fe4-a225-9f4d09d59877",
+              "phase": "validation",
+              "roleName": "Validation",
+              "note": "validation started",
+              "timestamp": "2026-10-15T00:33:52.668Z"
+            },
+            {
+              "id": "89daae2c-a634-4142-84ba-017f5a28e94f",
+              "phase": "validation",
+              "roleName": "Validation",
+              "note": "validation passed",
+              "timestamp": "2026-10-15T00:33:52.715Z"
+            },
+            {
+              "id": "b76ce7da-bae3-4f55-944a-0af6ab1a554c",
+              "phase": "evaluator",
+              "roleName": "Goal evaluator",
+              "note": "evaluator started",
+              "timestamp": "2026-10-15T00:33:52.719Z"
+            }
+          ],
+          "children": [
+            {
+              "id": "0424edc3-ac52-4cfe-a21e-4f4548031907",
+              "phase": "maker",
+              "agentName": "Maker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:50.347Z",
+              "endedAt": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "cd8ceb3f-a01b-4b5b-a42c-7b5ac5f99fb9",
+              "phase": "checker",
+              "agentName": "Checker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:51.788Z",
+              "endedAt": "2026-10-15T00:33:52.659Z"
+            },
+            {
+              "id": "14258684-e56d-47e4-aeae-f1c6981fc95b",
+              "phase": "evaluator",
+              "status": "running",
+              "startedAt": "2026-10-15T00:33:52.719Z"
+            }
+          ],
+          "artifacts": [
+            {
+              "id": "1cc110b6-ee51-4c21-8893-3ca33fc0707d",
+              "phase": "maker",
+              "filename": "iteration-1-maker.md",
+              "bytes": 63,
+              "createdAt": "2026-10-15T00:33:51.785Z"
+            },
+            {
+              "id": "f3cd4c26-1767-49f8-9ed4-bb9fd20976c7",
+              "phase": "checker",
+              "filename": "iteration-1-checker.md",
+              "bytes": 60,
+              "createdAt": "2026-10-15T00:33:52.664Z"
+            },
+            {
+              "id": "e82bcd8e-d40b-4f93-9f4b-d0ad143c0ad9",
+              "phase": "validation",
+              "filename": "25c84f1a-0fae-4e9f-9b06-763b9755608e-stdout.txt",
+              "bytes": 0,
+              "createdAt": "2026-10-15T00:33:52.715Z"
+            },
+            {
+              "id": "9ce8cbb3-723c-4157-a730-f69373ebba19",
+              "phase": "validation",
+              "filename": "05c8788a-0a59-4304-965e-564e4f3df5db-stderr.txt",
+              "bytes": 0,
+              "createdAt": "2026-10-15T00:33:52.715Z"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  [
+    {
+      "id": "c6f36597-d76c-4801-a4e3-f2d0bce6c048",
+      "sessionId": "46d40d06-9f06-4a74-b4eb-02b03d6c3aa2",
+      "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+      "artifactDirectoryId": "6c523581-cea9-4c06-9878-275eee7c415b",
+      "loopName": "maker-checker-events",
+      "structure": "makerChecker",
+      "launchContextScope": "firstIterationOnly",
+      "projectId": "020609f0-897e-4098-8473-49193421191f",
+      "status": "running",
+      "currentIteration": 1,
+      "maxIterations": 2,
+      "startedAt": "2026-10-15T00:33:50.340Z",
+      "updatedAt": "2026-10-15T00:33:53.568Z",
+      "writeTarget": "artifactMarkdown",
+      "iterations": [
+        {
+          "id": "f283b7d2-5cd3-45cd-8375-24631fa3615c",
+          "index": 1,
+          "startedAt": "2026-10-15T00:33:50.342Z",
+          "checkerDecision": "APPROVE",
+          "validationPassed": true,
+          "validation": {
+            "classification": "completed",
+            "exitCode": 0,
+            "durationMs": 43,
+            "passed": true
+          },
+          "timeline": [
+            {
+              "id": "8390ef8f-6c13-40ed-af57-f720946f15a7",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker started",
+              "timestamp": "2026-10-15T00:33:50.347Z"
+            },
+            {
+              "id": "a24cefa5-e511-4c03-9708-9bc793f61513",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker completed",
+              "timestamp": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "9950e5e2-f1b9-4169-aedc-4527b5c588b6",
+              "phase": "maker",
+              "roleName": "maker",
+              "note": "Saved report artifact: iteration-1-maker.md",
+              "timestamp": "2026-10-15T00:33:51.785Z"
+            },
+            {
+              "id": "224b7d05-71ee-4241-9982-f3f9f9bf1ced",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker started",
+              "timestamp": "2026-10-15T00:33:51.788Z"
+            },
+            {
+              "id": "ebcd6c82-df61-45a7-b183-46fba05d9309",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker completed",
+              "timestamp": "2026-10-15T00:33:52.659Z"
+            },
+            {
+              "id": "e25fb878-3ce9-4552-87ca-95089bd5febd",
+              "phase": "checker",
+              "roleName": "checker",
+              "note": "Saved report artifact: iteration-1-checker.md",
+              "timestamp": "2026-10-15T00:33:52.664Z"
+            },
+            {
+              "id": "b027c7b9-1f8d-4fe4-a225-9f4d09d59877",
+              "phase": "validation",
+              "roleName": "Validation",
+              "note": "validation started",
+              "timestamp": "2026-10-15T00:33:52.668Z"
+            },
+            {
+              "id": "89daae2c-a634-4142-84ba-017f5a28e94f",
+              "phase": "validation",
+              "roleName": "Validation",
+              "note": "validation passed",
+              "timestamp": "2026-10-15T00:33:52.715Z"
+            },
+            {
+              "id": "b76ce7da-bae3-4f55-944a-0af6ab1a554c",
+              "phase": "evaluator",
+              "roleName": "Goal evaluator",
+              "note": "evaluator started",
+              "timestamp": "2026-10-15T00:33:52.719Z"
+            },
+            {
+              "id": "b1f31ee1-d021-4fbb-883a-646ac8741934",
+              "phase": "evaluator",
+              "roleName": "Goal evaluator",
+              "note": "evaluator completed",
+              "timestamp": "2026-10-15T00:33:53.565Z"
+            }
+          ],
+          "children": [
+            {
+              "id": "0424edc3-ac52-4cfe-a21e-4f4548031907",
+              "phase": "maker",
+              "agentName": "Maker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:50.347Z",
+              "endedAt": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "cd8ceb3f-a01b-4b5b-a42c-7b5ac5f99fb9",
+              "phase": "checker",
+              "agentName": "Checker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:51.788Z",
+              "endedAt": "2026-10-15T00:33:52.659Z"
+            },
+            {
+              "id": "14258684-e56d-47e4-aeae-f1c6981fc95b",
+              "phase": "evaluator",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:52.719Z",
+              "endedAt": "2026-10-15T00:33:53.565Z"
+            }
+          ],
+          "artifacts": [
+            {
+              "id": "1cc110b6-ee51-4c21-8893-3ca33fc0707d",
+              "phase": "maker",
+              "filename": "iteration-1-maker.md",
+              "bytes": 63,
+              "createdAt": "2026-10-15T00:33:51.785Z"
+            },
+            {
+              "id": "f3cd4c26-1767-49f8-9ed4-bb9fd20976c7",
+              "phase": "checker",
+              "filename": "iteration-1-checker.md",
+              "bytes": 60,
+              "createdAt": "2026-10-15T00:33:52.664Z"
+            },
+            {
+              "id": "e82bcd8e-d40b-4f93-9f4b-d0ad143c0ad9",
+              "phase": "validation",
+              "filename": "25c84f1a-0fae-4e9f-9b06-763b9755608e-stdout.txt",
+              "bytes": 0,
+              "createdAt": "2026-10-15T00:33:52.715Z"
+            },
+            {
+              "id": "9ce8cbb3-723c-4157-a730-f69373ebba19",
+              "phase": "validation",
+              "filename": "05c8788a-0a59-4304-965e-564e4f3df5db-stderr.txt",
+              "bytes": 0,
+              "createdAt": "2026-10-15T00:33:52.715Z"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  [
+    {
+      "id": "c6f36597-d76c-4801-a4e3-f2d0bce6c048",
+      "sessionId": "46d40d06-9f06-4a74-b4eb-02b03d6c3aa2",
+      "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+      "artifactDirectoryId": "6c523581-cea9-4c06-9878-275eee7c415b",
+      "loopName": "maker-checker-events",
+      "structure": "makerChecker",
+      "launchContextScope": "firstIterationOnly",
+      "projectId": "020609f0-897e-4098-8473-49193421191f",
+      "status": "running",
+      "currentIteration": 1,
+      "maxIterations": 2,
+      "startedAt": "2026-10-15T00:33:50.340Z",
+      "updatedAt": "2026-10-15T00:33:53.573Z",
+      "writeTarget": "artifactMarkdown",
+      "iterations": [
+        {
+          "id": "f283b7d2-5cd3-45cd-8375-24631fa3615c",
+          "index": 1,
+          "startedAt": "2026-10-15T00:33:50.342Z",
+          "checkerDecision": "APPROVE",
+          "validationPassed": true,
+          "validation": {
+            "classification": "completed",
+            "exitCode": 0,
+            "durationMs": 43,
+            "passed": true
+          },
+          "timeline": [
+            {
+              "id": "8390ef8f-6c13-40ed-af57-f720946f15a7",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker started",
+              "timestamp": "2026-10-15T00:33:50.347Z"
+            },
+            {
+              "id": "a24cefa5-e511-4c03-9708-9bc793f61513",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker completed",
+              "timestamp": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "9950e5e2-f1b9-4169-aedc-4527b5c588b6",
+              "phase": "maker",
+              "roleName": "maker",
+              "note": "Saved report artifact: iteration-1-maker.md",
+              "timestamp": "2026-10-15T00:33:51.785Z"
+            },
+            {
+              "id": "224b7d05-71ee-4241-9982-f3f9f9bf1ced",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker started",
+              "timestamp": "2026-10-15T00:33:51.788Z"
+            },
+            {
+              "id": "ebcd6c82-df61-45a7-b183-46fba05d9309",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker completed",
+              "timestamp": "2026-10-15T00:33:52.659Z"
+            },
+            {
+              "id": "e25fb878-3ce9-4552-87ca-95089bd5febd",
+              "phase": "checker",
+              "roleName": "checker",
+              "note": "Saved report artifact: iteration-1-checker.md",
+              "timestamp": "2026-10-15T00:33:52.664Z"
+            },
+            {
+              "id": "b027c7b9-1f8d-4fe4-a225-9f4d09d59877",
+              "phase": "validation",
+              "roleName": "Validation",
+              "note": "validation started",
+              "timestamp": "2026-10-15T00:33:52.668Z"
+            },
+            {
+              "id": "89daae2c-a634-4142-84ba-017f5a28e94f",
+              "phase": "validation",
+              "roleName": "Validation",
+              "note": "validation passed",
+              "timestamp": "2026-10-15T00:33:52.715Z"
+            },
+            {
+              "id": "b76ce7da-bae3-4f55-944a-0af6ab1a554c",
+              "phase": "evaluator",
+              "roleName": "Goal evaluator",
+              "note": "evaluator started",
+              "timestamp": "2026-10-15T00:33:52.719Z"
+            },
+            {
+              "id": "b1f31ee1-d021-4fbb-883a-646ac8741934",
+              "phase": "evaluator",
+              "roleName": "Goal evaluator",
+              "note": "evaluator completed",
+              "timestamp": "2026-10-15T00:33:53.565Z"
+            },
+            {
+              "id": "88513117-64e9-46d2-a6a0-caa8aaa59482",
+              "phase": "evaluator",
+              "roleName": "Goal evaluator",
+              "note": "Saved report artifact: iteration-1-evaluator.md",
+              "timestamp": "2026-10-15T00:33:53.571Z"
+            }
+          ],
+          "children": [
+            {
+              "id": "0424edc3-ac52-4cfe-a21e-4f4548031907",
+              "phase": "maker",
+              "agentName": "Maker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:50.347Z",
+              "endedAt": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "cd8ceb3f-a01b-4b5b-a42c-7b5ac5f99fb9",
+              "phase": "checker",
+              "agentName": "Checker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:51.788Z",
+              "endedAt": "2026-10-15T00:33:52.659Z"
+            },
+            {
+              "id": "14258684-e56d-47e4-aeae-f1c6981fc95b",
+              "phase": "evaluator",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:52.719Z",
+              "endedAt": "2026-10-15T00:33:53.565Z"
+            }
+          ],
+          "artifacts": [
+            {
+              "id": "1cc110b6-ee51-4c21-8893-3ca33fc0707d",
+              "phase": "maker",
+              "filename": "iteration-1-maker.md",
+              "bytes": 63,
+              "createdAt": "2026-10-15T00:33:51.785Z"
+            },
+            {
+              "id": "f3cd4c26-1767-49f8-9ed4-bb9fd20976c7",
+              "phase": "checker",
+              "filename": "iteration-1-checker.md",
+              "bytes": 60,
+              "createdAt": "2026-10-15T00:33:52.664Z"
+            },
+            {
+              "id": "e82bcd8e-d40b-4f93-9f4b-d0ad143c0ad9",
+              "phase": "validation",
+              "filename": "25c84f1a-0fae-4e9f-9b06-763b9755608e-stdout.txt",
+              "bytes": 0,
+              "createdAt": "2026-10-15T00:33:52.715Z"
+            },
+            {
+              "id": "9ce8cbb3-723c-4157-a730-f69373ebba19",
+              "phase": "validation",
+              "filename": "05c8788a-0a59-4304-965e-564e4f3df5db-stderr.txt",
+              "bytes": 0,
+              "createdAt": "2026-10-15T00:33:52.715Z"
+            },
+            {
+              "id": "15204216-72d8-46a9-82d7-4ae10f5bca34",
+              "phase": "evaluator",
+              "filename": "iteration-1-evaluator.md",
+              "bytes": 62,
+              "createdAt": "2026-10-15T00:33:53.571Z"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  [
+    {
+      "id": "c6f36597-d76c-4801-a4e3-f2d0bce6c048",
+      "sessionId": "46d40d06-9f06-4a74-b4eb-02b03d6c3aa2",
+      "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+      "artifactDirectoryId": "6c523581-cea9-4c06-9878-275eee7c415b",
+      "loopName": "maker-checker-events",
+      "structure": "makerChecker",
+      "launchContextScope": "firstIterationOnly",
+      "projectId": "020609f0-897e-4098-8473-49193421191f",
+      "status": "running",
+      "currentIteration": 1,
+      "maxIterations": 2,
+      "startedAt": "2026-10-15T00:33:50.340Z",
+      "updatedAt": "2026-10-15T00:33:53.579Z",
+      "writeTarget": "artifactMarkdown",
+      "iterations": [
+        {
+          "id": "f283b7d2-5cd3-45cd-8375-24631fa3615c",
+          "index": 1,
+          "startedAt": "2026-10-15T00:33:50.342Z",
+          "endedAt": "2026-10-15T00:33:53.575Z",
+          "checkerDecision": "APPROVE",
+          "goalDecision": "SUCCESS",
+          "validationPassed": true,
+          "validation": {
+            "classification": "completed",
+            "exitCode": 0,
+            "durationMs": 43,
+            "passed": true
+          },
+          "timeline": [
+            {
+              "id": "8390ef8f-6c13-40ed-af57-f720946f15a7",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker started",
+              "timestamp": "2026-10-15T00:33:50.347Z"
+            },
+            {
+              "id": "a24cefa5-e511-4c03-9708-9bc793f61513",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker completed",
+              "timestamp": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "9950e5e2-f1b9-4169-aedc-4527b5c588b6",
+              "phase": "maker",
+              "roleName": "maker",
+              "note": "Saved report artifact: iteration-1-maker.md",
+              "timestamp": "2026-10-15T00:33:51.785Z"
+            },
+            {
+              "id": "224b7d05-71ee-4241-9982-f3f9f9bf1ced",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker started",
+              "timestamp": "2026-10-15T00:33:51.788Z"
+            },
+            {
+              "id": "ebcd6c82-df61-45a7-b183-46fba05d9309",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker completed",
+              "timestamp": "2026-10-15T00:33:52.659Z"
+            },
+            {
+              "id": "e25fb878-3ce9-4552-87ca-95089bd5febd",
+              "phase": "checker",
+              "roleName": "checker",
+              "note": "Saved report artifact: iteration-1-checker.md",
+              "timestamp": "2026-10-15T00:33:52.664Z"
+            },
+            {
+              "id": "b027c7b9-1f8d-4fe4-a225-9f4d09d59877",
+              "phase": "validation",
+              "roleName": "Validation",
+              "note": "validation started",
+              "timestamp": "2026-10-15T00:33:52.668Z"
+            },
+            {
+              "id": "89daae2c-a634-4142-84ba-017f5a28e94f",
+              "phase": "validation",
+              "roleName": "Validation",
+              "note": "validation passed",
+              "timestamp": "2026-10-15T00:33:52.715Z"
+            },
+            {
+              "id": "b76ce7da-bae3-4f55-944a-0af6ab1a554c",
+              "phase": "evaluator",
+              "roleName": "Goal evaluator",
+              "note": "evaluator started",
+              "timestamp": "2026-10-15T00:33:52.719Z"
+            },
+            {
+              "id": "b1f31ee1-d021-4fbb-883a-646ac8741934",
+              "phase": "evaluator",
+              "roleName": "Goal evaluator",
+              "note": "evaluator completed",
+              "timestamp": "2026-10-15T00:33:53.565Z"
+            },
+            {
+              "id": "88513117-64e9-46d2-a6a0-caa8aaa59482",
+              "phase": "evaluator",
+              "roleName": "Goal evaluator",
+              "note": "Saved report artifact: iteration-1-evaluator.md",
+              "timestamp": "2026-10-15T00:33:53.571Z"
+            }
+          ],
+          "children": [
+            {
+              "id": "0424edc3-ac52-4cfe-a21e-4f4548031907",
+              "phase": "maker",
+              "agentName": "Maker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:50.347Z",
+              "endedAt": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "cd8ceb3f-a01b-4b5b-a42c-7b5ac5f99fb9",
+              "phase": "checker",
+              "agentName": "Checker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:51.788Z",
+              "endedAt": "2026-10-15T00:33:52.659Z"
+            },
+            {
+              "id": "14258684-e56d-47e4-aeae-f1c6981fc95b",
+              "phase": "evaluator",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:52.719Z",
+              "endedAt": "2026-10-15T00:33:53.565Z"
+            }
+          ],
+          "artifacts": [
+            {
+              "id": "1cc110b6-ee51-4c21-8893-3ca33fc0707d",
+              "phase": "maker",
+              "filename": "iteration-1-maker.md",
+              "bytes": 63,
+              "createdAt": "2026-10-15T00:33:51.785Z"
+            },
+            {
+              "id": "f3cd4c26-1767-49f8-9ed4-bb9fd20976c7",
+              "phase": "checker",
+              "filename": "iteration-1-checker.md",
+              "bytes": 60,
+              "createdAt": "2026-10-15T00:33:52.664Z"
+            },
+            {
+              "id": "e82bcd8e-d40b-4f93-9f4b-d0ad143c0ad9",
+              "phase": "validation",
+              "filename": "25c84f1a-0fae-4e9f-9b06-763b9755608e-stdout.txt",
+              "bytes": 0,
+              "createdAt": "2026-10-15T00:33:52.715Z"
+            },
+            {
+              "id": "9ce8cbb3-723c-4157-a730-f69373ebba19",
+              "phase": "validation",
+              "filename": "05c8788a-0a59-4304-965e-564e4f3df5db-stderr.txt",
+              "bytes": 0,
+              "createdAt": "2026-10-15T00:33:52.715Z"
+            },
+            {
+              "id": "15204216-72d8-46a9-82d7-4ae10f5bca34",
+              "phase": "evaluator",
+              "filename": "iteration-1-evaluator.md",
+              "bytes": 62,
+              "createdAt": "2026-10-15T00:33:53.571Z"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  [
+    {
+      "id": "c6f36597-d76c-4801-a4e3-f2d0bce6c048",
+      "sessionId": "46d40d06-9f06-4a74-b4eb-02b03d6c3aa2",
+      "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+      "artifactDirectoryId": "6c523581-cea9-4c06-9878-275eee7c415b",
+      "loopName": "maker-checker-events",
+      "structure": "makerChecker",
+      "launchContextScope": "firstIterationOnly",
+      "projectId": "020609f0-897e-4098-8473-49193421191f",
+      "status": "completed",
+      "currentIteration": 1,
+      "maxIterations": 2,
+      "stopReason": "success",
+      "startedAt": "2026-10-15T00:33:50.340Z",
+      "updatedAt": "2026-10-15T00:33:53.581Z",
+      "endedAt": "2026-10-15T00:33:53.581Z",
+      "writeTarget": "artifactMarkdown",
+      "iterations": [
+        {
+          "id": "f283b7d2-5cd3-45cd-8375-24631fa3615c",
+          "index": 1,
+          "startedAt": "2026-10-15T00:33:50.342Z",
+          "endedAt": "2026-10-15T00:33:53.575Z",
+          "checkerDecision": "APPROVE",
+          "goalDecision": "SUCCESS",
+          "validationPassed": true,
+          "validation": {
+            "classification": "completed",
+            "exitCode": 0,
+            "durationMs": 43,
+            "passed": true
+          },
+          "timeline": [
+            {
+              "id": "8390ef8f-6c13-40ed-af57-f720946f15a7",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker started",
+              "timestamp": "2026-10-15T00:33:50.347Z"
+            },
+            {
+              "id": "a24cefa5-e511-4c03-9708-9bc793f61513",
+              "phase": "maker",
+              "roleName": "Maker",
+              "note": "maker completed",
+              "timestamp": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "9950e5e2-f1b9-4169-aedc-4527b5c588b6",
+              "phase": "maker",
+              "roleName": "maker",
+              "note": "Saved report artifact: iteration-1-maker.md",
+              "timestamp": "2026-10-15T00:33:51.785Z"
+            },
+            {
+              "id": "224b7d05-71ee-4241-9982-f3f9f9bf1ced",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker started",
+              "timestamp": "2026-10-15T00:33:51.788Z"
+            },
+            {
+              "id": "ebcd6c82-df61-45a7-b183-46fba05d9309",
+              "phase": "checker",
+              "roleName": "Checker",
+              "note": "checker completed",
+              "timestamp": "2026-10-15T00:33:52.659Z"
+            },
+            {
+              "id": "e25fb878-3ce9-4552-87ca-95089bd5febd",
+              "phase": "checker",
+              "roleName": "checker",
+              "note": "Saved report artifact: iteration-1-checker.md",
+              "timestamp": "2026-10-15T00:33:52.664Z"
+            },
+            {
+              "id": "b027c7b9-1f8d-4fe4-a225-9f4d09d59877",
+              "phase": "validation",
+              "roleName": "Validation",
+              "note": "validation started",
+              "timestamp": "2026-10-15T00:33:52.668Z"
+            },
+            {
+              "id": "89daae2c-a634-4142-84ba-017f5a28e94f",
+              "phase": "validation",
+              "roleName": "Validation",
+              "note": "validation passed",
+              "timestamp": "2026-10-15T00:33:52.715Z"
+            },
+            {
+              "id": "b76ce7da-bae3-4f55-944a-0af6ab1a554c",
+              "phase": "evaluator",
+              "roleName": "Goal evaluator",
+              "note": "evaluator started",
+              "timestamp": "2026-10-15T00:33:52.719Z"
+            },
+            {
+              "id": "b1f31ee1-d021-4fbb-883a-646ac8741934",
+              "phase": "evaluator",
+              "roleName": "Goal evaluator",
+              "note": "evaluator completed",
+              "timestamp": "2026-10-15T00:33:53.565Z"
+            },
+            {
+              "id": "88513117-64e9-46d2-a6a0-caa8aaa59482",
+              "phase": "evaluator",
+              "roleName": "Goal evaluator",
+              "note": "Saved report artifact: iteration-1-evaluator.md",
+              "timestamp": "2026-10-15T00:33:53.571Z"
+            }
+          ],
+          "children": [
+            {
+              "id": "0424edc3-ac52-4cfe-a21e-4f4548031907",
+              "phase": "maker",
+              "agentName": "Maker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:50.347Z",
+              "endedAt": "2026-10-15T00:33:51.779Z"
+            },
+            {
+              "id": "cd8ceb3f-a01b-4b5b-a42c-7b5ac5f99fb9",
+              "phase": "checker",
+              "agentName": "Checker",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:51.788Z",
+              "endedAt": "2026-10-15T00:33:52.659Z"
+            },
+            {
+              "id": "14258684-e56d-47e4-aeae-f1c6981fc95b",
+              "phase": "evaluator",
+              "status": "completed",
+              "startedAt": "2026-10-15T00:33:52.719Z",
+              "endedAt": "2026-10-15T00:33:53.565Z"
+            }
+          ],
+          "artifacts": [
+            {
+              "id": "1cc110b6-ee51-4c21-8893-3ca33fc0707d",
+              "phase": "maker",
+              "filename": "iteration-1-maker.md",
+              "bytes": 63,
+              "createdAt": "2026-10-15T00:33:51.785Z"
+            },
+            {
+              "id": "f3cd4c26-1767-49f8-9ed4-bb9fd20976c7",
+              "phase": "checker",
+              "filename": "iteration-1-checker.md",
+              "bytes": 60,
+              "createdAt": "2026-10-15T00:33:52.664Z"
+            },
+            {
+              "id": "e82bcd8e-d40b-4f93-9f4b-d0ad143c0ad9",
+              "phase": "validation",
+              "filename": "25c84f1a-0fae-4e9f-9b06-763b9755608e-stdout.txt",
+              "bytes": 0,
+              "createdAt": "2026-10-15T00:33:52.715Z"
+            },
+            {
+              "id": "9ce8cbb3-723c-4157-a730-f69373ebba19",
+              "phase": "validation",
+              "filename": "05c8788a-0a59-4304-965e-564e4f3df5db-stderr.txt",
+              "bytes": 0,
+              "createdAt": "2026-10-15T00:33:52.715Z"
+            },
+            {
+              "id": "15204216-72d8-46a9-82d7-4ae10f5bca34",
+              "phase": "evaluator",
+              "filename": "iteration-1-evaluator.md",
+              "bytes": 62,
+              "createdAt": "2026-10-15T00:33:53.571Z"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+]

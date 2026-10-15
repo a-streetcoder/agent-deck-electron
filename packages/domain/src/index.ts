@@ -16,6 +16,7 @@ export * from "./memory.ts";
 export * from "./extensions.ts";
 export * from "./loops.ts";
 export * from "./events.ts";
+export * from "./eventDiffs.ts";
 export * from "./slashUniverse.ts";
 export {
   derivedMcpServerName,

@@ -1953,6 +1953,8 @@ export interface ChildRunOptions {
   artifactRootId?: string;
   artifactRootToken?: string;
   source: SubagentRunSource;
+  /** The bridge tool call that creates a fresh run (event log tree edge); continuations keep the original. */
+  parentToolCallId?: string;
   /** Fresh parallel children only; continuation and single-child callers omit it. */
   worktree?: boolean;
 }
@@ -2239,6 +2241,9 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
                 createdAt,
                 updatedAt: createdAt,
                 source: runOptions?.source ?? "single",
+                ...(runOptions?.parentToolCallId
+                  ? { parentToolCallId: runOptions.parentToolCallId }
+                  : {}),
                 declaredReads: [...declaredReads],
               };
               const allocation = durable.prepareTurn

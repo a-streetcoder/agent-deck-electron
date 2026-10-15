@@ -1,0 +1,61 @@
+[
+  [],
+  [
+    {
+      "id": "262fa0f0-1e84-4bcf-94c1-1231f8bfe851",
+      "parentSessionId": "40fbf6e4-6038-4698-bf55-af07d182838b",
+      "parentToolCallId": "call_mock_1",
+      "task": "Summarize the meeting notes.",
+      "status": "starting",
+      "createdAt": "2026-10-15T00:33:49.159Z",
+      "updatedAt": "2026-10-15T00:33:49.159Z",
+      "source": "single",
+      "artifactRootId": "262fa0f0-1e84-4bcf-94c1-1231f8bfe851"
+    }
+  ],
+  [
+    {
+      "id": "262fa0f0-1e84-4bcf-94c1-1231f8bfe851",
+      "parentSessionId": "40fbf6e4-6038-4698-bf55-af07d182838b",
+      "parentToolCallId": "call_mock_1",
+      "task": "Summarize the meeting notes.",
+      "status": "running",
+      "createdAt": "2026-10-15T00:33:49.159Z",
+      "updatedAt": "2026-10-15T00:33:49.753Z",
+      "source": "single",
+      "artifactRootId": "262fa0f0-1e84-4bcf-94c1-1231f8bfe851"
+    }
+  ],
+  [
+    {
+      "id": "262fa0f0-1e84-4bcf-94c1-1231f8bfe851",
+      "parentSessionId": "40fbf6e4-6038-4698-bf55-af07d182838b",
+      "parentToolCallId": "call_mock_1",
+      "task": "Summarize the meeting notes.",
+      "status": "running",
+      "createdAt": "2026-10-15T00:33:49.159Z",
+      "updatedAt": "2026-10-15T00:33:49.753Z",
+      "source": "single",
+      "artifactRootId": "262fa0f0-1e84-4bcf-94c1-1231f8bfe851"
+    }
+  ],
+  [
+    {
+      "id": "262fa0f0-1e84-4bcf-94c1-1231f8bfe851",
+      "parentSessionId": "40fbf6e4-6038-4698-bf55-af07d182838b",
+      "parentToolCallId": "call_mock_1",
+      "task": "Summarize the meeting notes.",
+      "status": "completed",
+      "createdAt": "2026-10-15T00:33:49.159Z",
+      "updatedAt": "2026-10-15T00:33:49.878Z",
+      "completedAt": "2026-10-15T00:33:49.878Z",
+      "summary": "CHILD_SUBAGENT_SENTINEL: three bullet summary.",
+      "model": "mock-model",
+      "inputTokens": 1,
+      "outputTokens": 4,
+      "durationMs": 719,
+      "source": "single",
+      "artifactRootId": "262fa0f0-1e84-4bcf-94c1-1231f8bfe851"
+    }
+  ]
+]
