@@ -53,6 +53,7 @@ test("create, edit, and delete a library prompt template", async ({ page }) => {
 
   // Edit the body.
   await row.getByTestId("prompt-invocation").click();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
   // The editor surfaces the on-disk path (native "File" metadata row); path
   // separators follow the OS, so match the prompt-library/review.md suffix.
   await expect(page.getByTestId("prompt-file-path")).toContainText(
@@ -65,7 +66,7 @@ test("create, edit, and delete a library prompt template", async ({ page }) => {
     .toContain("Please review the diff for security issues.");
 
   // Rename review → audit: the file moves on disk, /prompt:<name> follows.
-  await row.getByTestId("prompt-rename-review").click();
+  await page.getByTestId("prompt-rename-review").click();
   await page.getByTestId("prompt-rename-input-review").fill("audit");
   await page.getByTestId("prompt-rename-confirm-review").click();
 
@@ -78,6 +79,8 @@ test("create, edit, and delete a library prompt template", async ({ page }) => {
   // Body carried across the rename.
   expect(readFileSync(auditFile, "utf8")).toContain("Please review the diff for security issues.");
 
+  // The rename drops the selection (its file path changed): reselect the prompt.
+  await renamed.click();
   // Delete is confirm-gated (native parity): dismissing keeps the prompt.
   page.once("dialog", (dialog) => {
     expect(dialog.message()).toContain(`Delete prompt "audit"`);
@@ -136,6 +139,7 @@ test("the All Projects toggle sets a prompt as a default (native defaultPromptTe
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
   await openNav(page, "prompts");
 
+  await page.locator('[data-prompt-name="changelog-note"]').click();
   const toggle = page.getByTestId("prompt-default-changelog-note");
   await expect(toggle).toBeVisible();
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
@@ -189,6 +193,7 @@ test("shows readable prompt load and default-toggle failures", async ({ page }) 
   await page.reload();
   await selectProject(page, path.basename(project));
   await openNav(page, "prompts");
+  await page.locator('[data-prompt-name="failure-toggle"]').click();
   const toggle = page.getByTestId("prompt-default-failure-toggle");
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
   await page.route("**/settings", async (route) => {
@@ -220,6 +225,7 @@ test("the editor's per-project availability assigns a global prompt to a project
   // Open the editor for the global prompt, then assign it to this project via
   // the per-project availability checkbox.
   await page.locator('[data-prompt-name="briefing"]').getByTestId("prompt-invocation").click();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
   await expect(page.getByTestId("prompt-editor")).toBeVisible();
   const checkbox = page.getByTestId(`prompt-assign-briefing-${path.basename(project)}`);
   await expect(checkbox).not.toBeChecked();

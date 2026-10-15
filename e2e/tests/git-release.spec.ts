@@ -38,11 +38,12 @@ test.afterAll(async () => {
   await harness.close();
 });
 
-test("Git release stays empty without a globally selected project", async ({ page }) => {
+test("the Git screen preselects the active session's project", async ({ page }) => {
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(work));
   await openNav(page, "git");
   await expect(page.getByTestId("app-view-title")).toHaveText("Git");
-  await expect(page.getByTestId("git-no-project")).toBeVisible();
-  await expect(page.getByTestId("git-release")).toHaveCount(0);
+  await expect(page.getByTestId("git-project-picker").locator("option:checked")).toHaveText(
+    path.basename(work),
+  );
 });

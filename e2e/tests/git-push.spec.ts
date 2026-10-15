@@ -48,13 +48,14 @@ test.afterAll(async () => {
   await harness.close();
 });
 
-test("Git push stays empty without a globally selected project", async ({ page }) => {
+test("the Git screen preselects the active session's project", async ({ page }) => {
   await page.goto(harness.baseUrl);
   await selectProject(page, path.basename(work));
   await openNav(page, "git");
   await expect(page.getByTestId("app-view-title")).toHaveText("Git");
-  await expect(page.getByTestId("git-no-project")).toBeVisible();
-  await expect(page.getByTestId("git-commit-push")).toHaveCount(0);
+  await expect(page.getByTestId("git-project-picker").locator("option:checked")).toHaveText(
+    path.basename(work),
+  );
 });
 
 test("push with no remote fails cleanly (502)", async () => {

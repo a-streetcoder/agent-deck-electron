@@ -140,8 +140,9 @@ test("copies the explicitly selected prompt invocation with clipboard feedback",
   await openNav(page, "prompts");
   const row = page.locator('[data-prompt-name="command-copy-check"]');
   await expect(row).toBeVisible();
-  await row.getByRole("button").first().click();
-  await page.getByTestId("prompt-editor").getByRole("button", { name: "Cancel" }).click();
+  await row.click();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
 
   await page.keyboard.press("ControlOrMeta+k");
   await page.getByTestId("command-palette-input").fill("Copy Selected Prompt Invocation");

@@ -136,7 +136,9 @@ test("an isolated session runs in a worktree", async ({ page }) => {
 
   await openNav(page, "git");
   await expect(page.getByTestId("app-view-title")).toHaveText("Git");
-  await expect(page.getByTestId("git-no-project")).toBeVisible();
+  await expect(page.getByTestId("git-project-picker").locator("option:checked")).toHaveText(
+    path.basename(repo),
+  );
 
   const deleteButton = page.getByTestId("sessions-panel").getByTestId(`chat-delete-${isolated.id}`);
   await page.getByTestId("sessions-panel").getByTestId(`chat-${isolated.id}`).hover();

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, openNav, selectProject, test } from "../helpers/fixtures.ts";
+import { expect, openNav, pickAgent, selectProject, test } from "../helpers/fixtures.ts";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
 
 /**
@@ -117,7 +117,7 @@ test("picking an agent injects its body as the system prompt", async ({ page }) 
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
 
   // Pick a global agent in the composer; project session context is not a catalog filter.
-  await page.getByTestId("agent-picker").selectOption("pancake-bot");
+  await pickAgent(page, "pancake-bot");
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
 
   const requestCountBefore = harness.mock.requests.length;
@@ -143,7 +143,7 @@ test("picking an agent injects its body as the system prompt", async ({ page }) 
     .locator('[data-active="true"]')
     .getAttribute("data-testid");
   // Switching back to the default agent restores a separate session.
-  await page.getByTestId("agent-picker").selectOption("");
+  await pickAgent(page, null);
   await expect(page.getByTestId("user-cell")).toHaveCount(0);
   // Return through history: choosing an agent in an unsent draft now edits that draft.
   await page.getByTestId("sessions-panel").getByTestId(agentChat!).click();
@@ -334,7 +334,7 @@ test("an agent-bound session shows the agent name in the expanded panel (native 
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
 
   // Picking an agent binds the session to it (SessionMeta.agentName).
-  await page.getByTestId("agent-picker").selectOption("pancake-bot");
+  await pickAgent(page, "pancake-bot");
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
 
   // The sessions list surfaces the bound agent's name as a visible line
@@ -372,7 +372,7 @@ test("project agent diagnostics and named launch retain project context", async 
   await page.goto(harness.baseUrl);
   await page.getByTestId("sessions-panel").getByTestId(`chat-${session.id}`).click();
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
-  await expect(page.getByTestId("agent-picker")).toHaveValue("pancake-bot");
+  await expect(page.getByTestId("agent-chip-label")).toHaveText("pancake-bot");
   const start = harness.mock.requests.length;
   await page.getByTestId("composer-input").fill("project breakfast proof");
   await page.getByTestId("send-button").click();

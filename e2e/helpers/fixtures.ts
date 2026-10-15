@@ -74,11 +74,17 @@ export async function selectProject(page: Page, name: string): Promise<string> {
   if ((await search.inputValue()) !== "") await search.fill("");
   // session_meta arrives asynchronously after the HTTP creation response.
   const row = panel.getByTestId(`chat-${sessionId}`);
-  await expect(row).toBeVisible();
+  await expect(row).toBeVisible({ timeout: 15_000 });
   await row.click();
   await expect(page.getByTestId("composer-input")).toBeVisible();
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
   return sessionId;
+}
+
+/** The composer agent picker is a popover (not a <select>): open it and choose. */
+export async function pickAgent(page: Page, name: string | null): Promise<void> {
+  await page.getByTestId("agent-picker").click();
+  await page.getByTestId(`agent-option-${name ?? "default"}`).click();
 }
 
 /** Enter runtime-owned workspace actions through the real first-send lifecycle. */

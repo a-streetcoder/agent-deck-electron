@@ -27,7 +27,9 @@ async function renameActive(page: Page, title: string): Promise<string> {
   await active.getByTitle("Rename").click();
   await page.getByTestId(`chat-rename-input-${id}`).fill(title);
   await page.getByTestId(`chat-rename-input-${id}`).press("Enter");
-  await expect(page.getByTestId("sessions-panel").getByText(title, { exact: true })).toBeVisible();
+  await expect(
+    page.getByTestId("sessions-panel").getByTestId("chat-title").filter({ hasText: title }),
+  ).toBeVisible();
   return id;
 }
 

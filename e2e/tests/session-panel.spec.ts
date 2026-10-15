@@ -100,6 +100,8 @@ test("the sessions panel filters sessions by title (18.1)", async ({ page }) => 
 
   const panel = page.getByTestId("sessions-panel");
   const rows = panel.locator('[data-testid^="chat-"][role="button"]');
+  // The Activity list (A1c) repeats session titles inside the panel: match rows only.
+  const titles = panel.getByTestId("chat-title");
 
   // Rename two rows to distinct titles (target by "not yet renamed" so a
   // reorder-on-rename can't make us rename the same row twice).
@@ -109,7 +111,7 @@ test("the sessions panel filters sessions by title (18.1)", async ({ page }) => 
     await rowLocator.getByTitle("Rename").click();
     await renameInput.fill(name);
     await renameInput.press("Enter");
-    await expect(panel.getByText(name, { exact: true })).toBeVisible();
+    await expect(titles.filter({ hasText: name })).toBeVisible();
   };
   await rename(rows.first(), "alpha-session");
   await rename(rows.filter({ hasNotText: "alpha-session" }).first(), "beta-session");
@@ -118,8 +120,8 @@ test("the sessions panel filters sessions by title (18.1)", async ({ page }) => 
   // deterministic regardless of how many other sessions exist.
   await page.getByTestId("sessions-search").fill("alpha");
   await expect(rows).toHaveCount(1);
-  await expect(panel).toContainText("alpha-session");
-  await expect(panel).not.toContainText("beta-session");
+  await expect(titles.filter({ hasText: "alpha-session" })).toHaveCount(1);
+  await expect(titles.filter({ hasText: "beta-session" })).toHaveCount(0);
 
   // A non-matching query shows the empty state.
   await page.getByTestId("sessions-search").fill("zzz-no-such-session");
@@ -128,8 +130,8 @@ test("the sessions panel filters sessions by title (18.1)", async ({ page }) => 
 
   // Clearing the search restores the list (both renamed sessions present).
   await page.getByTestId("sessions-search").fill("");
-  await expect(panel).toContainText("alpha-session");
-  await expect(panel).toContainText("beta-session");
+  await expect(titles.filter({ hasText: "alpha-session" })).toHaveCount(1);
+  await expect(titles.filter({ hasText: "beta-session" })).toHaveCount(1);
 });
 
 test("the sessions panel shows each session's last-active time (native row caption)", async ({

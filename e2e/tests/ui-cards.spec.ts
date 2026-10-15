@@ -77,7 +77,7 @@ test("question commands navigate answered and pending cards in order without wra
 
   const firstTarget = page.locator("[data-question-navigation-cell]").nth(0);
   const secondTarget = page.locator("[data-question-navigation-cell]").nth(1);
-  const status = page.getByTestId("transcript").getByRole("status");
+  const status = page.getByTestId("transcript").locator('[role="status"][aria-atomic="true"]');
   await expect(firstTarget).toHaveAttribute("role", "group");
   await expect(firstTarget).toHaveAttribute("aria-label", "Resolved question, 1 of 2");
   await expect(secondTarget).toHaveAttribute("aria-label", "Pending question, 2 of 2");

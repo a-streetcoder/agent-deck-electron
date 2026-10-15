@@ -141,9 +141,8 @@ test("creating a global agent in the editor lands on disk and is pickable", asyn
 
   // …and pickable in the composer.
   await page.getByTestId("new-chat").click();
-  await expect(page.getByTestId("agent-picker").locator('option[value="waffle-bot"]')).toHaveCount(
-    1,
-  );
+  await page.getByTestId("agent-picker").click();
+  await expect(page.getByTestId("agent-option-waffle-bot")).toHaveCount(1);
 });
 
 test("editing a skill updates its SKILL.md without losing the body", async ({ page }) => {

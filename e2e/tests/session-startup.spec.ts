@@ -41,7 +41,7 @@ test("an empty session shows a startup card that clears after the first message"
 
   const card = page.getByTestId("session-startup");
   await expect(card).toBeVisible();
-  await expect(page.getByTestId("startup-agent")).toHaveText("Pi Agent");
+  await expect(page.getByTestId("startup-agent")).toHaveText("Orchestrator");
   await expect(page.getByTestId("startup-skills")).toContainText("None assigned");
   await expect(page.getByRole("button", { name: "View final system prompt" })).toHaveCount(0);
 

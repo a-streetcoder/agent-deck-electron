@@ -79,7 +79,9 @@ test("a disabled agent disappears from the composer picker", async ({ page }) =>
   await expect(page.getByTestId("session-cwd")).toHaveText(project);
 
   // toaster is pickable to start.
-  await expect(page.getByTestId("agent-picker").locator('option[value="toaster"]')).toHaveCount(1);
+  await page.getByTestId("agent-picker").click();
+  await expect(page.getByTestId("agent-option-toaster")).toHaveCount(1);
+  await page.keyboard.press("Escape");
 
   await openNav(page, "agents");
   await page.locator('[data-agent-name="toaster"]').click();
@@ -91,7 +93,9 @@ test("a disabled agent disappears from the composer picker", async ({ page }) =>
 
   // Now it's gone from the picker.
   await page.getByTestId("new-chat").click();
-  await expect(page.getByTestId("agent-picker").locator('option[value="toaster"]')).toHaveCount(0);
+  await page.getByTestId("agent-picker").click();
+  await expect(page.getByTestId("agent-menu")).toBeVisible();
+  await expect(page.getByTestId("agent-option-toaster")).toHaveCount(0);
 });
 
 test("deleting a global agent removes its file", async ({ page }) => {

@@ -1,10 +1,17 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startHarness, type E2eHarness } from "../helpers/env.ts";
-import { expect, openNav, type Page, selectProject, test } from "../helpers/fixtures.ts";
+import {
+  expect,
+  openNav,
+  type Page,
+  selectProject,
+  startDraftWithMessage,
+  test,
+} from "../helpers/fixtures.ts";
 
 /**
  * Visual regression gate (docs/effect-migration-plan.md — standing gate for the
@@ -216,6 +223,8 @@ test("visual: skills screen", async ({ page }) => {
 test("visual: session view with the terminal drawer open", async ({ page }) => {
   await page.goto(harness.baseUrl);
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+  // Runtime controls (terminal, preview) are gated until the draft is started.
+  await startDraftWithMessage(page);
 
   await page.getByTestId("terminal-toggle").click();
   const drawer = page.getByTestId("terminal-drawer");
@@ -260,6 +269,9 @@ test("visual: session view with the terminal drawer open", async ({ page }) => {
 
 test("visual: transcript with a completed exchange", async ({ page }) => {
   await page.goto(harness.baseUrl);
+  await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+  // A fresh draft: the terminal baseline above already sent a turn in the default session.
+  await page.getByTestId("new-chat").click();
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
 
   await page.getByTestId("composer-input").fill("visual baseline prompt");
@@ -397,6 +409,11 @@ test("visual: composer with pending review-comment cards", async ({ page }) => {
   await page.getByTestId("new-chat").click();
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
 
+  // The diff-panel baseline above already wrote this file: rewriting it unchanged
+  // drops it from the session's changed set a moment after the turn, closing the
+  // open file view under the comment click. Start from a clean tree.
+  rmSync(path.join(DIFF_REPO, "src", "visual.txt"), { force: true });
+
   await page.getByTestId("composer-input").fill("please write the diff baseline file");
   await page.getByTestId("send-button").click();
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle", {
@@ -438,6 +455,7 @@ test("visual: composer with a pending preview-element context card", async ({ pa
   await expect(page.getByTestId("session-cwd")).toHaveText(PREVIEW_PROJECT);
   await page.getByTestId("new-chat").click();
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+  await startDraftWithMessage(page);
 
   // Run the dev server so the preview embeds (the element-capture form only
   // exists in the embedded-browser state), then capture a fixed element context.
@@ -558,6 +576,7 @@ test("visual: preview panel with an embedded dev server", async ({ page }) => {
   await expect(page.getByTestId("session-cwd")).toHaveText(PREVIEW_PROJECT);
   await page.getByTestId("new-chat").click();
   await expect(page.getByTestId("status-indicator")).toHaveAttribute("data-status", "idle");
+  await startDraftWithMessage(page);
 
   // Open the panel, run the dev script; the discovered port auto-embeds.
   await page.getByTestId("preview-toggle").click();
@@ -568,14 +587,11 @@ test("visual: preview panel with an embedded dev server", async ({ page }) => {
   // no loading overlay is on screen — then only the port-bearing URL bar +
   // iframe body vary, and those are masked.
   await expect(page.getByTestId("preview-loading")).toHaveCount(0, { timeout: 30_000 });
-  // Settle the composer footer BEFORE the shot: the wide preview pane narrows the
-  // chat column enough that the chip row wraps once the async model id replaces
-  // its "model" placeholder, growing the chat-layer height ~11px. Waiting for the
-  // real model id makes the captured height deterministic (else --update grabs
-  // the pre-wrap frame and compare runs, which settle post-wrap, fail).
-  await expect(page.getByTestId("model-chip-label")).not.toHaveText("model", {
-    timeout: 15_000,
-  });
+  // Settle the composer footer BEFORE the shot: the token/context chips arrive
+  // async after idle and the wide preview pane narrows the chat column enough
+  // that the chip row can wrap, changing the chat-layer height. (The model chip
+  // keeps its "model" placeholder in a first-send session: D5 finding.)
+  await expect(page.getByTestId("session-tokens")).toBeVisible({ timeout: 15_000 });
 
   // Clip to the chat layer (the panel's mount). Mask the URL input (carries the
   // ephemeral port) and the iframe (cross-origin content is nondeterministic);
