@@ -1,8 +1,10 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { claudeBridgeProviderExtensions } from "@agent-deck/pi-host";
+import { resolveBindHost } from "./bindHost.ts";
 import { isMainModule } from "./mainModule.ts";
 import { startServer } from "./server.ts";
 
@@ -36,6 +38,18 @@ export {
 if (isMainModule(import.meta.url, process.argv[1])) {
   const port = Number(process.env.PORT ?? 4200);
 
+  // Pi's agent dir, skills, gh and git config all live under HOME. The server
+  // image puts HOME inside the data volume (/data/home); an existing volume or
+  // bind mount gets no first-mount copy of it, so create it here.
+  const home = homedir();
+  if (!existsSync(home)) {
+    try {
+      mkdirSync(home, { recursive: true, mode: 0o700 });
+    } catch (error) {
+      console.warn(`Could not create the home directory ${home}:`, error);
+    }
+  }
+
   // Claude models through the user's own Claude Code install. Done at the real
   // entry point only: embedders and tests calling startServer() stay hermetic.
   process.env.AGENT_DECK_PROVIDER_EXTENSIONS = [
@@ -57,13 +71,23 @@ if (isMainModule(import.meta.url, process.argv[1])) {
     );
   }
 
+  let host: string | undefined;
+  try {
+    const bind = resolveBindHost(process.env);
+    for (const warning of bind.warnings) console.warn(warning);
+    host = bind.host;
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  }
   const server = await startServer({
     port,
+    host,
     staticDir: hasWebBuild ? webDist : undefined,
     // Lets the desktop shell (and tests) point persistence at an isolated dir.
     dataDir: process.env.AGENT_DECK_DATA_DIR || undefined,
   });
-  console.log(`agent-deck listening on http://127.0.0.1:${server.port}`);
+  console.log(`agent-deck listening on http://${host || "127.0.0.1"}:${server.port}`);
   // Latched + rejection-safe: a second signal must not start a second close()
   // against half-torn-down state, and a failed close still exits (nonzero)
   // instead of leaving an unhandled rejection and a zombie process.

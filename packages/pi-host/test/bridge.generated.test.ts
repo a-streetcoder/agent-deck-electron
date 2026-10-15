@@ -1,5 +1,16 @@
-import { existsSync, readFileSync, rmSync, utimesSync } from "node:fs";
-import { dirname } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { sweepStaleBridgeExtensions, writeBridgeExtension } from "../src/bridge.ts";
 
@@ -158,6 +169,35 @@ describe("generated recall bridge", () => {
     } finally {
       vi.unstubAllGlobals();
       rmSync(dirname(file), { recursive: true, force: true });
+    }
+  });
+});
+
+describe("native MCP transports", () => {
+  it("resolves pi-mcp beside the Pi that AGENT_DECK_PI_CLI points at (bundled layout)", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-runtime-")));
+    const scope = join(root, "node_modules", "@earendil-works");
+    const cli = join(scope, "pi-coding-agent", "dist", "cli.js");
+    const mcp = join(scope, "pi-mcp", "dist", "index.js");
+    for (const file of [cli, mcp]) {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "");
+    }
+    vi.stubEnv("AGENT_DECK_PI_CLI", cli);
+    let file: string | undefined;
+    try {
+      file = writeBridgeExtension({
+        endpoint: "http://127.0.0.1:1/bridge",
+        sessionId: "s",
+        token: "t",
+        tools: [],
+        nativeMcp: { servers: [] },
+      });
+      expect(readFileSync(file, "utf8")).toContain(JSON.stringify(pathToFileURL(mcp).href));
+    } finally {
+      vi.unstubAllEnvs();
+      if (file) rmSync(dirname(file), { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

@@ -15,8 +15,16 @@ import { fileURLToPath, pathToFileURL } from "node:url";
  * absolute path because Pi does not expose them to extensions. */
 function piMcpModuleUrl(): string {
   const piHostRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  for (const root of [piHostRoot, path.resolve(piHostRoot, "..", "..")]) {
-    const pi = path.join(root, "node_modules", "@earendil-works", "pi-coding-agent");
+  // Bundled builds (desktop, server image) locate Pi through AGENT_DECK_PI_CLI
+  // (`<pi package>/dist/cli.js`); the source-relative roots cover workspace runs.
+  const cli = process.env.AGENT_DECK_PI_CLI?.trim();
+  const piDirs = [
+    ...(cli ? [path.resolve(path.dirname(cli), "..")] : []),
+    ...[piHostRoot, path.resolve(piHostRoot, "..", "..")].map((root) =>
+      path.join(root, "node_modules", "@earendil-works", "pi-coding-agent"),
+    ),
+  ];
+  for (const pi of piDirs) {
     if (!existsSync(pi)) continue;
     const real = realpathSync(pi);
     for (const candidate of [
