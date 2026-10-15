@@ -1,6 +1,6 @@
 ---
 id: ade-oili
-status: in_progress
+status: closed
 deps: [ade-c5h8]
 links: []
 created: 2026-10-14T23:39:31Z
@@ -26,3 +26,7 @@ Real-Pi tests: spawn two, await both, cancel one; managed_subagent still works u
 **2026-10-14T23:43:20Z**
 
 2026-10-15 approved by the owner (lane A tree, reply: 'the rest is approved'); dispatch in dependency order.
+
+**2026-10-15T01:56:24Z**
+
+2026-10-15 merged (wt/ade-oili: c5df372 + review round b3a6f45). Contrarian + GPT review21 applied: await_subagents returns the FULL private result to the owning parent (log keeps the capped redacted copy), parking timer and deferred refresh re-armed when the last spawned child ends, cancel_subagent returns {ok:false, reason} when nothing was cancelled, Deck agents bridge group lists the tools with the background-children disclosure, checkpointRef removed / artifacts optional, timeoutMs clamped to 240 s, awaitSubagentRuns moved next to the store, launching children tracked before acceptance so Stop cancels them. Tests: 8 unit files 203 passed (2 skipped), real-Pi subagent-spawn 2 + subagent 1 + continuation 1 + abort 3 + parallel 1 + named 17 + mcp 1. Known: managed_parallel children cannot be cancelled by id (reported honestly); a run finished by another server process wakes await only via the log.
