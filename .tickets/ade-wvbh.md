@@ -1,6 +1,6 @@
 ---
 id: ade-wvbh
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-15T21:55:06Z
@@ -36,3 +36,7 @@ node --test for the store (validation, override precedence, change resets the cl
 **2026-10-15T22:13:10Z**
 
 2026-10-15 contrarian: blocker (remote page could set the address) already fixed in dc56801; drop the per-row hint (contradicts 'empty URL = plain local'); validation gaps (trailing dot, labels, port 0); gate should not throw; preserve unknown keys on save; docs env table. Round 2 sent. 16b addendum written on ade-hndc (seamless origin via reload, Access team pinning against phishing).
+
+**2026-10-15T22:17:25Z**
+
+2026-10-15 round 2 (0b94d42) landed; squashed 45bfb0d, merged aeeede9, typecheck + design-system + desktop node tests + contracts keybindings + web tests green, web build deployed. CLOSED. Follow-ups: the AGENT_DECK_SHARED_SERVER_URL override still uses the looser remoteServerOrigin rules; no single-instance lock on team-server.json; the save error uses a raw text element rather than AppInlineNotice.

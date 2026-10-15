@@ -1,6 +1,6 @@
 ---
 id: ade-u5bg
-status: open
+status: in_progress
 deps: [ade-wvbh]
 links: []
 created: 2026-10-15T21:55:07Z
@@ -18,3 +18,9 @@ Owner decision 2026-10-15: download when missing. Resolution order: the stored c
 
 node --test for the resolution order and for the verifier (wrong checksum -> file deleted, nothing recorded); a mocked download test; docs list the pinned version and how to bump it; the sign-in button is disabled with an explanation until a cloudflared is resolved.
 
+
+## Notes
+
+**2026-10-15T22:17:25Z**
+
+2026-10-15 started; worktree E:\agent-deck-wt\ade-u5bg (wt/ade-u5bg). Parallel with 16b: keep changes in a new module (cloudflared resolution + verified download), its IPC and its UI block; the sign-in flow belongs to 16b.
