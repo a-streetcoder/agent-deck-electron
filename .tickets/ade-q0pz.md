@@ -51,3 +51,7 @@ Each of the seven items has a regression test that fails on HEAD and passes afte
 **2026-10-15T20:17:20Z**
 
 2026-10-15 round 5 (5e4038d): share-plan status and in-place restore clean check hook-free (mtime-touch tests); gitCarriesLfs: checkout + consented untracked (check-attr) + tip + every outgoing commit touching an attributes file (no cap; range upstream..HEAD or tip --not --remotes), fail-closed with its own refusal text; assertNoLfs on gitPush/gitPushBranch; prepareSessionExport runs the full detection before gitPushTransfer (share and return); CONNECTION_SECRET redacts whole connection-string values; styling assertion dropped. Verification review51 launched.
+
+**2026-10-15T20:21:11Z**
+
+2026-10-15 review51 on 5e4038d: no blocker; two should-fix (merge-only attributes missed by the path-limited log without -m; backslash ends an unquoted connection-string value). Round 6 sent; after it the ticket merges and any further reviewer item becomes a follow-up note.
