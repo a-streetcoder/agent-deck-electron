@@ -436,11 +436,19 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
   const publicSettings = (value: AppSettings = settings.get()): AppSettings => ({
     ...value,
     defaultMcpServers: [...mcpAssignments.defaultServerNames()],
+    // ANA-01: the shared server sends nothing, so it has nothing to switch or announce.
+    ...(ctx.sharedServer ? { analyticsEnabled: false, analyticsNoticeSeen: true } : {}),
+  });
+
+  const capabilities = () => ({
+    agentMemory: ctx.memoryEnabled,
+    // ANA-01: whether this backend can send usage counts at all (key, local, not a test).
+    analytics: ctx.analytics?.available ?? false,
   });
 
   fastify.get("/settings", async () => ({
     settings: publicSettings(),
-    capabilities: { agentMemory: ctx.memoryEnabled },
+    capabilities: capabilities(),
   }));
 
   fastify.patch("/settings", async (request, reply) => {
@@ -492,6 +500,8 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
         semanticMemoryEnabled: z.boolean().optional(),
         piAgentIdleParkingEnabled: z.boolean().optional(),
         piAgentIdleParkingTimeoutMinutes: z.number().int().min(1).max(120).optional(),
+        analyticsEnabled: z.boolean().optional(),
+        analyticsNoticeSeen: z.boolean().optional(),
         worktreeIsolation: z.boolean().optional(),
         keepWorktreeAfterMerge: z.boolean().optional(),
         gitAutomation: z.boolean().optional(),
@@ -580,6 +590,10 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
       patch.piAgentIdleParkingEnabled = d.piAgentIdleParkingEnabled;
     if (d.piAgentIdleParkingTimeoutMinutes !== undefined)
       patch.piAgentIdleParkingTimeoutMinutes = d.piAgentIdleParkingTimeoutMinutes;
+    if (d.analyticsEnabled !== undefined) patch.analyticsEnabled = d.analyticsEnabled;
+    // Turning it off is an informed choice: the one-time notice has nothing left to say.
+    if (d.analyticsEnabled === false) patch.analyticsNoticeSeen = true;
+    if (d.analyticsNoticeSeen !== undefined) patch.analyticsNoticeSeen = d.analyticsNoticeSeen;
     if (d.worktreeIsolation !== undefined) patch.worktreeIsolation = d.worktreeIsolation;
     if (d.keepWorktreeAfterMerge !== undefined)
       patch.keepWorktreeAfterMerge = d.keepWorktreeAfterMerge;
@@ -597,7 +611,14 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     // Refine above guarantees every command/chord is valid, so the plain
     // {command,key} shape is safe to store as KeybindingBinding[].
     if (d.keybindings !== undefined) patch.keybindings = d.keybindings as KeybindingBinding[];
+    // The opt-out is the last count sent, so it is tracked while still enabled.
+    const analyticsChanged =
+      d.analyticsEnabled !== undefined && d.analyticsEnabled !== settings.get().analyticsEnabled;
+    if (analyticsChanged && !d.analyticsEnabled)
+      ctx.analytics?.track("settings_analytics_changed", { enabled: false });
     const updated = settings.update(patch);
+    if (analyticsChanged && d.analyticsEnabled)
+      ctx.analytics?.track("settings_analytics_changed", { enabled: true });
     // A5: a plan item waiting on delegation (dispatch or verification) can move now.
     if (d.subagentsEnabled !== undefined) void ctx.planDispatcher?.evaluateAll();
     if (d.semanticMemoryEnabled !== undefined) {
@@ -627,7 +648,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     }
     return {
       settings: publicSettings(updated),
-      capabilities: { agentMemory: ctx.memoryEnabled },
+      capabilities: capabilities(),
     };
   });
 

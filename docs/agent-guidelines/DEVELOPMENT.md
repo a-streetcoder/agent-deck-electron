@@ -1,6 +1,6 @@
 # Development guidance
 
-Run commands from the repository root with Node.js 22.19+ and pnpm.
+Run commands from the repository root with Node.js 22.22+ and pnpm.
 
 ```sh
 pnpm install

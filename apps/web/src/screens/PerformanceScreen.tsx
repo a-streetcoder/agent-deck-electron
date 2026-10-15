@@ -13,6 +13,7 @@ import { cn } from "@/lib/cn";
 interface ParkingSettings {
   piAgentIdleParkingEnabled: boolean;
   piAgentIdleParkingTimeoutMinutes: number;
+  analyticsEnabled: boolean;
 }
 
 type LoadState = "loading" | "ready" | "error";
@@ -22,6 +23,8 @@ export function PerformanceScreen() {
   const [minutesDraft, setMinutesDraft] = useState("10");
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [saving, setSaving] = useState(false);
+  // ANA-01: the Privacy switch only where this backend can send usage counts.
+  const [analyticsAvailable, setAnalyticsAvailable] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   const load = useCallback(async (signal?: AbortSignal): Promise<void> => {
@@ -30,8 +33,12 @@ export function PerformanceScreen() {
     try {
       const response = await fetch("/settings", { signal });
       if (!response.ok) throw new Error("We couldn’t load performance preferences.");
-      const data = (await response.json()) as { settings: ParkingSettings };
+      const data = (await response.json()) as {
+        settings: ParkingSettings;
+        capabilities?: { analytics?: boolean };
+      };
       setSettings(data.settings);
+      setAnalyticsAvailable(data.capabilities?.analytics === true);
       setMinutesDraft(String(data.settings.piAgentIdleParkingTimeoutMinutes));
       setLoadState("ready");
     } catch (cause) {
@@ -183,6 +190,33 @@ export function PerformanceScreen() {
               </div>
             </label>
           </Card>
+          {analyticsAvailable ? (
+            <>
+              <h2 className="pt-3 text-label font-medium text-text-primary">Privacy</h2>
+              <Card padding="md">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0" id="analytics-description">
+                    <div className="text-label font-medium text-text-primary">
+                      Send anonymous usage counts
+                    </div>
+                    <p className="mt-1 text-caption text-text-muted">
+                      Counts of app starts, new sessions, Loops, subagents, moves and MCP
+                      connections, with the app version, platform and model id. Never prompts,
+                      transcripts, titles or paths.
+                    </p>
+                  </div>
+                  <AppSwitch
+                    aria-label="Send anonymous usage counts"
+                    aria-describedby="analytics-description"
+                    data-testid="analytics-toggle"
+                    disabled={saving}
+                    checked={settings.analyticsEnabled}
+                    onCheckedChange={(next) => void update({ analyticsEnabled: next })}
+                  />
+                </div>
+              </Card>
+            </>
+          ) : null}
         </div>
       ) : null}
 

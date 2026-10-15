@@ -317,6 +317,8 @@ export interface SpawnSessionParams {
   readonly recallChildMemory?: ChildMemoryRecall;
   /** Live global MCP policy, re-read immediately before delegated child spawn. */
   readonly mcpPolicyEnabled?: () => boolean;
+  /** ANA-01: a delegated child spawned and opened its card (every child path, once per start). */
+  readonly onChildStarted?: () => void;
   /** Required durable lifecycle sink for generic managed_subagent/managed_parallel runs. */
   readonly childRuns?: {
     create: (record: SubagentRunRecord) => void;
@@ -2750,6 +2752,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
           },
         });
         cardOpened = true;
+        params.onChildStarted?.();
 
         const processChild = (item: PiStreamItem): void => {
           if (!isPiEvent(item)) return;

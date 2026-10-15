@@ -37,8 +37,8 @@ hand-rolled. The pi launch contract is documented in
 
 ## Development
 
-Requires Node.js 22.19 or newer. This matches the minimum required by the pinned
-Electron toolchain.
+Requires Node.js 22.22 or newer: the pinned Electron toolchain needs 22.19 and
+`posthog-node` (analytics) needs 22.22.
 
 ```sh
 pnpm install
@@ -71,6 +71,42 @@ message. Opening a draft or restarting the app does not start Pi or discard it.
 Unsent text and attachments are saved in local app data. A failed startup keeps
 the message available for retry; deleting the chat explicitly removes its draft.
 The desktop app waits for pending draft saves before quitting.
+
+## Analytics
+
+The local backend sends anonymous usage counts to PostHog (EU host) with
+`posthog-node`, keyed by a random install id stored once in the data directory
+(`install-id`). It is on by default; a one-time notice says so, and
+**Settings > Performance > Privacy** turns it off (`analyticsEnabled` in
+`PATCH /settings`). Nothing is sent on the shared server, under tests
+(`NODE_ENV=test` or `AGENT_DECK_TEST=1`), or when the build has no
+`AGENT_DECK_POSTHOG_KEY` (a public project key baked in by
+`scripts/build-backend.mjs`); there the switch and the notice are not shown
+(`capabilities.analytics` in `GET /settings` is false). The PostHog project
+discards client IP addresses.
+
+`session_created` is counted when a session actually launches (a draft's first
+message), not when a draft is made. Its `provider` is sent only for Pi's built-in
+providers and Claude Code (`claude-bridge`), and `model` only when it is in Pi's
+static built-in model list for that provider (the Anthropic list for
+`claude-bridge`; a thinking suffix such as `:high` is removed first). Models
+added in `models.json`, even under a built-in provider, are reported as `custom`.
+
+| Event                        | Fields                        |
+| ---------------------------- | ----------------------------- |
+| `app_started`                | none                          |
+| `session_created`            | `provider`, `model`           |
+| `loop_started`               | none                          |
+| `subagent_spawned`           | none                          |
+| `session_moved`              | `direction` (`out`, `return`) |
+| `mcp_server_connected`       | `transport` (`stdio`, `http`) |
+| `settings_analytics_changed` | `enabled`                     |
+
+Every event also carries `appVersion` and `platform` (`<os>-<arch>`). Any other
+field, and any other value containing a slash, backslash, colon or whitespace, is
+dropped before sending. Never sent: prompts, transcripts, titles, file paths, project or
+repository names, model output, email or hostname. No autocapture, session replay
+or person profiles.
 
 ## macOS packaging
 

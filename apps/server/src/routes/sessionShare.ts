@@ -308,6 +308,7 @@ export function registerSessionShareRoutes(ctx: ServerContext): void {
         serverOrigin: link.serverOrigin,
         serverSessionId: link.serverSessionId,
       });
+      ctx.analytics?.track("session_moved", { direction: "out" });
       const decorated = ctx.withActivity?.([next])[0] ?? next;
       broadcast({ type: "session_meta", session: decorated });
       return { session: decorated };

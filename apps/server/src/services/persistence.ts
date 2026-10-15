@@ -203,6 +203,10 @@ export interface AppSettings {
    * modifier); anything else is dropped rather than trusted.
    */
   keybindings: KeybindingBinding[];
+  /** ANA-01: send anonymous usage counts (local mode only). Default on. */
+  analyticsEnabled: boolean;
+  /** ANA-01: the one-time analytics notice was dismissed. */
+  analyticsNoticeSeen: boolean;
 }
 
 const MAX_INJECTED_COMMAND_IDS = 256;
@@ -509,6 +513,8 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       semanticMemoryEnabled: persistLegacySemanticSeed,
       piAgentIdleParkingEnabled: true,
       piAgentIdleParkingTimeoutMinutes: 10,
+      analyticsEnabled: true,
+      analyticsNoticeSeen: false,
       worktreeIsolation: false,
       keepWorktreeAfterMerge: true,
       gitAutomation: true, // native piAgentGitAutomationEnabled default: git actions shown
@@ -618,6 +624,9 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
             record.piAgentIdleParkingTimeoutMinutes <= 120
               ? record.piAgentIdleParkingTimeoutMinutes
               : 10,
+          analyticsEnabled:
+            typeof record.analyticsEnabled === "boolean" ? record.analyticsEnabled : true,
+          analyticsNoticeSeen: record.analyticsNoticeSeen === true,
           worktreeIsolation:
             typeof record.worktreeIsolation === "boolean" ? record.worktreeIsolation : false,
           keepWorktreeAfterMerge:
@@ -691,6 +700,8 @@ export const makeSettingsStoreHandle = (dataDir: string): Effect.Effect<Settings
       if (value.piAgentIdleParkingEnabled === true) delete persisted.piAgentIdleParkingEnabled;
       if (value.piAgentIdleParkingTimeoutMinutes === 10)
         delete persisted.piAgentIdleParkingTimeoutMinutes;
+      if (value.analyticsEnabled === true) delete persisted.analyticsEnabled;
+      if (value.analyticsNoticeSeen === false) delete persisted.analyticsNoticeSeen;
       // Absence is the shipped enabled state, preserving legacy settings bytes.
       // Persist only the user's explicit pause.
       if (value.agentMemoryEnabled === true) delete persisted.agentMemoryEnabled;

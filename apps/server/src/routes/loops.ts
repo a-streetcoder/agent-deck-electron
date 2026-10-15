@@ -688,6 +688,7 @@ export function registerLoopRoutes(
         // A8: the checkpoint waits on a person (a run that failed to start never asks).
         if (run.stopReason === "humanInputRequired")
           ctx.events.humanRequested(humanFromLoopApproval(run));
+        ctx.analytics?.track("loop_started");
         return reply.status(201).send({ run, worktree: null });
       } catch (error) {
         if (run) loopEngine.rollbackStart(run.id);
@@ -994,6 +995,7 @@ export function registerLoopRoutes(
     // Only now: every fallible startup step above can still roll the parent back.
     ctx.events.sessionCreated(parent.meta, userActor(runner));
     recordLoopAction(request, run, "start");
+    ctx.analytics?.track("loop_started");
     return reply.status(201).send({ run, worktree });
   };
   fastify.post("/loops/:id/run", async (request, reply) =>

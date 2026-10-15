@@ -522,6 +522,7 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
       serverOrigin: link.serverOrigin,
       serverSessionId: link.serverSessionId,
     });
+    ctx.analytics?.track("session_moved", { direction: "return" });
     // The device fetched it, so the device deletes it too (the server does as well).
     const transferRefDeleted = await gitDeleteTransferRef(repo, transfer.ref).then(
       () => true,
