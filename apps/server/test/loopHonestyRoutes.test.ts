@@ -11,7 +11,11 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  affectedRegion,
+  failedVerifications,
   LOOP_PARALLEL_WRITE_TARGET_CODE,
+  projectNodeTree,
+  type EventDraft,
   type LoopDefinition,
   type LoopStructure,
 } from "@agent-deck/domain";
@@ -1915,6 +1919,59 @@ describe("loop route honesty gate", () => {
         evaluatorModel: "shared-model",
       },
     });
+  });
+
+  it("A10 retry from node: a checker FAIL iteration resolves to its run, which the loop retry re-runs", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "loop-retry-from-node-"));
+    writeLoopFile(
+      { home },
+      {
+        name: "Node Retry",
+        structure: "makerChecker",
+        goal: "Build and review.",
+        makerName: "Maker",
+        checkerName: "Checker",
+        checkerRubric: "Require evidence.",
+        writeTarget: "artifactMarkdown",
+      },
+    );
+    const definition = scanLoops({ home })[0]!;
+    // The real engine and its event sink: the Run tree reads exactly these events.
+    const engine = new LoopEngine({
+      dataDir: mkdtempSync(path.join(tmpdir(), "loop-retry-from-node-data-")),
+      executeRole: async ({ phase }) => (phase === "checker" ? "FAIL\nOut of scope." : "made"),
+    });
+    const drafts: EventDraft[] = [];
+    engine.attachEventSink((next) => drafts.push(...next));
+    const failed = engine.start(definition, home, { projectId: "project", sessionId: "loop-1" });
+    await engine.settled(failed.id);
+    expect(failed).toMatchObject({ status: "failed", stopReason: "agentFailed" });
+
+    const tree = projectNodeTree(
+      drafts.map((draft, index) => ({ ...draft, id: `e${index}`, ts: failed.startedAt })),
+      { runId: failed.id },
+    );
+    const [failure] = failedVerifications(tree);
+    expect(failure).toMatchObject({
+      key: `loopIteration:${failed.iterations[0]!.id}`,
+      reason: "checkerFail",
+      retry: { kind: "loopRun", runId: failed.id },
+    });
+    expect(affectedRegion(tree, failure!.key)?.affected).toContain(`loopRun:${failed.id}`);
+
+    const { fastify, createSession, startEngine, settledEngine, getEngine } = makeRoutes(home);
+    getEngine.mockImplementation((id) => engine.get(id));
+    createSession.mockReturnValue({
+      meta: { id: "retry-parent", cwd: home, createdAt: failed.startedAt, projectId: "project" },
+    });
+    settledEngine.mockReturnValue(new Promise<void>(() => {}));
+    startEngine.mockReturnValue({ ...failed, id: "retry-run", status: "running", iterations: [] });
+    const retry = await fastify.inject({
+      method: "POST",
+      url: `/loops/runs/${(failure!.retry as { runId: string }).runId}/retry`,
+    });
+    expect(retry.statusCode).toBe(201);
+    expect(startEngine.mock.calls[0]![2]).toMatchObject({ retryOf: failed.id });
   });
 
   it("preflights both valid Maker+Checker roles and preserves their selected names", async () => {

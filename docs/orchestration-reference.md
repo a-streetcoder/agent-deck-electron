@@ -442,6 +442,59 @@ session the backend lists as needing attention (`attention:notify` requires a se
 revalidates it), so a loop approval is announced in-app only. A desktop notification for it
 needs a project-level attention source in `apps/desktop/main.js`: an owner decision.
 
+### Node-level retry (A10)
+
+Checkpoints attach to nodes: `checkpoint.created` carries `node`, the node the checkpoint
+belongs to (additive; the checkpoint store is unchanged). Only turns have checkpoints (the
+per-turn capture at the idle boundary), so `node` is the turn today; a safety checkpoint taken
+by a rollback has none. A log written before A10 is read with the checkpoint's `parent` turn
+instead. Loop children and dispatched plan runs are Pi child processes outside that capture:
+they have no checkpoints of their own.
+
+`affectedRegion(tree, failedNodeId)` (`packages/domain/src/affectedRegion.ts`) marks the A2
+tree in log order (the fold position of each node's first and terminal event, never the
+clock):
+
+- **trusted**: not the failed node, not inside it, not one of its ancestors, and terminal
+  before the failed node's first event;
+- **affected**: everything else (the node, its subtree, its ancestors, and whatever began or
+  was still running when it began; a parallel sibling counts as affected);
+- **recovery frontier**: the trusted node owning the latest trusted checkpoint that a later
+  rollback did not truncate, and only when no trusted node ended after that checkpoint
+  (restoring it must not drop trusted work). After a rollback, its target counts as taken at
+  the rollback.
+
+`failedVerifications(tree)` finds what to mark: a run its verifier rejected (A7, not a
+verifier run), a blocked plan item's run (A5: its run failed, stopped or was rejected; the
+item's status comes from the latest `plan.changed`), and the first checker `FAIL` iteration
+of a loop run `canRetryLoopRun` accepts. A rejected run outside a plan re-runs the turn above
+it; with no turn above it (a parent-session run) it is not offered.
+
+The Run tree labels rows Trusted, Affected or Recovery point while a failure is in view and
+puts one action, "Retry from node", on the failed node, after a confirm. It restores the
+frontier checkpoint through the existing `checkpoint_rollback` (when the frontier is the open
+session's), then re-runs the region:
+
+| Failed node                     | Re-run                                                                                                           |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| a rejected run in a turn        | the first prompt the rollback dropped, sent again (the Checkpoints panel's rerun); needs a frontier              |
+| a blocked plan item's run       | `POST /sessions/:id/plan/items/:itemId/retry`: the item and its blocked dependants back to `todo`, then dispatch |
+| a checker `FAIL` loop iteration | the existing `POST /loops/runs/:id/retry` (the whole run from its definition snapshot)                           |
+
+The plan route logs `plan.item.retried {itemId, itemIds}` with the person as actor first and
+refuses (409) when it cannot, or when the item is not blocked; the dispatcher's plan writes
+and dispatches are caused by that event. The click is live intent: it makes the session's
+plan owned again, also after a Stop revoked it. The action waits while a turn runs, and a
+restore also while a subagent or loop run in the tree is still working. The existing
+rollback, rerun and loop retry controls are unchanged.
+
+Not covered: only one prompt is re-sent, so turns between the frontier and the failed one
+are not replayed, and attachments are not; a checkpoint pruned by retention (no event) can
+still be named as the frontier, and the rollback then fails with its own error; a loop and
+a plan item without a frontier re-run on the files as they are; a loop retry re-runs the
+whole run, not one node of it, through the existing retry route, which injects its run request
+without the caller's headers (not checked behind the shared server's identity hook).
+
 ## Collaboration
 
 The shared server (Cloudflare Access identity, per-user provider sign-in, credentials,

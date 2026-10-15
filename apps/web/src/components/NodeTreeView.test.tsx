@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emptyTranscript,
   humanAnsweredDraft,
@@ -20,8 +20,16 @@ import { NodeTreeView } from "./NodeTreeView.tsx";
 import planLog from "../../../../packages/domain/test/fixtures/events/plan.jsonl?raw";
 
 const switchToSession = vi.fn();
+const rollbackToCheckpoint = vi.fn(async (_turnIndex: number) => ({
+  filesRestored: true,
+  nextPrompt: "Second prompt" as string | null,
+  nextPromptHadAttachments: false,
+}));
+const sendPrompt = vi.fn(async (_sessionId: string, _text: string) => {});
 vi.mock("../state/wsBridge.ts", () => ({
   switchToSession: (session: unknown) => switchToSession(session),
+  rollbackToCheckpoint: (turnIndex: number) => rollbackToCheckpoint(turnIndex),
+  sendPrompt: (sessionId: string, text: string) => sendPrompt(sessionId, text),
 }));
 
 const SESSION = "00000000-0000-4000-8000-000000000005";
@@ -88,8 +96,9 @@ const cells: TranscriptCell[] = [
 ];
 
 let served: EventEnvelope[] = [];
-const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), "http://x");
+  if (init?.method === "POST") return Response.json({ itemIds: ["b"] });
   const after = Number(url.searchParams.get("afterSeq"));
   const limit = Number(url.searchParams.get("limit"));
   const rest = served.filter((event) => event.seq > after);
@@ -106,6 +115,8 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
 beforeEach(() => {
   served = [...recorded, fork];
   fetchMock.mockClear();
+  rollbackToCheckpoint.mockClear();
+  sendPrompt.mockClear();
   vi.stubGlobal("fetch", fetchMock);
   useAppStore.setState({
     session: { id: SESSION, cwd: "/tmp", createdAt: "now" },
@@ -305,4 +316,182 @@ it("A8: a supervisor request's row gives way to its human node", async () => {
   const types = screen.getAllByTestId("tree-node").map((node) => node.getAttribute("data-type"));
   expect(types).not.toContain("supervisorRequest");
   expect(types).toContain("human");
+});
+
+describe("A10 retry from node", () => {
+  let seq = 50;
+  const event = (kind: string, subject: object, extra: object = {}): EventEnvelope =>
+    ({
+      v: 1,
+      id: `a10-${(seq += 1)}`,
+      seq,
+      ts: "2026-10-15T00:00:00.000Z",
+      logId: "log",
+      kind,
+      projectId: null,
+      sessionId: SESSION,
+      subject,
+      actor: { type: "system" },
+      payload: {},
+      ...extra,
+    }) as EventEnvelope;
+  const run = (id: string, status: string, verdict?: object) => ({
+    payload: {
+      run: {
+        id,
+        parentSessionId: SESSION,
+        task: `Task ${id}`,
+        status,
+        createdAt: "",
+        updatedAt: "",
+        ...(verdict ? { verdict } : {}),
+      },
+    },
+  });
+  const rejected = (id: string) =>
+    event(
+      "subagent.run.verified",
+      { type: "subagentRun", id },
+      run(id, "completed", {
+        decision: "REJECT",
+        reason: "no tests",
+        verifierRunId: `v-${id}`,
+      }),
+    );
+  const underSession = { parent: { type: "session", id: SESSION } };
+  const rowOf = (type: string, label: string) =>
+    screen
+      .getAllByTestId("tree-node")
+      .find(
+        (row) =>
+          row.getAttribute("data-type") === type &&
+          within(row).getAllByTestId("tree-node-label")[0]!.textContent === label,
+      )!;
+  const ownMark = (row: HTMLElement) =>
+    within(row.querySelector("summary, div") as HTMLElement).queryByTestId("tree-node-mark")
+      ?.textContent;
+
+  beforeEach(() => {
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => true),
+    );
+  });
+
+  it("a run rejected in a later turn: marks the region and restores, then re-prompts", async () => {
+    served = [
+      ...recorded,
+      event(
+        "turn.prompted",
+        { type: "turn", id: "t2" },
+        {
+          parent: { type: "session", id: SESSION },
+          payload: { label: "Second prompt" },
+        },
+      ),
+      // Delegated by the second turn's tool call: that turn is what runs again.
+      event(
+        "subagent.run.created",
+        { type: "subagentRun", id: "r2" },
+        {
+          parent: { type: "toolCall", id: "call_t2" },
+          ...run("r2", "running"),
+        },
+      ),
+      rejected("r2"),
+      event(
+        "session.turn.completed",
+        { type: "turn", id: "t2" },
+        {
+          payload: {
+            toolCalls: [{ id: "call_t2", name: "managed_subagent" }],
+            label: "Second prompt",
+          },
+        },
+      ),
+    ];
+    render(<NodeTreeView />);
+    const button = await waitFor(() => screen.getByTestId("retry-from-node"));
+    expect(button.closest("[data-type]")?.getAttribute("data-type")).toBe("subagentRun");
+    expect(ownMark(rowOf("turn", "Plan and delegate"))).toBe("Recovery point");
+    expect(ownMark(rowOf("turn", "Second prompt"))).toBe("Affected");
+    expect(ownMark(rowOf("subagentRun", "Summarize the notes."))).toBe("Trusted");
+
+    act(() => button.click());
+    await waitFor(() => expect(sendPrompt).toHaveBeenCalledWith(SESSION, "Second prompt"));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('"Plan and delegate"'));
+    expect(rollbackToCheckpoint).toHaveBeenCalledWith(0);
+  });
+
+  it("never restores files while another run is still working", async () => {
+    served = [
+      ...recorded,
+      event("turn.prompted", { type: "turn", id: "t2" }, underSession),
+      event(
+        "subagent.run.created",
+        { type: "subagentRun", id: "r2" },
+        {
+          parent: { type: "toolCall", id: "call_t2" },
+          ...run("r2", "running"),
+        },
+      ),
+      rejected("r2"),
+      event(
+        "session.turn.completed",
+        { type: "turn", id: "t2" },
+        {
+          payload: { toolCalls: [{ id: "call_t2", name: "managed_subagent" }] },
+        },
+      ),
+      event(
+        "subagent.run.created",
+        { type: "subagentRun", id: "busy" },
+        {
+          ...underSession,
+          ...run("busy", "running"),
+        },
+      ),
+    ];
+    render(<NodeTreeView />);
+    const button = await waitFor(() => screen.getByTestId("retry-from-node"));
+    expect(button).toHaveProperty("disabled", true);
+    expect(button.getAttribute("title")).toMatch(/^Wait for the running subagents/);
+  });
+
+  it("a blocked plan item asks the dispatcher; a rejected first turn has nothing to restore", async () => {
+    const plan = (items: object[]) =>
+      event("plan.changed", { type: "plan", id: SESSION }, { payload: { kind: "set", items } });
+    served = [
+      recorded[0]!,
+      recorded[1]!,
+      plan([{ id: "b", title: "B", status: "todo" }]),
+      event(
+        "subagent.run.created",
+        { type: "subagentRun", id: "rb" },
+        {
+          parent: { type: "session", id: SESSION },
+          ...run("rb", "running"),
+        },
+      ),
+      event("subagent.run.finished", { type: "subagentRun", id: "rb" }, run("rb", "failed")),
+      plan([{ id: "b", title: "B", status: "blocked", runId: "rb" }]),
+    ];
+    const { unmount } = render(<NodeTreeView />);
+    const button = await waitFor(() => screen.getByTestId("retry-from-node"));
+    act(() => button.click());
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(`/sessions/${SESSION}/plan/items/b/retry`, {
+        method: "POST",
+      }),
+    );
+    expect(rollbackToCheckpoint).not.toHaveBeenCalled();
+    unmount();
+
+    // The recorded run, rejected inside the session's first turn: no checkpoint before it.
+    served = [...recorded, rejected(`00000000-0000-4000-8000-000000000009`)];
+    render(<NodeTreeView />);
+    const disabled = await waitFor(() => screen.getByTestId("retry-from-node"));
+    expect(disabled).toHaveProperty("disabled", true);
+    expect(disabled.getAttribute("title")).toBe("No checkpoint before this node to restore.");
+  });
 });

@@ -16,6 +16,7 @@ import {
   applyPlanUpdates,
   propagateBlocked,
   readyFrontier,
+  retryPlanItemUpdates,
   sameAgent,
   type EventEnvelope,
   type ProjectedPlanDispatch,
@@ -86,6 +87,13 @@ export interface PlanDispatcher {
   evaluate(sessionId: string, causationId?: string): Promise<void>;
   /** Recompute every live session (the delegation setting changed). */
   evaluateAll(): Promise<void>;
+  /**
+   * A10 retry from node: a person's click is live intent. A blocked item and its blocked
+   * dependants go back to todo (caused by the logged retry event), the session's plan is
+   * owned again (also after a Stop revoked it) and a pass re-dispatches them. False when
+   * the item is not blocked.
+   */
+  retry(sessionId: string, itemId: string, causationId: string): Promise<boolean>;
   close(): void;
 }
 
@@ -365,6 +373,15 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
     evaluate: schedule,
     evaluateAll: async () => {
       await Promise.all(deps.liveSessions().map((sessionId) => schedule(sessionId)));
+    },
+    retry: async (sessionId, itemId, causationId) => {
+      const updates = retryPlanItemUpdates(deps.plan(sessionId) ?? [], itemId);
+      if (closed || updates.length === 0) return false;
+      owned.add(sessionId);
+      lastCause.set(sessionId, causationId);
+      deps.updatePlan(sessionId, updates, causationId);
+      await schedule(sessionId, causationId);
+      return true;
     },
     close() {
       closed = true;

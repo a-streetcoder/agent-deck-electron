@@ -85,6 +85,15 @@ export interface EventProducers {
     },
     causationId?: string,
   ): boolean;
+  /**
+   * A10: a person retried a blocked plan item (itemIds: it and the dependants it reopens).
+   * The event's id (the cause of the dispatcher's writes), or undefined when not logged.
+   */
+  planItemRetried(
+    sessionId: string,
+    retry: { itemId: string; itemIds: string[] },
+    actor: EventActor,
+  ): string | undefined;
   checkpointCreated(
     sessionId: string,
     record: CheckpointRecord,
@@ -461,6 +470,22 @@ export function createEventProducers(
       }).ok;
     },
 
+    planItemRetried(sessionId, retry, actor) {
+      const result = log.append({
+        kind: "plan.item.retried",
+        sessionId,
+        subject: { type: "plan", id: sessionId },
+        actor,
+        payload: {
+          itemId: capText(retry.itemId, EVENT_LABEL_MAX_CHARS),
+          itemIds: retry.itemIds
+            .slice(0, MAX_PLAN_EVENT_ITEMS)
+            .map((id) => capText(id, EVENT_LABEL_MAX_CHARS)),
+        },
+      });
+      return result.ok ? result.event.id : undefined;
+    },
+
     checkpointCreated(sessionId, record, { actor = SYSTEM, turn } = {}) {
       append({
         kind: "checkpoint.created",
@@ -469,7 +494,12 @@ export function createEventProducers(
         parent: turn ? { type: "turn", id: turn.turnId } : { type: "session", id: sessionId },
         actor,
         ...causedBy(turn),
-        payload: checkpointPayload(record),
+        // A10: the node the checkpoint belongs to (its recovery point). Only turns have
+        // checkpoints; a safety checkpoint (a rollback's undo point) belongs to none.
+        payload: {
+          ...checkpointPayload(record),
+          ...(turn ? { node: { type: "turn", id: turn.turnId } } : {}),
+        },
       });
     },
 

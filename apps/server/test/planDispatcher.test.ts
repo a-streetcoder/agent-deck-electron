@@ -444,3 +444,60 @@ describe("plan dispatcher", () => {
     dispatcher.close();
   });
 });
+
+describe("A10 retry from node", () => {
+  it("a rejected item and its dependant run again on a person's retry, in order", async () => {
+    const w = world([todo("a", { verifiedBy: "reviewer" }), todo("b", { dependsOn: ["a"] })]);
+    const dispatcher = createPlanDispatcher(w.deps);
+    w.agentPlan();
+    await w.settle();
+    w.finish("run-1");
+    await w.settle();
+    w.answer(w.spawned.find((s) => s.verifier)!.runId, "REJECT: tests missing");
+    await w.settle();
+    expect(w.status()).toEqual({ a: "blocked", b: "blocked" });
+
+    expect(await dispatcher.retry("s1", "b", "retry-b")).toBe(true);
+    // b alone cannot run while a is still blocked: the pass blocks it again.
+    expect(w.status()).toEqual({ a: "blocked", b: "blocked" });
+
+    expect(await dispatcher.retry("s1", "a", "retry-a")).toBe(true);
+    expect(w.status()).toEqual({ a: "in_progress", b: "todo" });
+    expect(w.plan()[0]?.note).toBeUndefined();
+    expect(w.recorded.at(-1)).toMatchObject({
+      itemId: "a",
+      runId: "run-3",
+      causationId: "retry-a",
+    });
+    expect(w.causes).toContain("retry-a");
+
+    w.finish("run-3");
+    await w.settle();
+    w.answer(w.spawned.filter((s) => s.verifier).at(-1)!.runId, "APPROVE");
+    await w.settle();
+    expect(w.status()).toEqual({ a: "done", b: "in_progress" });
+    // Nothing blocked is left to retry.
+    expect(await dispatcher.retry("s1", "a", "again")).toBe(false);
+    dispatcher.close();
+  });
+
+  it("the click is live intent: a retry dispatches after a Stop revoked the plan", async () => {
+    const w = world([todo("a"), todo("b", { dependsOn: ["a"] })]);
+    const dispatcher = createPlanDispatcher(w.deps);
+    w.agentPlan();
+    await w.settle();
+    w.finish("run-1", "stopped");
+    await w.settle();
+    expect(w.status()).toEqual({ a: "blocked", b: "blocked" });
+    // A pass of its own (a freed slot, a restore) still dispatches nothing.
+    await dispatcher.evaluate("s1");
+    expect(w.spawned).toHaveLength(1);
+
+    expect(await dispatcher.retry("s1", "a", "retry-1")).toBe(true);
+    expect(w.spawned.map((s) => s.runId)).toEqual(["run-1", "run-2"]);
+    w.finish("run-2");
+    await w.settle();
+    expect(w.status()).toEqual({ a: "done", b: "in_progress" });
+    dispatcher.close();
+  });
+});

@@ -41,6 +41,10 @@ export interface ExecutionNode {
   updatedAt: string;
   /** The ts of the event that made the status terminal. */
   endedAt?: string;
+  /** A10: the fold positions of the node's first event and of the event that made its
+   * status terminal. Log order, never the clock: affectedRegion compares these. */
+  firstEvent: number;
+  endEvent?: number;
   /** The store pruned the record (subagent.run.removed, session.removed, ...); history stays. */
   removed?: true;
   /** Only referenced (as a parent) by the events in view; its own events are not. */
@@ -66,6 +70,11 @@ export interface ExecutionNode {
   loopChild?: PublicLoopChild;
   /** human (A8): the request, and its answer or expiry once settled. */
   human?: HumanNodeFacts;
+  /** checkpoint (A10): its capture index and the node it belongs to (absent on a safety
+   * checkpoint). A later rollback that truncated it marks the node `removed`. */
+  checkpoint?: { turnIndex: number; node?: StoredNodeRef };
+  /** plan (A10): the latest plan's items (id, status, run), for the blocked ones. */
+  planItems?: { id: string; status: string; runId?: string }[];
 }
 
 /** What the tree keeps of a human node: the request and how it settled. */
@@ -203,6 +212,7 @@ export function projectNodeTree(
   // The node order at each server.started: placeholders older than one are interrupted.
   const restarts: { order: number; ts: string }[] = [];
   let order = 0;
+  let position = 0;
 
   const touch = (ref: StoredNodeRef, event: NodeTreeEvent, sessionId?: string): Draft => {
     const key = nodeKey(ref, sessionId);
@@ -218,6 +228,7 @@ export function projectNodeTree(
         ...(sessionId ? { sessionId } : {}),
         startedAt: event.ts,
         updatedAt: event.ts,
+        firstEvent: position,
         order: order++,
       };
       drafts.set(key, node);
@@ -227,14 +238,20 @@ export function projectNodeTree(
   };
   const setStatus = (node: Draft, status: NodeStatus, ts: string): void => {
     node.status = status;
-    if (TERMINAL.has(status)) node.endedAt = ts;
-    else delete node.endedAt;
+    if (TERMINAL.has(status)) {
+      node.endedAt = ts;
+      node.endEvent = position;
+    } else {
+      delete node.endedAt;
+      delete node.endEvent;
+    }
   };
   const sessionNode = (sessionId: string, event: NodeTreeEvent): Draft =>
     drafts.get(nodeKey({ type: "session", id: sessionId })) ??
     touch({ type: "session", id: sessionId }, event, sessionId);
 
   for (const event of events) {
+    position += 1;
     // A parent's read cursor (A3) is not a step of the run: no node, no updatedAt bump.
     if (event.kind === SUBAGENT_RESULT_READ) continue;
     const session = sessionOf(event);
@@ -335,16 +352,46 @@ export function projectNodeTree(
       }
       case "plan.changed": {
         node.label = "Plan";
-        const items = Array.isArray(payload.items) ? (payload.items as { status?: unknown }[]) : [];
+        const items = Array.isArray(payload.items)
+          ? (payload.items as { id?: unknown; status?: unknown; runId?: unknown }[])
+          : [];
         const open = items.some((item) => item.status !== "done" && item.status !== "skipped");
+        node.planItems = items.flatMap((item) => {
+          const id = str(item.id);
+          const runId = str(item.runId);
+          return id ? [{ id, status: String(item.status), ...(runId ? { runId } : {}) }] : [];
+        });
         setStatus(node, open ? "running" : "done", ts);
         break;
       }
       case "checkpoint.created":
-      case "checkpoint.rolledBack":
+      case "checkpoint.rolledBack": {
         node.label = str(payload.label) ?? "Checkpoint";
+        const turnIndex = typeof payload.turnIndex === "number" ? payload.turnIndex : undefined;
+        if (event.kind === "checkpoint.created" && turnIndex !== undefined) {
+          const owner = payload.node as Partial<StoredNodeRef> | undefined;
+          const type = str(owner?.type);
+          const id = str(owner?.id);
+          node.checkpoint = { turnIndex, ...(type && id ? { node: { type, id } } : {}) };
+        }
+        // A rollback makes its target current again (the node ends here) and truncates
+        // the later captures, except the safety one it took first.
+        if (event.kind === "checkpoint.rolledBack" && turnIndex !== undefined) {
+          for (const other of drafts.values()) {
+            const index = other.checkpoint?.turnIndex;
+            if (
+              other.sessionId === node.sessionId &&
+              index !== undefined &&
+              index > turnIndex &&
+              index !== payload.safetyTurnIndex
+            ) {
+              other.removed = true;
+            }
+          }
+        }
         setStatus(node, "done", ts);
         break;
+      }
       case "supervisor.progress.recorded":
         node.label = str(payload.message) ?? "Progress";
         node.progress = true;
@@ -481,6 +528,7 @@ export function projectNodeTree(
         ...(explicit.sessionId ? { sessionId: explicit.sessionId } : {}),
         startedAt: node.startedAt,
         updatedAt: node.startedAt,
+        firstEvent: node.firstEvent,
         order: node.order - 0.5,
         placeholder: true,
       };

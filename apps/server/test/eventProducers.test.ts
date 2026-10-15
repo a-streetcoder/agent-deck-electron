@@ -158,7 +158,13 @@ describe("A1b1 producers", () => {
       parent: { type: "turn", id: "id-1" },
       actor: { type: "system" },
       causationId: "id-1",
-      payload: { turnIndex: 0, hasFiles: true, gitRef: "refs/agent-deck/checkpoints/s1/0" },
+      payload: {
+        turnIndex: 0,
+        hasFiles: true,
+        gitRef: "refs/agent-deck/checkpoints/s1/0",
+        // A10: the node the checkpoint belongs to.
+        node: { type: "turn", id: "id-1" },
+      },
     });
   });
 
@@ -232,6 +238,24 @@ describe("A1b1 producers", () => {
         reason: "no tests",
       },
     });
+  });
+
+  it("A10: plan.item.retried is the person's intent, its id the cause of what follows", () => {
+    const h = harness();
+    const id = h.events.planItemRetried(
+      "s1",
+      { itemId: "a", itemIds: ["a", "b"] },
+      userActor({ id: "u1", name: "Ale" }),
+    );
+    expect(h.all()).toEqual([
+      expect.objectContaining({
+        id,
+        kind: "plan.item.retried",
+        subject: { type: "plan", id: "s1" },
+        actor: { type: "user", id: "u1", name: "Ale" },
+        payload: { itemId: "a", itemIds: ["a", "b"] },
+      }),
+    ]);
   });
 
   it("a steer joins the running turn: one turn id, one completion, caused by the steer once Pi takes it", () => {

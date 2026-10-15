@@ -15,6 +15,7 @@ import type { IncomingMessage } from "node:http";
 import { serverLog } from "../serverLog.ts";
 import { createSessionDraftGateway } from "../sessionDrafts.ts";
 import { requestUser } from "../trustedProxy.ts";
+import { retryPlanItemUpdates } from "@agent-deck/domain";
 import { userActor } from "../eventProducers.ts";
 import { coAuthorTrailers, gitIdentityEnv, withTrailers } from "../gitIdentity.ts";
 import { API_KEY_ONLY_PROVIDERS, listProjectFiles } from "@agent-deck/resources";
@@ -576,6 +577,41 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const known = sessions.get(id)?.meta ?? index.find((s) => s.id === id);
     if (!known) return reply.status(404).send({ error: "unknown session" });
     return { events: ctx.planEvents.list(id) };
+  });
+
+  // A10 retry from node: a person re-runs a blocked plan item and the dependants it
+  // blocked. The click is the live intent the dispatcher waits for, logged with its actor
+  // before anything moves; the Run tree restores the frontier checkpoint first, if any.
+  fastify.post("/sessions/:id/plan/items/:itemId/retry", async (request, reply) => {
+    const { id, itemId } = request.params as { id: string; itemId: string };
+    const session = sessions.get(id);
+    if (!session || !ctx.planDispatcher)
+      return reply.status(404).send({ error: "unknown session" });
+    const itemIds = retryPlanItemUpdates(session.plan, itemId).map((update) => update.id);
+    if (itemIds.length === 0) {
+      return reply.status(409).send({
+        code: "plan_item_not_blocked",
+        error: "Only a blocked plan item can be retried.",
+      });
+    }
+    const cause = ctx.events.planItemRetried(
+      id,
+      { itemId, itemIds },
+      userActor(requestUser(request.raw)),
+    );
+    if (!cause) {
+      return reply.status(409).send({
+        code: "plan_retry_not_recorded",
+        error: "The retry could not be recorded in the event log, so nothing was dispatched.",
+      });
+    }
+    if (!(await ctx.planDispatcher.retry(id, itemId, cause))) {
+      return reply.status(409).send({
+        code: "plan_item_not_blocked",
+        error: "Only a blocked plan item can be retried.",
+      });
+    }
+    return { itemIds };
   });
 
   // Rename: updates pi's session name (when live) and the persisted title.

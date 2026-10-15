@@ -1,14 +1,18 @@
 import { ControlButton } from "@/design-system/components/NativeControls";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  affectedRegion,
   eventLabel,
+  failedVerifications,
   humanKindLabel,
   memoryToolCardLabel,
   openHumanNodes,
   projectNodeTree,
   PROMPT_LABEL_MAX_CHARS,
+  type AffectedRegion,
   type AssistantCell,
   type EventEnvelope,
+  type FailedVerification,
   type ExecutionNode,
   type NodeStatus,
   type ToolCell,
@@ -18,7 +22,7 @@ import {
 import { toolPresentation } from "@/components/transcript/toolPresentation";
 import { useAppStore } from "../state/store.ts";
 import type { ProjectEventPage } from "../state/projectLog.ts";
-import { switchToSession } from "../state/wsBridge.ts";
+import { rollbackToCheckpoint, sendPrompt, switchToSession } from "../state/wsBridge.ts";
 import { actorLabel, formatEventTime } from "./ActivityList.tsx";
 import { VerdictChip } from "./VerdictChip.tsx";
 
@@ -171,18 +175,102 @@ function duplicateRows(nodes: ReadonlyMap<string, ExecutionNode>): ReadonlySet<s
 
 const NO_HIDDEN: ReadonlySet<string> = new Set();
 
+/** A10: one failed verification, its marked region and the checkpoint it may restore. */
+interface Failure {
+  failure: FailedVerification;
+  region?: AffectedRegion;
+  /** The frontier checkpoint, when it is the open session's (rollback acts on that one). */
+  restore?: { turnIndex: number; label: string };
+}
+
+/** A10: the marking of every failed verification in view, and the one action. */
+interface Marks {
+  mark: ReadonlyMap<string, "trusted" | "affected" | "frontier">;
+  failures: ReadonlyMap<string, Failure>;
+  /** A turn is running or a retry is in flight: nothing restores now. */
+  busy: boolean;
+  /** A subagent or loop run is still working: a restore would rewrite files under it. */
+  liveWork: boolean;
+  onRetry: (key: string) => void;
+}
+
+const NO_MARKS: Marks = {
+  mark: new Map(),
+  failures: new Map(),
+  busy: false,
+  liveWork: false,
+  onRetry: () => {},
+};
+
+const MARK_LABEL = { trusted: "Trusted", affected: "Affected", frontier: "Recovery point" };
+
+const RERUN_TEXT: Record<FailedVerification["retry"]["kind"], string> = {
+  turn: "send the turn's prompt again",
+  planItem: "re-dispatch the plan item and the items it blocked",
+  loopRun: "retry the loop run from its saved definition (it may write to its checkout again)",
+};
+
+/** Why the action cannot run now, or undefined when it can. */
+function retryBlocker(entry: Failure, marks: Marks): string | undefined {
+  if (entry.failure.retry.kind === "turn" && !entry.restore)
+    return "No checkpoint before this node to restore.";
+  if (marks.busy) return "Wait for the running turn to finish.";
+  if (entry.restore && marks.liveWork)
+    return "Wait for the running subagents and loops to finish before restoring files.";
+  return undefined;
+}
+
+/**
+ * A10 "Retry from node": restore the frontier checkpoint through the existing rollback
+ * (the RPC the Checkpoints panel uses), then re-run the affected region: a turn's prompt
+ * again (the first prompt the rollback dropped, as the panel's rerun), a plan item through
+ * the dispatcher (the click is the live intent, logged with its actor), a loop through the
+ * existing loop retry. Resolves to the success message.
+ */
+async function retryFromNode(sessionId: string, entry: Failure): Promise<string> {
+  const { retry } = entry.failure;
+  let nextPrompt: string | null = null;
+  if (entry.restore) ({ nextPrompt } = await rollbackToCheckpoint(entry.restore.turnIndex));
+  if (retry.kind === "turn") {
+    if (!nextPrompt) return "Restored the checkpoint; there was no later prompt to send again.";
+    await sendPrompt(sessionId, nextPrompt);
+    return "Restored the checkpoint and sent the turn's prompt again.";
+  }
+  const response =
+    retry.kind === "planItem"
+      ? await fetch(
+          `/sessions/${encodeURIComponent(retry.sessionId)}/plan/items/${encodeURIComponent(retry.itemId)}/retry`,
+          { method: "POST" },
+        )
+      : await fetch(`/loops/runs/${encodeURIComponent(retry.runId)}/retry`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ currentCheckoutConfirmed: true }),
+        });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `Retry failed (${response.status}).`);
+  }
+  return retry.kind === "planItem" ? "Plan item queued to run again." : "Loop run retried.";
+}
+
 const NodeRow = memo(function NodeRow({
   node,
   joins,
   hidden = NO_HIDDEN,
+  marks = NO_MARKS,
 }: {
   node: ExecutionNode;
   joins: Joins;
   hidden?: ReadonlySet<string>;
+  marks?: Marks;
 }) {
   const tool = node.ref.type === "toolCall";
   const leaves = turnLeaves(node, joins);
   const outcome = humanOutcome(node);
+  const mark = marks.mark.get(node.key);
+  const failure = marks.failures.get(node.key);
+  const blocker = failure ? retryBlocker(failure, marks) : undefined;
   const summary = (
     <span className="flex min-w-0 items-baseline gap-1.5">
       {CHIP_TYPES.has(node.ref.type) ? (
@@ -204,6 +292,27 @@ const NodeRow = memo(function NodeRow({
         {tool ? toolLabel(node, joins) : node.label}
       </span>
       {node.subagentRun?.verdict ? <VerdictChip verdict={node.subagentRun.verdict} /> : null}
+      {mark ? (
+        <span className="shrink-0 text-micro text-text-muted" data-testid="tree-node-mark">
+          {MARK_LABEL[mark]}
+        </span>
+      ) : null}
+      {failure ? (
+        <ControlButton
+          className="shrink-0 rounded-capsule border border-border-subtle px-1.5 text-micro text-accent enabled:hover:underline disabled:text-text-muted"
+          data-testid="retry-from-node"
+          disabled={blocker !== undefined}
+          title={blocker ?? `Retry from node: ${RERUN_TEXT[failure.failure.retry.kind]}`}
+          onClick={(event) => {
+            // Inside a <summary>: the click must not fold the row.
+            event.preventDefault();
+            event.stopPropagation();
+            marks.onRetry(node.key);
+          }}
+        >
+          Retry from node
+        </ControlButton>
+      ) : null}
       {tool ? null : (
         <>
           <span className="shrink-0 text-text-muted">{actorLabel(node.actor)}</span>
@@ -226,6 +335,7 @@ const NodeRow = memo(function NodeRow({
       data-testid="tree-node"
       data-type={node.ref.type}
       data-status={node.status}
+      {...(mark ? { "data-mark": mark } : {})}
     >
       {nested ? (
         <details open>
@@ -243,7 +353,7 @@ const NodeRow = memo(function NodeRow({
             {node.children
               .filter((child) => !hidden.has(child.key))
               .map((child) => (
-                <NodeRow key={child.key} node={child} joins={joins} hidden={hidden} />
+                <NodeRow key={child.key} node={child} joins={joins} hidden={hidden} marks={marks} />
               ))}
           </ul>
         </details>
@@ -347,6 +457,62 @@ export function NodeTreeView() {
   // A8: open human nodes first; they also stay in place below.
   const waiting = useMemo(() => (tree ? openHumanNodes(tree) : []), [tree]);
   const hidden = useMemo(() => (tree ? duplicateRows(tree.nodes) : NO_HIDDEN), [tree]);
+  const running = useAppStore((state) => state.transcript.agentStatus === "running");
+  const [retrying, setRetrying] = useState(false);
+  const failures = useMemo(() => {
+    const out = new Map<string, Failure>();
+    if (!tree) return out;
+    for (const failure of failedVerifications(tree)) {
+      const region = affectedRegion(tree, failure.key);
+      const frontier = region?.frontier;
+      const checkpoint = frontier ? tree.nodes.get(frontier.checkpointKey) : undefined;
+      out.set(failure.key, {
+        failure,
+        ...(region ? { region } : {}),
+        ...(frontier && checkpoint && frontier.sessionId === sessionId
+          ? { restore: { turnIndex: frontier.turnIndex, label: checkpoint.label } }
+          : {}),
+      });
+    }
+    return out;
+  }, [tree, sessionId]);
+  const onRetry = useCallback(
+    (key: string) => {
+      const entry = failures.get(key);
+      if (!entry || !sessionId) return;
+      const rerun = RERUN_TEXT[entry.failure.retry.kind];
+      const plan = entry.restore
+        ? `restore the checkpoint "${entry.restore.label}" (the conversation and files after it are discarded), then ${rerun}`
+        : `${rerun}; no checkpoint is restored`;
+      if (!window.confirm(`Retry from node: ${plan}.`)) return;
+      setRetrying(true);
+      void retryFromNode(sessionId, entry)
+        .then((message) => useAppStore.getState().pushToast({ kind: "success", message }))
+        .catch((error: unknown) =>
+          useAppStore.getState().pushToast({
+            kind: "error",
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        )
+        .finally(() => setRetrying(false));
+    },
+    [failures, sessionId],
+  );
+  const marks = useMemo<Marks>(() => {
+    const mark = new Map<string, "trusted" | "affected" | "frontier">();
+    const regions = [...failures.values()].flatMap((entry) => (entry.region ? [entry.region] : []));
+    // Affected by any failure wins over trusted by another; a frontier shows as such.
+    for (const region of regions) for (const key of region.trusted) mark.set(key, "trusted");
+    for (const region of regions) for (const key of region.affected) mark.set(key, "affected");
+    for (const region of regions) if (region.frontier) mark.set(region.frontier.key, "frontier");
+    const liveWork = [...(tree?.nodes.values() ?? [])].some(
+      (node) =>
+        !node.placeholder &&
+        (node.ref.type === "subagentRun" || node.ref.type === "loopRun") &&
+        (node.status === "running" || node.status === "pending"),
+    );
+    return { mark, failures, busy: running || retrying, liveWork, onRetry };
+  }, [tree, failures, running, retrying, onRetry]);
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2" data-testid="node-tree">
       {waiting.length > 0 ? (
@@ -356,7 +522,7 @@ export function NodeTreeView() {
           aria-label="Waiting on a person"
         >
           {waiting.map((node) => (
-            <NodeRow key={node.key} node={node} joins={joins} />
+            <NodeRow key={node.key} node={node} joins={joins} marks={marks} />
           ))}
         </ul>
       ) : null}
@@ -365,7 +531,7 @@ export function NodeTreeView() {
           {root.children
             .filter((node) => !hidden.has(node.key))
             .map((node) => (
-              <NodeRow key={node.key} node={node} joins={joins} hidden={hidden} />
+              <NodeRow key={node.key} node={node} joins={joins} hidden={hidden} marks={marks} />
             ))}
           {forks.map((fork) => {
             const meta = sessions.find((candidate) => candidate.id === fork.sessionId);
