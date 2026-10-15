@@ -1,0 +1,142 @@
+name: Server image
+
+# SRV-17a: build the shared-server image, smoke it on the runner (local mode,
+# AGENT_DECK_TRUSTED_PROXY unset), and only then push it to GHCR. Pull requests
+# to main build and smoke without pushing, so a broken Dockerfile shows early.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/agent-deck-server
+
+jobs:
+  build-smoke:
+    runs-on: ubuntu-latest
+    outputs:
+      tags: ${{ steps.meta.outputs.tags }}
+      labels: ${{ steps.meta.outputs.labels }}
+      app-version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          # latest=auto: `latest` only for a non-prerelease semver tag.
+          flavor: latest=auto
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+      - id: version
+        env:
+          VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && steps.meta.outputs.version || 'dev' }}
+        run: echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: agent-deck-server:smoke
+          build-args: APP_VERSION=${{ steps.version.outputs.value }}
+          cache-from: type=gha,scope=server-image
+          cache-to: type=gha,scope=server-image,mode=max
+      - name: Smoke the image
+        run: |
+          set -euo pipefail
+          run() {
+            # AGENT_DECK_HOST=0.0.0.0 (+ the opt-out) only so the runner reaches the
+            # port published on loopback; the image itself binds 127.0.0.1.
+            docker run -d --name ad-smoke -p 127.0.0.1:4200:4200 -e PORT=4200 \
+              -e AGENT_DECK_HOST=0.0.0.0 -e AGENT_DECK_ALLOW_UNAUTHENTICATED_HOST=1 \
+              -v ad-smoke-data:/data agent-deck-server:smoke
+            for _ in $(seq 1 30); do
+              if [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4200/health)" = 200 ]; then return 0; fi
+              sleep 2
+            done
+            docker logs ad-smoke
+            return 1
+          }
+          json() {
+            body=$(curl -fsS "http://127.0.0.1:4200$1")
+            echo "$1: $(echo "$body" | head -c 200)"
+            echo "$body" | jq -e . > /dev/null
+          }
+          run
+          curl -fsS http://127.0.0.1:4200/health
+          echo
+          json /projects
+          json /resources/agents
+          json /resources/skills
+          docker exec ad-smoke sh -c 'node "$AGENT_DECK_PI_CLI" --version'
+          docker exec -w /app ad-smoke node -e "require('node-pty'); console.log('node-pty ok')"
+          # The pi-mcp module the generated bridge imports (packages/pi-host/src/bridge.ts).
+          docker exec ad-smoke node --input-type=module -e "
+            import { existsSync, realpathSync } from 'node:fs';
+            import path from 'node:path';
+            import { pathToFileURL } from 'node:url';
+            const pi = realpathSync(path.resolve(path.dirname(process.env.AGENT_DECK_PI_CLI), '..'));
+            const file = [
+              path.join(pi, '..', 'pi-mcp', 'dist', 'index.js'),
+              path.join(pi, 'node_modules', '@earendil-works', 'pi-mcp', 'dist', 'index.js'),
+            ].find(existsSync);
+            const mcp = await import(pathToFileURL(file).href);
+            if (!mcp.StdioTransport || !mcp.StreamableHttpTransport) throw new Error('pi-mcp transports missing');
+            console.log('pi-mcp ok:', file);"
+          # The home (Pi agent dir, gh, git config) lives in the data volume.
+          docker exec ad-smoke sh -c 'mkdir -p ~/.pi/agent && echo kept > ~/.pi/agent/smoke-marker'
+          docker rm -f ad-smoke
+          run
+          test "$(docker exec ad-smoke cat /data/home/.pi/agent/smoke-marker)" = kept
+          echo "home survived a container replace"
+          # Budget is the compressed (pull) size: the node slim base plus git
+          # alone is ~330 MB unpacked, so an unpacked 400 MB cap cannot hold.
+          size=$(docker image inspect --format '{{.Size}}' agent-deck-server:smoke)
+          packed=$(docker save agent-deck-server:smoke | gzip -1 | wc -c)
+          echo "Image size: $((size / 1024 / 1024)) MB unpacked, $((packed / 1024 / 1024)) MB compressed"
+          if [ "$packed" -gt $((400 * 1024 * 1024)) ]; then
+            echo "Compressed image is over the 400 MB budget" >&2
+            exit 1
+          fi
+      - name: Container log
+        if: always()
+        run: docker logs ad-smoke || true
+
+  publish:
+    needs: build-smoke
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Same context, build args and cache scope as the smoked build: the layers come from the cache.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ needs.build-smoke.outputs.tags }}
+          labels: ${{ needs.build-smoke.outputs.labels }}
+          build-args: APP_VERSION=${{ needs.build-smoke.outputs.app-version }}
+          cache-from: type=gha,scope=server-image

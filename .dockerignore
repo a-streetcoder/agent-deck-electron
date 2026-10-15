@@ -1,0 +1,30 @@
+**/node_modules
+**/dist
+**/target
+**/native/*.node
+build
+release
+coverage
+playwright-report
+test-results
+.git
+.github
+.tickets
+.claude
+.agents
+.cargo-local
+.rustup-local
+.node22-local
+.stfolder
+.stversions
+docs
+win
+# e2e stays a workspace member (the lockfile lists it): keep only its manifest.
+e2e/*
+!e2e/package.json
+# Root-only on purpose: the builtin agents and prompts under packages/resources are .md files.
+*.md
+!README.md
+**/.env
+**/.env.*
+**/*.sync-conflict-*
