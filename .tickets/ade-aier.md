@@ -26,3 +26,7 @@ To be written per sub-ticket after the owner approves the split and answers the 
 **2026-10-14T18:08:14Z**
 
 2026-10-14 contrarian amendments: SRV-06 (ade-gfs4) is a hard prerequisite of (a), because nearly every real repo is private and cloning with a VM credential would repeat the shared-credential problem for GitHub; (c) session hand-off becomes its own epic later, because the Pi session header stores an absolute cwd and session folders are keyed by cwd, so a path remap in SessionMeta alone does not move a session; project identity across machines is the GitHub repository id, not the origin URL.
+
+**2026-10-15T07:00:03Z**
+
+2026-10-15 owner answers to the four open questions: (1) a shared project checks out the repository's default branch, per-session worktrees as today; (2) only the creator or the operator may delete a shared project (the project records its creator); (3) whether a moved session carries its worktree branch needs an edge-case analysis before a decision (dispatched to the oracle); (4) a session move is a COPY on the system (new server id, 'shared from' link, local kept) but for the user it must look and behave as the same session (one entry, one title, the local copy becomes a pointer/mirror rather than a second visible session). SRV-06 approved and dispatched as the prerequisite.

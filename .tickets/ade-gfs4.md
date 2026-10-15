@@ -1,6 +1,6 @@
 ---
 id: ade-gfs4
-status: open
+status: in_progress
 deps: [ade-fr91, ade-1vjx]
 links: []
 created: 2026-10-14T00:08:59Z
@@ -20,3 +20,9 @@ GUARDRAILS (this checkout is mirrored live to the VM by Syncthing and is the ser
 
 User connects GitHub from Settings and sees the account; a push from that user session appears on GitHub as that user; a session without a connection falls back to the VM default and says so; tokens never appear in logs, previews or the UI; docs updated.
 
+
+## Notes
+
+**2026-10-15T07:00:03Z**
+
+2026-10-15 approved by the owner. Operator prerequisite still open: register the GitHub OAuth App (device flow, client id only) and set its client id on the VM (systemd drop-in) before the live check; the developer builds everything behind a configurable client id with a mocked device flow.
