@@ -1,6 +1,6 @@
 ---
 id: ade-ldzq
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-15T03:42:36Z
@@ -20,3 +20,9 @@ GUARDRAILS as every ticket. Also check whether the real provider path on the VM 
 ## Acceptance Criteria
 
 The chip shows the real model id in all three states; test added; tsc, eslint, prettier clean.
+
+## Notes
+
+**2026-10-15T03:56:57Z**
+
+2026-10-15 merged (wt/ade-ldzq: 1c5f93d + review round 79204e9). Root causes: the draft state route returned null for models outside the owner catalog; the composer never re-read state (or models) when a draft became a started session. Fixes: previewLaunchModel shares the launch's own choice logic (plan -> resumed file -> Pi settings default; refused provider -> bridge twin; credentialTransport, no probe), composer refreshes state and models on draft -> started with latest-wins state refreshes. The D5 reload symptom is explained (reload picks the newest project-less session with agentName null, not the started one) and not claimed fixed. Tests: real-Pi session-drafts 5, claudeTransport 14, Composer + pickers 23. Known: preview placeholder when nothing resolves or the bridge twin is undiscovered; /models has no latest-wins.
