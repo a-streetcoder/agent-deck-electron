@@ -29,4 +29,4 @@ Domain tests for sessionActivity (turn open + not live = idle; parked = idle; op
 
 **2026-10-15T08:58:13Z**
 
-2026-10-15 implemented as cf04aa2 (sessionActivity in domain, activity on /sessions and session_meta pushes, idle-edge re-push, member chips shared with ActivityList, ?session= deep link after the first subscription, Copy link, Fork/Re-run hidden for non-owners, forkedFrom on plain forks with provenance and Activity row). Architect decisions on the developer's questions: parked stays  (legible, never running); agent/system Activity rows count for the owner of their session. Contrarian + GPT review36 running.
+2026-10-15 implemented as cf04aa2 (sessionActivity in domain, activity on /sessions and session_meta pushes, idle-edge re-push, member chips shared with ActivityList, ?session= deep link after the first subscription, Copy link, Fork/Re-run hidden for non-owners, forkedFrom on plain forks with provenance and Activity row). Architect decisions on the developer's questions: parked stays "parked" (legible, never running); agent/system Activity rows count for the owner of their session. Contrarian + GPT review36 running.
