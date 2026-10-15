@@ -32,6 +32,10 @@ export default defineConfig({
       "/loops": { target: serverTarget },
       "/mcp": { target: serverTarget },
       "/memory": { target: serverTarget },
+      "/events": { target: serverTarget },
+      "/fs": { target: serverTarget },
+      "/supervisor": { target: serverTarget },
+      "/me": { target: serverTarget },
     },
   },
 });

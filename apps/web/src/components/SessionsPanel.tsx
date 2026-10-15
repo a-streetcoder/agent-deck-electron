@@ -17,6 +17,7 @@ import { sortSessionsByActivity, sortSessionsWithPins } from "@/lib/sessionOrder
 import { projectDisplayName, sessionDisplayTitle } from "@/lib/sessionTitle";
 import { userDisplayName, userInitials } from "@/lib/userIdentity";
 import { useAppStore } from "../state/store.ts";
+import { ActivityList } from "./ActivityList.tsx";
 import { SessionStatusIndicator } from "./SessionStatusIndicator.tsx";
 import {
   deleteSession,
@@ -396,6 +397,7 @@ export function SessionsMainPanel() {
             </ControlButton>
           </span>
         </div>
+        <ActivityList />
         <ControlInput
           data-testid="sessions-search"
           className="mb-1.5 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1 text-detail text-text-primary outline-none focus:border-accent"

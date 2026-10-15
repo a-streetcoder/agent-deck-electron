@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SessionMeta } from "@agent-deck/contracts";
-import { splitJsonl, type EventEnvelope, type TurnRefs } from "@agent-deck/domain";
+import {
+  projectSupervisor,
+  splitJsonl,
+  type EventEnvelope,
+  type TurnRefs,
+} from "@agent-deck/domain";
 import { Effect } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { createEventLog, type EventLog } from "../src/eventLog.ts";
@@ -12,7 +17,8 @@ import type { CheckpointRecord } from "../src/services/checkpoints.ts";
 import { makePlanEventService } from "../src/services/planEvents.ts";
 import { reportChildTurn } from "../src/services/sessionManager.ts";
 import { SupervisorLog } from "../src/supervisor.ts";
-import { capabilityFields, scanEventLines } from "./fixtures/eventScan.ts";
+import { CAPABILITY_FIELDS } from "../src/subagentRunStore.ts";
+import { scanEventLines } from "./fixtures/eventScan.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.resolve(here, "../../../packages/domain/test/fixtures/events");
@@ -37,9 +43,9 @@ function harness() {
   const events = createEventProducers(log, {
     randomId: () => `id-${++n}`,
     pathPrefixes: () => [
-      { path: dataDir, placeholder: "<dataDir>" },
-      { path: "C:\\Users\\Alice", placeholder: "<home>" },
-      { path: "/srv/projects/acme", placeholder: "<project>" },
+      { prefix: dataDir, placeholder: "<dataDir>" },
+      { prefix: "C:\\Users\\Alice", placeholder: "<home>" },
+      { prefix: "/srv/projects/acme", placeholder: "<project>" },
     ],
   });
   const all = (): EventEnvelope[] =>
@@ -312,10 +318,15 @@ describe("A1b1 producers", () => {
       method: "interview_request",
       message: "Why?",
     });
+    h.events.supervisorOpened(other, "child-1");
     h.events.supervisorCancelled(supervisor.markCancelled(other.id, "The subagent ended.")!);
     expect(supervisor.markCancelled(other.id, "again")).toBeUndefined();
     expect(supervisor.markAnswered("unknown", "x")).toBeUndefined();
-    const [progress, opened, answered, cancelled] = h.all();
+    const [progress, opened, answered, , cancelled] = h.all();
+    // The projection A1d reads agrees with SupervisorLog, progress rows included.
+    expect(
+      [...projectSupervisor(h.all()).values()].map((r) => [r.id, r.status, r.response]),
+    ).toEqual(supervisor.list().map((r) => [r.id, r.status, r.response]));
     expect(progress).toMatchObject({
       kind: "supervisor.progress.recorded",
       payload: { status: "recorded" },
@@ -372,7 +383,10 @@ describe("A1b1 producers", () => {
     });
     h.events.supervisorOpened(asked, "child-1");
     h.events.supervisorAnswered(
-      supervisor.markAnswered(asked.id, `Use Bearer ${"t".repeat(30)} and ~/secrets/key`)!,
+      supervisor.markAnswered(
+        asked.id,
+        `Use Bearer ${"t".repeat(30)} and /home/carol/secrets/key`,
+      )!,
       userActor(),
     );
     const [prompted, opened, answered] = h.all();
@@ -405,8 +419,8 @@ describe("A1b1 producers", () => {
       }),
       "child-1",
     );
-    expect(capabilityFields()).toContain("artifactRootToken");
-    expect(capabilityFields().length).toBeGreaterThan(10);
+    expect(CAPABILITY_FIELDS.has("artifactRootToken")).toBe(true);
+    expect(CAPABILITY_FIELDS.size).toBeGreaterThan(10);
     expect(scanEventLines(h.lines(), [h.dataDir, "secret-project"])).toEqual([]);
     // The scan itself catches what it looks for, mid-text too.
     const leaky = h

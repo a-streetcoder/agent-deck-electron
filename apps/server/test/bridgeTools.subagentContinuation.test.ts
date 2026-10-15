@@ -56,6 +56,7 @@ describe("managed_subagent continuation bridge contract", () => {
       runId,
       ["docs/guide.md", "src/main.ts"],
       undefined,
+      "tool-call",
     );
     expect(response).toEqual({ content: `Deck subagent ID: ${runId}\n\nlatest result` });
   });
@@ -225,6 +226,7 @@ describe("managed_subagent continuation bridge contract", () => {
       "parallel",
       false,
       undefined,
+      "tool-call",
     );
     await dispatch(bridge, "managed_parallel", {
       tasks: [{ task: "isolated" }],
@@ -239,6 +241,7 @@ describe("managed_subagent continuation bridge contract", () => {
       "parallel",
       true,
       undefined,
+      "tool-call",
     );
   });
 });

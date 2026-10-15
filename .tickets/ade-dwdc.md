@@ -1,6 +1,6 @@
 ---
 id: ade-dwdc
-status: in_progress
+status: closed
 deps: [ade-x3gn]
 links: []
 created: 2026-10-14T23:54:53Z
@@ -20,3 +20,9 @@ GUARDRAILS: worktree E:/agent-deck-wt/<ticket> on wt/<ticket>; never git checkou
 ## Acceptance Criteria
 
 Route tests: cursor paging, projectId filter including null, origin guard, 401 on the shared server without identity; web tests: slice ingest with gap tolerance, logId reset, Activity list renders a fixture; live check recorded by the architect on the VM with two identities (owner-independent via the second identity's folder is NOT possible: record what one identity shows and leave the two-identity check to SRV-03).
+
+## Notes
+
+**2026-10-15T00:42:09Z**
+
+2026-10-15 merged (wt/ade-dwdc: 31233bc + review fixes 494e186). Contrarian: no blocker; GPT review15: four should-fix. Applied: All Projects shows every project's events, route reads lastSeq before the page (beforeSeq = lastSeq+1), Vite proxy for /events,/fs,/supervisor,/me, one refresh in flight with a dirty flag, far-behind reset to the newest page, sparse-project backward walk (10 hops) keeping older events, logId-change restart, run rows link with the session title, loop rows say (opens Loops), dates for other days. Tests: eventRoutes 5, originGuard 6, remoteServerIdentity 14 (+5 symlink skips; the /events 401/200 assertions ran), web 30. Known: backward walk stops after ~20 segments; a failed refresh waits for the next nudge; loop rows do not select the run.

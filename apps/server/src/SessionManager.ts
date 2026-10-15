@@ -1684,6 +1684,7 @@ export class SessionManager {
     source: "single" | "parallel" = "single",
     worktree = false,
     signal?: AbortSignal,
+    parentToolCallId?: string,
   ): Promise<string> {
     signal?.throwIfAborted();
     const parent = this.sessions.get(parentSessionId);
@@ -1693,6 +1694,7 @@ export class SessionManager {
         source,
         ...(worktree ? { worktree: true } : {}),
         ...(signal ? { signal } : {}),
+        ...(parentToolCallId ? { toolCallId: parentToolCallId } : {}),
       })
     ).text;
   }
@@ -1706,6 +1708,7 @@ export class SessionManager {
     continueSubagentId?: string,
     declaredReads?: readonly string[],
     signal?: AbortSignal,
+    parentToolCallId?: string,
   ): Promise<ChildRunResult> {
     signal?.throwIfAborted();
     const parent = this.sessions.get(parentSessionId);
@@ -1717,6 +1720,7 @@ export class SessionManager {
         source: "single",
         declaredReads: [...(declaredReads ?? [])],
         ...(signal ? { signal } : {}),
+        ...(parentToolCallId ? { toolCallId: parentToolCallId } : {}),
       });
     }
 
@@ -1769,6 +1773,7 @@ export class SessionManager {
         source: "single",
         declaredReads: [...(declaredReads ?? [])],
         ...(signal ? { signal } : {}),
+        ...(parentToolCallId ? { toolCallId: parentToolCallId } : {}),
         runId: continueSubagentId,
         resumeSessionPath: run.sessionFile,
         artifactRootId: run.artifactRootId,

@@ -27,6 +27,7 @@ import type {
 import { responseErrorMessage } from "../lib/responseError.ts";
 import { RpcClientTransport, type ClientTransport, type TransportHost } from "./clientTransport.ts";
 import { useAppStore, type CurrentUser } from "./store.ts";
+import { ingestProjectEvents, type ProjectEventPage } from "./projectLog.ts";
 
 /**
  * The ONLY module that touches the WebSocket. Server messages mutate the
@@ -86,6 +87,8 @@ const transportHost: TransportHost = {
       sessionRuns.clear();
     }
     useAppStore.getState().setConnection(status);
+    // Nudges sent while the socket was down are lost: catch up from the cursor.
+    if (status === "open") void refreshProjectLog();
   },
   getLastSeq: () => useAppStore.getState().lastSeq,
   getStreamGeneration: () => useAppStore.getState().streamGeneration,
@@ -786,6 +789,15 @@ function handleMessage(message: ServerMessage): void {
       // SRV-13: a provider sign-in or sign-out changes /me's providersConnected.
       if (store.me) void refreshMe();
       break;
+    case "project_events": {
+      // No project open shows every project's events.
+      const open = store.currentProjectId;
+      if (open !== null && message.projectId !== open) return;
+      const log = store.projectLog;
+      if (log?.projectId === open && message.seq <= log.lastSeq) return;
+      void refreshProjectLog();
+      break;
+    }
     case "session_meta":
       attentionMetaGeneration.set(
         message.session.id,
@@ -1506,6 +1518,99 @@ export async function addProject(path: string): Promise<ProjectMeta | undefined>
     store.setError(String(error));
     return undefined;
   }
+}
+
+const PROJECT_LOG_TAIL = 200;
+const PROJECT_LOG_PAGE = 1_000;
+const PROJECT_LOG_MAX_PAGES = 5;
+// A tail read scans at most two log segments, so a quiet project's tail can come back
+// empty with more: true; follow nextBeforeSeq this many times to find its last events.
+const PROJECT_LOG_MAX_TAIL_HOPS = 10;
+
+let projectLogRefresh: Promise<void> | null = null;
+let projectLogDirty = false;
+
+/**
+ * A1c: bring the open project's event log up to date (no project open = every
+ * project, ADR 0003). One refresh at a time: a call during a fetch schedules exactly
+ * one follow-up, so responses never overlap and a stale one cannot reinstate an old
+ * cursor. Best-effort: a failure waits for the next nudge or project change.
+ */
+export function refreshProjectLog(): Promise<void> {
+  if (projectLogRefresh) {
+    projectLogDirty = true;
+    return projectLogRefresh;
+  }
+  projectLogRefresh = (async () => {
+    try {
+      do {
+        projectLogDirty = false;
+        await pullProjectLog();
+      } while (projectLogDirty);
+    } catch (error) {
+      console.debug("[events] project log refresh failed", error);
+    } finally {
+      projectLogRefresh = null;
+    }
+  })();
+  return projectLogRefresh;
+}
+
+async function pullProjectLog(): Promise<void> {
+  const projectId = useAppStore.getState().currentProjectId;
+  const url = (cursor: string): string =>
+    `/events?${projectId === null ? "" : `projectId=${encodeURIComponent(projectId)}&`}${cursor}`;
+  const stillOpen = (): boolean => useAppStore.getState().currentProjectId === projectId;
+
+  for (let page = 0; page < PROJECT_LOG_MAX_PAGES; page += 1) {
+    const previous = useAppStore.getState().projectLog;
+    if (previous?.projectId !== projectId) {
+      await pullProjectTail(projectId, url, stillOpen);
+      return;
+    }
+    const result = await fetchJson<ProjectEventPage>(
+      url(`afterSeq=${previous.lastSeq}&limit=${PROJECT_LOG_PAGE}`),
+    );
+    if (!stillOpen()) return;
+    if (result.logId !== previous.logId) {
+      // The server's log was replaced: this cursor means nothing there.
+      await pullProjectTail(projectId, url, stillOpen);
+      return;
+    }
+    const store = useAppStore.getState();
+    store.setProjectLog(ingestProjectEvents(store.projectLog, projectId, result));
+    if (!result.more) return;
+  }
+  // Still behind after the forward pages: drop the backlog and show the newest page
+  // instead, rather than wait for a nudge that may never come (the gap stays unread).
+  await pullProjectTail(projectId, url, stillOpen);
+}
+
+async function pullProjectTail(
+  projectId: string | null,
+  url: (cursor: string) => string,
+  stillOpen: () => boolean,
+): Promise<void> {
+  const first = await fetchJson<ProjectEventPage>(url(`limit=${PROJECT_LOG_TAIL}`));
+  let tail = first;
+  for (
+    let hop = 0;
+    hop < PROJECT_LOG_MAX_TAIL_HOPS &&
+    tail.events.length === 0 &&
+    tail.more &&
+    tail.nextBeforeSeq !== undefined;
+    hop += 1
+  ) {
+    tail = await fetchJson<ProjectEventPage>(
+      url(`beforeSeq=${tail.nextBeforeSeq}&limit=${PROJECT_LOG_TAIL}`),
+    );
+    if (tail.logId !== first.logId) return; // replaced mid-walk; the next refresh starts over
+  }
+  if (!stillOpen()) return;
+  // A fresh start: the cursor is the server's lastSeq when the walk began.
+  useAppStore
+    .getState()
+    .setProjectLog(ingestProjectEvents(null, projectId, { ...tail, lastSeq: first.lastSeq }));
 }
 
 /** Who the server says we are. Best-effort: a loopback server answers null. A

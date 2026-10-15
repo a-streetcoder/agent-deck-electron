@@ -175,48 +175,48 @@ export function serializeEvent(event: EventEnvelope): string {
   return JSON.stringify({ ...event, payload: { truncated: true, originalBytes } });
 }
 
-/** A known absolute root and the placeholder that replaces it in event text. */
+/** A known local root and the placeholder that replaces it in event text. */
 export interface PathPrefix {
-  path: string;
+  prefix: string;
   placeholder: string;
 }
 
-const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-// Generic absolute paths the known prefixes did not cover. A path is redacted up to
-// its first space, comma or semicolon, so the tail of a path containing one survives.
-const GENERIC_PATHS: readonly RegExp[] = [
-  /(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s"'<>|*?,;]*/g,
-  /(?<![\\\w])\\\\[^\s\\/"'<>|,;]+[\\/][^\s"'<>|,;]*/g,
-  /(?<![\w.~-])\/(?:home|Users|root|tmp|var|private|mnt|opt|srv|etc|Volumes|media|run)\/[^\s"'<>|,;]*/g,
-  /(?<![\w~])~[\\/][^\s"'<>|,;]*/g,
-];
+// Whatever absolute path survives the known prefixes: drive-letter and UNC paths, and
+// POSIX paths under the usual roots (a bare "/x" stays: it is too often not a path).
+const WINDOWS_PATH = /(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s"'`<>|]*/g;
+const UNC_PATH = /\\\\[^\s\\"'`<>|]+\\[^\s"'`<>|]*/g;
+const POSIX_PATH =
+  /(?<![\w.~>/-])\/(?:home|Users|tmp|var|private|root|opt|mnt|srv|etc|usr|Volumes|workspace|data)(?:\/[^\s"'`<>|]*)?/g;
+// A known prefix matches only up to a separator or the end of the path.
+const PREFIX_END = String.raw`(?![^\\/\s"'` + "`" + String.raw`<>|])`;
 
 /**
- * Replace absolute paths in free event text (A1 policy: the log holds facts and
- * references, never a machine's layout). Known roots (data dir, home, project
- * roots) become their placeholder, longest first, matched case-insensitively with
- * either separator; any other drive, UNC, POSIX home/temp or ~ path becomes <path>.
+ * Replace local filesystem paths in free text (errors, notes, summaries) before it
+ * reaches the log: each known prefix (longest first; both slash styles, and case-
+ * insensitively for Windows roots) by its placeholder, then any remaining absolute
+ * path by "<path>". Pure: the server injects the data dir, home and project roots.
  */
-export function redactPaths(text: string, prefixes: readonly PathPrefix[]): string {
-  let result = text;
-  const roots = prefixes
-    .map((prefix) => ({ ...prefix, path: prefix.path.replace(/[\\/]+$/, "") }))
-    .filter((prefix) => prefix.path.length >= 3)
-    .sort((a, b) => b.path.length - a.path.length);
-  for (const root of roots) {
-    const pattern = root.path
+export function redactPaths(text: string, prefixes: readonly PathPrefix[] = []): string {
+  let out = text;
+  const sorted = prefixes
+    .filter(({ prefix }) => prefix.replace(/[\\/]+$/, "").length > 2)
+    .sort((a, b) => b.prefix.length - a.prefix.length);
+  for (const { prefix, placeholder } of sorted) {
+    const trimmed = prefix.replace(/[\\/]+$/, "");
+    const windows = /^[A-Za-z]:|^\\\\/.test(trimmed);
+    const pattern = trimmed
       .split(/[\\/]+/)
       .map(escapeRegExp)
-      .join("[\\\\/]+");
-    result = result.replace(
-      new RegExp(`${pattern}(?=$|[\\\\/\\s"'<>|:;,)\\]])`, "gi"),
-      () => root.placeholder,
-    );
+      .join(String.raw`[\\/]+`);
+    out = out.replace(new RegExp(pattern + PREFIX_END, windows ? "gi" : "g"), () => placeholder);
   }
-  for (const generic of GENERIC_PATHS) result = result.replace(generic, "<path>");
-  return result;
+  return out.replace(WINDOWS_PATH, generic).replace(UNC_PATH, generic).replace(POSIX_PATH, generic);
 }
+
+/** "<path>", keeping the sentence punctuation a path match swallowed at its end. */
+const generic = (match: string): string => `<path>${/[).,;:]*$/.exec(match)?.[0] ?? ""}`;
 
 const SECRET_PATTERNS: ReadonlyArray<[RegExp, string]> = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, "<secret>"],

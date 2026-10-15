@@ -14,6 +14,7 @@ import {
 import path from "node:path";
 import {
   clampMaxIterations,
+  diffLoopRuns,
   isLoopRunTerminal,
   isRunnableLoopStructure,
   loopDefinitionValidationError,
@@ -21,7 +22,9 @@ import {
   normalizeLoopClassificationPrompt,
   normalizeLoopLaunchContext,
   normalizeParallelBranches,
+  toPublicLoopRun,
   LOOP_STRUCTURE_UNSUPPORTED_CODE,
+  type EventDraft,
   type LoopChildRecord,
   type LoopChangedFile,
   type LoopCheckerDecision,
@@ -36,6 +39,8 @@ import {
   type LoopValidationResult,
   type LoopStopReason,
   type LoopWorktreeReview,
+  type PublicLoopRun,
+  type PublicViewOptions,
 } from "@agent-deck/domain";
 import { z } from "zod";
 
@@ -619,6 +624,13 @@ export class LoopEngine {
   private readonly artifactsRoot?: string;
   private readonly artifactSetupError?: Error;
   private readonly warn: (message: string, error?: unknown) => void;
+  /** A1 event log: runs as loaded, before boot recovery (copies; released at attach). */
+  private bootRuns: LoopRun[] = [];
+  private storeQuarantined = false;
+  private eventSink?: (drafts: EventDraft[]) => void;
+  private publicView: () => PublicViewOptions = () => ({});
+  /** Deep copies: runs are edited in place, so the previous view cannot be the live objects. */
+  private lastPublic: PublicLoopRun[] = [];
 
   constructor(deps: LoopEngineDeps = {}) {
     this.now = deps.now ?? (() => new Date().toISOString());
@@ -666,6 +678,7 @@ export class LoopEngine {
       const parsed = persistedRunsSchema.parse(JSON.parse(readFileSync(this.storePath, "utf8")));
       for (const persisted of parsed) {
         const run = persisted as unknown as LoopRun;
+        this.bootRuns.push(structuredClone(run));
         if (run.artifactDirectory || run.artifactDirectoryId) {
           if (!this.artifactsRoot || !run.artifactDirectoryId || !run.artifactDirectory) {
             throw new Error("incomplete Loop artifact ownership metadata");
@@ -759,6 +772,54 @@ export class LoopEngine {
         this.warn("Loop run store is invalid and could not be quarantined", quarantineError);
       }
       this.runs.clear();
+      this.bootRuns = [];
+      this.storeQuarantined = true;
+    }
+  }
+
+  /** The public view as loaded, before boot recovery (startup reconcile). */
+  bootPublicRuns(): PublicLoopRun[] {
+    const options = this.publicView();
+    return this.bootRuns.map((run) => toPublicLoopRun(run, options));
+  }
+
+  /** Every run as the event log may see it (fresh deep copies, local paths redacted). */
+  publicRuns(): PublicLoopRun[] {
+    const options = this.publicView();
+    return [...this.runs.values()].map((run) => toPublicLoopRun(run, options));
+  }
+
+  /** True when loop-runs.json was invalid at boot and renamed aside (history unknown). */
+  quarantined(): boolean {
+    return this.storeQuarantined;
+  }
+
+  /** From now on every persist hands the diff of the public view to sink. */
+  attachEventSink(
+    sink: (drafts: EventDraft[]) => void,
+    publicView: () => PublicViewOptions = () => ({}),
+  ): void {
+    this.publicView = publicView;
+    this.lastPublic = this.publicRuns();
+    this.eventSink = sink;
+  }
+
+  /** The boot copies are needed only until the startup reconcile has run. */
+  releaseBootRuns(): void {
+    this.bootRuns = [];
+  }
+
+  private emitEvents(): void {
+    if (!this.eventSink) return;
+    const next = this.publicRuns();
+    const drafts = diffLoopRuns(this.lastPublic, next);
+    this.lastPublic = next;
+    if (drafts.length === 0) return;
+    try {
+      this.eventSink(drafts);
+    } catch (error) {
+      // The run store stays authoritative: a log failure never fails a persist.
+      this.warn("could not record Loop run events", error);
     }
   }
 
@@ -772,6 +833,7 @@ export class LoopEngine {
     } finally {
       rmSync(temp, { force: true });
     }
+    this.emitEvents();
   }
 
   private allocateArtifacts(run: LoopRun): void {

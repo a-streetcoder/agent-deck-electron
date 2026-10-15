@@ -174,6 +174,7 @@ describe("managed_parallel bounded concurrency", () => {
         "parallel",
         true,
         undefined,
+        "parallel-call",
       ]);
     }
   });
