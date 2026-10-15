@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -275,34 +275,74 @@ describe("A1b2 startup reconcile", () => {
     ).toEqual([["subagent.run.updated", ids.done, "reconcile"]]);
   });
 
-  it("a store quarantined at boot does not remove its runs from the log", async () => {
+  it("a store quarantined at boot does not remove its runs from the log, then or on the next boot", async () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "event-reconcile-quarantine-"));
     seed(dataDir);
     await boot(dataDir);
     const before = logEvents(dataDir).length;
-    writeFileSync(path.join(dataDir, "subagent-runs.json"), "{ not json");
+    const removed = () => logEvents(dataDir).filter((event) => event.kind.endsWith(".removed"));
+    const file = (name: string) => path.join(dataDir, name);
+
+    // D8: corrupt stores are renamed aside and the server starts with empty ones.
+    writeFileSync(file("subagent-runs.json"), "{ not json");
+    writeFileSync(file("loop-runs.json"), "[ not json");
+    writeFileSync(file("loop-session-snapshots.json"), "{ not json");
+    await boot(dataDir);
+    const names = readdirSync(dataDir);
+    expect(names.some((name) => /^loop-runs\.corrupt-.*\.json$/.test(name))).toBe(true);
+    expect(names.some((name) => name.startsWith("subagent-runs.json.corrupt-"))).toBe(true);
+    expect(names.some((name) => name.startsWith("loop-session-snapshots.json.corrupt-"))).toBe(
+      true,
+    );
+    expect(existsSync(file("loop-runs.json"))).toBe(false);
+    expect(logEvents(dataDir).slice(before)).toEqual([]);
+
+    // The next boot finds the stores missing, not corrupt: still no removals.
+    expect(existsSync(file("subagent-runs.json"))).toBe(false);
     await boot(dataDir);
     expect(logEvents(dataDir).slice(before)).toEqual([]);
-    // A corrupt loop-runs.json cannot go through startServer today: the engine's warn
-    // reaches fastify before it is initialized. Same boot path, without the server.
-    writeFileSync(path.join(dataDir, "loop-runs.json"), "[ not json");
-    const log = createEventLog(dataDir);
+
+    // A clean write recreates each store file; the following boot reconciles normally.
     const store = new SubagentRunStore(dataDir, () => {});
-    const engine = new LoopEngine({ dataDir });
-    try {
-      expect(engine.quarantined()).toBe(true);
-      startEventProducers(
-        log,
-        { subagentRuns: store, loopRuns: engine },
-        { view: () => ({}), warn: () => {}, strict: true },
-      );
-    } finally {
-      log.close();
-      store.close();
-    }
-    // The subagent file is simply absent now (not corrupt): its runs are reported removed.
-    const after = logEvents(dataDir).slice(before);
-    expect(after.filter((event) => event.kind === "loop.run.removed")).toEqual([]);
+    store.create({
+      id: randomUUID(),
+      parentSessionId: randomUUID(),
+      task: "after the quarantine",
+      completedAt: T1,
+      status: "completed",
+      createdAt: T0,
+      updatedAt: T1,
+    });
+    store.close();
+    writeFileSync(file("loop-runs.json"), "[]");
+    await boot(dataDir);
+    expect(removed().map((event) => event.kind)).toEqual([
+      "subagent.run.removed",
+      "subagent.run.removed",
+      "loop.run.removed",
+      "loop.run.removed",
+    ]);
+  });
+
+  it("only a missing or corrupt store file is quarantined, never a valid one", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "event-reconcile-missing-"));
+    const missing = new SubagentRunStore(dataDir, () => {});
+    missing.close();
+    expect(missing.quarantined()).toBe(true);
+    expect(new LoopEngine({ dataDir }).quarantined()).toBe(true);
+    seed(dataDir);
+    const valid = new SubagentRunStore(dataDir, () => {});
+    valid.close();
+    expect(valid.quarantined()).toBe(false);
+    expect(new LoopEngine({ dataDir }).quarantined()).toBe(false);
+    // Even right after a quarantine of the other store in the same data dir.
+    writeFileSync(path.join(dataDir, "loop-runs.json"), "[ not json");
+    expect(new LoopEngine({ dataDir }).quarantined()).toBe(true);
+    writeFileSync(path.join(dataDir, "loop-runs.json"), "[]");
+    expect(new LoopEngine({ dataDir }).quarantined()).toBe(false);
+    const again = new SubagentRunStore(dataDir, () => {});
+    again.close();
+    expect(again.quarantined()).toBe(false);
   });
 
   it("a process read-only at boot reconciles at the first commit after its promotion", () => {

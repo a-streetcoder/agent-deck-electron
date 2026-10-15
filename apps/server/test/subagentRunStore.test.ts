@@ -543,6 +543,8 @@ describe("SubagentRunStore", () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-commit-gap-"));
     const warnings = vi.fn();
     const first = new SubagentRunStore(dataDir, warnings);
+    // D8: a missing store file skips the artifact check, so one committed run first.
+    first.create(record());
     const run = record();
     first.prepareTurn(run, "system");
     const root = path.join(realpathSync(dataDir), "Subagent Runs", run.id);

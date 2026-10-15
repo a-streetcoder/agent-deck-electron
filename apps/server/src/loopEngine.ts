@@ -845,7 +845,14 @@ export class LoopEngine {
       }
       this.persist();
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        // D8: nothing deletes loop-runs.json (removals rewrite it), so a missing file is a
+        // fresh install, the boot after a quarantine, or an outside delete. Removals are
+        // suppressed while the file is missing or was quarantined this boot: deferred, not
+        // never (the first clean write recreates the file, the next boot reconciles).
+        this.storeQuarantined = true;
+        return;
+      }
       try {
         const quarantine = path.join(
           directory,
@@ -874,7 +881,7 @@ export class LoopEngine {
     return [...this.runs.values()].map((run) => toPublicLoopRun(run, options));
   }
 
-  /** True when loop-runs.json was invalid at boot and renamed aside (history unknown). */
+  /** True when loop-runs.json was missing or invalid at boot (history unknown, D8). */
   quarantined(): boolean {
     return this.storeQuarantined;
   }

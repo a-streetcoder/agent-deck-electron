@@ -440,7 +440,7 @@ export class SubagentRunStore {
     return this.state.runs.map((run) => toPublicSubagentRun(run, options));
   }
 
-  /** True when the store file was corrupt at boot and renamed aside (history unknown). */
+  /** True when the store file was missing or corrupt at boot (history unknown, D8). */
   quarantined(): boolean {
     return this.storeQuarantined;
   }
@@ -1266,7 +1266,12 @@ export class SubagentRunStore {
         })),
       };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        // D8: as for loop-runs.json, a missing file is unknown history, not removals
+        // (also skips the orphan-artifact check); deferred until the next clean write.
+        this.storeQuarantined = true;
+        return;
+      }
       try {
         renameSync(this.filePath, `${this.filePath}.corrupt-${Date.now()}`);
       } catch {
