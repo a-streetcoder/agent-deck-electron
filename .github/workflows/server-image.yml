@@ -29,6 +29,13 @@ jobs:
       app-version: ${{ steps.version.outputs.value }}
     steps:
       - uses: actions/checkout@v4
+      - name: Validate deploy/compose.yaml
+        run: |
+          set -euo pipefail
+          # Throwaway .env: every empty value in the template gets a placeholder.
+          sed -E 's/^([A-Z_]+)=$/\1=placeholder/' deploy/.env.example > deploy/.env
+          docker compose -f deploy/compose.yaml config --quiet
+          rm deploy/.env
       - uses: docker/setup-buildx-action@v3
       - id: meta
         uses: docker/metadata-action@v5
@@ -59,8 +66,10 @@ jobs:
           set -euo pipefail
           run() {
             # AGENT_DECK_HOST=0.0.0.0 (+ the opt-out) only so the runner reaches the
-            # port published on loopback; the image itself binds 127.0.0.1.
+            # port published on loopback; the image itself binds 127.0.0.1. The hardening
+            # flags are the ones deploy/compose.yaml sets.
             docker run -d --name ad-smoke -p 127.0.0.1:4200:4200 -e PORT=4200 \
+              --read-only --tmpfs /tmp:exec --cap-drop ALL --security-opt no-new-privileges \
               -e AGENT_DECK_HOST=0.0.0.0 -e AGENT_DECK_ALLOW_UNAUTHENTICATED_HOST=1 \
               -v ad-smoke-data:/data agent-deck-server:smoke
             for _ in $(seq 1 30); do

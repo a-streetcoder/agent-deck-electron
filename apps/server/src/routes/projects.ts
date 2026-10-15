@@ -294,18 +294,20 @@ export function registerProjectRoutes(ctx: ServerContext): void {
   // directory names only, confined to AGENT_DECK_PROJECT_ROOT (default: the
   // server user's home); symlinks are never followed out of it.
   fastify.get("/fs/dirs", async (request, reply) => {
-    const browseRoot = realpathSync.native(
-      nodePath.resolve(process.env.AGENT_DECK_PROJECT_ROOT || homedir()),
-    );
     const requested = (request.query as { path?: unknown }).path;
-    const candidate =
-      typeof requested === "string" && requested.trim()
-        ? nodePath.resolve(browseRoot, requested.trim())
-        : browseRoot;
-    const inside = (target: string): boolean =>
-      target === browseRoot || target.startsWith(browseRoot + nodePath.sep);
+    let browseRoot: string;
     let current: string;
     try {
+      // Inside the try: a missing root is "not browsable", not a 500.
+      browseRoot = realpathSync.native(
+        nodePath.resolve(process.env.AGENT_DECK_PROJECT_ROOT || homedir()),
+      );
+      const inside = (target: string): boolean =>
+        target === browseRoot || target.startsWith(browseRoot + nodePath.sep);
+      const candidate =
+        typeof requested === "string" && requested.trim()
+          ? nodePath.resolve(browseRoot, requested.trim())
+          : browseRoot;
       current = realpathSync.native(candidate);
       if (!inside(current) || !statSync(current).isDirectory()) throw new Error("outside");
     } catch {

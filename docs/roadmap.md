@@ -74,6 +74,7 @@ See [`release-windows.md`](release-windows.md). Tickets in `.tickets/`.
 - ade-lfpv — DST-A (operator): Agent Deck certificate profile on Azure Artifact Signing — closed
 - ade-za74 — DST-03/04: signed Windows installer, release workflow and auto-update — open
 - ade-159t — DST epic stub: remaining rows DST-02, DST-05, DST-06, DST-01 — open
+  - DST-05 is the server image pipeline (SRV-17a, ade-229e); DST-06 is its manual upgrade path (SRV-17b, ade-tb53: set the tag, pull, up); the Linux target is the server package, not a desktop app. The register's automatic update channel stays Missing.
 - S22b desktop auto-update for macOS/Linux — open, inside ade-159t
 
 ## Lane D — Housekeeping and leftovers
