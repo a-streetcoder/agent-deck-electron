@@ -18,3 +18,9 @@ Owner-paced. On the VM: install docker, create deploy/.env from the current syst
 
 deck.moretti.cc served by the container; old units disabled; Syncthing share to the VM removed; runbook has no checkout-based deploy left.
 
+
+## Notes
+
+**2026-10-15T23:09:32Z**
+
+2026-10-16 ready to start when you are: 17a image (merged 8d74f98) and 17b compose/runbook (merged e6c8524) are in; prerequisites on your side: push the branch and tag a v* release so the image publishes to GHCR (or run the workflow manually for a sha tag), make the package public or create a read:packages token, create the token tunnel + public hostname, and fill deploy/.env. Runbook: docs/remote-server-poc.md 'Install on a server'.

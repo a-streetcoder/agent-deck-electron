@@ -1,6 +1,6 @@
 ---
 id: ade-tb53
-status: in_progress
+status: closed
 deps: [ade-229e]
 links: []
 created: 2026-10-15T21:53:37Z
@@ -40,3 +40,7 @@ docker compose config validates in CI (workflow step); .env.example complete; ru
 **2026-10-15T23:02:08Z**
 
 2026-10-16 reviews: GPT (review58) = backup umask, restore into an empty volume, port 7844 docs, DST stub (done by the architect); contrarian = no first-up blocker, but a restarted agent-deck strands cloudflared in a dead namespace (fix: pause container owning the namespace), image not yet published (runbook prerequisites), upgrade command does nothing on a pinned tag, auth switchable from .env (hard-code proxy + PORT in compose, fatal typo in bindHost), hardening never exercised (CI smoke with the flags), missing project root 500s (server creates it), Cloudflare GitHub login method prerequisite, recovery token useless on the shared server, cloudflared metrics on 0.0.0.0. Consolidated fix round sent.
+
+**2026-10-15T23:09:31Z**
+
+2026-10-16 fix round (dd8529a: pause-container namespace owner, proxy + PORT fixed in compose, fatal proxy typo, startupDirs creates home and project root, 404 on a missing root, hardened CI smoke, runbook prerequisites/upgrade/backup/restore/ssh, loopback metrics, roadmap DST wording) verified by the architect; squashed 991212b, merged e6c8524; server typecheck, bindHost + startupDirs tests, format gate green; VM restarted (health 200). CLOSED. Owner/17c: the stack has never run with up; first run validates read_only with real sessions, the net container recovery, GHCR access after the first release. Follow-ups: the recovery token's Desktop login paragraph is rewritten by 16d; ensureStartupDirs only warns on failure; if the net container dies both services need up -d --force-recreate.
