@@ -72,12 +72,35 @@ export function nextSharedServerClient(current, origin, create) {
 export const RESTART_ERROR = "The team server changed. Restart Agent Deck to use it.";
 
 /**
- * The page keeps the origin its window started with; while main's client
+ * The page keeps the origin its window loaded with; while main's client
  * points elsewhere (another server, or none after clearing) the renderer's
  * calls get this soft error instead of reaching a server it does not show.
+ * SRV-16b: Save reloads the window, so this is only the backstop for a reload
+ * that did not happen (the draft flush failed or timed out).
  */
 export function restartGate(client, windowOrigin) {
   return (client?.origin ?? null) !== windowOrigin ? RESTART_ERROR : null;
+}
+
+/**
+ * SRV-16b: the answer to the preload's sendSync("shared-server:window-origin"):
+ * `origin` (main's origin in effect, null for none) for the main window's main
+ * frame showing the app's own renderer (`rendererOrigin`), which the caller
+ * records as that load's origin; undefined for any other sender or page, which
+ * records nothing and gets null.
+ */
+export function windowOriginFor(event, mainWindow, origin, rendererOrigin) {
+  const contents = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null;
+  if (!contents || event?.sender !== contents) return undefined;
+  if (!event.senderFrame || event.senderFrame !== contents.mainFrame) return undefined;
+  let senderOrigin = null;
+  try {
+    senderOrigin = new URL(event.senderFrame.url).origin;
+  } catch {
+    return undefined;
+  }
+  if (!rendererOrigin || senderOrigin !== rendererOrigin) return undefined;
+  return origin;
 }
 
 export const REMOTE_MODE_ERROR = "Team server settings are not available in remote mode.";
@@ -137,4 +160,57 @@ export function writeTeamServerSettings(dir, settings) {
   const temp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temp, `${JSON.stringify(settings, null, 2)}\n`);
   fs.renameSync(temp, file);
+}
+
+/**
+ * SRV-16b: the per-host sign-in records kept next to the URL in
+ * team-server.json: `teams` ({ [origin]: Access team domain }, pinned at the
+ * first sign-in), `auds` ({ [origin]: Access application audience }) and
+ * `signedOut` (origins signed out here, so a cached cloudflared token is not
+ * picked up silently again).
+ */
+export function createTeamPins(dir, expectedTeam) {
+  const read = () => readTeamServerSettings(dir);
+  const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  const update = (change) => {
+    const settings = read();
+    writeTeamServerSettings(dir, { ...settings, ...change(settings) });
+  };
+  const otherWith = (map, origin, value) =>
+    (isRecord(map) &&
+      Object.entries(map).find(([other, pinned]) => other !== origin && pinned === value)?.[0]) ||
+    null;
+  const signedOutList = (settings) =>
+    Array.isArray(settings.signedOut)
+      ? settings.signedOut.filter((item) => typeof item === "string")
+      : [];
+  return {
+    pinned(origin) {
+      const { teams } = read();
+      const team = isRecord(teams) && Object.hasOwn(teams, origin) ? teams[origin] : null;
+      return typeof team === "string" ? team : null;
+    },
+    /** Another origin that pinned `team`, or null. */
+    pinnedElsewhere: (origin, team) => otherWith(read().teams, origin, team),
+    /** Another origin that pinned the Access application audience `aud`, or null. */
+    audElsewhere: (origin, aud) => otherWith(read().auds, origin, aud),
+    /** Pin `team` (and `aud` when known) for `origin`. */
+    pin(origin, team, aud = null) {
+      update((settings) => ({
+        teams: { ...(isRecord(settings.teams) ? settings.teams : {}), [origin]: team },
+        ...(aud
+          ? { auds: { ...(isRecord(settings.auds) ? settings.auds : {}), [origin]: aud } }
+          : {}),
+      }));
+    },
+    expected: () => expectedTeam?.trim().toLowerCase() || null,
+    signedOut: (origin) => signedOutList(read()).includes(origin),
+    setSignedOut(origin, value) {
+      const list = signedOutList(read());
+      if (list.includes(origin) === value) return;
+      update(() => ({
+        signedOut: value ? [...list, origin] : list.filter((item) => item !== origin),
+      }));
+    },
+  };
 }

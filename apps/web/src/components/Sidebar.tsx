@@ -29,6 +29,7 @@ import { isMacDesktop, teamServer } from "@/lib/native";
 import { userDisplayName, userInitials } from "@/lib/userIdentity";
 import { useAppStore, type AppView, type CurrentUser } from "../state/store.ts";
 import { PANEL_FADE, PANEL_MOVE, SessionsMainPanel } from "./SessionsPanel.tsx";
+import { TeamServerIndicator } from "./TeamServerIndicator.tsx";
 
 /**
  * Sidebar structure: pixel-font brand title bar, then two layers. UI-01
@@ -117,6 +118,7 @@ export function OrchestrateCollapsedCard({
           </span>
           {name ? <span className="truncate text-detail text-text-secondary">{name}</span> : null}
         </span>
+        <TeamServerIndicator />
       </ControlButton>
     </div>
   );

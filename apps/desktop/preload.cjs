@@ -5,10 +5,11 @@
 // type-a-path fallback it uses in a plain browser.
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
-// SRV-12b: main passes the configured shared server's origin (never a token).
-const sharedServerArg = process.argv.find((arg) => arg.startsWith("--agent-deck-shared-server="));
-const sharedServerOrigin = sharedServerArg?.slice("--agent-deck-shared-server=".length);
 const remote = process.argv.includes("--agent-deck-remote-server");
+// SRV-12b, SRV-16b: the configured shared server's origin (never a token),
+// asked from main at every load so a reload after Save picks up a new one.
+const askedOrigin = remote ? null : ipcRenderer.sendSync("shared-server:window-origin");
+const sharedServerOrigin = typeof askedOrigin === "string" ? askedOrigin : undefined;
 
 contextBridge.exposeInMainWorld("agentDeck", {
   isElectron: true,
@@ -89,12 +90,28 @@ contextBridge.exposeInMainWorld("agentDeck", {
    * { serverUrl, overridden, origin, restartRequired }; set({ serverUrl })
    * resolves { ok: false, error } or { ok: true, ...the new state }. Absent in
    * remote mode: that page comes from the server and must not set it.
+   * SRV-16b: status() and onStatus(handler) give the sign-in status
+   * { state, user?, team?, error?, warning? } (never a token); signIn(),
+   * signOut(), acceptTeam(), cancelSignIn(), forgetToken() (Remove cached
+   * token) and check() (re-check the status) resolve { ok, error? }.
    */
   teamServer: remote
     ? undefined
     : {
         get: () => ipcRenderer.invoke("team-server:get"),
         set: (input) => ipcRenderer.invoke("team-server:set", input),
+        status: () => ipcRenderer.invoke("team-server:status"),
+        signIn: () => ipcRenderer.invoke("team-server:sign-in"),
+        signOut: () => ipcRenderer.invoke("team-server:sign-out"),
+        acceptTeam: () => ipcRenderer.invoke("team-server:accept-team"),
+        cancelSignIn: () => ipcRenderer.invoke("team-server:sign-in-cancel"),
+        forgetToken: () => ipcRenderer.invoke("team-server:forget-token"),
+        check: () => ipcRenderer.invoke("team-server:check"),
+        onStatus: (handler) => {
+          const listener = (_event, status) => handler(status);
+          ipcRenderer.on("team-server:status", listener);
+          return () => ipcRenderer.removeListener("team-server:status", listener);
+        },
         // --- SRV-16c: cloudflared ---
         /** { path, source, version, warning } or null when no cloudflared is found. */
         cloudflared: () => ipcRenderer.invoke("team-server:cloudflared"),

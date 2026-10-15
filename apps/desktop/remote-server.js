@@ -7,6 +7,8 @@
  *  - where the main window may navigate while attached to it (the Access login
  *    round-trip goes through the team domain and GitHub before coming back).
  */
+import { Buffer } from "node:buffer";
+import path from "node:path";
 
 /**
  * The remote control-plane origin from `AGENT_DECK_REMOTE_SERVER_URL`, or null
@@ -118,6 +120,73 @@ export async function cloudflaredToken(run, origin, signal) {
 export async function cloudflaredLogin(run, origin, signal) {
   await run(["access", "login", origin], 300_000, signal);
   return cloudflaredToken(run, origin, signal);
+}
+
+/**
+ * SRV-16b: `access logout` for `origin` when this cloudflared has it (2025.8.1
+ * does not: its `access --help` lists no logout). Answers whether it ran; the
+ * caller treats any failure as best effort.
+ */
+export async function cloudflaredLogout(run, origin) {
+  const help = String(await run(["access", "--help"], 15_000));
+  if (!/^\s*logout\b/m.test(help)) return false;
+  await run(["access", "logout", origin], 15_000);
+  return true;
+}
+
+/**
+ * SRV-16b: the Cloudflare Access team that issued `token`: the host of its
+ * `iss` claim (`https://<team>.cloudflareaccess.com`), lowercased, or null.
+ * Read only, never verified: it names the team for pinning, the edge and the
+ * server do the verification.
+ */
+export function accessTokenTeam(token) {
+  try {
+    const { protocol, hostname } = new URL(tokenPayload(token).iss);
+    return protocol === "https:" && hostname ? hostname.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** SRV-16b: the Access application audience (`aud`, its first entry) of `token`, or null. */
+export function accessTokenAudience(token) {
+  try {
+    const { aud } = tokenPayload(token);
+    const first = Array.isArray(aud) ? aud[0] : aud;
+    return typeof first === "string" && first ? first : null;
+  } catch {
+    return null;
+  }
+}
+
+const tokenPayload = (token) =>
+  JSON.parse(Buffer.from(String(token).split(".")[1], "base64url").toString());
+
+/**
+ * SRV-16b: the files in cloudflared's token folder that cache `host`'s
+ * application token: `<host>-<aud>-token` (and its `.lock`), where the AUD tag
+ * is hex, so another host whose name starts with `host-` never matches. The
+ * team's org token (`<team>-org-token`) is not among them.
+ */
+export function cachedTokenFiles(names, host) {
+  const escaped = host.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^${escaped}-[0-9a-f]{32,128}-token(?:\\.lock)?$`);
+  return names.filter((name) => pattern.test(name.toLowerCase()));
+}
+
+/** Delete `host`'s cached application token files in `dir`; answers how many. */
+export function forgetCachedTokens({ dir, host, fs }) {
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch (error) {
+    if (error?.code === "ENOENT") return 0;
+    throw error;
+  }
+  const files = cachedTokenFiles(names, host);
+  for (const name of files) fs.rmSync(path.join(dir, name), { force: true });
+  return files.length;
 }
 
 /**
