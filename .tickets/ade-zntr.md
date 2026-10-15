@@ -1,6 +1,6 @@
 ---
 id: ade-zntr
-status: in_progress
+status: closed
 deps: [ade-74y5, ade-0nzw]
 links: []
 created: 2026-10-15T07:25:23Z
@@ -34,3 +34,7 @@ Domain tests for the marking over recorded trees; server test for retry-from-nod
 **2026-10-15T09:34:33Z**
 
 2026-10-15 GPT review37 of 72f7a98: both blockers (server-side running guard, loop retry identity via inject) coincide with the contrarian; added to the round: blocked items without a run get no retry action; placeholder terminal position marks completed tool placeholders affected; plan retry must carry and validate the generation/run (409 on stale intent before any restore).
+
+**2026-10-15T09:50:22Z**
+
+2026-10-15 merged as 9f5c470 (72f7a98 + fix round b8fea96: retried failures dropped via rolledBack/retryOf + 409 loop_already_retried, loop retry runs as the caller through a shared runLoop, retry intent scoped to the named items (A5 rule written), server-side rollback guard on a running turn or detached subagents + client re-check after confirm, recovery point only for work that wrote to the session checkout, honest confirm text, rejection reason carried, blocked-before-launch items retryable, placeholder terminal positions, generation/runId validated with 409 plan_retry_stale). Post-merge: server/domain/web tsc clean; server 52 passed, domain 68, web 20. Follow-ups: dry run and real retry are two requests; pruned checkpoint can still be the frontier; first dropped prompt only; loop retry is whole-run; fromNode guard sees only in-memory runs.
