@@ -1,6 +1,6 @@
 ---
 id: ade-pjln
-status: in_progress
+status: closed
 deps: [ade-hndc, ade-u5bg]
 links: []
 created: 2026-10-15T21:55:07Z
@@ -32,3 +32,7 @@ No reference to AGENT_DECK_REMOTE_SERVER_URL remains outside the changelog/archi
 **2026-10-15T23:15:59Z**
 
 2026-10-16 reviews: GPT (review59) no findings (external backend URL already loopback-only); contrarian no blocker, should-fix: AGENT_DECK_RENDERER_URL unvalidated (a remote page could become the trusted renderer origin), no main-window navigation guard, skills:trashRecovery lacks the origin check, docs overclaim + recovery token still recommended for the VM, handover doc names the removed variable, leftover REMOTE_SERVER_URL ignored silently. Fix round sent.
+
+**2026-10-15T23:22:21Z**
+
+2026-10-16 fix round (8a3d297: loopback-only AGENT_DECK_RENDERER_URL/SERVER_URL, main-window navigation guard, trashRecovery origin check, docs, handover archived, warning for the leftover variable) verified by the architect; squashed 603dd12 onto poc/shared-server (runbook conflict with 17b resolved: 17b table minus the recovery-token row), merged 4ff78ff; typecheck + design-system + desktop node tests + web tests + format gate green; web build deployed. CLOSED. Follow-up for 17c: unset AGENT_DECK_DESKTOP_RECOVERY_TOKEN in the VM drop-in (and the owner's Windows user variable from ade-gloc is now harmless).

@@ -1,6 +1,6 @@
 ---
 id: ade-fah9
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-10-15T21:55:06Z
@@ -23,3 +23,7 @@ A teammate installs the desktop, opens Settings > Team server, enters the URL, c
 **2026-10-15T21:56:37Z**
 
 2026-10-15 owner approved (exact word) the SRV-16 tree 16a-16d.
+
+**2026-10-15T23:22:22Z**
+
+2026-10-16 EPIC CLOSED: 16a ade-wvbh (merged aeeede9), 16b ade-hndc (efe887d), 16c ade-u5bg (f52cb44), 16d ade-pjln (4ff78ff), all deployed. Owner live checks on the first dev launch: the preload receives the origin via sendSync (frame URL present at preload time), Settings > Team server: enter https://deck.moretti.cc, Download cloudflared if needed, Sign in through the browser, status 'Signed in as <name> (<team>)', Make shared / move / mirror / bring back; Sign out, Remove cached token; a Save that changes the origin reloads the window; the team warning on a second origin. Remote launchers are gone; the browser at deck.moretti.cc is the client for people without the app.
