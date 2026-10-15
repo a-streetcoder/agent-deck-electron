@@ -55,32 +55,27 @@ afterEach(() => {
 });
 
 describe("ProjectsScreen with no projects", () => {
-  for (const [label, bridge] of [
-    ["the desktop shell attached to a remote server", { isElectron: true, remote: true }],
-    ["a plain browser (no Electron bridge)", undefined],
-  ] as const) {
-    it(`reaches the server folder browser from Add Projects in ${label}`, async () => {
-      vi.stubGlobal("window", Object.assign(window, { agentDeck: bridge }));
-      stubServer();
-      useAppStore.setState({ projects: [], currentProjectId: null });
-      render(<ProjectsScreen />);
+  it("reaches the server folder browser from Add Projects in a plain browser", async () => {
+    vi.stubGlobal("window", Object.assign(window, { agentDeck: undefined }));
+    stubServer();
+    useAppStore.setState({ projects: [], currentProjectId: null });
+    render(<ProjectsScreen />);
 
-      expect(screen.getByText("No projects yet")).toBeTruthy();
-      fireEvent.click(screen.getByTestId("projects-add"));
-      await screen.findByTestId("add-projects-dialog");
+    expect(screen.getByText("No projects yet")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("projects-add"));
+    await screen.findByTestId("add-projects-dialog");
 
-      // Immediate children of AGENT_DECK_PROJECT_ROOT are listed; picking one fills the path.
-      fireEvent.click(await screen.findByTestId("server-folder-syncr"));
-      await waitFor(() =>
-        expect((screen.getByTestId("projects-add-path") as HTMLInputElement).value).toBe(
-          `${root}/syncr`,
-        ),
-      );
-      fireEvent.click(screen.getByTestId("projects-add-confirm"));
-      await waitFor(() => expect(vi.mocked(addProject)).toHaveBeenCalledWith(`${root}/syncr`));
-      expect(screen.queryByTestId("choose-project-folder")).toBeNull();
-    });
-  }
+    // Immediate children of AGENT_DECK_PROJECT_ROOT are listed; picking one fills the path.
+    fireEvent.click(await screen.findByTestId("server-folder-syncr"));
+    await waitFor(() =>
+      expect((screen.getByTestId("projects-add-path") as HTMLInputElement).value).toBe(
+        `${root}/syncr`,
+      ),
+    );
+    fireEvent.click(screen.getByTestId("projects-add-confirm"));
+    await waitFor(() => expect(vi.mocked(addProject)).toHaveBeenCalledWith(`${root}/syncr`));
+    expect(screen.queryByTestId("choose-project-folder")).toBeNull();
+  });
 });
 
 describe("ProjectsScreen on the shared server (SRV-12a)", () => {

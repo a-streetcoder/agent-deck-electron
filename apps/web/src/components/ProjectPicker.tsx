@@ -131,9 +131,9 @@ export function ProjectPicker() {
     await addProject(path);
   };
 
-  // In the desktop app with a local server, "Add project" opens the native folder
-  // chooser. A browser, or the shell attached to a REMOTE server, must choose a
-  // folder on the server instead: browse it inside the popover (or type a path).
+  // In the desktop app, "Add project" opens the native folder chooser. A browser
+  // must choose a folder on the server instead: browse it inside the popover (or
+  // type a path).
   const startAddProject = async (): Promise<void> => {
     if (canPickLocalPaths()) {
       setOpen(false);

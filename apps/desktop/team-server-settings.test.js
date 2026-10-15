@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
-  REMOTE_MODE_ERROR,
   RESTART_ERROR,
   SETTINGS_FILE,
   createTeamPins,
@@ -84,6 +83,12 @@ test("the env variable overrides the stored URL", () => {
     overridden: false,
   });
   assert.throws(() => resolveServerOrigin(null, "http://env.example.com"), /SHARED_SERVER_URL/);
+  assert.throws(() => resolveServerOrigin(null, "https://u:p@env.example.com"), /credentials/);
+  assert.throws(() => resolveServerOrigin(null, "not a url"), /absolute https URL/);
+  assert.equal(
+    resolveServerOrigin(null, "https://env.example.com/a?x=1").origin,
+    "https://env.example.com",
+  );
 });
 
 test("a changed origin replaces the client and cancels its sign-in; null drops it", () => {
@@ -133,10 +138,10 @@ test("settings round-trip; a missing or corrupt file reads as not configured", (
   }
 });
 
-test("set validates, keeps cloudflaredPath and unknown keys, re-points the client; remote mode refuses both", () => {
+test("set validates, keeps cloudflaredPath and unknown keys, re-points the client", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "team-server-"));
   try {
-    const context = { dir, env: undefined, remote: false, windowOrigin: null };
+    const context = { dir, env: undefined, windowOrigin: null };
     let applied = 0;
     const handlers = createTeamServerHandlers({ context: () => context, apply: () => applied++ });
     writeTeamServerSettings(dir, {
@@ -160,15 +165,6 @@ test("set validates, keeps cloudflaredPath and unknown keys, re-points the clien
       cloudflaredPath: "C:/cf.exe",
       signedInAs: { name: "later ticket" },
     });
-
-    context.remote = true;
-    assert.deepEqual(handlers.set({ serverUrl: "https://attacker.example.com" }), {
-      ok: false,
-      error: REMOTE_MODE_ERROR,
-    });
-    assert.throws(() => handlers.get(), { message: REMOTE_MODE_ERROR });
-    assert.equal(readTeamServerSettings(dir).serverUrl, "https://deck.example.com");
-    assert.equal(applied, 1);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -5,21 +5,14 @@
 // type-a-path fallback it uses in a plain browser.
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
-const remote = process.argv.includes("--agent-deck-remote-server");
 // SRV-12b, SRV-16b: the configured shared server's origin (never a token),
 // asked from main at every load so a reload after Save picks up a new one.
-const askedOrigin = remote ? null : ipcRenderer.sendSync("shared-server:window-origin");
+const askedOrigin = ipcRenderer.sendSync("shared-server:window-origin");
 const sharedServerOrigin = typeof askedOrigin === "string" ? askedOrigin : undefined;
 
 contextBridge.exposeInMainWorld("agentDeck", {
   isElectron: true,
   platform: process.platform,
-  /**
-   * True when the shell is attached to a remote server (AGENT_DECK_REMOTE_SERVER_URL):
-   * native file/folder pickers would choose paths on THIS machine, not the one
-   * running the agents, so the renderer must use server-side path flows.
-   */
-  remote,
   /**
    * Open the native folder chooser. Resolves to the selected absolute path(s),
    * or [] if the user cancels.
@@ -66,13 +59,7 @@ contextBridge.exposeInMainWorld("agentDeck", {
   openResourceFile: (request) => ipcRenderer.invoke("resources:openFile", request),
   revealResourceFile: (request) => ipcRenderer.invoke("resources:revealFile", request),
   /**
-   * Local sign-in page only (ade-zvv5): "start" runs the cloudflared browser
-   * login, "cancel" aborts it. Resolves { ok, error? }, never the token.
-   * @param {"start" | "cancel"} action
-   */
-  remoteSignIn: (action) => ipcRenderer.invoke("remote-sign-in", action),
-  /**
-   * SRV-12b, local mode with a shared server configured: allow-listed calls to
+   * SRV-12b, with a shared server configured: allow-listed calls to
    * it made by main with the Access token. Resolves { status, body } or
    * { status: 401, signInRequired: true }; signIn() opens the system browser.
    */
@@ -88,45 +75,42 @@ contextBridge.exposeInMainWorld("agentDeck", {
   /**
    * SRV-16a: the team server setting. get() resolves
    * { serverUrl, overridden, origin, restartRequired }; set({ serverUrl })
-   * resolves { ok: false, error } or { ok: true, ...the new state }. Absent in
-   * remote mode: that page comes from the server and must not set it.
+   * resolves { ok: false, error } or { ok: true, ...the new state }.
    * SRV-16b: status() and onStatus(handler) give the sign-in status
    * { state, user?, team?, error?, warning? } (never a token); signIn(),
    * signOut(), acceptTeam(), cancelSignIn(), forgetToken() (Remove cached
    * token) and check() (re-check the status) resolve { ok, error? }.
    */
-  teamServer: remote
-    ? undefined
-    : {
-        get: () => ipcRenderer.invoke("team-server:get"),
-        set: (input) => ipcRenderer.invoke("team-server:set", input),
-        status: () => ipcRenderer.invoke("team-server:status"),
-        signIn: () => ipcRenderer.invoke("team-server:sign-in"),
-        signOut: () => ipcRenderer.invoke("team-server:sign-out"),
-        acceptTeam: () => ipcRenderer.invoke("team-server:accept-team"),
-        cancelSignIn: () => ipcRenderer.invoke("team-server:sign-in-cancel"),
-        forgetToken: () => ipcRenderer.invoke("team-server:forget-token"),
-        check: () => ipcRenderer.invoke("team-server:check"),
-        onStatus: (handler) => {
-          const listener = (_event, status) => handler(status);
-          ipcRenderer.on("team-server:status", listener);
-          return () => ipcRenderer.removeListener("team-server:status", listener);
-        },
-        // --- SRV-16c: cloudflared ---
-        /** { path, source, version, warning } or null when no cloudflared is found. */
-        cloudflared: () => ipcRenderer.invoke("team-server:cloudflared"),
-        /** { downloadVersion, warning }: the pinned version a download fetches (or null). */
-        cloudflaredInfo: () => ipcRenderer.invoke("team-server:cloudflared-info"),
-        /** Verified download; resolves { ok, path, version } or { ok: false, error }. */
-        downloadCloudflared: () => ipcRenderer.invoke("team-server:cloudflared-download"),
-        /** Byte progress { received, total } of a running download; returns unsubscribe. */
-        onCloudflaredProgress: (handler) => {
-          const listener = (_event, progress) => handler(progress);
-          ipcRenderer.on("team-server:cloudflared-progress", listener);
-          return () => ipcRenderer.removeListener("team-server:cloudflared-progress", listener);
-        },
-        // --- end SRV-16c ---
-      },
+  teamServer: {
+    get: () => ipcRenderer.invoke("team-server:get"),
+    set: (input) => ipcRenderer.invoke("team-server:set", input),
+    status: () => ipcRenderer.invoke("team-server:status"),
+    signIn: () => ipcRenderer.invoke("team-server:sign-in"),
+    signOut: () => ipcRenderer.invoke("team-server:sign-out"),
+    acceptTeam: () => ipcRenderer.invoke("team-server:accept-team"),
+    cancelSignIn: () => ipcRenderer.invoke("team-server:sign-in-cancel"),
+    forgetToken: () => ipcRenderer.invoke("team-server:forget-token"),
+    check: () => ipcRenderer.invoke("team-server:check"),
+    onStatus: (handler) => {
+      const listener = (_event, status) => handler(status);
+      ipcRenderer.on("team-server:status", listener);
+      return () => ipcRenderer.removeListener("team-server:status", listener);
+    },
+    // --- SRV-16c: cloudflared ---
+    /** { path, source, version, warning } or null when no cloudflared is found. */
+    cloudflared: () => ipcRenderer.invoke("team-server:cloudflared"),
+    /** { downloadVersion, warning }: the pinned version a download fetches (or null). */
+    cloudflaredInfo: () => ipcRenderer.invoke("team-server:cloudflared-info"),
+    /** Verified download; resolves { ok, path, version } or { ok: false, error }. */
+    downloadCloudflared: () => ipcRenderer.invoke("team-server:cloudflared-download"),
+    /** Byte progress { received, total } of a running download; returns unsubscribe. */
+    onCloudflaredProgress: (handler) => {
+      const listener = (_event, progress) => handler(progress);
+      ipcRenderer.on("team-server:cloudflared-progress", listener);
+      return () => ipcRenderer.removeListener("team-server:cloudflared-progress", listener);
+    },
+    // --- end SRV-16c ---
+  },
   /** Open an allow-listed http(s) URL in the user's default browser. */
   openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
   /** Flush device-local drafts before main closes the renderer/backend. */

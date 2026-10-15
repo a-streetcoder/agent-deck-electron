@@ -24,12 +24,9 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("SessionStartupCard draft with no projects (remote server)", () => {
+describe("SessionStartupCard draft with no projects (browser)", () => {
   it("adds a project through the server folder browser and selects it", async () => {
-    vi.stubGlobal(
-      "window",
-      Object.assign(window, { agentDeck: { isElectron: true, remote: true } }),
-    );
+    vi.stubGlobal("window", Object.assign(window, { agentDeck: undefined }));
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string) => {

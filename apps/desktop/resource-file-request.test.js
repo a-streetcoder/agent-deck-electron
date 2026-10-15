@@ -3,17 +3,15 @@ import test from "node:test";
 import {
   catalogListsPath,
   parseResourceFileRequest,
-  localShellActionsAllowed,
   RESOURCE_KINDS,
   resolveResourceFile,
 } from "./resource-file-request.js";
 
-test("refuses open/reveal in remote mode before any catalog fetch or fs call", async () => {
+test("the catalog authorizes the exact path before the fs checks run", async () => {
   const file = "/Users/x/.pi/agent/agents/a.md";
   const calls = [];
   const fileInfo = { isSymbolicLink: () => false, isFile: () => true };
-  const deps = (remote) => ({
-    remote,
+  const deps = {
     controlPlaneFetch: async (url) => {
       calls.push(`fetch ${url}`);
       return { ok: true, json: async () => ({ agents: [{ filePath: file }] }) };
@@ -21,19 +19,10 @@ test("refuses open/reveal in remote mode before any catalog fetch or fs call", a
     lstat: async (p) => (calls.push(`lstat ${p}`), fileInfo),
     realpath: async (p) => (calls.push(`realpath ${p}`), p),
     stat: async (p) => (calls.push(`stat ${p}`), fileInfo),
-  });
+  };
   const request = { kind: "agent", projectId: null, filePath: file };
 
-  // The catalog would come from the remote server: it must not authorize a local file.
-  await assert.rejects(
-    resolveResourceFile(request, deps("https://deck.example.test")),
-    /Resource file is unavailable/,
-  );
-  assert.deepEqual(calls, []);
-  assert.equal(localShellActionsAllowed("https://deck.example.test"), false);
-
-  // Local: the catalog authorizes the exact path, then the fs checks run.
-  assert.equal(await resolveResourceFile(request, deps(null)), file);
+  assert.equal(await resolveResourceFile(request, deps), file);
   assert.deepEqual(calls, [
     "fetch /resources/agents",
     `lstat ${file}`,

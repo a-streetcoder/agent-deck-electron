@@ -63,18 +63,9 @@ afterEach(() => {
 const makeShared = () => fireEvent.click(screen.getByRole("button", { name: "Make shared" }));
 
 describe("ShareProjectControl", () => {
-  it("renders nothing without a configured shared server or in remote mode", () => {
+  it("renders nothing without a configured shared server", () => {
     window.agentDeck = { isElectron: true };
-    const { container, rerender } = render(
-      <ShareProjectControl project={project} shared={shared()} />,
-    );
-    expect(container.innerHTML).toBe("");
-    window.agentDeck = {
-      isElectron: true,
-      remote: true,
-      sharedServer: { origin: SERVER, request, signIn, cancelSignIn },
-    };
-    rerender(<ShareProjectControl project={{ ...project }} shared={shared()} />);
+    const { container } = render(<ShareProjectControl project={project} shared={shared()} />);
     expect(container.innerHTML).toBe("");
   });
 

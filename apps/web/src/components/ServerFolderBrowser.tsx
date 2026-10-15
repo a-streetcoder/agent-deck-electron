@@ -6,8 +6,8 @@ import { CornerLeftUp, Folder } from "lucide-react";
 /**
  * Choose a folder ON THE SERVER (remote-server POC, docs/remote-server-poc.md).
  *
- * A browser tab, or the desktop shell attached to a remote server, cannot pick
- * paths on the machine that runs the agents, so this lists `GET /fs/dirs`
+ * A browser tab cannot pick paths on the machine that runs the agents, so this
+ * lists `GET /fs/dirs`
  * (confined to AGENT_DECK_PROJECT_ROOT) and lets the user walk down to the
  * folder they want, or type its path. Used by the project picker, the Projects
  * screen and the new-session card so every "add a project" entry reaches it.

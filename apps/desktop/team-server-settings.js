@@ -5,7 +5,6 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { remoteServerOrigin } from "./remote-server.js";
 
 export const SETTINGS_FILE = "team-server.json";
 const MAX_URL_CHARS = 2048;
@@ -51,11 +50,27 @@ export function validateServerUrl(raw) {
  * invalid one throws, as at startup before), else the stored URL when valid.
  */
 export function resolveServerOrigin(stored, env) {
-  if (env) {
-    return { origin: remoteServerOrigin(env, "AGENT_DECK_SHARED_SERVER_URL"), overridden: true };
-  }
+  if (env) return { origin: envServerOrigin(env), overridden: true };
   const { origin } = validateServerUrl(stored);
   return { origin: origin ?? null, overridden: false };
+}
+
+/**
+ * The AGENT_DECK_SHARED_SERVER_URL dev override as an origin; it throws (and so
+ * fails startup) unless it is an absolute https URL without credentials. Looser
+ * than validateServerUrl: a path or query is dropped, not refused.
+ */
+function envServerOrigin(raw) {
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("AGENT_DECK_SHARED_SERVER_URL must be an absolute https URL");
+  }
+  if (url.protocol !== "https:" || url.username || url.password) {
+    throw new Error("AGENT_DECK_SHARED_SERVER_URL must be an https URL without credentials");
+  }
+  return url.origin;
 }
 
 /**
@@ -103,13 +118,9 @@ export function windowOriginFor(event, mainWindow, origin, rendererOrigin) {
   return origin;
 }
 
-export const REMOTE_MODE_ERROR = "Team server settings are not available in remote mode.";
-
 /**
  * The team-server:get / team-server:set logic. `context()` gives
- * { dir, env, remote, windowOrigin } at call time; `apply()` re-points the client.
- * In remote mode the page comes from the server, so both refuse: remote
- * content must not choose the server the next local launch talks to.
+ * { dir, env, windowOrigin } at call time; `apply()` re-points the client.
  */
 export function createTeamServerHandlers({ context, apply }) {
   const state = () => {
@@ -121,12 +132,10 @@ export function createTeamServerHandlers({ context, apply }) {
   return {
     state,
     get() {
-      if (context().remote) throw new Error(REMOTE_MODE_ERROR);
       return state();
     },
     set(input) {
-      const { dir, remote } = context();
-      if (remote) return { ok: false, error: REMOTE_MODE_ERROR };
+      const { dir } = context();
       const result = validateServerUrl(input?.serverUrl);
       if (result.error) return { ok: false, error: result.error };
       writeTeamServerSettings(dir, { ...readTeamServerSettings(dir), serverUrl: result.origin });

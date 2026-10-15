@@ -42,7 +42,7 @@ them. Items 1 and 2 are the t3code orchestration-v2 ideas carried from the old r
 ## Lane B — Shared server (carried over; the collaboration model)
 
 ADR 0003 trust model; live setup in [`remote-server-poc.md`](remote-server-poc.md); handover in
-[`handover-shared-server-poc.md`](handover-shared-server-poc.md). Tickets in `.tickets/`.
+[`handover-shared-server-poc.md`](archive/handover-shared-server-poc.md). Tickets in `.tickets/`.
 
 - ade-brgd — SRV-01: ADR shared headless host — closed (ADR 0003; amended by ADR 0004)
 - ade-63d3 — SRV-02: REST origin and CSRF guard mirroring the WebSocket guard — closed

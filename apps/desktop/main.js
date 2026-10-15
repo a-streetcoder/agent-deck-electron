@@ -22,18 +22,7 @@ import {
   configurePreviewSession,
   PREVIEW_PARTITION,
 } from "./preview-guard.js";
-import {
-  accessTokenHeaders,
-  allowRemoteShellNavigation,
-  cloudflaredLogin,
-  cloudflaredLogout,
-  cloudflaredToken,
-  createRemoteSignIn,
-  forgetCachedTokens,
-  isControlPlanePage,
-  remoteServerOrigin,
-  retryInSlots,
-} from "./remote-server.js";
+import { cloudflaredLogout, forgetCachedTokens } from "./cloudflared-access.js";
 import {
   cloudflaredVersion,
   CLOUDFLARED_ASSETS,
@@ -48,12 +37,12 @@ import {
   createTeamServerHandlers,
   nextSharedServerClient,
   readTeamServerSettings,
-  REMOTE_MODE_ERROR,
   restartGate,
   windowOriginFor,
 } from "./team-server-settings.js";
 import { createTeamServerStatus } from "./team-server-status.js";
-import { localShellActionsAllowed, resolveResourceFile } from "./resource-file-request.js";
+import { resolveResourceFile } from "./resource-file-request.js";
+import { loopbackHttpUrl, mainWindowNavigation } from "./main-window-policy.js";
 import { checkForUpdates } from "./update-check.js";
 import {
   app,
@@ -83,7 +72,7 @@ const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // apps/desktop -> repository root.
 const repoRoot = path.resolve(__dirname, "..", "..");
-// A remote server (docs/remote-server-poc.md) cannot receive a token this shell
+// An external server (AGENT_DECK_SERVER_URL) cannot receive a token this shell
 // generated, so the two sides may share one through the environment instead.
 const desktopRecoveryToken = process.env.AGENT_DECK_DESKTOP_RECOVERY_TOKEN || randomUUID();
 const legacySkillRecoveryTokenPattern =
@@ -107,14 +96,11 @@ const windowColors = () =>
 
 let serverProcess = null;
 let serverPort = null;
-// The privileged control-plane origin (this app's own server). Loopback runs
-// derive it from `serverPort`; a remote attach (AGENT_DECK_REMOTE_SERVER_URL)
-// sets it to that https origin and spawns no server.
+// The privileged control-plane origin: this app's own loopback server, derived
+// from `serverPort` once it is known.
 let controlPlaneOrigin = null;
-let remoteServer = null;
-// ade-zvv5: set while a cloudflared launch has no cached token; the window then
-// opens on sign-in.html and this handles its "remote-sign-in" IPC.
-let remoteSignIn = null;
+// AGENT_DECK_RENDERER_URL (the Vite dev server), validated as loopback at startup.
+let rendererUrlOverride = null;
 // SRV-12b: local mode with a team server configured (SRV-16a: the Settings
 // value, or AGENT_DECK_SHARED_SERVER_URL as a dev override); Make shared calls
 // that server through this client (the Access token stays in main).
@@ -160,11 +146,6 @@ function requestDraftFlush(quit) {
   mainWindow.webContents.send("drafts:flush", { token });
 }
 
-// The local sign-in page (ade-zvv5) has no composer and never answers the
-// draft flush, so Close and Quit from it skip the handshake (REV-01).
-const onSignInPage = () =>
-  remoteSignIn !== null || Boolean(mainWindow?.webContents.getURL().startsWith("file:"));
-
 ipcMain.on("drafts:flushed", (event, payload) => {
   if (
     !mainWindow ||
@@ -199,18 +180,9 @@ const isControlPlaneUrl = (parsed) =>
     parsed.port === String(serverPort));
 /** The renderer's origin: the Vite dev server when set, else the control plane. */
 const expectedRendererOriginNow = () =>
-  controlPlaneOrigin
-    ? new URL(process.env.AGENT_DECK_RENDERER_URL || `${controlPlaneOrigin}/`).origin
-    : null;
-/**
- * Fetch from this app's own server. A remote attach goes through Electron's
- * session so the Cloudflare Access cookie the window logged in with applies;
- * loopback keeps Node's fetch.
- */
-const controlPlaneFetch = (pathname, init) =>
-  remoteServer
-    ? session.defaultSession.fetch(`${controlPlaneOrigin}${pathname}`, init)
-    : fetch(`${controlPlaneOrigin}${pathname}`, init);
+  controlPlaneOrigin ? new URL(rendererUrlOverride || `${controlPlaneOrigin}/`).origin : null;
+/** Fetch from this app's own server. */
+const controlPlaneFetch = (pathname, init) => fetch(`${controlPlaneOrigin}${pathname}`, init);
 // Generation-orders backend refreshes so a slower old response cannot restore
 // a stale badge. The count itself is always derived from distinct durable rows.
 let attentionRefreshGeneration = 0;
@@ -314,21 +286,7 @@ function ownedServerLaunch() {
 function externalServerPort() {
   const raw = process.env.AGENT_DECK_SERVER_URL;
   if (!raw) return null;
-
-  const url = new URL(raw);
-  if (
-    url.protocol !== "http:" ||
-    (url.hostname !== "127.0.0.1" && url.hostname !== "localhost") ||
-    !url.port
-  ) {
-    throw new Error("AGENT_DECK_SERVER_URL must be a loopback HTTP URL with an explicit port");
-  }
-
-  const port = Number(url.port);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new Error("AGENT_DECK_SERVER_URL contains an invalid port");
-  }
-  return port;
+  return Number(loopbackHttpUrl(raw, "AGENT_DECK_SERVER_URL").port);
 }
 
 /**
@@ -439,25 +397,6 @@ function waitForHealth(port, timeoutMs = 20_000) {
   });
 }
 
-/**
- * Remote attach: GET /health through the session-aware fetch, run only AFTER
- * the window has loaded a page on the control-plane origin (so the Access
- * cookie exists). Before login Access answers a redirect, never a 200, which is
- * why this cannot gate window creation. Retried every 5 s for 30 s (retryInSlots) so a
- * server that is still restarting is accepted once it answers.
- */
-function checkRemoteHealth() {
-  return retryInSlots(async (timeoutMs) => {
-    const response = await controlPlaneFetch("/health", {
-      signal: AbortSignal.timeout(timeoutMs),
-      redirect: "manual",
-    });
-    if (response.status !== 200) {
-      throw new Error(`remote server /health answered ${response.status || "a redirect"}`);
-    }
-  });
-}
-
 function createWindow() {
   const { width: workAreaWidth } = screen.getPrimaryDisplay().workAreaSize;
   const initialWidth = Math.max(940, Math.round(workAreaWidth * 0.6));
@@ -483,9 +422,6 @@ function createWindow() {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       sandbox: true,
-      // Tells the preload (and so the renderer) that local pickers pick on the
-      // wrong machine; the renderer then uses the server-side path flows.
-      additionalArguments: remoteServer ? ["--agent-deck-remote-server"] : [],
       // Enable the <webview> tag so the Slice L2 general-purpose browser can
       // mount a REAL Chromium guest (not an iframe). The guest's own security
       // posture is force-hardened in the web-contents-created handler below —
@@ -496,60 +432,19 @@ function createWindow() {
 
   // AGENT_DECK_RENDERER_URL points at the Vite dev server (HMR) when set;
   // otherwise load the server-served production build same-origin.
-  const rendererUrl = process.env.AGENT_DECK_RENDERER_URL || `${controlPlaneOrigin}/`;
-  if (remoteSignIn) {
-    // No cached cloudflared token: show the local sign-in page first; the
-    // remoteSignIn attach callback loads the app once the browser login succeeds.
-    void mainWindow.loadFile(path.join(__dirname, "sign-in.html"), {
-      query: {
-        teamDomain: process.env.AGENT_DECK_CF_ACCESS_TEAM_DOMAIN || new URL(remoteServer).host,
-      },
-    });
-  } else {
-    void mainWindow.loadURL(rendererUrl);
-  }
+  void mainWindow.loadURL(rendererUrlOverride || `${controlPlaneOrigin}/`);
 
-  if (remoteServer) {
-    // Attached to a remote server: the window may only travel the Access login
-    // round-trip (team domain, GitHub) and back; any other target opens in the
-    // system browser. Applied to redirects too, since login is all redirects.
-    const teamDomain = process.env.AGENT_DECK_CF_ACCESS_TEAM_DOMAIN;
-    const guardRemoteNavigation = (event, url) => {
-      if (allowRemoteShellNavigation(url, controlPlaneOrigin, teamDomain)) return;
-      event.preventDefault();
-      let parsed;
-      try {
-        parsed = new URL(url);
-      } catch {
-        return;
-      }
-      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-        void shell.openExternal(url);
-      }
-    };
-    mainWindow.webContents.on("will-navigate", guardRemoteNavigation);
-    mainWindow.webContents.on("will-redirect", guardRemoteNavigation);
-
-    // Startup completes once the app itself (not an Access/GitHub login page)
-    // has loaded in the main frame: the session now holds the Access cookie, so
-    // the control-plane health check and the badge refresh can run.
-    let remoteStartupDone = false;
-    mainWindow.webContents.on("did-navigate", (_event, url) => {
-      if (remoteStartupDone || !isControlPlanePage(url, controlPlaneOrigin)) return;
-      remoteStartupDone = true;
-      startupTrace("remote app page loaded");
-      void checkRemoteHealth().then(
-        () => {
-          startupTrace("remote server health confirmed");
-          void refreshDesktopAttention();
-        },
-        (error) => {
-          dialog.showErrorBox("agent-deck failed to start", String(error));
-          app.quit();
-        },
-      );
-    });
-  }
+  // SRV-16d: the main window stays on the renderer origin (the IPC sender checks
+  // trust it); any other http(s) target opens in the system browser. Redirects
+  // too, since a server-side redirect never fires will-navigate.
+  const guardMainNavigation = (event, url) => {
+    const verdict = mainWindowNavigation(url, expectedRendererOriginNow());
+    if (verdict === "allow") return;
+    event.preventDefault();
+    if (verdict === "external") void shell.openExternal(url);
+  };
+  mainWindow.webContents.on("will-navigate", guardMainNavigation);
+  mainWindow.webContents.on("will-redirect", guardMainNavigation);
 
   // Open external links (docs, GitHub) in the user's browser, not the app.
   // Parse the URL and compare the exact host so a look-alike like
@@ -561,11 +456,7 @@ function createWindow() {
     } catch {
       return { action: "deny" };
     }
-    if (
-      parsed.hostname === "127.0.0.1" ||
-      parsed.hostname === "localhost" ||
-      (remoteServer && parsed.origin === controlPlaneOrigin)
-    ) {
+    if (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") {
       return { action: "allow" };
     }
     if (parsed.protocol === "http:" || parsed.protocol === "https:") {
@@ -578,13 +469,13 @@ function createWindow() {
   // after it is both visible and focused. Main never globally clears attention.
   // SRV-16b: focus re-checks the team server status (at most once a minute).
   mainWindow.on("focus", () => {
-    if (!remoteServer) void teamStatus.focused();
+    void teamStatus.focused();
   });
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
   mainWindow.on("close", (event) => {
-    if (draftsFlushedForQuit || mainWindow.webContents.isCrashed() || onSignInPage()) return;
+    if (draftsFlushedForQuit || mainWindow.webContents.isCrashed()) return;
     event.preventDefault();
     flushDraftsBeforeQuit();
   });
@@ -755,8 +646,8 @@ function buildAppMenu() {
 /**
  * Resolve a renderer resource identity against the backend's current catalog.
  * No path supplied by the renderer reaches shell APIs unless the exact path is
- * present in the requested project-scoped agent/prompt/MCP catalog, and never
- * in remote mode (resolveResourceFile in resource-file-request.js).
+ * present in the requested project-scoped agent/prompt/MCP catalog
+ * (resolveResourceFile in resource-file-request.js).
  */
 async function validatedResourceFile(event, request) {
   const expectedRendererOrigin = expectedRendererOriginNow();
@@ -776,7 +667,6 @@ async function validatedResourceFile(event, request) {
     throw new Error("Resource file is unavailable");
   }
   return resolveResourceFile(request, {
-    remote: remoteServer,
     controlPlaneFetch,
     lstat,
     realpath,
@@ -795,19 +685,6 @@ ipcMain.handle("resources:revealFile", async (event, request) => {
   const file = await validatedResourceFile(event, request);
   shell.showItemInFolder(file);
   return true;
-});
-
-// ade-zvv5: only the local sign-in page in the main window may start or cancel
-// the cloudflared login. The answer is { ok, error? }; the token stays here.
-ipcMain.handle("remote-sign-in", (event, action) => {
-  if (
-    !remoteSignIn ||
-    event.sender !== mainWindow?.webContents ||
-    !event.senderFrame?.url.startsWith("file:")
-  ) {
-    return { ok: false, error: "Sign-in is not available." };
-  }
-  return remoteSignIn(action);
 });
 
 // SRV-12b: the app's own renderer asks main to call the shared server. The
@@ -843,7 +720,7 @@ ipcMain.on("shared-server:window-origin", (event) => {
   const origin = windowOriginFor(
     event,
     mainWindow,
-    remoteServer ? null : (sharedServer?.origin ?? null),
+    sharedServer?.origin ?? null,
     expectedRendererOriginNow(),
   );
   if (origin !== undefined) windowSharedOrigin = origin;
@@ -856,12 +733,11 @@ ipcMain.handle("shared-server:sign-in-cancel", (event) => {
   return true;
 });
 
-// SRV-16a: the team server setting (userData/team-server.json); refused in remote mode.
+// SRV-16a: the team server setting (userData/team-server.json).
 const teamServerHandlers = createTeamServerHandlers({
   context: () => ({
     dir: app.getPath("userData"),
     env: process.env.AGENT_DECK_SHARED_SERVER_URL,
-    remote: Boolean(remoteServer),
     windowOrigin: windowSharedOrigin,
   }),
   apply: applyTeamServerSetting,
@@ -871,7 +747,7 @@ const teamServerHandlers = createTeamServerHandlers({
 // "team-server:status"; the Access team of each host is pinned in team-server.json.
 const teamStatus = createTeamServerStatus({
   publish: (status) => {
-    if (!remoteServer && mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("team-server:status", status);
     }
   },
@@ -889,9 +765,9 @@ const teamStatus = createTeamServerStatus({
     }),
 });
 
-/** Point the shared-server client at the configured origin (none in remote mode). */
+/** Point the shared-server client at the configured origin. */
 function applyTeamServerSetting() {
-  const origin = remoteServer ? null : teamServerHandlers.state().origin;
+  const { origin } = teamServerHandlers.state();
   const previous = sharedServer;
   sharedServer = nextSharedServerClient(sharedServer, origin, (next) =>
     createSharedServerClient({
@@ -917,16 +793,15 @@ ipcMain.handle("team-server:set", (event, input) => {
   return result;
 });
 
-/** SRV-16b: the sign-in status and actions; refused in remote mode like get/set. */
+/** SRV-16b: the sign-in status and actions, behind the same sender guard as get/set. */
 const teamServerAction = (event, run) => {
   assertTrustedPickerSender(event, "Team server settings are unavailable");
-  if (remoteServer) return { ok: false, error: REMOTE_MODE_ERROR };
   return run();
 };
 
 ipcMain.handle("team-server:status", (event) => {
   assertTrustedPickerSender(event, "Team server settings are unavailable");
-  return remoteServer ? { state: "off" } : teamStatus.get();
+  return teamStatus.get();
 });
 
 ipcMain.handle("team-server:sign-in", (event) =>
@@ -973,9 +848,6 @@ ipcMain.handle("shell:openExternal", async (_event, rawUrl) => {
 });
 
 ipcMain.handle("subagents:revealArtifacts", async (event, rawRunId) => {
-  // ade-q0pz: the directory would come from the remote server (see localShellActionsAllowed).
-  if (!localShellActionsAllowed(remoteServer))
-    throw new Error("Subagent artifacts are unavailable");
   const runId = typeof rawRunId === "string" ? rawRunId : "";
   assertTrustedPickerSender(event, "Subagent artifacts are unavailable");
   if (
@@ -1000,7 +872,6 @@ ipcMain.handle("subagents:revealArtifacts", async (event, rawRunId) => {
 });
 
 ipcMain.handle("loops:revealArtifacts", async (event, rawRunId) => {
-  if (!localShellActionsAllowed(remoteServer)) throw new Error("Loop run is unavailable");
   const runId = typeof rawRunId === "string" ? rawRunId : "";
   const expectedRendererOrigin = expectedRendererOriginNow();
   let senderOrigin = null;
@@ -1035,9 +906,7 @@ ipcMain.handle("loops:revealArtifacts", async (event, rawRunId) => {
 });
 
 ipcMain.handle("skills:trashRecovery", async (event, rawToken) => {
-  // REV-01: in remote mode the recovery path lives on the server host; trashing
-  // it here would hit whatever local directory shares that path.
-  if (remoteServer) throw new Error("Move to Trash is not available for a remote server.");
+  assertTrustedPickerSender(event, "Skill recovery is unavailable");
   const token = typeof rawToken === "string" ? rawToken : "";
   if (
     !mainWindow ||
@@ -1077,7 +946,6 @@ ipcMain.handle("skills:trashRecovery", async (event, rawToken) => {
 });
 
 ipcMain.handle("loops:revealWorktree", async (event, rawRunId) => {
-  if (!localShellActionsAllowed(remoteServer)) throw new Error("Loop run is unavailable");
   const runId = typeof rawRunId === "string" ? rawRunId : "";
   const expectedRendererOrigin = expectedRendererOriginNow();
   let senderOrigin = null;
@@ -1144,11 +1012,6 @@ function boundedPickerPaths(filePaths) {
 }
 
 ipcMain.handle("drop:classifyPaths", async (event, rawPaths) => {
-  // ade-q0pz: no stat() of page-supplied paths for a remote page (a UNC path
-  // probes an SMB host); dropped files would be on the wrong machine anyway.
-  if (!localShellActionsAllowed(remoteServer)) {
-    throw new Error("Dropped attachments are unavailable");
-  }
   assertTrustedPickerSender(event, "Dropped attachments are unavailable");
   const paths = (Array.isArray(rawPaths) ? rawPaths : []).slice(0, 16).flatMap((item) => {
     if (
@@ -1368,7 +1231,6 @@ function cloudflaredRunner() {
 /** { path, source, version, warning } for Settings > Team server, or null when none is found. */
 ipcMain.handle("team-server:cloudflared", async (event) => {
   assertTrustedPickerSender(event, "Team server settings are unavailable");
-  if (remoteServer) throw new Error(REMOTE_MODE_ERROR);
   const found = resolvedCloudflared();
   if (!found.path) return null;
   const version = await cloudflaredVersion((args, timeout) =>
@@ -1383,7 +1245,6 @@ ipcMain.handle("team-server:cloudflared", async (event) => {
  */
 ipcMain.handle("team-server:cloudflared-info", (event) => {
   assertTrustedPickerSender(event, "Team server settings are unavailable");
-  if (remoteServer) throw new Error(REMOTE_MODE_ERROR);
   const supported = CLOUDFLARED_ASSETS[`${process.platform}-${process.arch}`];
   return {
     downloadVersion: supported ? CLOUDFLARED_VERSION : null,
@@ -1401,7 +1262,6 @@ let cloudflaredDownload = null;
  */
 ipcMain.handle("team-server:cloudflared-download", (event) => {
   assertTrustedPickerSender(event, "Team server settings are unavailable");
-  if (remoteServer) return { ok: false, error: REMOTE_MODE_ERROR };
   const sender = event.sender;
   cloudflaredDownload ??= downloadAndStoreCloudflared({
     userDataDir: app.getPath("userData"),
@@ -1423,72 +1283,24 @@ ipcMain.handle("team-server:cloudflared-download", (event) => {
 
 async function bootstrap() {
   startupTrace("bootstrap started");
+  if (process.env.AGENT_DECK_REMOTE_SERVER_URL) {
+    console.warn(
+      "AGENT_DECK_REMOTE_SERVER_URL ignored: remote attach was removed; configure a team server in Settings",
+    );
+  }
   try {
-    remoteServer = remoteServerOrigin(process.env.AGENT_DECK_REMOTE_SERVER_URL);
-    if (remoteServer) {
-      // Remote attach: no owned server, no loopback port. The renderer and every
-      // control-plane call go to the published origin through Access. The window
-      // opens straight away so the user can sign in; the health check runs once
-      // the app page has loaded (createWindow's did-navigate handler).
-      controlPlaneOrigin = remoteServer;
-      startupTrace("remote server configured");
-      // ade-1vjx: with AGENT_DECK_CLOUDFLARED set, sign in through cloudflared
-      // (system browser) and present the token as `cf-access-token` on every
-      // request and WebSocket upgrade to the origin, so Access never shows its
-      // login inside the window. Unset keeps the in-window login. SRV-16c:
-      // only the variable counts here, not the resolved or downloaded one.
-      const remoteCloudflared = process.env.AGENT_DECK_CLOUDFLARED;
-      const run = remoteCloudflared
-        ? (args, timeout, signal) => execCloudflared(remoteCloudflared, args, timeout, signal)
-        : null;
-      if (run) {
-        const { host } = new URL(remoteServer);
-        // ponytail: token fixed for the run; mid-run expiry (168 h) needs an app restart.
-        const attach = (accessToken) => {
-          // One listener on every URL (Electron keeps only the last one per
-          // session): it adds the token for the Access host and strips it elsewhere.
-          session.defaultSession.webRequest.onBeforeSendHeaders(
-            { urls: ["<all_urls>"] },
-            (details, callback) =>
-              callback({
-                requestHeaders: accessTokenHeaders(
-                  details.url,
-                  details.requestHeaders,
-                  host,
-                  accessToken,
-                ),
-              }),
-          );
-          startupTrace("cloudflared access token attached");
-        };
-        try {
-          attach(await cloudflaredToken(run, remoteServer));
-        } catch {
-          // No cached token, or it expired: the window opens on sign-in.html and
-          // `access login` (system browser) runs only when its button is clicked.
-          startupTrace("cloudflared sign-in page required");
-          remoteSignIn = createRemoteSignIn({
-            login: (signal) => cloudflaredLogin(run, remoteServer, signal),
-            attach: (accessToken) => {
-              attach(accessToken);
-              remoteSignIn = null;
-              if (mainWindow && !mainWindow.isDestroyed()) {
-                void mainWindow.loadURL(process.env.AGENT_DECK_RENDERER_URL || `${remoteServer}/`);
-              }
-            },
-          });
-        }
-      }
-    } else {
-      // SRV-16a: the Settings value, or the env dev override (an invalid one fails startup).
-      applyTeamServerSetting();
-      const configuredPort = externalServerPort();
-      serverPort = configuredPort ?? (await startServer());
-      controlPlaneOrigin = `http://127.0.0.1:${serverPort}`;
-      startupTrace("server port acquired");
-      await waitForHealth(serverPort);
-      startupTrace("server health confirmed");
-    }
+    // Only a loopback renderer (the Vite dev server) may replace the backend's build.
+    rendererUrlOverride = process.env.AGENT_DECK_RENDERER_URL
+      ? loopbackHttpUrl(process.env.AGENT_DECK_RENDERER_URL, "AGENT_DECK_RENDERER_URL").href
+      : null;
+    // SRV-16a: the Settings value, or the env dev override (an invalid one fails startup).
+    applyTeamServerSetting();
+    const configuredPort = externalServerPort();
+    serverPort = configuredPort ?? (await startServer());
+    controlPlaneOrigin = `http://127.0.0.1:${serverPort}`;
+    startupTrace("server port acquired");
+    await waitForHealth(serverPort);
+    startupTrace("server health confirmed");
   } catch (error) {
     dialog.showErrorBox("agent-deck failed to start", String(error));
     app.quit();
@@ -1502,7 +1314,7 @@ async function bootstrap() {
   Menu.setApplicationMenu(buildAppMenu());
   startupTrace("creating main window");
   createWindow();
-  if (!remoteServer) void refreshDesktopAttention();
+  void refreshDesktopAttention();
   startupTrace("main window created");
 }
 
@@ -1641,8 +1453,7 @@ app.on("before-quit", (event) => {
     mainWindow &&
     !mainWindow.isDestroyed() &&
     !mainWindow.webContents.isCrashed() &&
-    !draftsFlushedForQuit &&
-    !onSignInPage()
+    !draftsFlushedForQuit
   ) {
     event.preventDefault();
     flushDraftsBeforeQuit();
@@ -1653,7 +1464,6 @@ app.on("before-quit", (event) => {
 
 app.on("will-quit", () => {
   // Kill a pending `cloudflared access login` so it does not outlive the app.
-  void remoteSignIn?.("cancel");
   sharedServer?.cancelSignIn();
   stopServer();
 });

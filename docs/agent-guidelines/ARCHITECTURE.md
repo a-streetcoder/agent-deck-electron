@@ -13,7 +13,7 @@ Keep boundaries explicit:
 
 ## Packages
 
-- `apps/desktop`: the Electron shell and preload bridge; it hosts the web UI and starts the backend, or attaches to a remote server when `AGENT_DECK_REMOTE_SERVER_URL` is set.
+- `apps/desktop`: the Electron shell and preload bridge; it hosts the web UI and starts the local backend (a team server is a Settings entry reached from main, never the window's origin).
 - `apps/server`: the Fastify backend: sessions, Loops, subagent runs, skills, MCP definitions, checkpoints and the HTTP/WebSocket API.
 - `apps/web`: the React/Vite renderer.
 - `packages/pi-host`: Pi process launch (`launchPlan.ts`), JSONL RPC framing and the generated bridge extension (`bridge.ts`).

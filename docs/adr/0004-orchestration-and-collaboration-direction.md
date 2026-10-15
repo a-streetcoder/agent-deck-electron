@@ -14,7 +14,7 @@
 Two things happened since the July vision was written.
 
 1. The shared server POC (`poc/shared-server`, [`remote-server-poc.md`](../remote-server-poc.md),
-   [handover](../handover-shared-server-poc.md)) was proven end to end on 2026-10-14: two people,
+   [handover](../archive/handover-shared-server-poc.md)) was proven end to end on 2026-10-14: two people,
    their own Cloudflare Access identity and provider sign-ins, agents executing on the VM,
    sessions visible to both. It is where the last twenty commits and the open SRV tickets are.
    ADR 0003 admitted it as an opt-in exception to "agents run on the owner's machine"; the

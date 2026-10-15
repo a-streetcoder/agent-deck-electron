@@ -6,8 +6,8 @@ before (loopback only, no identity).
 
 The Agent Deck **server** runs on a Linux VM. `cloudflared` on the same VM publishes it as
 `https://deck.moretti.cc` behind **Cloudflare Access** with GitHub as the identity provider.
-Ale and Andrea reach it from a browser or from the Electron shell; each request carries the
-email Cloudflare verified, the server records who created each session and who sent each
+Ale and Andrea reach it from a browser; the desktop app stays local Agent Deck and links to it
+as a team server (**Settings > Team server**). Each request carries the email Cloudflare verified, the server records who created each session and who sent each
 prompt, and the UI shows it.
 
 ## Environment variables
@@ -23,22 +23,25 @@ Server (`apps/server`):
 | `AGENT_DECK_PROJECT_ROOT`           | `/home/deck`                                   | Root that `GET /fs/dirs` may browse (default: the server user's home).                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `AGENT_DECK_HOST`                   | `0.0.0.0`                                      | Bind address (default `127.0.0.1`). Only loopback values (`::1` and `localhost` bind as `127.0.0.1`) or the wildcards `0.0.0.0` / `::` (dual-stack in Node) since the Pi tool bridge always calls `127.0.0.1`; a wildcard refuses to start unless `AGENT_DECK_TRUSTED_PROXY=cloudflare` or `AGENT_DECK_ALLOW_UNAUTHENTICATED_HOST=1` (local smoke tests only). A non-empty `AGENT_DECK_TRUSTED_PROXY` other than exactly `cloudflare` refuses to start (a typo would turn authentication off). |
 | `AGENT_DECK_CF_ACCESS_JWKS_URL`     | _(unset)_                                      | Override of the JWKS URL. Tests and staging only.                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `AGENT_DECK_DESKTOP_RECOVERY_TOKEN` | _(any secret)_                                 | Pre-existing. Set the same value on the VM and in the desktop launcher so the shell's "reveal" calls are accepted.                                                                                                                                                                                                                                                                                                                                                                             |
 | `AGENT_DECK_OPERATOR_EMAIL`         | `operator@example.com`                         | The Access email whose sessions keep using the shared `~/.pi/agent` (see [Credentials](#credentials)). Unset: every user, the operator included, gets an own agent dir.                                                                                                                                                                                                                                                                                                                        |
 | `AGENT_DECK_GITHUB_CLIENT_ID`       | `Ov23li...`                                    | GitHub OAuth App client id for per-user GitHub connections (see [GitHub](#github-connection)). Unset: connecting answers 409 "GitHub app not configured".                                                                                                                                                                                                                                                                                                                                      |
 
 Desktop (`apps/desktop/main.js`):
 
-| Variable                            | Example                                        | Meaning                                                                                                                                                                                                                     |
-| ----------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AGENT_DECK_REMOTE_SERVER_URL`      | `https://deck.moretti.cc`                      | Attach to this origin: spawn no server, load the renderer from it, treat it as the control plane.                                                                                                                           |
-| `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`  | `streetcoding-collective.cloudflareaccess.com` | Optional. Pins the in-window login round-trip to this team's Access pages (else any `*.cloudflareaccess.com`), and the team a team server sign-in may use without a check against it (see [Desktop login](#desktop-login)). |
-| `AGENT_DECK_DESKTOP_RECOVERY_TOKEN` | _(same as the VM)_                             | Optional. Honored instead of a random per-launch token.                                                                                                                                                                     |
-| `AGENT_DECK_SHARED_SERVER_URL`      | `https://deck.moretti.cc`                      | Dev override of **Settings > Team server** (local mode). Set, it wins over the stored setting and the screen says so.                                                                                                       |
-| `AGENT_DECK_CLOUDFLARED`            | `C:\Tools\cloudflared.exe`                     | Dev override (wins over the saved one): the cloudflared used to sign in. When unset it is found or downloaded (see Desktop login below).                                                                                    |
+| Variable                            | Example                                        | Meaning                                                                                                                                                                      |
+| ----------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`  | `streetcoding-collective.cloudflareaccess.com` | Optional. The Access team a team server sign-in may use without a check against it (see [Desktop login](#desktop-login)).                                                    |
+| `AGENT_DECK_DESKTOP_RECOVERY_TOKEN` | _(any secret)_                                 | Optional. Honored instead of a random per-launch token; needed only when the backend named by `AGENT_DECK_SERVER_URL` was started by hand, so both sides get the same value. |
+| `AGENT_DECK_SHARED_SERVER_URL`      | `https://deck.moretti.cc`                      | Dev override of **Settings > Team server** (local mode). Set, it wins over the stored setting and the screen says so.                                                        |
+| `AGENT_DECK_CLOUDFLARED`            | `C:\Tools\cloudflared.exe`                     | Dev override (wins over the saved one): the cloudflared used to sign in. When unset it is found or downloaded (see Desktop login below).                                     |
 
-`AGENT_DECK_SERVER_URL` (loopback attach, used by `pnpm dev` and the SSH-tunnel launcher) is
-unchanged and mutually exclusive with `AGENT_DECK_REMOTE_SERVER_URL`.
+`AGENT_DECK_SERVER_URL` (loopback attach, used by `pnpm dev`) is unchanged. The desktop no
+longer attaches to a remote origin (SRV-16d removed that mode and its launchers): it always runs
+its own local backend, and people without the app use the browser at the public origin.
+`AGENT_DECK_SERVER_URL` must name a backend running on this machine: a tunnelled remote backend
+would hand its paths to the local shell (open, reveal, trash). It and `AGENT_DECK_RENDERER_URL`
+must be loopback `http://` URLs with an explicit port, otherwise startup fails; a leftover
+`AGENT_DECK_REMOTE_SERVER_URL` is ignored with a console warning.
 
 ## Server surface
 
@@ -214,7 +217,6 @@ Environment=AGENT_DECK_TRUSTED_PROXY=cloudflare
 Environment=AGENT_DECK_CF_ACCESS_TEAM_DOMAIN=streetcoding-collective.cloudflareaccess.com
 Environment=AGENT_DECK_CF_ACCESS_AUD=<aud tag from the Access application>
 Environment=AGENT_DECK_PUBLIC_ORIGIN=https://deck.moretti.cc
-Environment=AGENT_DECK_DESKTOP_RECOVERY_TOKEN=<shared secret>
 ExecStart=/usr/bin/env pnpm --filter @agent-deck/server dev
 Restart=on-failure
 RestartSec=3
@@ -275,28 +277,16 @@ and from a signed-in browser: `https://deck.moretti.cc/me` shows your identity.
 
 ## Clients
 
-- **Browser**: open `https://deck.moretti.cc`, sign in with GitHub. The served web build works
-  as is; the sidebar shows "Signed in as", session rows show the creator's initials, user
-  messages show their author.
-- **Desktop (Windows)**: double-click `win\Agent Deck Remote (cloudflare).cmd`. It sets
-  `AGENT_DECK_REMOTE_SERVER_URL=https://deck.moretti.cc` and starts Electron from
-  `apps/desktop`; extra arguments (for example `--remote-debugging-port=9222`) pass through to
-  Electron. Startup order in remote mode: the window opens on the remote origin at once (no
-  pre-window health wait, since Access answers a login redirect, never 200, before a cookie
-  exists); the first launch shows the Access login inside the window (allowed navigation: the
-  app origin, the team's `cloudflareaccess.com` pages, `github.com`); once the main frame has
-  loaded a page on the app origin the shell runs the session-aware `/health` check and the
-  badge refresh, and only a failure at that point shows the "failed to start" dialog. Every
-  other link still opens in the system browser. To enable "Reveal …" actions that need the
-  recovery token, set `AGENT_DECK_DESKTOP_RECOVERY_TOKEN` in the launcher to the VM's value.
-  **Folders are chosen on the server**: the preload reports `remote: true`, so the native
-  folder/file pickers are disabled (they would pick paths on your PC) and "Add project" opens
-  the in-popover server folder browser (`/fs/dirs`) plus the type-a-path input, exactly like a
-  browser. The same server folder browser is reachable from every add-project entry: the
-  toolbar project picker, the Projects screen's "Add Projects…" dialog, and the "Add project…"
-  button next to the new-session Project dropdown (which also selects the new project for the
-  draft). Skill-folder and prompt-file imports fall back to their typed-path inputs likewise.
-- **Desktop in local mode with a shared server** (SRV-12b, SRV-16a): open **Settings > Team
+- **Browser** (the client for people without the desktop app): open `https://deck.moretti.cc`,
+  sign in with GitHub. The served web build works as is; the sidebar shows "Signed in as",
+  session rows show the creator's initials, user messages show their author. **Folders are
+  chosen on the server**: without the desktop bridge there are no native pickers, so "Add
+  project" opens the in-popover server folder browser (`/fs/dirs`) plus the type-a-path input.
+  The same server folder browser is reachable from every add-project entry: the toolbar project
+  picker, the Projects screen's "Add Projects…" dialog, and the "Add project…" button next to the
+  new-session Project dropdown (which also selects the new project for the draft). Skill-folder
+  and prompt-file imports fall back to their typed-path inputs likewise.
+- **Desktop with a team server** (SRV-12b, SRV-16a): open **Settings > Team
   server**, enter the server address (`https://deck.moretti.cc`) and Save. Only a bare https
   origin is accepted (no path, query, credentials or port 0; plain host name labels, an IPv4 or
   a bracketed IPv6 literal); an empty field clears it. The value is stored per machine in
@@ -320,11 +310,9 @@ and from a signed-in browser: `https://deck.moretti.cc/me` shows your identity.
   server set, the Projects screen offers **Make shared** on each local project (see
   [Make shared from the desktop](#make-shared-from-the-desktop)). Not configured, the app looks
   exactly like local Agent Deck (the setting is reached from Settings or the command palette).
-  In remote mode none of it is shown, and main refuses every `team-server:*` call (that page
-  comes from the server).
-- **Desktop over SSH** (`win\Agent Deck Remote (dev VM).cmd`) still works, but through the
-  tunnel the server sees loopback requests with no assertion, so with the proxy mode on it
-  answers 401. Use one mode or the other on the VM.
+  The desktop never loads a page from the team server: its window is always served by its own
+  local backend (SRV-16d removed the remote-attach mode, `win\Agent Deck Remote (cloudflare).cmd`
+  and the SSH-tunnel `win\Agent Deck Remote (dev VM).cmd`).
 
 ## Operations
 
@@ -336,12 +324,10 @@ generic setup above in two places: the checkout is `~/ai-playground/a-streetcodi
 
 - **Browser**: `https://deck.moretti.cc`, Cloudflare Access with GitHub login, 7-day session.
   `/me` shows your identity.
-- **Desktop**: `win\Agent Deck Remote (cloudflare).cmd` (Electron with
-  `AGENT_DECK_REMOTE_SERVER_URL=https://deck.moretti.cc` and `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`;
-  extra arguments pass through, for example `--remote-debugging-port=9222`). The first run shows
-  the Access/GitHub login inside the window. GitHub passkey 2FA returns 404 there; use an
-  authenticator app or SMS until the system-browser login lands (ticket ade-1vjx).
-- In remote mode the UI is the same, plus "Signed in as <github email>" under the logo, an
+- **Desktop**: the local app with **Settings > Team server** set to `https://deck.moretti.cc`
+  and signed in (see [Desktop login](#desktop-login)); Make shared, the move, the mirror and
+  bring back reach the VM from there.
+- In the browser the UI is the same, plus "Signed in as <github email>" under the logo, an
   initials chip on session rows, an author label above user messages, and folder pickers that
   browse the VM (no native dialogs).
 - **Projects** live on the VM in `/srv/streetcoding` as server-owned git clones (today
@@ -529,13 +515,9 @@ ever rendered inside Electron, and the Access token stays in Electron main.
 
 - **Renewal**: an expired token makes `/me` and every call answer "sign in required"; the
   status turns `needsSignIn` and a Sign in renews it. No exchange endpoint is needed, so the
-  server-minted token design in [handover-shared-server-poc.md](handover-shared-server-poc.md)
+  server-minted token design in [handover-shared-server-poc.md](archive/handover-shared-server-poc.md)
   stays shelved.
-- **Remote mode** (until SRV-16d removes it): with `AGENT_DECK_CLOUDFLARED` set, remote-mode
-  `bootstrap()` reads the cached token once per launch and adds `cf-access-token` to every
-  `https://` and `wss://` request to the remote host; without one the window opens on
-  `apps/desktop/sign-in.html` and only its button runs `access login`. Mid-run expiry is not
-  handled there: restart the app.
+
 - **cloudflared** (SRV-16c, `apps/desktop/cloudflared-resolver.js`): main uses the first that
   exists of `AGENT_DECK_CLOUDFLARED` (dev override; it wins like `AGENT_DECK_SHARED_SERVER_URL`,
   and when it points at a missing file the next source is used and the screen says
@@ -545,8 +527,7 @@ ever rendered inside Electron, and the Access token stays in Electron main.
   `%ProgramFiles%\cloudflared`, `%LOCALAPPDATA%\Microsoft\WinGet\Links`; macOS:
   `/opt/homebrew/bin`, `/usr/local/bin`; Linux: `/usr/local/bin`, `/usr/bin`). The shared-server client
   resolves it again on every call, so a cloudflared installed or downloaded while the app runs
-  is used without a restart. Remote-attach mode uses only `AGENT_DECK_CLOUDFLARED` (unset keeps
-  the in-window login). **Settings > Team server** shows the one in use (path, source,
+  is used without a restart. **Settings > Team server** shows the one in use (path, source,
   `cloudflared --version`); with none it offers **Download cloudflared**, which fetches the
   pinned release **2026.10.0** over https from
   `github.com/cloudflare/cloudflared/releases/download/<version>/<asset>` (Windows x64, macOS
@@ -591,9 +572,10 @@ ever rendered inside Electron, and the Access token stays in Electron main.
 `KillMode=control-group`. The drop-in `agent-deck-server.service.d/remote.conf` sets
 `AGENT_DECK_TRUSTED_PROXY=cloudflare`, `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`,
 `AGENT_DECK_CF_ACCESS_AUD`, `AGENT_DECK_PUBLIC_ORIGIN=https://deck.moretti.cc` and
-`AGENT_DECK_PROJECT_ROOT=/srv/streetcoding` (and, once ticket ade-gloc is done,
-`AGENT_DECK_DESKTOP_RECOVERY_TOKEN`; once the GitHub OAuth App exists,
+`AGENT_DECK_PROJECT_ROOT=/srv/streetcoding` (and, once the GitHub OAuth App exists,
 `AGENT_DECK_GITHUB_CLIENT_ID`). The tunnel runs as `cloudflared-agent-deck.service`.
+The drop-in still sets `AGENT_DECK_DESKTOP_RECOVERY_TOKEN` (ade-gloc, for the removed remote
+attach); the operator should unset it at the 17c cutover.
 
 ## Origins
 
@@ -1134,8 +1116,7 @@ desktop's resolution unchanged. Also:
 
 Everything else is the operator's: the variables in [Environment variables](#environment-variables)
 (`AGENT_DECK_TRUSTED_PROXY` and the Access settings, `AGENT_DECK_PUBLIC_ORIGIN`,
-`AGENT_DECK_PROJECT_ROOT`, `AGENT_DECK_OPERATOR_EMAIL`, `AGENT_DECK_GITHUB_CLIENT_ID`,
-`AGENT_DECK_DESKTOP_RECOVERY_TOKEN`). With `AGENT_DECK_TRUSTED_PROXY` unset the container is a
+`AGENT_DECK_PROJECT_ROOT`, `AGENT_DECK_OPERATOR_EMAIL`, `AGENT_DECK_GITHUB_CLIENT_ID`). With `AGENT_DECK_TRUSTED_PROXY` unset the container is a
 single-user local server with no authentication.
 
 Data: everything that must survive a container replace is in `/data`. Mount a named volume there
@@ -1214,16 +1195,15 @@ What any other way of running the image must keep (`deploy/compose.yaml`, see
   VM runs as the service's Unix user with that user's keys and tokens. Attribution is a label,
   not isolation: either person can act in the other's session, and the audit trail is the
   label plus Access logs.
-- **Desktop shell.** With `AGENT_DECK_REMOTE_SERVER_URL` set, the https origin is the
-  privileged control plane: IPC handlers accept only frames from that origin (or the Vite dev
-  origin), the in-app browser and preview guests may never navigate to it, and the shell's own
-  control-plane calls go through Electron's session so the Access cookie, not a header, is the
-  credential.
-- **Remote-mode local shell actions are refused** (ade-q0pz): with
-  `AGENT_DECK_REMOTE_SERVER_URL` set, "Open file" and "Reveal in folder" for agents, prompts and
-  MCP configs, revealing subagent or Loop artifacts and a retained Loop worktree, and classifying
-  dropped files all fail before any path reaches the OS, because the path would come from the
-  server (a UNC path would open an SMB connection on Windows).
+- **Desktop shell.** The privileged control plane is always the shell's own loopback backend
+  (SRV-16d removed the remote-attach mode). IPC handlers accept only main-frame calls from the
+  local renderer origin: the backend's, or the Vite dev server's when `AGENT_DECK_RENDERER_URL`
+  is set. `AGENT_DECK_RENDERER_URL` and `AGENT_DECK_SERVER_URL` must be loopback `http://` URLs
+  with an explicit port and are refused at startup otherwise, and the main window navigates only
+  within the renderer origin (any other http(s) link opens in the system browser), so no page
+  served by the shared server becomes the trusted renderer. The team server is reached by main
+  alone, with the Access token in main (see
+  [Make shared from the desktop](#make-shared-from-the-desktop)).
 - **`POST /sessions/:id/share/abort` is refused on the shared server** (409 `share_refused`, as
   preflight and share): it is a device route; a return has its own owner-checked abort.
 - **Hooks are off for shared-server pushes and transfers** (ade-q0pz): Push and Commit and
