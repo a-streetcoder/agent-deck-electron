@@ -119,8 +119,15 @@ export function awaitSubagentRuns(
     function onAbort(): void {
       finish(true);
     }
+    // A run this process launched counts as finished only once its scope has closed
+    // too: its terminal status lands first, while the child Pi is still alive, and a
+    // continuation started in between would resume the same session file twice.
+    const closing = new Set<string>();
     const check = (): void => {
-      if (!finished && runIds.every((id) => !awaitedRunActive(deps.read(id)))) finish(false);
+      if (finished) return;
+      if (runIds.every((id) => !closing.has(id) && !awaitedRunActive(deps.read(id)))) {
+        finish(false);
+      }
     };
     const unsubscribe = deps.subscribe((event) => {
       if (
@@ -130,11 +137,20 @@ export function awaitSubagentRuns(
         check();
       }
     });
+    for (const id of wanted) {
+      const settled = deps.settled?.(id);
+      if (!settled) continue;
+      closing.add(id);
+      const closed = (): void => {
+        closing.delete(id);
+        check();
+      };
+      settled.then(closed, closed);
+    }
     check();
     if (finished) return;
     timer = setTimeout(() => finish(true), options.timeoutMs);
     options.signal?.addEventListener("abort", onAbort, { once: true });
-    for (const id of wanted) deps.settled?.(id)?.then(check, check);
   });
 }
 

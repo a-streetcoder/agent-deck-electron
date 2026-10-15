@@ -114,4 +114,42 @@ describe("awaitSubagentRuns", () => {
     settle();
     expect((await pending).results[0]?.status).toBe("failed");
   });
+
+  it("waits for an in-process run's scope close after its terminal status", async () => {
+    const log = stub({ a: run("a", "running"), b: run("b", "running") });
+    let close!: () => void;
+    const closed = new Promise<void>((resolve) => (close = resolve));
+    let resolved = false;
+    const pending = awaitSubagentRuns(
+      ["a", "b"],
+      // a ran in this process; b came from another one and stays status-only.
+      { ...log.deps, settled: (id) => (id === "a" ? closed : undefined) },
+      { timeoutMs: 5_000 },
+    ).then((outcome) => {
+      resolved = true;
+      return outcome;
+    });
+    log.store.a = run("a", "completed");
+    log.store.b = run("b", "completed");
+    log.emit(finished("a"));
+    log.emit(finished("b"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(resolved).toBe(false);
+    close();
+    const outcome = await pending;
+    expect(outcome.timedOut).toBe(false);
+    expect(outcome.results.map((r) => r.status)).toEqual(["completed", "completed"]);
+  });
+
+  it("finishes a status-only run without an in-process settle", async () => {
+    const log = stub({ a: run("a", "running") });
+    const pending = awaitSubagentRuns(
+      ["a"],
+      { ...log.deps, settled: () => undefined },
+      { timeoutMs: 5_000 },
+    );
+    log.store.a = run("a", "stopped");
+    log.emit(finished("a"));
+    expect((await pending).timedOut).toBe(false);
+  });
 });

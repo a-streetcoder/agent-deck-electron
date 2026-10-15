@@ -208,6 +208,49 @@ describe("SessionManager managed_subagent continuation eligibility", () => {
     expect(runChildAgent).toHaveBeenCalledTimes(2);
   });
 
+  it("releases the claim at acceptance, so a second continuation need not wait for teardown", async () => {
+    const { manager, parentId, run, runChildAgent, store } = setup();
+    const teardowns: (() => void)[] = [];
+    // A child that commits its turn, finishes, and only then tears down (delayed).
+    runChildAgent.mockImplementation(
+      (_task, _agent, _policy, _overrides, options: { onAccepted: (id: string) => void }) => {
+        store.update(run.id, { status: "starting", completedAt: undefined });
+        options.onAccepted(run.id);
+        store.update(run.id, { status: "completed", completedAt: new Date().toISOString() });
+        return new Promise((resolve) =>
+          teardowns.push(() => resolve({ runId: run.id, text: "done" })),
+        );
+      },
+    );
+    const first = await manager.spawnSubagent(parentId, "first follow-up", {
+      continueSubagentId: run.id,
+    });
+    // Terminal, scope still open: the next continuation is accepted, not "already being continued".
+    const second = await manager.spawnSubagent(parentId, "second follow-up", {
+      continueSubagentId: run.id,
+    });
+    expect(second.runId).toBe(run.id);
+    expect(runChildAgent).toHaveBeenCalledTimes(2);
+    // The first child's late teardown cannot release the claim of a third, still launching one.
+    let releaseThird!: () => void;
+    runChildAgent.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseThird = () => resolve({ runId: run.id, text: "third" });
+        }),
+    );
+    const third = manager.runManagedSubagent(parentId, "third follow-up", undefined, run.id);
+    teardowns[0]!();
+    await first.done;
+    await expect(
+      manager.runManagedSubagent(parentId, "duplicate", undefined, run.id),
+    ).rejects.toThrow(/already being continued/);
+    releaseThird();
+    await third;
+    teardowns[1]!();
+    await second.done;
+  });
+
   it("releases a continuation claim exactly once after child launch failure", async () => {
     const { manager, parentId, run, runChildAgent } = setup();
     runChildAgent.mockRejectedValueOnce(new Error("spawn failed"));
