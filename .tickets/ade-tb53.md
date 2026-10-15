@@ -1,6 +1,6 @@
 ---
 id: ade-tb53
-status: open
+status: in_progress
 deps: [ade-229e]
 links: []
 created: 2026-10-15T21:53:37Z
@@ -28,3 +28,7 @@ docker compose config validates in CI (workflow step); .env.example complete; ru
 **2026-10-15T22:32:21Z**
 
 2026-10-15 more constraints from the 17a contrarian: Compose needs a tmpfs /tmp (mkdtemp is used for bridge extensions, prompt files, the no-hooks dir and skill merges) if the rootfs is read-only; cap_drop ALL + no-new-privileges; choose network namespace sharing (network_mode: service:agent-deck) or host networking for the cloudflared sidecar (a proxy over a Docker network gets 401); ownerless/local-mode sessions need a git identity (user.name/email env or gitconfig in /data/home) and openssh-client for git@ remotes; a typo in AGENT_DECK_TRUSTED_PROXY silently disables authentication: the .env.example must spell it out.
+
+**2026-10-15T22:47:57Z**
+
+2026-10-15 started; worktree E:\agent-deck-wt\ade-tb53 (wt/ade-tb53).

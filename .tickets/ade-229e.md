@@ -1,6 +1,6 @@
 ---
 id: ade-229e
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-15T21:53:37Z
@@ -52,3 +52,7 @@ docker build succeeds in CI; the container answers /health 200 and GET /projects
 **2026-10-15T22:44:10Z**
 
 2026-10-15 verification (review57): previous blockers resolved; one should-fix left (::1 accepted by resolveBindHost while the Pi bridge and HEALTHCHECK use 127.0.0.1). Round 3 sent (normalize ::1/localhost to 127.0.0.1). Merge after it without another GPT pass.
+
+**2026-10-15T22:47:57Z**
+
+2026-10-15 round 3 (cf205e5: ::1/localhost bind 127.0.0.1) landed; squashed 574f920, merged 8d74f98; typecheck + bindHost + bridge tests green; VM restarted on the merge (health 200). CLOSED. The GHCR workflow has not run yet: it runs on the first push (PR to main or a v* tag), which is the owner's. Follow-ups: publish job rebuilds from cache rather than pushing the smoked bytes; AGENT_DECK_ALLOW_UNAUTHENTICATED_HOST usable in production (docs only); AGENT_DECK_HOST=:: fails loudly where IPv6 is off.
