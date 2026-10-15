@@ -54,3 +54,7 @@ All gates green or failures documented as environmental; review findings disposi
 **2026-10-15T19:10:48Z**
 
 2026-10-15 review45 (GPT, risk-focused) result: NOT READY, 2 blockers (remote-mode resources:openFile authorized by the server catalog; transfer worktree add/reset run with hooks enabled) + 5 should-fix (share/abort served on the shared server; cf-access-token not stripped on cross-host redirects; Git-screen pushes with hooks and raw errors; token redaction before JSON.parse bypassed by \u escapes; SECRET_KEY exact-name only). All seven verified against HEAD and accepted; fix ticket ade-q0pz drafted for approval. No impersonation or unauthenticated bypass found in the reviewed paths.
+
+**2026-10-15T20:29:27Z**
+
+2026-10-15 review45 findings dispositioned by ade-q0pz (merged 5d48fa6, deployed); GPT verdict after six rounds (review52): READY TO PUSH poc/shared-server, relying on the verified rounds. Everything this machine can run is green at 5d48fa6 (typecheck, format, eslint, design-system, 7 real-Pi suites, touched unit files). Still owner-only: full unit suites and focused Playwright on a machine with memory (a reviewer's accidental full server run here showed two return timeouts and two Windows symlink-permission failures, believed environmental), the two-user smoke with Andrea (SRV-03), the live checks listed on ade-q0pz and ade-aier, then the push go.

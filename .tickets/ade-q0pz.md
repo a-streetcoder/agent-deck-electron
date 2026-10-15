@@ -1,6 +1,6 @@
 ---
 id: ade-q0pz
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-15T19:10:48Z
@@ -55,3 +55,7 @@ Each of the seven items has a regression test that fails on HEAD and passes afte
 **2026-10-15T20:21:11Z**
 
 2026-10-15 review51 on 5e4038d: no blocker; two should-fix (merge-only attributes missed by the path-limited log without -m; backslash ends an unquoted connection-string value). Round 6 sent; after it the ticket merges and any further reviewer item becomes a follow-up note.
+
+**2026-10-15T20:29:27Z**
+
+2026-10-15 round 6 (fe1c36c: -m on the attribute scan, backslashes in connection strings) verified by GPT (review52): READY TO PUSH. Squashed as a9be175, merged 5d48fa6 (--no-ff), typecheck + design-system + desktop node tests + sessionMove/sessionReturn/git/sessionMirror/analytics/sessionTransfer + SessionShare green in the main checkout, deployed to the VM (health 200). CLOSED. Follow-ups (non-ticketed): preload still exposes the refused IPC methods in remote mode (web shows the generic unavailable message); unquoted connection-string values stop at an embedded quote; the return's own LFS check sees tracked files and history only (the export step covers untracked); redaction covers the injected token and the redactSecrets patterns only. Owner live checks: Access login and cross-host redirect without cf-access-token in a packaged remote-mode build; shared-server push, release and failed-release cleanup with connected and tokenless users; real-LFS conversation-only move, snapshot and return refusals; non-LFS move/return round trip with repository hooks planted.
