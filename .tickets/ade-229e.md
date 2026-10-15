@@ -40,3 +40,7 @@ docker build succeeds in CI; the container answers /health 200 and GET /projects
 **2026-10-15T22:29:52Z**
 
 2026-10-15 fix round landed as ac7c61e: image listens on loopback (override only for smoke tests, documented), rustup-init 1.29.1 pinned with sha256; VM rebuild + smoke green (health 200 with the override; without it the published port is unreachable and HEALTHCHECK healthy). Waiting for the contrarian before merge.
+
+**2026-10-15T22:32:20Z**
+
+2026-10-15 contrarian: blockers = 0.0.0.0 default (already fixed in ac7c61e) and the home outside the volume (transcripts, settings, skills, gh/git config lost on replacement; per-user symlinked dirs recreated empty); recommended = home at /data/home via useradd, ripgrep/fd-find in the image (Pi downloads unpinned binaries otherwise), smoke before publish in CI, no latest for prereleases, AGENT_DECK_APP_VERSION build arg, .dockerignore nested patterns, startup refusal of a non-loopback host without the trusted proxy, docs. Round 2 sent.

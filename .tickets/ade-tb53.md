@@ -24,3 +24,7 @@ docker compose config validates in CI (workflow step); .env.example complete; ru
 **2026-10-15T22:21:25Z**
 
 2026-10-15 constraints from 17a (binding): the server trusts the Cloudflare proxy only from loopback, so the cloudflared sidecar must run with network_mode: service:agent-deck (shared network namespace) and point at 127.0.0.1:4200; the image listens on AGENT_DECK_HOST=0.0.0.0 by default: Compose must NOT publish the port, or publish on 127.0.0.1 only; Pi credentials (~/.pi/agent), the gh login and git config live in /home/agentdeck: mount a second named volume for the home (or set the relevant *_HOME variables into /data) so they survive container replacement; a fresh --tmpfs /data must be uid=1000,gid=1000 (named volumes inherit the owner automatically); image is linux/amd64 only.
+
+**2026-10-15T22:32:21Z**
+
+2026-10-15 more constraints from the 17a contrarian: Compose needs a tmpfs /tmp (mkdtemp is used for bridge extensions, prompt files, the no-hooks dir and skill merges) if the rootfs is read-only; cap_drop ALL + no-new-privileges; choose network namespace sharing (network_mode: service:agent-deck) or host networking for the cloudflared sidecar (a proxy over a Docker network gets 401); ownerless/local-mode sessions need a git identity (user.name/email env or gitconfig in /data/home) and openssh-client for git@ remotes; a typo in AGENT_DECK_TRUSTED_PROXY silently disables authentication: the .env.example must spell it out.
