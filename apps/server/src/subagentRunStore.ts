@@ -13,11 +13,6 @@ import {
 } from "node:fs";
 import path from "node:path";
 import {
-  clearQuarantineMarker,
-  hasQuarantineMarker,
-  writeQuarantineMarker,
-} from "./storeQuarantine.ts";
-import {
   diffSubagentRuns,
   emptyTranscript,
   subagentRunResult,
@@ -445,7 +440,7 @@ export class SubagentRunStore {
     return this.state.runs.map((run) => toPublicSubagentRun(run, options));
   }
 
-  /** True when the store file was corrupt at boot and renamed aside (history unknown). */
+  /** True when the store file was missing or corrupt at boot (history unknown, D8). */
   quarantined(): boolean {
     return this.storeQuarantined;
   }
@@ -1217,7 +1212,6 @@ export class SubagentRunStore {
       closeSync(fd);
       fd = undefined;
       renameSync(temp, this.filePath);
-      clearQuarantineMarker(this.filePath);
       // The rename has already replaced the authoritative file. Retain that
       // candidate in memory even if the following directory fsync reports a
       // durability failure, so a later write cannot rebuild from stale state
@@ -1273,14 +1267,13 @@ export class SubagentRunStore {
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        // Missing after a quarantine boot: still unknown history (no removals, no orphan cleanup).
-        this.storeQuarantined = hasQuarantineMarker(this.filePath);
+        // D8: as for loop-runs.json, a missing file is unknown history, not removals
+        // (also skips the orphan-artifact check); deferred until the next clean write.
+        this.storeQuarantined = true;
         return;
       }
       try {
-        const quarantine = `${this.filePath}.corrupt-${Date.now()}`;
-        renameSync(this.filePath, quarantine);
-        writeQuarantineMarker(this.filePath, quarantine);
+        renameSync(this.filePath, `${this.filePath}.corrupt-${Date.now()}`);
       } catch {
         // Invalid state is never used even if quarantine cannot be written.
       }

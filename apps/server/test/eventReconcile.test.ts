@@ -289,7 +289,7 @@ describe("A1b2 startup reconcile", () => {
     writeFileSync(file("loop-session-snapshots.json"), "{ not json");
     await boot(dataDir);
     const names = readdirSync(dataDir);
-    expect(names.some((name) => /^loop-runs.corrupt-.*.json$/.test(name))).toBe(true);
+    expect(names.some((name) => /^loop-runs\.corrupt-.*\.json$/.test(name))).toBe(true);
     expect(names.some((name) => name.startsWith("subagent-runs.json.corrupt-"))).toBe(true);
     expect(names.some((name) => name.startsWith("loop-session-snapshots.json.corrupt-"))).toBe(
       true,
@@ -297,13 +297,12 @@ describe("A1b2 startup reconcile", () => {
     expect(existsSync(file("loop-runs.json"))).toBe(false);
     expect(logEvents(dataDir).slice(before)).toEqual([]);
 
-    // The next boot finds the stores missing, not corrupt: the markers keep it a no-op.
-    expect(existsSync(file("loop-runs.quarantined.json"))).toBe(true);
-    expect(existsSync(file("subagent-runs.quarantined.json"))).toBe(true);
+    // The next boot finds the stores missing, not corrupt: still no removals.
+    expect(existsSync(file("subagent-runs.json"))).toBe(false);
     await boot(dataDir);
     expect(logEvents(dataDir).slice(before)).toEqual([]);
 
-    // A clean write of each store clears its marker; the following boot reconciles normally.
+    // A clean write recreates each store file; the following boot reconciles normally.
     const store = new SubagentRunStore(dataDir, () => {});
     store.create({
       id: randomUUID(),
@@ -316,9 +315,6 @@ describe("A1b2 startup reconcile", () => {
     });
     store.close();
     writeFileSync(file("loop-runs.json"), "[]");
-    new LoopEngine({ dataDir }); // a valid store is rewritten at load
-    expect(existsSync(file("loop-runs.quarantined.json"))).toBe(false);
-    expect(existsSync(file("subagent-runs.quarantined.json"))).toBe(false);
     await boot(dataDir);
     expect(removed().map((event) => event.kind)).toEqual([
       "subagent.run.removed",
@@ -326,6 +322,27 @@ describe("A1b2 startup reconcile", () => {
       "loop.run.removed",
       "loop.run.removed",
     ]);
+  });
+
+  it("only a missing or corrupt store file is quarantined, never a valid one", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "event-reconcile-missing-"));
+    const missing = new SubagentRunStore(dataDir, () => {});
+    missing.close();
+    expect(missing.quarantined()).toBe(true);
+    expect(new LoopEngine({ dataDir }).quarantined()).toBe(true);
+    seed(dataDir);
+    const valid = new SubagentRunStore(dataDir, () => {});
+    valid.close();
+    expect(valid.quarantined()).toBe(false);
+    expect(new LoopEngine({ dataDir }).quarantined()).toBe(false);
+    // Even right after a quarantine of the other store in the same data dir.
+    writeFileSync(path.join(dataDir, "loop-runs.json"), "[ not json");
+    expect(new LoopEngine({ dataDir }).quarantined()).toBe(true);
+    writeFileSync(path.join(dataDir, "loop-runs.json"), "[]");
+    expect(new LoopEngine({ dataDir }).quarantined()).toBe(false);
+    const again = new SubagentRunStore(dataDir, () => {});
+    again.close();
+    expect(again.quarantined()).toBe(false);
   });
 
   it("a process read-only at boot reconciles at the first commit after its promotion", () => {

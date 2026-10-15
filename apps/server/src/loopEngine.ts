@@ -13,11 +13,6 @@ import {
 } from "node:fs";
 import path from "node:path";
 import {
-  clearQuarantineMarker,
-  hasQuarantineMarker,
-  writeQuarantineMarker,
-} from "./storeQuarantine.ts";
-import {
   clampMaxIterations,
   diffLoopRuns,
   isLoopRunTerminal,
@@ -851,8 +846,11 @@ export class LoopEngine {
       this.persist();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        // Missing after a quarantine boot: still unknown history, not removals.
-        this.storeQuarantined = hasQuarantineMarker(this.storePath);
+        // D8: nothing deletes loop-runs.json (removals rewrite it), so a missing file is a
+        // fresh install, the boot after a quarantine, or an outside delete. Removals are
+        // suppressed while the file is missing or was quarantined this boot: deferred, not
+        // never (the first clean write recreates the file, the next boot reconciles).
+        this.storeQuarantined = true;
         return;
       }
       try {
@@ -861,7 +859,6 @@ export class LoopEngine {
           `loop-runs.corrupt-${Date.now()}-${randomUUID()}.json`,
         );
         renameSync(this.storePath, quarantine);
-        writeQuarantineMarker(this.storePath, quarantine);
         this.warn(`Quarantined invalid Loop run store at ${quarantine}`, error);
       } catch (quarantineError) {
         this.warn("Loop run store is invalid and could not be quarantined", quarantineError);
@@ -884,7 +881,7 @@ export class LoopEngine {
     return [...this.runs.values()].map((run) => toPublicLoopRun(run, options));
   }
 
-  /** True when loop-runs.json was invalid at boot and renamed aside (history unknown). */
+  /** True when loop-runs.json was missing or invalid at boot (history unknown, D8). */
   quarantined(): boolean {
     return this.storeQuarantined;
   }
@@ -925,7 +922,6 @@ export class LoopEngine {
     try {
       writeFileSync(temp, JSON.stringify([...this.runs.values()], null, 2));
       renameSync(temp, this.storePath);
-      clearQuarantineMarker(this.storePath);
     } finally {
       rmSync(temp, { force: true });
     }
