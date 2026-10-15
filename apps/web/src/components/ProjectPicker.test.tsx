@@ -47,55 +47,34 @@ afterEach(() => {
 });
 
 describe("ProjectPicker with no projects", () => {
-  for (const [label, bridge] of [
-    ["the desktop shell attached to a remote server", { isElectron: true, remote: true }],
-    ["a plain browser (no Electron bridge)", undefined],
-  ] as const) {
-    it(`offers Add project and browses the SERVER root in ${label}`, async () => {
-      vi.stubGlobal("window", Object.assign(window, { agentDeck: bridge }));
-      stubServerFolders();
-      useAppStore.setState({ projects: [], currentProjectId: null });
-      render(<ProjectPicker />);
-
-      fireEvent.click(screen.getByTestId("project-picker"));
-      fireEvent.click(screen.getByTestId("add-project"));
-
-      // The browser opens at the server's root and lists its immediate children.
-      await screen.findByTestId("server-folder-agent-deck");
-      expect(screen.getByTestId("server-folder-syncr")).toBeTruthy();
-      expect(screen.queryByTestId("server-folder-up")).toBeNull();
-      expect((screen.getByTestId("add-project-path") as HTMLInputElement).value).toBe(
-        "/srv/streetcoding",
-      );
-
-      // Picking a child folder selects it; confirming adds that server path.
-      fireEvent.click(screen.getByTestId("server-folder-agent-deck"));
-      await screen.findByTestId("server-folder-apps");
-      expect(screen.getByTestId("server-folder-up")).toBeTruthy();
-      expect((screen.getByTestId("add-project-path") as HTMLInputElement).value).toBe(
-        "/srv/streetcoding/agent-deck",
-      );
-      fireEvent.click(screen.getByTestId("add-project-confirm"));
-      await waitFor(() =>
-        expect(vi.mocked(addProject)).toHaveBeenCalledWith("/srv/streetcoding/agent-deck"),
-      );
-    });
-  }
-
-  it("never opens the local native picker when attached remotely", async () => {
-    const chooseDirectory = vi.fn(async () => ["C:\\Users\\pc\\wrong-machine"]);
-    vi.stubGlobal(
-      "window",
-      Object.assign(window, { agentDeck: { isElectron: true, remote: true, chooseDirectory } }),
-    );
+  it("offers Add project and browses the SERVER root in a plain browser", async () => {
+    vi.stubGlobal("window", Object.assign(window, { agentDeck: undefined }));
     stubServerFolders();
     useAppStore.setState({ projects: [], currentProjectId: null });
     render(<ProjectPicker />);
+
     fireEvent.click(screen.getByTestId("project-picker"));
     fireEvent.click(screen.getByTestId("add-project"));
-    await screen.findByTestId("server-folder-browser");
-    expect(chooseDirectory).not.toHaveBeenCalled();
-    expect(vi.mocked(addProject)).not.toHaveBeenCalled();
+
+    // The browser opens at the server's root and lists its immediate children.
+    await screen.findByTestId("server-folder-agent-deck");
+    expect(screen.getByTestId("server-folder-syncr")).toBeTruthy();
+    expect(screen.queryByTestId("server-folder-up")).toBeNull();
+    expect((screen.getByTestId("add-project-path") as HTMLInputElement).value).toBe(
+      "/srv/streetcoding",
+    );
+
+    // Picking a child folder selects it; confirming adds that server path.
+    fireEvent.click(screen.getByTestId("server-folder-agent-deck"));
+    await screen.findByTestId("server-folder-apps");
+    expect(screen.getByTestId("server-folder-up")).toBeTruthy();
+    expect((screen.getByTestId("add-project-path") as HTMLInputElement).value).toBe(
+      "/srv/streetcoding/agent-deck",
+    );
+    fireEvent.click(screen.getByTestId("add-project-confirm"));
+    await waitFor(() =>
+      expect(vi.mocked(addProject)).toHaveBeenCalledWith("/srv/streetcoding/agent-deck"),
+    );
   });
 });
 

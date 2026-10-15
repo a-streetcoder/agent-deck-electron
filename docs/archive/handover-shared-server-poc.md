@@ -1,5 +1,7 @@
 # Handover — shared-server POC (branch `poc/shared-server`)
 
+> Historical: remote attach removed in SRV-16d (2026-10-16).
+
 Written 2026-10-14 by the server-management session for the Agent Deck Electron session. Everything below is verified on the live setup, not planned.
 
 ## What was built and proven
@@ -56,7 +58,7 @@ Tests at 218a414: server 1236 pass (2 env-only symlink EPERM failures, see WINDO
 
 ## Direction change 2026-10-15
 
-See [handover-direction-2026-10-15.md](handover-direction-2026-10-15.md): the shared server is now the collaboration direction (Syncr dropped), graph engineering is the orchestration direction. Gap 1 above is closed by ADR 0004.
+See [handover-direction-2026-10-15.md](../handover-direction-2026-10-15.md): the shared server is now the collaboration direction (Syncr dropped), graph engineering is the orchestration direction. Gap 1 above is closed by ADR 0004.
 
 ## Working-tree warning
 

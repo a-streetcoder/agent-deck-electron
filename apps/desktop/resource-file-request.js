@@ -9,24 +9,12 @@ import path from "node:path";
 export const RESOURCE_KINDS = ["agent", "prompt", "mcp"];
 
 /**
- * ade-q0pz: attached to a remote server, every path a local shell action would
- * use (a resource file, an artifact or worktree directory) comes from that
- * server and lives on its host; handing it to the OS (a UNC path opens an
- * outbound SMB connection on Windows) is refused outright.
- */
-export function localShellActionsAllowed(remoteServer) {
-  return !remoteServer;
-}
-
-/**
- * The real file a resource open/reveal may hand to the OS, or a throw. Refused
- * in remote mode before any catalog fetch or filesystem call. The path must be
- * listed in the backend's project-scoped catalog, be a regular file and not a
- * symlink. `deps`: { remote, controlPlaneFetch, lstat, realpath, stat }.
+ * The real file a resource open/reveal may hand to the OS, or a throw. The path
+ * must be listed in the backend's project-scoped catalog, be a regular file and
+ * not a symlink. `deps`: { controlPlaneFetch, lstat, realpath, stat }.
  */
 export async function resolveResourceFile(request, deps) {
   const unavailable = () => new Error("Resource file is unavailable");
-  if (!localShellActionsAllowed(deps.remote)) throw unavailable();
   const parsedRequest = parseResourceFileRequest(request);
   if (!parsedRequest) throw unavailable();
   const { kind, projectId, filePath } = parsedRequest;

@@ -146,8 +146,6 @@ export interface TeamServerBridge {
 
 export interface AgentDeckBridge {
   isElectron?: boolean;
-  /** The shell is attached to a remote server; local file/folder pickers are wrong-machine. */
-  remote?: boolean;
   /** Flush pending draft persistence before desktop shutdown. */
   onFlushDrafts?(handler: () => Promise<void>): () => void;
   platform?: string;
@@ -208,30 +206,23 @@ export function isElectron(): boolean {
   return nativeBridge()?.isElectron === true;
 }
 
-/** The Electron shell is attached to a remote server (docs/remote-server-poc.md). */
-export function isRemoteServer(): boolean {
-  return isElectron() && nativeBridge()?.remote === true;
-}
-
 /**
  * Whether a native picker would return paths that mean something to the
- * server: only in the Electron shell, and only when the server runs on this
- * machine. Remote mode must use the server-side path flows instead.
+ * server: only in the desktop app, whose server runs on this machine. A browser
+ * uses the server-side path flows instead.
  */
 export function canPickLocalPaths(): boolean {
-  return isElectron() && !isRemoteServer();
+  return isElectron();
 }
 
 /** SRV-12b: the shared server Make shared talks to; undefined when not configured. */
 export function sharedServer(): SharedServerBridge | undefined {
-  const bridge = nativeBridge();
-  return isElectron() && bridge?.remote !== true ? bridge?.sharedServer : undefined;
+  return isElectron() ? nativeBridge()?.sharedServer : undefined;
 }
 
-/** SRV-16a: the team server setting; undefined outside the local desktop app. */
+/** SRV-16a: the team server setting; undefined outside the desktop app. */
 export function teamServer(): TeamServerBridge | undefined {
-  const bridge = nativeBridge();
-  return isElectron() && bridge?.remote !== true ? bridge?.teamServer : undefined;
+  return isElectron() ? nativeBridge()?.teamServer : undefined;
 }
 
 /** Whether this renderer has the purpose-built desktop reveal capability. */
@@ -349,8 +340,7 @@ export async function chooseDirectory(
   options?: Parameters<NonNullable<AgentDeckBridge["chooseDirectory"]>>[0],
 ): Promise<string[]> {
   const bridge = nativeBridge();
-  // Remote server: a local path is meaningless there; callers fall back to typed paths.
-  if (!bridge?.chooseDirectory || bridge.remote === true) return [];
+  if (!bridge?.chooseDirectory) return [];
   try {
     const result: unknown = await bridge.chooseDirectory(options);
     if (!Array.isArray(result)) return [];
@@ -366,7 +356,7 @@ export async function chooseFiles(
   options?: Parameters<NonNullable<AgentDeckBridge["chooseFiles"]>>[0],
 ): Promise<string[]> {
   const bridge = nativeBridge();
-  if (!bridge?.chooseFiles || bridge.remote === true) return [];
+  if (!bridge?.chooseFiles) return [];
   try {
     const result: unknown = await bridge.chooseFiles(options);
     if (!Array.isArray(result)) return [];

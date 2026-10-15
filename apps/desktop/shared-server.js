@@ -13,7 +13,7 @@ import {
   cloudflaredLogin,
   cloudflaredToken,
   signInErrorText,
-} from "./remote-server.js";
+} from "./cloudflared-access.js";
 
 /** The only requests a renderer may ask for, as "METHOD /path". */
 const ALLOWED = new Set(["GET /projects", "POST /projects", "GET /me"]);
