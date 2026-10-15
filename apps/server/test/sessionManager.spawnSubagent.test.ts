@@ -8,7 +8,12 @@ import { BridgeRegistry } from "../src/bridge.ts";
 import { registerDeckBridgeTools } from "../src/bridgeTools.ts";
 import { ReceiptBus } from "../src/receipts.ts";
 import type { ServerRuntime } from "../src/runtime.ts";
-import { ManagedSession, MAX_DETACHED_SUBAGENTS, SessionManager } from "../src/SessionManager.ts";
+import {
+  ManagedSession,
+  MAX_DETACHED_SUBAGENTS,
+  SessionManager,
+  SubagentCapError,
+} from "../src/SessionManager.ts";
 import { makeSessionPushBusHandle } from "../src/services/pushBus.ts";
 import type { ChildRunOptions, ManagedSessionRuntime } from "../src/services/sessionManager.ts";
 import { SubagentRunStore } from "../src/subagentRunStore.ts";
@@ -159,6 +164,29 @@ describe("SessionManager.spawnSubagent", () => {
     children[0]!.finish();
     await done;
     await vi.waitFor(() => expect(state.parked).toBe(1), { timeout: 2_000 });
+    await runtime.dispose();
+  });
+
+  it("A5: a released slot wakes the plan (after the counter dropped); the ninth spawn is a SubagentCapError", async () => {
+    const { session, manager, parentId, children, runtime } = harness();
+    const woken: number[] = [];
+    manager.onPlanWake = (sessionId) => {
+      expect(sessionId).toBe(parentId);
+      woken.push(session.detachedSubagents);
+    };
+    const spawns = Array.from({ length: MAX_DETACHED_SUBAGENTS }, () =>
+      manager.spawnSubagent(parentId, "task", { detached: true }),
+    );
+    await expect(
+      manager.spawnSubagent(parentId, "ninth", { detached: true }),
+    ).rejects.toBeInstanceOf(SubagentCapError);
+    await vi.waitFor(() => expect(children).toHaveLength(MAX_DETACHED_SUBAGENTS));
+    children.forEach((child) => child.accept());
+    await Promise.all(spawns);
+    children[0]!.finish();
+    await vi.waitFor(() => expect(woken).toEqual([MAX_DETACHED_SUBAGENTS - 1]));
+    expect(manager.detachedSlots(parentId)).toBe(1);
+    children.slice(1).forEach((child) => child.finish());
     await runtime.dispose();
   });
 });

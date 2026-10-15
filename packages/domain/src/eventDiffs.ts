@@ -820,6 +820,62 @@ export function projectPlans(
   return state;
 }
 
+/** A5: the latest plan.item.dispatched of one plan item. */
+export interface ProjectedPlanDispatch {
+  runId: string;
+  agentName?: string;
+  /** The plan generation: id of the plan.changed that set the plan (set_session_plan). */
+  generation?: string;
+  /** The dispatch event's id. */
+  eventId?: string;
+}
+
+/**
+ * A5: plan.item.dispatched, latest per (session, item); readers ignore a dispatch of an
+ * older generation. Extends a copy of initial.
+ */
+export function projectPlanDispatches(
+  events: Iterable<ProjectedEvent>,
+  initial: Iterable<[string, Map<string, ProjectedPlanDispatch>]> = [],
+): Map<string, Map<string, ProjectedPlanDispatch>> {
+  const state = new Map(initial);
+  const copied = new Set<string>();
+  for (const event of events) {
+    if (event.kind !== "plan.item.dispatched" || !event.sessionId) continue;
+    const payload = (event.payload ?? {}) as {
+      itemId?: unknown;
+      runId?: unknown;
+      agentName?: unknown;
+      generation?: unknown;
+    };
+    if (typeof payload.itemId !== "string" || typeof payload.runId !== "string") continue;
+    if (!copied.has(event.sessionId)) {
+      state.set(event.sessionId, new Map(state.get(event.sessionId)));
+      copied.add(event.sessionId);
+    }
+    state.get(event.sessionId)!.set(payload.itemId, {
+      runId: payload.runId,
+      ...(typeof payload.agentName === "string" ? { agentName: payload.agentName } : {}),
+      ...(typeof payload.generation === "string" ? { generation: payload.generation } : {}),
+      ...(event.id ? { eventId: event.id } : {}),
+    });
+  }
+  return state;
+}
+
+/** A5: the current plan generation: the id of the latest plan event that set a whole plan. */
+export function planGeneration(
+  history: readonly ProjectedPlanChange[] | undefined,
+): string | undefined {
+  for (let i = (history?.length ?? 0) - 1; i >= 0; i -= 1) {
+    const change = history![i]!;
+    // Reconcile imports are history from before the log, never the current plan.
+    if (!change.imported && (change.kind === "created" || change.kind === "replaced"))
+      return change.id;
+  }
+  return undefined;
+}
+
 // ---------------------------------------------------------------------------
 // A1d cut-over merges: readers take membership and order from the log and exact detail
 // from the store ("move readers, not stores"); the startup equivalence report.

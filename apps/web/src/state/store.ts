@@ -68,6 +68,8 @@ export interface QuestionNavigationRequest {
   direction: QuestionNavigationDirection;
   sessionId: string;
   token: number;
+  /** A5: go to this exact cell instead (a plan item's run card). */
+  cellId?: string;
 }
 
 /** Exact historical memory identity selected from a transcript recall card. */
@@ -455,6 +457,8 @@ export interface AppState {
   /** Token-scoped so an older consumer cannot clear a newer request. */
   clearGitActionRequest(token: number): void;
   requestQuestionNavigation(direction: QuestionNavigationDirection, sessionId: string): void;
+  /** A5: scroll the transcript to one cell (the plan panel's Show run). */
+  requestCellNavigation(cellId: string, sessionId: string): void;
   /** Consume only this request; a newer request cannot be cleared by an older effect. */
   completeQuestionNavigation(token: number, targetId?: string): void;
   requestMemoryNavigation(request: Omit<MemoryNavigationRequest, "requestId">): void;
@@ -733,6 +737,15 @@ export const useAppStore = create<AppState>((set) => ({
       questionNavigationRequest: {
         direction,
         sessionId,
+        token: ++nextQuestionNavigationToken,
+      },
+    }),
+  requestCellNavigation: (cellId, sessionId) =>
+    set({
+      questionNavigationRequest: {
+        direction: "next",
+        sessionId,
+        cellId,
         token: ++nextQuestionNavigationToken,
       },
     }),

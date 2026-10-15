@@ -28,17 +28,22 @@ export interface PlanEventServiceOptions {
   readonly dataDir: string;
   readonly maxPerSession?: number;
   /** A1 event log: called once per recorded event, after the store write. */
-  readonly onRecorded?: (event: SessionPlanEvent, op: PlanChangeOperation) => void;
+  readonly onRecorded?: (
+    event: SessionPlanEvent,
+    op: PlanChangeOperation,
+    causationId?: string,
+  ) => void;
   /** A1d: the log's plan projection for a session; undefined = read the store alone. */
   readonly readLog?: (sessionId: string) => readonly ProjectedPlanChange[] | undefined;
 }
 
 /**
  * Which plan operation ran — the same distinction native draws by method, plus
+ * `system`, an update the server wrote (the A5 dispatcher), and
  * `restore`, which republishes a plan the session already had (reopening one)
  * or hands an inherited plan to a brand-new session (forking one).
  */
-export type PlanChangeOperation = "set" | "update" | "restore";
+export type PlanChangeOperation = "set" | "update" | "restore" | "system";
 
 export interface PlanEventServiceShape {
   /** This session's history, oldest first. */
@@ -55,10 +60,24 @@ export interface PlanEventServiceShape {
     op: PlanChangeOperation,
     before: readonly SessionPlanItem[],
     after: readonly SessionPlanItem[],
+    causationId?: string,
   ) => void;
   /** Forget a deleted session's history. */
   readonly deleteSession: (sessionId: string) => void;
 }
+
+const samePlanItem = (a: SessionPlanItem, b: SessionPlanItem | undefined): boolean =>
+  b !== undefined &&
+  a.id === b.id &&
+  a.title === b.title &&
+  a.status === b.status &&
+  a.assignee === b.assignee &&
+  a.verifiedBy === b.verifiedBy &&
+  a.runId === b.runId &&
+  a.task === b.task &&
+  a.isolated === b.isolated &&
+  a.note === b.note &&
+  (a.dependsOn ?? []).join("\n") === (b.dependsOn ?? []).join("\n");
 
 /**
  * Which kind of event a before→after transition is, or undefined when it is not
@@ -70,17 +89,11 @@ function classify(
   before: readonly SessionPlanItem[],
   after: readonly SessionPlanItem[],
 ): SessionPlanEventKind | undefined {
-  if (op === "update") {
+  if (op === "update" || op === "system") {
     // Native's updateSessionPlan patches items by id and returns early on
     // `guard changed else`, so an unknown id or a patch that rewrites a value
     // with itself appends nothing. It never empties a plan.
-    return before.length === after.length &&
-      before.every(
-        (item, i) =>
-          item.id === after[i]?.id &&
-          item.title === after[i]?.title &&
-          item.status === after[i]?.status,
-      )
+    return before.length === after.length && before.every((item, i) => samePlanItem(item, after[i]))
       ? undefined
       : "updated";
   }
@@ -120,7 +133,7 @@ export const makePlanEventService = (options: PlanEventServiceOptions): PlanEven
 
     all: () => Effect.runSync(store.all),
 
-    record: (sessionId, op, before, after) => {
+    record: (sessionId, op, before, after, causationId) => {
       const existing = Effect.runSync(store.get(sessionId));
       // A restore is only an event when it is the session's FIRST plan — which
       // is native's own load-time rule: any plan holding no events is seeded
@@ -144,7 +157,7 @@ export const makePlanEventService = (options: PlanEventServiceOptions): PlanEven
         at: new Date().toISOString(),
       };
       Effect.runSync(store.set(sessionId, [...existing, event].slice(-cap)));
-      options.onRecorded?.(event, op);
+      options.onRecorded?.(event, op, causationId);
     },
 
     deleteSession: (sessionId) => {

@@ -325,6 +325,20 @@ export const SessionPlanItem = Schema.mutable(
     id: Schema.String,
     title: Schema.String,
     status: PlanItemStatus,
+    /** A5: ids of the items this one waits for; none = ready at once. */
+    dependsOn: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
+    /** A5: agent name the server dispatches the item to once it is ready. */
+    assignee: Schema.optional(Schema.String),
+    /** A5: agent name that verifies the result; never the assignee (principle 4). */
+    verifiedBy: Schema.optional(Schema.String),
+    /** A5: the assignee's prompt; absent = the title is the whole prompt. */
+    task: Schema.optional(Schema.String),
+    /** A5: run in its own worktree, alongside other isolated items. */
+    isolated: Schema.optional(Schema.Boolean),
+    /** A5: server-owned: the Deck subagent run the item was last dispatched to. */
+    runId: Schema.optional(Schema.String),
+    /** A5: server-owned: why the verifier rejected the result. */
+    note: Schema.optional(Schema.String),
   }),
 );
 export type SessionPlanItem = typeof SessionPlanItem.Type;

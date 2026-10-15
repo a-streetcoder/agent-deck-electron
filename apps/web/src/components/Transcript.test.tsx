@@ -134,3 +134,32 @@ describe("Transcript question navigation", () => {
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: "end" }));
   });
 });
+
+describe("Transcript cell navigation (A5 plan Show run)", () => {
+  it("scrolls to the run's card, and toasts when the card is hidden", () => {
+    const run: ToolCell = { ...webTool, id: "run-1" };
+    useAppStore.setState({
+      transcript: { ...emptyTranscript(), cells: [streamedCell, run] },
+      transcriptVisibility: { ...DEFAULT_TRANSCRIPT_VISIBILITY, showWebActivity: true },
+      toasts: [],
+    });
+    render(<Transcript />);
+    scrollIntoView.mockClear();
+    act(() => useAppStore.getState().requestCellNavigation("run-1", "one"));
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView.mock.contexts[0]).toBe(screen.getByText("cell run-1").parentElement);
+    expect(useAppStore.getState().questionNavigationRequest).toBeNull();
+
+    act(() =>
+      useAppStore.setState({
+        transcriptVisibility: { ...DEFAULT_TRANSCRIPT_VISIBILITY, showWebActivity: false },
+      }),
+    );
+    scrollIntoView.mockClear();
+    act(() => useAppStore.getState().requestCellNavigation("run-1", "one"));
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(useAppStore.getState().toasts.map((toast) => toast.message)).toEqual([
+      "That run's card is not shown in the transcript (hidden or not loaded).",
+    ]);
+  });
+});

@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { homedir, tmpdir } from "node:os";
 import nodePath from "node:path";
 import type { DiffPush, ServerMessage, SessionMeta } from "@agent-deck/contracts";
-import { equivalenceReport, extensionBridgeConflict } from "@agent-deck/domain";
+import { equivalenceReport, extensionBridgeConflict, planGeneration } from "@agent-deck/domain";
 import {
   addResourceWatchPaths,
   appendSystemPromptPath,
@@ -111,7 +111,7 @@ import {
   registerSubagentDeltaRoute,
   startProjectEventNudges,
 } from "./routes/events.ts";
-import { createSubagentDeltaReader } from "./subagentDelta.ts";
+import { createSubagentDeltaReader, filesChanged } from "./subagentDelta.ts";
 import { registerGitRoutes } from "./routes/git.ts";
 import { registerLoopRoutes } from "./routes/loops.ts";
 import { registerMcpRoutes } from "./routes/mcp.ts";
@@ -120,7 +120,7 @@ import { registerProjectRoutes } from "./routes/projects.ts";
 import { registerResourceRoutes } from "./routes/resources.ts";
 import { registerSessionRoutes } from "./routes/sessions.ts";
 import { registerSettingsRoutes } from "./routes/settings.ts";
-import { SessionManager } from "./SessionManager.ts";
+import { SessionManager, SubagentCapError } from "./SessionManager.ts";
 import { SessionImageStore } from "./sessionImages.ts";
 import { forkSessionAttachmentStores } from "./sessionAttachmentLifecycle.ts";
 import { SessionPasteStore } from "./sessionPastes.ts";
@@ -138,6 +138,7 @@ import { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import { SubagentRunStore } from "./subagentRunStore.ts";
 import { createEventLog, disabledEventLog, type EventLog } from "./eventLog.ts";
 import { createEventProducers } from "./eventProducers.ts";
+import { createPlanDispatcher } from "./planDispatcher.ts";
 import { createLogReaders } from "./eventReaders.ts";
 import { localPathPrefixes, reconcilePlanHistory, startEventProducers } from "./eventReconcile.ts";
 import { resolveTrustedDataDir } from "./trustedDataDir.ts";
@@ -478,7 +479,8 @@ async function initServer(
   // SUB-14: durable plan history, kept off the meta broadcast path.
   const planEvents = makePlanEventService({
     dataDir,
-    onRecorded: (event, op) => events.planChanged(event.sessionId, op, event),
+    onRecorded: (event, op, causationId) =>
+      events.planChanged(event.sessionId, op, event, undefined, causationId),
     readLog: (sessionId) => logReaders.plans(sessionId),
   });
   const loopSnapshots = new LoopSessionSnapshotStore(dataDir, (message, error) =>
@@ -1059,6 +1061,59 @@ async function initServer(
     warn: (message, error) => console.warn(message, error),
   });
   registerDeckBridgeTools(bridge, sessions, eventLog, subagentDeltas);
+  // A5: run assigned plan items through the A4 spawn path as they become ready.
+  const planDispatcher = createPlanDispatcher({
+    subscribe: (subscriber) => eventLog.subscribe(subscriber),
+    writable: () => eventLog.writable,
+    plan: (sessionId) => sessions.get(sessionId)?.plan,
+    generation: (sessionId) => planGeneration(logReaders.plans(sessionId)),
+    updatePlan: (sessionId, updates, causationId) =>
+      sessions.get(sessionId)?.updatePlan(updates, { causationId }),
+    dispatches: (sessionId) => logReaders.projections().dispatches.get(sessionId),
+    run: (sessionId, runId) => sessions.subagentRunRecord(sessionId, runId),
+    filesChanged: async (sessionId, runId) => {
+      const record = sessions.subagentRunRecord(sessionId, runId);
+      if (!record?.worktreePath) return undefined;
+      return (await filesChanged(record, (message, error) => console.warn(message, error)))
+        .filesChangedSinceBase;
+    },
+    slots: (sessionId) => {
+      const meta = sessions.get(sessionId)?.meta;
+      return meta && sessions.delegationAllowed(meta) ? sessions.detachedSlots(sessionId) : 0;
+    },
+    spawn: async (sessionId, task, { agentName, verifier, worktree }) => {
+      try {
+        return await sessions.spawnSubagent(sessionId, task, {
+          agentName,
+          detached: true,
+          ...(worktree ? { worktree: true } : {}),
+          // The verifier gets the loop checker profile (read-only tools plus git-only
+          // checker_shell) and a durable run record like any managed child.
+          ...(verifier
+            ? {
+                toolPolicy: "readOnly" as const,
+                overrides: {
+                  checkerShell: true,
+                  defaultExpectedOutcome: "reportOnly" as const,
+                  durable: true,
+                },
+              }
+            : {}),
+        });
+      } catch (error) {
+        if (error instanceof SubagentCapError) return "wait";
+        throw error;
+      }
+    },
+    recordDispatch: (sessionId, dispatch, causationId) =>
+      events.planItemDispatched(sessionId, dispatch, causationId),
+    recordVerified: (sessionId, verified, causationId) =>
+      events.planItemVerified(sessionId, verified, causationId),
+    liveSessions: () => sessions.liveSessionIds(),
+    warn: (message, error) => console.warn(`[plan-dispatch] ${message}`, error),
+  });
+  // A freed child slot or a restored plan: settle (and maybe dispatch) after the caller returns.
+  sessions.onPlanWake = (sessionId) => setImmediate(() => void planDispatcher.evaluate(sessionId));
   registerSupervisorListBridgeTool(bridge, supervisor);
   registerSubagentDeltaBridgeTool(bridge, subagentDeltas);
 
@@ -1527,6 +1582,7 @@ async function initServer(
   // did in the monolith.
   const ctx: ServerContext = {
     ...(options.claudeCodeLoggedIn ? { claudeCodeLoggedIn: options.claudeCodeLoggedIn } : {}),
+    planDispatcher,
     composerDrafts,
     fastify,
     sessions,
@@ -1659,6 +1715,7 @@ async function initServer(
         await step(() => askUser.close());
         // First pass stops every session visible when shutdown began. Session
         // teardown also settles child supervisor bridge calls.
+        planDispatcher.close();
         await step(() => sessions.stopAll());
         // Pre-admitted HTTP handlers and already-dispatched WS frames may now
         // finish rollback/publication without deadlocking on stopped sessions.
