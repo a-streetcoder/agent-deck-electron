@@ -30,3 +30,7 @@ Renderer tests: output at or under the caps and always well-formed; since round 
 **2026-10-15T09:33:55Z**
 
 2026-10-15 contrarian on c3623cb: merge clean (also with A10). BLOCKER: rendered text not passed through redactSecrets (final-message head, fallback labels, titles) -> redact before capping. Fix before close: raw entry ids can break the line structure (whitelist /^[\w-]{1,64}$/); read_session scans the whole log from seq 0 synchronously per call (extend the countSessionTurn fold with per-session turn refs); pre-log sessions show only logged turns without a warning (use startedAt); docs on residual injection risk, case-insensitive member match, fallback turn boundaries; sessionId guard in sessionLogWindow. Follow-ups: memoise the parsed Pi file by path+size+mtime; cursor has no logId (same gap as A3); renamed members keep the last-seen name. Fix round sent.
+
+**2026-10-15T09:34:33Z**
+
+2026-10-15 GPT review38 of c3623cb: redaction blocker and the per-call log scan coincide with the contrarian; added to the round: budget the ENCODED length of header + turns under one cap, whole lines only, never slice inside a quoted value (also for the 12,000 list cap).
