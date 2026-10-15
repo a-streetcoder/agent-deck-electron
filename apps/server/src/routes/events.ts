@@ -1,4 +1,4 @@
-import type { EventEnvelope } from "@agent-deck/domain";
+import type { EventEnvelope, OpenHumanRequest } from "@agent-deck/domain";
 import type { ServerMessage } from "@agent-deck/contracts";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -33,7 +33,31 @@ const eventsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(MAX_EVENT_READ_LIMIT).default(DEFAULT_LIMIT),
 });
 
-export function registerEventRoutes(fastify: FastifyInstance, log: EventLog): void {
+const openHumanQuery = z.object({
+  projectId: z
+    .string()
+    .min(1)
+    .transform((value) => (value === "null" ? null : value))
+    .optional(),
+});
+
+export function registerEventRoutes(
+  fastify: FastifyInstance,
+  log: EventLog,
+  /** A8: the log readers' open human requests (whole log, not a tail). */
+  openHuman: () => ReadonlyMap<string, OpenHumanRequest> = () => new Map(),
+): void {
+  // A8: what waits on a person, oldest first; every member sees every project's.
+  fastify.get("/events/open-human", async (request, reply) => {
+    const parsed = openHumanQuery.safeParse(request.query);
+    if (!parsed.success) return reply.status(400).send({ error: "Invalid query." });
+    const { projectId } = parsed.data;
+    const requests = [...openHuman().values()]
+      .filter((open) => projectId === undefined || open.projectId === projectId)
+      .sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
+    return { logId: log.logId, requests };
+  });
+
   // Shared server: the identity hook already refused unauthenticated callers, and
   // every authenticated user sees every project (ADR 0003 attribution, no membership).
   fastify.get("/events", async (request, reply) => {

@@ -253,11 +253,14 @@ export interface SessionTurnEvents {
     title?: string;
     message?: string;
     options?: string[];
+    timeout?: number;
   }): void;
   /** A8: answered or cancelled over the ui_response RPC; actor: who answered. */
   uiResolved?(id: string, response: Record<string, unknown>, actor?: EventActor): void;
-  /** A8: Pi settled the request itself (the MCP sign-in paste box). */
+  /** A8: Pi settled the request itself (the sign-in paste box, its turn ended, it exited). */
   uiClosed?(id: string, reason: string): void;
+  /** A8: the request's own `timeout` (ms) ran out; Pi resolved it with no answer. */
+  uiExpired?(id: string, timeoutMs: number): void;
 }
 
 /** Bound on the child's get_entries after it settled; a slow Pi yields a partial report. */
@@ -1032,6 +1035,26 @@ export const makeManagedSessionRuntime = (
       bus.unsafeAppend(event);
     };
 
+    // A8: Pi settles a dialog on its own (its timeout, a turn's abort signal, its
+    // exit) and tells nobody, so the server closes the request at the same points.
+    const uiTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    const turnUiRequests = new Set<string>();
+    let agentRunning = false;
+    /** Drop a request's bookkeeping; true when it was still pending. */
+    const forgetUiRequest = (id: string): boolean => {
+      clearTimeout(uiTimers.get(id));
+      uiTimers.delete(id);
+      turnUiRequests.delete(id);
+      return pendingUiRequests.delete(id);
+    };
+    /** Close a request Pi already resolved without an answer; its card stops being answerable. */
+    const settleUiRequest = (id: string, how: { expiredMs: number } | { reason: string }): void => {
+      if (!forgetUiRequest(id)) return;
+      if ("expiredMs" in how) quietly(() => params.turnEvents?.uiExpired?.(id, how.expiredMs));
+      else quietly(() => params.turnEvents?.uiClosed?.(id, how.reason));
+      emit({ type: "question_answered", cellId: `question-${id}` });
+    };
+
     const persistProviderRetries = (): void => {
       const retries = transcript.cells
         .filter((cell): cell is ProviderRetryCell => cell.kind === "provider_retry")
@@ -1054,6 +1077,7 @@ export const makeManagedSessionRuntime = (
 
     const runExitHandling = (exit: PiProcessExit): void => {
       if (exitHandled) return;
+      for (const id of [...pendingUiRequests.keys()]) settleUiRequest(id, { reason: "Pi exited." });
       // Parking closes the exact same scoped Pi process tree as stop(), but is
       // not a conversation lifecycle event. Do not finalize retries, expire
       // input, publish session_exit, set endedAt/failure, or bump activity.
@@ -1246,7 +1270,13 @@ export const makeManagedSessionRuntime = (
 
     const applyPiEvent = (piEvent: PiInboundEvent): void => {
       const type = eventType(piEvent);
+      if (type === "agent_end") {
+        // A dialog still open at the end of its turn was resolved by Pi (abort signal).
+        agentRunning = false;
+        for (const id of [...turnUiRequests]) settleUiRequest(id, { reason: "The turn ended." });
+      }
       if (type === "agent_start") {
+        agentRunning = true;
         authoritativeIdle = false;
         clearFailure();
         onMetaChange(meta);
@@ -1324,6 +1354,13 @@ export const makeManagedSessionRuntime = (
         // answerable methods; this was its unguarded sibling.
         if (isAnswerableUiRequest(e.method)) {
           pendingUiRequests.set(e.id, e.method);
+          if (agentRunning) turnUiRequests.add(e.id);
+          const timeout = (piEvent as { timeout?: unknown }).timeout;
+          if (typeof timeout === "number" && timeout > 0) {
+            const timer = setTimeout(() => settleUiRequest(e.id, { expiredMs: timeout }), timeout);
+            timer.unref?.();
+            uiTimers.set(e.id, timer);
+          }
           quietly(() => params.turnEvents?.uiRequested?.(piEvent as typeof e));
           markNeedsAttention();
         }
@@ -1350,7 +1387,7 @@ export const makeManagedSessionRuntime = (
         // Ingest closes a question Pi settled on its own (MCP sign-in paste box).
         if (domainEvent.type === "question_answered") {
           const id = domainEvent.cellId.slice("question-".length);
-          if (pendingUiRequests.delete(id))
+          if (forgetUiRequest(id))
             quietly(() => params.turnEvents?.uiClosed?.(id, "Settled by Pi."));
         }
         if (domainEvent.type === "provider_retry") retryChanged = true;
@@ -1865,7 +1902,7 @@ export const makeManagedSessionRuntime = (
               new Error("ui response must carry cancelled, confirmed, or a string value"),
             );
           }
-          pendingUiRequests.delete(id);
+          forgetUiRequest(id);
           quietly(() => params.turnEvents?.uiResolved?.(id, response, actor));
           // Fire-and-forget write (like the legacy PiSession path); a dead pi
           // just swallows it rather than surfacing an error to the caller.

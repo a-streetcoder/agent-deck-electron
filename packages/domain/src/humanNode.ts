@@ -10,11 +10,14 @@
 // are written next to them. Pure: the server only appends the drafts built here.
 //
 // Timeout policy, per request, default none (nothing expires that did not before):
-//   askUser (ask_user tool)  opt-in `timeoutPolicy` param, at most 10 minutes (the tool's own
-//                            wait cap). "default": the call returns the default as the answer
+//   askUser (ask_user tool)  opt-in `timeoutPolicy` param, at most 4 minutes: Pi's bridge
+//                            fetch fails at undici's 300 s headers timeout, so a longer wait
+//                            could never fire. "default": the call returns the default as the answer
 //                            and the turn continues; "blocked": the call returns timed_out and
 //                            the node is marked blocked.
-//   askUser (extension UI)   none: the extension owns its own wait.
+//   askUser (extension UI)   the request's own `timeout` (ms), when the extension sets one:
+//                            Pi then resolves the dialog with no answer, so it expires
+//                            "blocked". Without one, none.
 //   decision                 none: the channel's fixed wait (110 s) closes the request as
 //                            cancelled, which the child already receives as an error.
 //   loopApproval             none: the checkpoint is durable across restarts, and a timer
@@ -27,6 +30,7 @@ import {
   redactSecrets,
   type EventActor,
   type EventDraft,
+  type EventEnvelope,
   type NodeRef,
   type PathPrefix,
 } from "./events.ts";
@@ -37,8 +41,11 @@ export const HUMAN_KINDS = ["loopApproval", "decision", "askUser"] as const;
 export type HumanKind = (typeof HUMAN_KINDS)[number];
 
 export const HUMAN_MAX_OPTIONS = 20;
-/** The ask_user tool's own wait cap (its `timeout` maximum is 600 s). */
-export const HUMAN_TIMEOUT_MAX_MINUTES = 10;
+/**
+ * Below Pi's bridge fetch limit: undici's default 300 s headersTimeout fails a longer
+ * wait first (the bridge fetch sets none of its own). ask_user's plain `timeout` caps at 290 s.
+ */
+export const HUMAN_TIMEOUT_MAX_MINUTES = 4;
 
 export type HumanTimeoutPolicy =
   | { type: "none" }
@@ -286,9 +293,17 @@ export const extensionUiHumanId = (sessionId: string, requestId: string): string
 /** A Pi extension's blocking extension_ui_request (select / confirm / input / editor). */
 export function humanFromExtensionUi(
   sessionId: string,
-  request: { id: string; method: string; title?: string; message?: string; options?: string[] },
+  request: {
+    id: string;
+    method: string;
+    title?: string;
+    message?: string;
+    options?: string[];
+    timeout?: number;
+  },
 ): HumanRequest {
   const title = request.title ?? request.method;
+  const timeout = request.timeout;
   return {
     id: extensionUiHumanId(sessionId, request.id),
     kind: "askUser",
@@ -298,6 +313,15 @@ export function humanFromExtensionUi(
       : request.method === "confirm"
         ? { options: ["yes", "no"] }
         : {}),
+    ...(typeof timeout === "number" && timeout > 0
+      ? {
+          timeoutPolicy: {
+            type: "expire" as const,
+            afterMinutes: timeout / 60_000,
+            then: "blocked" as const,
+          },
+        }
+      : {}),
     sessionId,
     actor: { type: "agent", sessionId },
     ...(request.method === "input" && MCP_SIGN_IN.test(title)
@@ -345,3 +369,57 @@ const KIND_LABEL: Record<string, string> = {
 
 export const humanKindLabel = (kind: string | undefined): string =>
   (kind && KIND_LABEL[kind]) ?? "Human";
+
+/** An open human request as the server lists it (GET /events/open-human). */
+export interface OpenHumanRequest extends HumanRequestedPayload {
+  id: string;
+  projectId: string | null;
+  sessionId?: string;
+  /** Who asked. */
+  actor: EventActor;
+  requestedAt: string;
+}
+
+/** Envelope fields the open-request fold reads (EventEnvelope is a superset). */
+type HumanFoldEvent = Pick<EventEnvelope, "kind" | "ts" | "subject" | "actor" | "payload"> &
+  Partial<Pick<EventEnvelope, "projectId" | "sessionId">>;
+
+/**
+ * Open human requests over the whole log, independent of any tail (a durable loop
+ * approval may be weeks old). Settled ones drop out; a restart or writer takeover
+ * drops every memory-only one (all kinds but loopApproval); a removed loop run drops
+ * its approval. Extends a copy of initial.
+ */
+export function projectOpenHumanRequests(
+  events: Iterable<HumanFoldEvent>,
+  initial: Iterable<[string, OpenHumanRequest]> = [],
+): Map<string, OpenHumanRequest> {
+  const open = new Map(initial);
+  for (const event of events) {
+    if (event.kind === "server.started" || event.kind === "writer.acquired") {
+      for (const [id, request] of open) if (request.kind !== "loopApproval") open.delete(id);
+    } else if (event.kind === "loop.run.removed") {
+      open.delete(event.subject.id);
+    } else if (event.subject.type !== "human") {
+      continue;
+    } else if (event.kind === "human.requested") {
+      const payload = event.payload as HumanRequestedPayload;
+      if (!payload || !(HUMAN_KINDS as readonly string[]).includes(payload.kind)) continue;
+      open.set(event.subject.id, {
+        ...payload,
+        id: event.subject.id,
+        projectId: event.projectId ?? null,
+        ...(event.sessionId ? { sessionId: event.sessionId } : {}),
+        actor: event.actor,
+        requestedAt: event.ts,
+      });
+    } else if (
+      event.kind === "human.answered" ||
+      event.kind === "human.expired" ||
+      event.kind === "human.cancelled"
+    ) {
+      open.delete(event.subject.id);
+    }
+  }
+  return open;
+}

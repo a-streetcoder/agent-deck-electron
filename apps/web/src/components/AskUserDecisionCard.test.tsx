@@ -33,6 +33,17 @@ afterEach(() => {
 });
 
 describe("AskUserDecisionCard", () => {
+  it("A8: marks an answer the timeout policy supplied", () => {
+    render(
+      <AskUserDecisionCard
+        cell={{ ...pending, status: "answered", answer: { selections: ["Safe"], defaulted: true } }}
+      />,
+    );
+    expect(screen.getByTestId("ask-user-audit").textContent).toBe(
+      "No answer in time, default used: Safe",
+    );
+  });
+
   it("keeps multi-select and freeform mutually exclusive and retries a valid payload", async () => {
     answerMock.mockRejectedValueOnce(new Error("retry me")).mockResolvedValueOnce(undefined);
     render(<AskUserDecisionCard cell={pending} />);

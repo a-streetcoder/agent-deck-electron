@@ -279,6 +279,20 @@ export function projectNodeTree(
           }
         }
         break;
+      case "writer.acquired":
+        // A8: a writer takeover; the previous writer's waits died with it (as the
+        // supervisor projection already reads it). Its turns are left as they are.
+        node.label = "Writer acquired";
+        for (const other of drafts.values()) {
+          if (other.status !== "pending") continue;
+          if (
+            other.ref.type === "supervisorRequest" ||
+            (other.ref.type === "human" && other.human?.kind !== "loopApproval")
+          ) {
+            setStatus(other, "interrupted", ts);
+          }
+        }
+        break;
       case "session.created":
         node.label = str(payload.title) ?? "Session";
         setStatus(node, "running", ts);
@@ -429,9 +443,16 @@ export function projectNodeTree(
         setStatus(node, "stopped", ts);
         break;
       case "subagent.run.removed":
-      case "loop.run.removed":
+      case "loop.run.removed": {
         node.removed = true;
+        // A8: eviction counts a waiting approval as terminal; nobody can answer it now.
+        const approval = drafts.get(nodeKey({ type: "human", id: node.ref.id }));
+        if (event.kind === "loop.run.removed" && approval?.status === "pending") {
+          approval.human = { ...approval.human, cancelledReason: "The loop run was removed." };
+          setStatus(approval, "stopped", ts);
+        }
         break;
+      }
       // loop.timeline / loop.artifact / loop.review / loop.run.userAction: facts on an
       // existing node that the detail panes read from the stores; no status change.
     }

@@ -1,12 +1,12 @@
 import { ControlButton } from "@/design-system/components/NativeControls";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { SessionMeta } from "@agent-deck/contracts";
 import {
+  eventLabel,
   humanKindLabel,
-  openHumanNodes,
-  projectNodeTree,
   type EventActor,
   type EventEnvelope,
+  type OpenHumanRequest,
 } from "@agent-deck/domain";
 import { sectionHeaderClass } from "@/design-system/styles";
 import { cn } from "@/lib/cn";
@@ -16,6 +16,33 @@ import { refreshProjectLog, switchToSession } from "../state/wsBridge.ts";
 
 // ponytail: renders the newest rows only; virtualize if the full 2,000 are ever wanted.
 const SHOWN = 100;
+
+/** Server-wide boundaries, not the project's activity. */
+const SERVER_KINDS = new Set(["server.started", "writer.acquired"]);
+
+/**
+ * A8: the open human requests of the project over the whole log (a durable loop
+ * approval may be far older than the tail), refetched on every project log nudge.
+ */
+function useOpenHumanRequests(projectId: string | null, nudge: number | undefined) {
+  const [requests, setRequests] = useState<OpenHumanRequest[]>([]);
+  useEffect(() => {
+    let live = true;
+    const query = projectId === null ? "" : `?projectId=${encodeURIComponent(projectId)}`;
+    fetch(`/events/open-human${query}`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body: { requests?: OpenHumanRequest[] } | null) => {
+        if (live && body?.requests) setRequests(body.requests);
+      })
+      .catch(() => {
+        // Transient: the next nudge refetches.
+      });
+    return () => {
+      live = false;
+    };
+  }, [projectId, nudge]);
+  return requests;
+}
 
 export function actorLabel(actor: EventActor): string {
   if (actor.type === "user") return actor.id ? userDisplayName({ ...actor, id: actor.id }) : "user";
@@ -57,11 +84,11 @@ export function ActivityList() {
     void refreshProjectLog();
   }, [projectId]);
 
-  const events = log?.projectId === projectId ? log.events : [];
+  const all = log?.projectId === projectId ? log.events : undefined;
+  const events = useMemo(() => (all ?? []).filter((event) => !SERVER_KINDS.has(event.kind)), [all]);
   const shown = events.slice(-SHOWN).reverse();
   // A8: requests waiting on a person, first and outside the collapsed list.
-  // ponytail: from the project tail only; a request older than the tail drops out.
-  const waiting = useMemo(() => openHumanNodes(projectNodeTree(events)), [events]);
+  const waiting = useOpenHumanRequests(projectId, log?.lastSeq);
   return (
     <>
       {waiting.length > 0 ? (
@@ -70,23 +97,24 @@ export function ActivityList() {
           data-testid="activity-waiting"
           aria-label="Waiting on a person"
         >
-          {waiting.map((node) => {
-            const session = sessions.find((candidate) => candidate.id === node.sessionId);
+          {waiting.map((request) => {
+            const session = sessions.find((candidate) => candidate.id === request.sessionId);
             const target: AppView | undefined = session
               ? "chat"
-              : node.human?.kind === "loopApproval"
+              : request.kind === "loopApproval"
                 ? "loops"
                 : undefined;
+            const label = eventLabel(request.prompt) || "Waiting on a person";
             return (
               <li
-                key={node.key}
+                key={request.id}
                 className="flex items-baseline gap-1.5 text-detail text-text-secondary"
                 data-testid="activity-waiting-row"
               >
                 <span className="shrink-0 font-medium text-text-primary">
-                  {humanKindLabel(node.human?.kind)}
+                  {humanKindLabel(request.kind)}
                 </span>
-                <span className="shrink-0">{actorLabel(node.actor)}</span>
+                <span className="shrink-0">{actorLabel(request.actor)}</span>
                 {target ? (
                   <ControlButton
                     className="min-w-0 truncate text-left text-accent hover:underline"
@@ -95,10 +123,10 @@ export function ActivityList() {
                       if (session) void switchToSession(session);
                     }}
                   >
-                    {node.label}
+                    {label}
                   </ControlButton>
                 ) : (
-                  <span className="min-w-0 truncate">{node.label}</span>
+                  <span className="min-w-0 truncate">{label}</span>
                 )}
               </li>
             );

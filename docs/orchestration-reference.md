@@ -301,24 +301,38 @@ Events: `human.requested` (kind, prompt, options, timeout policy, `expiresAt`),
 policy fired), `human.cancelled` (closed without an answer: a tool's own wait ran out, the
 subagent or session ended, a person cancelled). Prompts and answers are redacted and capped;
 an MCP sign-in paste box's answer is withheld. On the shared server every member sees open
-requests (Activity lists them first; the Run tree pins them at the top) and any member may
-answer; the answer event records who did. A server restart interrupts every open human node
-except a loop approval, which is durable.
+requests and any member may answer; the answer event records who did.
+
+Where open requests show: `GET /events/open-human?projectId=` lists them from the whole log
+(the log readers' fold, no store), so the Activity panel's "Waiting on a person" list holds a
+loop approval however old it is; it refetches on every project log nudge. The Run tree pins
+a session's open requests at the top, and shows a decision as its human node only (the
+supervisor request row with the same id is hidden; the events stay). A loop approval has no
+session, so the session-scoped Run tree never shows it: its homes are the Loops screen and
+the Activity list. A server restart (`server.started`) or a writer takeover
+(`writer.acquired`) interrupts every open human node except a loop approval, which is
+durable; a removed loop run (eviction) cancels its approval.
 
 Timeout policy, per request, default none (nothing expires that did not before):
 
 - `askUser` from the `ask_user` tool: opt-in `timeoutPolicy: { afterMinutes, then, default? }`,
-  at most 10 minutes, replacing `timeout`. `then: "default"` answers with the default (an
+  at most 4 minutes (Pi's bridge fetch fails at undici's 300 s headers timeout, so a
+  longer wait could never fire; the plain `timeout` caps at 290 s), replacing `timeout`. `then: "default"` answers with the default (an
   offered title selects it, else free text) and the turn continues; `then: "blocked"` returns
   `timed_out` and marks the node blocked.
-- `askUser` from an extension: none; the extension owns its wait.
+- `askUser` from an extension: the request's own `timeout` when the extension sets one (Pi
+  resolves the dialog with no answer, so the node expires blocked); else none. Pi also
+  settles a dialog when its turn ends or Pi exits; the server closes the node then.
 - `decision`: none; the channel's fixed 110 s wait closes the request as cancelled, which
   the child already receives as an error.
 - `loopApproval`: none; the checkpoint survives restarts, so a timer needs a stored policy
   on the loop definition first.
 
 Desktop attention: the session kinds raise the session's attention marker (and so the
-desktop notification). A loop approval has no session: the app announces it in-app only.
+desktop notification). A loop approval has no session, and Electron main only notifies for a
+session the backend lists as needing attention (`attention:notify` requires a session id and
+revalidates it), so a loop approval is announced in-app only. A desktop notification for it
+needs a project-level attention source in `apps/desktop/main.js`: an owner decision.
 
 ## Collaboration
 

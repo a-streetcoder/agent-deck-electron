@@ -81,7 +81,7 @@ export function AskUserDecisionCard({ cell }: { cell: AskUserCell }) {
 
       {cell.status === "answered" ? (
         <div className="mt-3 text-body text-text-muted" data-testid="ask-user-audit">
-          Answered
+          {cell.answer?.defaulted ? "No answer in time, default used" : "Answered"}
           {cell.answer?.selections.length ? `: ${cell.answer.selections.join(", ")}` : ""}
           {cell.answer?.freeform ? ` — ${cell.answer.freeform}` : ""}
           {cell.answer?.comment ? ` (${cell.answer.comment})` : ""}

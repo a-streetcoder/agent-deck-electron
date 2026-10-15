@@ -58,11 +58,32 @@ it("shows every project when no project is open", async () => {
 });
 
 it("walks back past empty segments to a sparse project's last events", async () => {
+  // A8: pages holding only server-wide server.started rows count as empty; those rows
+  // are kept after the project's events, in seq order.
+  const restart = (seq: number) => ({
+    seq,
+    logId: "log-a",
+    projectId: null,
+    kind: "server.started",
+  });
   vi.mocked(fetch)
     .mockResolvedValueOnce(
-      Response.json({ ...body("log-a", []), lastSeq: 900, more: true, nextBeforeSeq: 600 }),
+      Response.json({
+        ...body("log-a", []),
+        events: [restart(850)],
+        lastSeq: 900,
+        more: true,
+        nextBeforeSeq: 600,
+      }),
     )
-    .mockResolvedValueOnce(Response.json({ ...body("log-a", []), more: true, nextBeforeSeq: 300 }))
+    .mockResolvedValueOnce(
+      Response.json({
+        ...body("log-a", []),
+        events: [restart(400)],
+        more: true,
+        nextBeforeSeq: 300,
+      }),
+    )
     .mockResolvedValueOnce(Response.json(body("log-a", [12, 40], { more: true })));
   await refreshProjectLog();
   expect(urls().slice(1)).toEqual([
@@ -70,7 +91,7 @@ it("walks back past empty segments to a sparse project's last events", async () 
     "/events?projectId=p1&includeServerEvents=true&beforeSeq=300&limit=200",
   ]);
   // The historical events are kept, and the cursor is the head at the start of the walk.
-  expect(shownSeqs()).toEqual([12, 40]);
+  expect(shownSeqs()).toEqual([12, 40, 400, 850]);
   expect(useAppStore.getState().projectLog?.lastSeq).toBe(900);
 });
 

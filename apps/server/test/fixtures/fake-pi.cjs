@@ -305,6 +305,23 @@ rl.on("line", (line) => {
         });
         send({ type: "agent_end", messages: [] });
         streamTimer = setInterval(() => {}, 1000);
+      } else if (cmd.message === "extension-ui-in-turn") {
+        // A8: a dialog the turn's abort signal resolves inside Pi: nothing is sent for it.
+        send({ type: "agent_start" });
+        send({ type: "extension_ui_request", id: "turn-q", method: "input", title: "Name" });
+        send({ type: "agent_end", messages: [] });
+        streamTimer = setInterval(() => {}, 1000);
+      } else if (cmd.message === "extension-ui-timeout") {
+        // A8: a dialog with its own timeout (ms); Pi resolves it locally when it runs out.
+        send({
+          type: "extension_ui_request",
+          id: "timed-q",
+          method: "confirm",
+          title: "Quick?",
+          message: "Answer fast",
+          timeout: 50,
+        });
+        streamTimer = setInterval(() => {}, 1000);
       } else if (cmd.message === "request-extension-ui") {
         send({
           type: "extension_ui_request",

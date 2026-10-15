@@ -14,6 +14,7 @@ import {
   humanTimeoutPolicy,
   humanTimeoutPolicyParamSchema,
   openHumanNodes,
+  projectOpenHumanRequests,
   WITHHELD_ANSWER,
 } from "../src/humanNode.ts";
 import { projectNodeTree } from "../src/nodeTree.ts";
@@ -163,7 +164,7 @@ describe("mapping the three request shapes", () => {
 
   it("rejects a policy over the cap or a default policy without a default", () => {
     expect(
-      humanTimeoutPolicyParamSchema.safeParse({ afterMinutes: 11, then: "blocked" }).success,
+      humanTimeoutPolicyParamSchema.safeParse({ afterMinutes: 5, then: "blocked" }).success,
     ).toBe(false);
     expect(
       humanTimeoutPolicyParamSchema.safeParse({ afterMinutes: 1, then: "default" }).success,
@@ -285,5 +286,96 @@ describe("human nodes in the tree", () => {
     expect(tree.nodes.get("human:run-1")?.status).toBe("pending");
     expect(tree.nodes.get("human:ask-9")?.status).toBe("interrupted");
     expect(openHumanNodes(tree).map((node) => node.key)).toEqual(["human:run-1"]);
+  });
+
+  it("a removed loop run (eviction) closes its waiting approval", () => {
+    const tree = projectNodeTree([
+      envelope(
+        humanRequestedDraft(humanFromLoopApproval({ id: "run-2", checkpointPrompt: "Ok?" }), AT),
+      ),
+      envelope({
+        kind: "loop.run.removed",
+        subject: { type: "loopRun", id: "run-2" },
+        actor: { type: "system" },
+        payload: { runId: "run-2" },
+      }),
+    ]);
+    expect(tree.nodes.get("human:run-2")).toMatchObject({
+      status: "stopped",
+      human: { cancelledReason: "The loop run was removed." },
+    });
+    expect(openHumanNodes(tree)).toEqual([]);
+  });
+
+  it("an extension UI request's own timeout becomes its policy", () => {
+    expect(
+      humanFromExtensionUi("s1", { id: "u", method: "input", title: "Name", timeout: 90_000 })
+        .timeoutPolicy,
+    ).toEqual({ type: "expire", afterMinutes: 1.5, then: "blocked" });
+    expect(
+      humanFromExtensionUi("s1", { id: "u", method: "input", title: "Name" }).timeoutPolicy,
+    ).toBeUndefined();
+  });
+});
+
+describe("open human requests over the whole log", () => {
+  const boundary = (kind: string): EventDraft => ({
+    kind,
+    subject: { type: "server", id: kind },
+    actor: { type: "system" },
+    payload: {},
+  });
+  const ask = (id: string) =>
+    humanFromAskUser({ requestId: id, sessionId: "s1", question: id, options: [] });
+
+  it("keeps an old loop approval through restarts and takeovers; drops what settled or died", () => {
+    const log = [
+      envelope(
+        humanRequestedDraft(
+          humanFromLoopApproval({ id: "run-old", checkpointPrompt: "Ok?", projectId: "p1" }),
+          AT,
+        ),
+        "2026-09-01T00:00:00.000Z",
+      ),
+      envelope(humanRequestedDraft(ask("ask-a"), AT)),
+      envelope(boundary("writer.acquired")),
+      envelope(humanRequestedDraft(ask("ask-b"), AT)),
+      envelope(humanRequestedDraft(ask("ask-c"), AT)),
+      envelope(humanAnsweredDraft(ask("ask-c"), ALE, "yes")),
+      envelope(
+        humanRequestedDraft(humanFromLoopApproval({ id: "run-gone", checkpointPrompt: "?" }), AT),
+      ),
+      envelope({
+        kind: "loop.run.removed",
+        subject: { type: "loopRun", id: "run-gone" },
+        actor: { type: "system" },
+        payload: { runId: "run-gone" },
+      }),
+    ];
+    const open = projectOpenHumanRequests(log);
+    expect([...open.keys()]).toEqual(["run-old", "ask-b"]);
+    expect(open.get("run-old")).toMatchObject({
+      kind: "loopApproval",
+      projectId: "p1",
+      requestedAt: "2026-09-01T00:00:00.000Z",
+      actor: { type: "system" },
+    });
+    expect(open.get("ask-b")).toMatchObject({ kind: "askUser", sessionId: "s1", prompt: "ask-b" });
+    // Folding on: a restart drops the memory-only one, the approval stays.
+    const later = projectOpenHumanRequests([envelope(boundary("server.started"))], open);
+    expect([...later.keys()]).toEqual(["run-old"]);
+    expect(open.has("ask-b")).toBe(true);
+  });
+
+  it("the tree interrupts open waits at a writer takeover, but not a loop approval", () => {
+    const tree = projectNodeTree([
+      envelope(
+        humanRequestedDraft(humanFromLoopApproval({ id: "run-1", checkpointPrompt: "Ok?" }), AT),
+      ),
+      envelope(humanRequestedDraft(ask("ask-1"), AT)),
+      envelope(boundary("writer.acquired")),
+    ]);
+    expect(tree.nodes.get("human:run-1")?.status).toBe("pending");
+    expect(tree.nodes.get("human:ask-1")?.status).toBe("interrupted");
   });
 });

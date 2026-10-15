@@ -89,7 +89,10 @@ export interface EventReadQuery {
    * itself, or an edge from it (a fork's session.created).
    */
   sessionId?: string;
-  /** Also return server.started outside the filters, so a reader can apply the restart rule. */
+  /**
+   * Also return server.started and writer.acquired outside the filters, so a reader can
+   * apply the restart rule.
+   */
   includeServerEvents?: boolean;
   /** Capped at MAX_EVENT_READ_LIMIT. */
   limit: number;
@@ -675,7 +678,8 @@ export function createEventLog(dataDir: string, options: EventLogOptions = {}): 
       event.seq < upper &&
       (((projectId === undefined || event.projectId === projectId) &&
         (sessionId === undefined || ofSession(event))) ||
-        (query.includeServerEvents === true && event.kind === "server.started"));
+        (query.includeServerEvents === true &&
+          (event.kind === "server.started" || event.kind === "writer.acquired")));
     // A read-only process's ring is a boot snapshot, so it always reads the files.
     const useRing = writable && !closed;
     const index = useRing ? segments : buildIndex();

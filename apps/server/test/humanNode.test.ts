@@ -134,6 +134,23 @@ describe("human node events", () => {
     });
   });
 
+  it("extension UI with its own timeout: the policy is recorded and the expiry written blocked", () => {
+    const h = harness();
+    const hooks = h.events.turnHooks(meta);
+    hooks.uiRequested!({ id: "t1", method: "confirm", title: "Quick?", timeout: 30_000 });
+    hooks.uiExpired!("t1", 30_000);
+    const [requested, expired] = h.human();
+    expect(requested).toMatchObject({
+      payload: { timeoutPolicy: { type: "expire", afterMinutes: 0.5, then: "blocked" } },
+    });
+    expect(requested!.payload).toHaveProperty("expiresAt");
+    expect(expired).toMatchObject({
+      kind: "human.expired",
+      subject: { type: "human", id: "s1/ui/t1" },
+      payload: { then: "blocked" },
+    });
+  });
+
   it("loop approval: no session, under its run, answered by whoever decided", () => {
     const h = harness();
     h.events.humanRequested({
@@ -180,15 +197,32 @@ function askHarness() {
 }
 
 describe("ask_user tool: human node and timeout policy", () => {
+  it("caps waits below Pi's 300 s bridge fetch limit; a closed question's default is an option", () => {
+    const parse = (extra: object) =>
+      askUserParamsSchema.safeParse({ question: "?", options: ["A", "B"], ...extra }).success;
+    expect(parse({ timeout: 290 })).toBe(true);
+    expect(parse({ timeout: 291 })).toBe(false);
+    expect(parse({ timeoutPolicy: { afterMinutes: 4, then: "blocked" } })).toBe(true);
+    expect(parse({ timeoutPolicy: { afterMinutes: 4.5, then: "blocked" } })).toBe(false);
+    const closed = { allowFreeform: false };
+    expect(
+      parse({ ...closed, timeoutPolicy: { afterMinutes: 1, then: "default", default: "B" } }),
+    ).toBe(true);
+    expect(
+      parse({ ...closed, timeoutPolicy: { afterMinutes: 1, then: "default", default: "C" } }),
+    ).toBe(false);
+    expect(parse({ timeoutPolicy: { afterMinutes: 1, then: "default", default: "C" } })).toBe(true);
+  });
+
   it("default none: the request stays open past any policy time; the answer records the member", async () => {
     vi.useFakeTimers();
     const h = askHarness();
     const result = h.coordinator.ask(
       "s1",
       "token",
-      askUserParamsSchema.parse({ question: "Deploy?", options: ["Ship", "Wait"], timeout: 600 }),
+      askUserParamsSchema.parse({ question: "Deploy?", options: ["Ship", "Wait"], timeout: 290 }),
     );
-    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await vi.advanceTimersByTimeAsync(4 * 60_000);
     expect(h.human().map((e) => e.kind)).toEqual(["human.requested"]);
     expect(h.human()[0]).toMatchObject({ payload: { timeoutPolicy: { type: "none" } } });
     expect(h.human()[0]!.payload).not.toHaveProperty("expiresAt");
@@ -222,7 +256,8 @@ describe("ask_user tool: human node and timeout policy", () => {
       selections: ["Wait"],
       defaulted: true,
     });
-    expect(h.answers).toEqual([[h.cells[0]!.requestId, { selections: ["Wait"] }]]);
+    // The transcript card shows the defaulted marker.
+    expect(h.answers).toEqual([[h.cells[0]!.requestId, { selections: ["Wait"], defaulted: true }]]);
     expect(h.human().map((e) => e.kind)).toEqual(["human.requested", "human.expired"]);
     expect(h.human()[1]).toMatchObject({ payload: { then: "default", answer: "Wait" } });
     // A late answer finds nothing pending and writes nothing.

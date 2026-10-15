@@ -6,6 +6,7 @@ import {
   emptyTranscript,
   humanAnsweredDraft,
   humanFromAskUser,
+  humanFromSupervisor,
   humanRequestedDraft,
   parseEventLine,
   splitJsonl,
@@ -228,4 +229,26 @@ it("A8: shows open human nodes first and who answered the settled ones", async (
   const outcomes = screen.getAllByTestId("human-outcome").map((span) => span.textContent);
   expect(outcomes).toContain("Answered by Ale: Ship");
   expect(outcomes).toContain("Question: waiting on a person");
+});
+
+it("A8: a supervisor request's row gives way to its human node", async () => {
+  const request = recorded.find((event) => event.subject.type === "supervisorRequest")!;
+  const human = humanRequestedDraft(
+    humanFromSupervisor(
+      {
+        id: request.subject.id,
+        parentSessionId: SESSION,
+        cellId: request.parent!.id,
+        message: "Pick",
+      },
+      "child",
+    ),
+    new Date(request.ts),
+  );
+  served = [...recorded, { ...request, ...human, id: "human-dup", seq: 40, projectId: null }];
+  render(<NodeTreeView />);
+  await waitFor(() => expect(screen.getAllByTestId("tree-node").length).toBeGreaterThan(0));
+  const types = screen.getAllByTestId("tree-node").map((node) => node.getAttribute("data-type"));
+  expect(types).not.toContain("supervisorRequest");
+  expect(types).toContain("human");
 });

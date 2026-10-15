@@ -158,7 +158,27 @@ function turnLeaves(node: ExecutionNode, joins: Joins): Leaf[] {
   return leaves;
 }
 
-const NodeRow = memo(function NodeRow({ node, joins }: { node: ExecutionNode; joins: Joins }) {
+/** A8: a supervisor request's row duplicates its human node (same id): show the human one. */
+function duplicateRows(nodes: ReadonlyMap<string, ExecutionNode>): ReadonlySet<string> {
+  const hidden = new Set<string>();
+  for (const node of nodes.values()) {
+    if (node.ref.type === "supervisorRequest" && nodes.has(`human:${node.ref.id}`))
+      hidden.add(node.key);
+  }
+  return hidden;
+}
+
+const NO_HIDDEN: ReadonlySet<string> = new Set();
+
+const NodeRow = memo(function NodeRow({
+  node,
+  joins,
+  hidden = NO_HIDDEN,
+}: {
+  node: ExecutionNode;
+  joins: Joins;
+  hidden?: ReadonlySet<string>;
+}) {
   const tool = node.ref.type === "toolCall";
   const leaves = turnLeaves(node, joins);
   const outcome = humanOutcome(node);
@@ -218,9 +238,11 @@ const NodeRow = memo(function NodeRow({ node, joins }: { node: ExecutionNode; jo
                 {leaf.kind === "reasoning" ? `Reasoning: ${leaf.text}` : leaf.text}
               </li>
             ))}
-            {node.children.map((child) => (
-              <NodeRow key={child.key} node={child} joins={joins} />
-            ))}
+            {node.children
+              .filter((child) => !hidden.has(child.key))
+              .map((child) => (
+                <NodeRow key={child.key} node={child} joins={joins} hidden={hidden} />
+              ))}
           </ul>
         </details>
       ) : (
@@ -322,6 +344,7 @@ export function NodeTreeView() {
   const forks = root?.forks ?? [];
   // A8: open human nodes first; they also stay in place below.
   const waiting = useMemo(() => (tree ? openHumanNodes(tree) : []), [tree]);
+  const hidden = useMemo(() => (tree ? duplicateRows(tree.nodes) : NO_HIDDEN), [tree]);
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2" data-testid="node-tree">
       {waiting.length > 0 ? (
@@ -337,9 +360,11 @@ export function NodeTreeView() {
       ) : null}
       {root && (root.children.length > 0 || forks.length > 0) ? (
         <ul className="space-y-0.5">
-          {root.children.map((node) => (
-            <NodeRow key={node.key} node={node} joins={joins} />
-          ))}
+          {root.children
+            .filter((node) => !hidden.has(node.key))
+            .map((node) => (
+              <NodeRow key={node.key} node={node} joins={joins} hidden={hidden} />
+            ))}
           {forks.map((fork) => {
             const meta = sessions.find((candidate) => candidate.id === fork.sessionId);
             const title = meta?.title?.trim() || fork.label;

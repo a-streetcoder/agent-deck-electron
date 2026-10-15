@@ -327,6 +327,16 @@ export function createEventProducers(
           withheld.delete(id);
           humanCancelled(uiRef(id), reason);
         },
+        uiExpired(id, timeoutMs) {
+          withheld.delete(id);
+          append(
+            humanExpiredDraft(
+              uiRef(id),
+              { type: "expire", afterMinutes: timeoutMs / 60_000, then: "blocked" },
+              view(),
+            ),
+          );
+        },
         consumed() {
           const turns = turnsOf(meta.id);
           const next = turns.queued.shift();

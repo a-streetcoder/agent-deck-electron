@@ -4,12 +4,14 @@
 // since the last one. A read-only process reads the writer's files the same way.
 import {
   projectLoopRuns,
+  projectOpenHumanRequests,
   projectPlanDispatches,
   projectPlans,
   projectSubagentRuns,
   projectSupervisor,
   SubagentDeltaIndex,
   type LoopRunsProjection,
+  type OpenHumanRequest,
   type ProjectedPlanDispatch,
   type ProjectedPlanChange,
   type ProjectedSupervisorRequest,
@@ -26,6 +28,8 @@ export interface LogProjections {
   dispatches: Map<string, Map<string, ProjectedPlanDispatch>>;
   /** A3: per-run delta trackers (cursor-compacted; removed runs dropped). */
   subagentDeltas: SubagentDeltaIndex;
+  /** A8: human requests still waiting on a person, over the whole log. */
+  openHuman: Map<string, OpenHumanRequest>;
   /** ts of the log's first event: older store history predates the log. */
   startedAt?: string;
 }
@@ -38,6 +42,8 @@ export interface LogReaders {
   plans(sessionId: string): readonly ProjectedPlanChange[] | undefined;
   /** A3: the delta trackers, caught up; undefined for the disabled log. */
   subagentDeltas(): SubagentDeltaIndex | undefined;
+  /** A8: open human requests, caught up (empty for the disabled log). */
+  openHuman(): ReadonlyMap<string, OpenHumanRequest>;
 }
 
 // ponytail: every boot folds all history; projection snapshots when startup passes ~1 s.
@@ -52,6 +58,7 @@ export function createLogReaders(log: EventLog): LogReaders {
     plans: new Map(),
     dispatches: new Map(),
     subagentDeltas: new SubagentDeltaIndex(),
+    openHuman: new Map(),
   };
   const catchUp = (): LogProjections => {
     while (log.lastSeq() > afterSeq) {
@@ -62,6 +69,7 @@ export function createLogReaders(log: EventLog): LogReaders {
       state.supervisor = projectSupervisor(page.events, state.supervisor);
       state.plans = projectPlans(page.events, state.plans);
       state.dispatches = projectPlanDispatches(page.events, state.dispatches);
+      state.openHuman = projectOpenHumanRequests(page.events, state.openHuman);
       for (const event of page.events) state.subagentDeltas.apply(event);
       if (page.nextAfterSeq === undefined || page.nextAfterSeq <= afterSeq) break;
       afterSeq = page.nextAfterSeq;
@@ -73,5 +81,6 @@ export function createLogReaders(log: EventLog): LogReaders {
     supervisor: () => (disabled ? undefined : catchUp().supervisor),
     plans: (sessionId) => (disabled ? undefined : (catchUp().plans.get(sessionId) ?? [])),
     subagentDeltas: () => (disabled ? undefined : catchUp().subagentDeltas),
+    openHuman: () => (disabled ? new Map() : catchUp().openHuman),
   };
 }

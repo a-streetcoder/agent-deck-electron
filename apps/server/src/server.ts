@@ -1697,7 +1697,7 @@ async function initServer(
   registerProjectRoutes(ctx);
   registerSessionRoutes(ctx);
   registerComposerDraftRoutes(ctx, composerDrafts);
-  registerEventRoutes(fastify, eventLog);
+  registerEventRoutes(fastify, eventLog, () => logReaders.openHuman());
   registerSubagentDeltaRoute(fastify, subagentDeltas);
   // A1c: coalesced project_events nudges to every client (same reach as resources_changed).
   const stopEventNudges = startProjectEventNudges(eventLog, broadcast);

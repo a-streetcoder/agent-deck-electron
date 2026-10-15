@@ -37,8 +37,11 @@ export const askUserParamsSchema = z
     // Kept explicit for compatibility with the native harness. When false the
     // answer endpoint rejects a comment rather than silently discarding it.
     allowComment: z.boolean().default(false),
-    /** Seconds. Kept finite so a model cannot retain a bridge request forever. */
-    timeout: z.number().int().min(1).max(600).optional(),
+    /**
+     * Seconds. Kept finite so a model cannot retain a bridge request forever, and
+     * below the 300 s undici headersTimeout that fails Pi's bridge fetch first.
+     */
+    timeout: z.number().int().min(1).max(290).optional(),
     /** A8: opt-in expiry; when set it replaces `timeout`. Absent: no policy. */
     timeoutPolicy: humanTimeoutPolicyParamSchema.optional(),
   })
@@ -71,6 +74,18 @@ export const askUserParamsSchema = z
         code: "custom",
         path: ["allowMultiple"],
         message: "allowMultiple requires at least two options",
+      });
+    }
+    const policy = value.timeoutPolicy;
+    if (
+      policy?.then === "default" &&
+      !value.allowFreeform &&
+      !options.includes(policy.default?.trim() ?? "")
+    ) {
+      issue.addIssue({
+        code: "custom",
+        path: ["timeoutPolicy", "default"],
+        message: "without free text the default must be one of the options",
       });
     }
     if (options.length === 0 && !value.allowFreeform) {
@@ -190,10 +205,10 @@ export class AskUserCoordinator {
         // The run continues with the default: an offered title selects it, else free text.
         const offered = options.find((option) => option.title === policy.default);
         const answer: AskUserAnswer = offered
-          ? { selections: [offered.title] }
-          : { selections: [], freeform: policy.default };
+          ? { selections: [offered.title], defaulted: true }
+          : { selections: [], freeform: policy.default, defaulted: true };
         session.answerAskUser(id, answer);
-        finish(content({ status: "answered", ...answer, defaulted: true }));
+        finish(content({ status: "answered", ...answer }));
       };
       const policyMs = humanTimeoutMs(policy);
       const timer = setTimeout(
