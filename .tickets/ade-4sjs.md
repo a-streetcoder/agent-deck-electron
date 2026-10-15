@@ -1,6 +1,6 @@
 ---
 id: ade-4sjs
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-10-14T23:39:29Z
@@ -38,3 +38,7 @@ Decisions 6 and 7 added 2026-10-15 (architect defaults applied, override if want
 **2026-10-15T07:25:26Z**
 
 2026-10-15 event-log discussion closed with the owner: on the shared server everything is visible to every co-worker by design, and that visibility is the advantage, not a risk ('we should have tools to use those sessions more easily, not try to hide them'). Consequences: keep one log per data dir; keep facts-and-references as the STORAGE rule (no duplicated outputs, capability tokens never in the log) while the UI shows full detail from the stores; NO redaction on session delete (tombstone only), no retention ticket; A6-A10 unblocked. New draft ticket SRV-15 captures the 'tools to use shared sessions' request.
+
+**2026-10-15T18:45:43Z**
+
+2026-10-15 owner answers (asked one at a time): (1) ANA-01: YES, PostHog; anonymous install id, app version and feature-usage counts only; session content (prompts, transcripts, paths, repo names) never sent; opt-out in settings; implementation ticket to be drafted for approval. (2) FINAL push gate: UNBLOCKED from SRV-06; ade-s625 goes once SRV-03 passes and its gates are green (ade-s625 deps already excluded SRV-06, no dep change). (3) A0 timing: moot, A0 ran alongside A1 and is DONE 2026-10-15 (roadmap row A0). (4) D1: moot, closed 2026-10-15 with option B (ADR 0005). All four recorded in docs/roadmap.md.

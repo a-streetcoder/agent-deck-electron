@@ -34,3 +34,7 @@ All gates green or failures documented as environmental; review findings disposi
 **2026-10-15T07:46:33Z**
 
 2026-10-15 owner: the licence is not a problem, Syncr and this repository are both theirs; the vendored engine is MIT with the rest of the repo (license = MIT added to both Cargo.toml, VENDORED.md updated). The checklist item is resolved; the PACKAGES_READ_TOKEN secret deletion and the first-CI-run note stay.
+
+**2026-10-15T18:45:43Z**
+
+2026-10-15 gates run on the Windows checkout (memory-limited machine, one thing at a time): pnpm -r typecheck GREEN; pnpm format:check GREEN; pnpm lint: design-system check failed on two raw controls from the A6 merge, fixed in 321063d, then check + eslint GREEN; Sidebar.test.tsx 12/12. Real-Pi suites touched by identity/git changes (session-worktree, sessionMove, sessionReturn, git-commit-message, session-delete-recovery, release, server) running one at a time; result in the next note. Owner decision (D4): push gate no longer waits for the SRV-06 live check. Still owner-only: full unit suites, focused Playwright, two-user smoke, cross-vendor review of main...HEAD, the push.

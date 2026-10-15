@@ -22,3 +22,7 @@ session-authors.json on the VM shows two distinct author ids in one session; /me
 **2026-10-14T13:26:37Z**
 
 2026-10-14: Andrea's GitHub email added to the Access policy 'Streetcoding Collective' on the deck.moretti.cc application via the Cloudflare API (include now lists two emails; exclude/require unchanged). Remaining: Andrea signs in from her machine (GitHub IdP must have that email verified) and the two-user browser session checklist.
+
+**2026-10-15T18:45:43Z**
+
+2026-10-15 owner decision: NO VM-wide gh login (neither bot nor ale). Private repositories are reached only through per-user SRV-06 connections; prerequisite: GitHub OAuth App registered and AGENT_DECK_GITHUB_CLIENT_ID in the service drop-in (owner). Remaining here: the two-user browser checklist with Andrea.

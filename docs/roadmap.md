@@ -79,8 +79,8 @@ See [`release-windows.md`](release-windows.md). Tickets in `.tickets/`.
 - ade-kaqr — PI-03 (epic): Pi-native MCP as the transport — closed 2026-10-15 (PI-03a..f)
 - ade-0v9e — D1: retire the Syncr skill-engine addon ([ADR 0005](adr/0005-retire-skill-engine-addon.md)) — closed 2026-10-15: option B, engine vendored as packages/skill-engine-native (MIT), deployed
 - ade-dwji — D2: ARCHITECTURE.md trimmed to the map, per-ticket sections in `orchestration-reference.md`, sync-seams closed, parity-loop seam rule removed — closed 2026-10-15
-- ade-u3ny — D3: CodeMirror soft-wrap toggle — open
-- ade-4sjs — D4: owner decisions (ANA-01, FINAL push gating, A0 timing) — open
+- ade-u3ny — D3: CodeMirror soft-wrap toggle — closed 2026-10-15
+- ade-4sjs — D4: owner decisions — closed 2026-10-15: ANA-01 YES with PostHog (anonymous install id, version and feature counts only, never session content, opt-out in settings; implementation ticket pending approval); FINAL push (ade-s625) unblocked from the SRV-06 live check, gated on SRV-03 + green gates; A0 ran alongside A1 (done); D1 option B (done); no VM-wide gh login, private repos only via per-user SRV-06 connections
 - ade-u8qg — D6 — closed 2026-10-15: loop children default tools and directProjectWrites for maker/stage roles (A0 finding) — open
 - ade-rnrd — D7 — closed 2026-10-15: tolerant verdict parsing, validation before checker, checker can run validation (A0 finding) — open
 - ade-scu0 — D8: corrupt or missing run stores no longer crash startServer nor tombstone logged runs — closed 2026-10-15
@@ -93,7 +93,7 @@ See [`release-windows.md`](release-windows.md). Tickets in `.tickets/`.
 ## Suggested order
 
 1. Finish what is in flight: SRV-03 (Andrea round), D5 (Playwright + baselines), then ade-s625 and push
-   `poc/shared-server` (D4 decides whether SRV-06 gates the push).
+   `poc/shared-server` (D4 decided 2026-10-15: SRV-06 does not gate the push).
 2. A0 evidence run in parallel (cheap, informs everything after A5).
 3. A1 → A2 → A3 (the t3code pair on the event log) → A4 → A5.
 4. A6 → A7 → A8, then A9 → A10, then A11 → A12.
