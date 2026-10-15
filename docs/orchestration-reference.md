@@ -43,7 +43,10 @@ Interpreter rules, the same for every graph:
   cycle budget (0 is unlimited). Only two budgeted edges exist: the evaluator's on `CONTINUE`
   and the checker's on `FAIL` (taken only against a passed validation, see
   [Loop checker and verdicts](#loop-checker-and-verdicts)). An evaluator without one makes a
-  single-pass loop.
+  single-pass loop: a `CONTINUE` there ends the run `notAchieved` with stop reason
+  `graphHasNoRepeatEdge`.
+- Stage numbers (prompts, artifacts, `stageIndex`, preflight positions) follow execution order,
+  not the order the nodes are listed in.
 - The checker's `ASK_HUMAN` stops the run after a continuing evaluator; prompts, artifacts and
   feedback per role are those of the matching template.
 
@@ -51,8 +54,22 @@ Interpreter rules, the same for every graph:
 budgeted edges, which lead back to the entry; there is exactly one entry node (or one column of
 parallel branches, which start together), so every node is reachable; there is one evaluator,
 alone in the last column; there is at most one maker, checker and triage; and a `human` node is
-the whole graph. A graph node other than the evaluator needs an agent, a checker needs the loop's
-`checkerRubric`, and branches need the `artifactMarkdown` write target.
+the whole graph. The shape before the evaluator must be one the interpreter runs: the six
+templates plus stages followed by one checker. Accepted:
+
+- a maker, optionally followed by one checker;
+- a chain of stages (one per column), optionally followed by one checker;
+- one column of parallel branches;
+- a triage.
+
+Refused, because the interpreter would mishandle them: any node other than the evaluator after
+the checker (validation ran once, before it); branches followed by a stage or a checker; triage
+with a checker; a maker mixed with stages; two stages in one column; an evaluator alone.
+
+A graph node other than the evaluator needs an agent, a checker needs the loop's
+`checkerRubric`, and branches need the `artifactMarkdown` write target. A hand-written graph
+cannot hold a `human` node nor use the `humanApproval` structure: a checkpoint is parked and
+resolved only through the Human approval template.
 
 A hand-written graph goes in the `.loop.md` frontmatter and replaces the template; `structure`
 stays as the display label. Example, a pipeline with a checker after stage two:
@@ -74,7 +91,9 @@ edges:
 ```
 
 The Loops screen draws the graph in the run dialog (definition) and the run panel (run, with each
-node's status from its latest-iteration child, mapped as the A2 tree maps a loop child). The
+node's status from its latest-iteration child through `loopChildStatus`, the A2 tree's mapping;
+on a finished run a node that never ran, such as an evaluator skipped by a checker `FAIL`, shows
+"skipped"). The
 editor does not author graphs; editing a hand-written loop there keeps its `nodes`/`edges`.
 
 ## Agent coordination

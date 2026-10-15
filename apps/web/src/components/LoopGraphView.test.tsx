@@ -91,3 +91,39 @@ it("says why an invalid graph cannot be drawn", () => {
     "Graph unavailable: A loop graph needs exactly one evaluator.",
   );
 });
+
+it("shows nodes that never ran in a finished run as skipped, and unknown statuses as running", () => {
+  const loop = {
+    structure: "makerChecker",
+    makerName: "Maker",
+    checkerName: "Checker",
+    maxIterations: 1,
+  } as const;
+  const { rerender } = render(
+    <LoopGraphView
+      loop={loop}
+      finished
+      runChildren={[
+        { id: "1", phase: "maker", status: "completed" },
+        // A checker FAIL skips the evaluator.
+        { id: "2", phase: "checker", status: "completed" },
+      ]}
+    />,
+  );
+  expect(nodes()).toEqual([
+    ["maker", "done"],
+    ["checker", "done"],
+    ["evaluator", "skipped"],
+  ]);
+  rerender(
+    <LoopGraphView
+      loop={loop}
+      runChildren={[{ id: "1", phase: "maker", status: "paused" as never }]}
+    />,
+  );
+  expect(nodes()).toEqual([
+    ["maker", "running"],
+    ["checker", "pending"],
+    ["evaluator", "pending"],
+  ]);
+});

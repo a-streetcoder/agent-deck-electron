@@ -247,3 +247,129 @@ describe("hand-written graphs in definition validation and preflight", () => {
     ]);
   });
 });
+
+describe("loopGraphColumns: only shapes the interpreter runs", () => {
+  const SHAPE = /Unsupported graph shape/;
+  const chain = (...kinds: LoopGraph["nodes"][number]["kind"][]): LoopGraph => {
+    const nodes = [...kinds, "evaluator" as const].map((kind, index) => ({
+      id: `n${index}`,
+      kind,
+      agentName: "A",
+    }));
+    return {
+      nodes,
+      edges: nodes.slice(1).map((node, index) => ({ from: nodes[index]!.id, to: node.id })),
+    };
+  };
+
+  it("accepts the template chains and stages followed by one checker", () => {
+    for (const kinds of [
+      ["maker"],
+      ["maker", "checker"],
+      ["triage"],
+      ["stage"],
+      ["stage", "stage", "stage"],
+      ["stage", "stage", "checker"],
+    ] as const) {
+      expect(error(chain(...kinds))).toBeUndefined();
+    }
+  });
+
+  it("refuses work after the checker (validation ran before it)", () => {
+    expect(error(chain("stage", "checker", "stage"))).toMatch(SHAPE);
+    expect(error(chain("maker", "checker", "stage"))).toMatch(SHAPE);
+  });
+
+  it("refuses triage with a checker, and other mixes", () => {
+    expect(error(chain("triage", "checker"))).toMatch(SHAPE);
+    expect(error(chain("maker", "stage"))).toMatch(SHAPE);
+    expect(error(chain("checker"))).toMatch(SHAPE);
+    expect(error({ nodes: [{ id: "e", kind: "evaluator" }], edges: [] })).toMatch(SHAPE);
+  });
+
+  const branches = (after: LoopGraph["nodes"][number]["kind"]): LoopGraph => ({
+    nodes: [
+      { id: "b1", kind: "branch", agentName: "A" },
+      { id: "b2", kind: "branch", agentName: "B" },
+      { id: "x", kind: after, agentName: "C" },
+      { id: "e", kind: "evaluator" },
+    ],
+    edges: [
+      { from: "b1", to: "x" },
+      { from: "b2", to: "x" },
+      { from: "x", to: "e" },
+    ],
+  });
+
+  it("refuses branches followed by a stage or a checker", () => {
+    expect(error(branches("stage"))).toMatch(SHAPE);
+    expect(error(branches("checker"))).toMatch(SHAPE);
+  });
+
+  it("refuses two stages in one column (no diamonds)", () => {
+    const diamond: LoopGraph = {
+      nodes: [
+        { id: "m", kind: "stage" },
+        { id: "a", kind: "stage" },
+        { id: "b", kind: "stage" },
+        { id: "e", kind: "evaluator" },
+      ],
+      edges: [
+        { from: "m", to: "a" },
+        { from: "m", to: "b" },
+        { from: "a", to: "e" },
+        { from: "b", to: "e" },
+      ],
+    };
+    expect(error(diamond)).toMatch(SHAPE);
+  });
+});
+
+describe("hand-written graphs: human checkpoints and execution order", () => {
+  const base = {
+    name: "graph",
+    goal: "Ship it.",
+    structure: "agentPipeline",
+    writeTarget: "artifactMarkdown",
+  } satisfies Partial<LoopDefinition>;
+  const HUMAN = /cannot hold a human checkpoint/;
+
+  it("refuses a human node and the Human approval structure in a hand-written graph", () => {
+    expect(
+      loopDefinitionValidationError({
+        ...base,
+        graph: { nodes: [{ id: "h", kind: "human" }], edges: [] },
+      }),
+    ).toMatch(HUMAN);
+    expect(
+      loopDefinitionValidationError({
+        ...base,
+        structure: "humanApproval",
+        graph: PIPELINE_WITH_CHECKER,
+        checkerRubric: "Evidence.",
+      }),
+    ).toMatch(HUMAN);
+    // The template keeps its human node.
+    expect(loopGraphColumns(loopGraph({ structure: "humanApproval" }))).toEqual({
+      columns: [[{ id: "human", kind: "human" }]],
+    });
+  });
+
+  it("numbers stage roles in execution order, not listing order", () => {
+    const graph: LoopGraph = {
+      nodes: [
+        { id: "second", kind: "stage", agentName: "B" },
+        { id: "first", kind: "stage", agentName: "A" },
+        { id: "e", kind: "evaluator" },
+      ],
+      edges: [
+        { from: "first", to: "second" },
+        { from: "second", to: "e" },
+      ],
+    };
+    expect(loopRequiredAgentRoles({ ...base, graph })).toEqual([
+      { role: "stage", position: 1, agentName: "A" },
+      { role: "stage", position: 2, agentName: "B" },
+    ]);
+  });
+});

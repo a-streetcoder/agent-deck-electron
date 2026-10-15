@@ -87,6 +87,13 @@ export function loopDefinitionValidationError(
   if (!loop.name.trim()) return "A name is required.";
   if (loop.graph) {
     if (!loop.goal.trim()) return "A goal is required.";
+    // A checkpoint is parked and resolved through the Human approval structure only.
+    if (
+      loop.structure === "humanApproval" ||
+      loop.graph.nodes.some((node) => node.kind === "human")
+    ) {
+      return "Hand-written graphs cannot hold a human checkpoint; use the Human approval structure.";
+    }
     const checked = loopGraphColumns(loop.graph);
     if ("error" in checked) return checked.error;
     for (const node of loop.graph.nodes) {
@@ -181,7 +188,10 @@ export function loopRequiredAgentRoles(
 ): LoopRequiredAgentRole[] {
   if (loop.graph) {
     const positions = new Map<string, number>();
-    return loop.graph.nodes.flatMap((node): LoopRequiredAgentRole[] => {
+    // Positions follow execution order (depth columns) when the graph is valid.
+    const checked = loopGraphColumns(loop.graph);
+    const ordered = "columns" in checked ? checked.columns.flat() : loop.graph.nodes;
+    return ordered.flatMap((node): LoopRequiredAgentRole[] => {
       if (node.kind === "evaluator" || node.kind === "human") return [];
       const position = (positions.get(node.kind) ?? 0) + 1;
       positions.set(node.kind, position);
@@ -376,6 +386,8 @@ export type LoopRunStatus =
 export type LoopStopReason =
   | "success"
   | "maxIterationsReached"
+  /** A9: the evaluator continued but the graph has no budgeted edge to repeat on. */
+  | "graphHasNoRepeatEdge"
   | "validationFailedAfterFinalIteration"
   | "validationUnavailable"
   | "unsafeWriteTarget"
@@ -854,6 +866,25 @@ export function loopGraphColumns(
   const last = columns.at(-1)!;
   if (last.length !== 1 || last[0]!.kind !== "evaluator") {
     return { error: "The evaluator must end the iteration, after every other node." };
+  }
+  // The interpreter runs the six template shapes plus stages followed by one checker.
+  // Validation runs once, before the first judge, so nothing but the evaluator may
+  // follow a checker; triage and branches keep their templates' shape.
+  const body = columns.slice(0, -1).map((column) => column.map((node) => node.kind));
+  const checker = body.at(-1)?.join() === "checker";
+  const work = checker ? body.slice(0, -1) : body;
+  const single = (kind: LoopNodeKind) => work.length === 1 && work[0]!.join() === kind;
+  const shape = checker
+    ? single("maker") || (work.length > 0 && work.every((column) => column.join() === "stage"))
+    : single("maker") ||
+      single("triage") ||
+      (work.length === 1 && work[0]!.every((kind) => kind === "branch")) ||
+      (work.length > 0 && work.every((column) => column.join() === "stage"));
+  if (!shape) {
+    return {
+      error:
+        "Unsupported graph shape: use a maker, a triage, parallel branches, or a chain of stages (a maker or the stages may be followed by one checker), then the evaluator.",
+    };
   }
   return { columns };
 }

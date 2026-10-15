@@ -1923,7 +1923,8 @@ export class LoopEngine {
     const checked = loopGraphColumns(graph);
     if ("error" in checked) throw new Error(checked.error);
     const has = (kind: LoopGraphNode["kind"]) => graph.nodes.some((node) => node.kind === kind);
-    const stageNodes = graph.nodes.filter((node) => node.kind === "stage");
+    // Stage numbers follow execution order (the depth columns), not the order nodes are listed.
+    const stageNodes = checked.columns.flat().filter((node) => node.kind === "stage");
     const backEdge = (node: LoopGraphNode, when: "CONTINUE" | "FAIL") =>
       graph.edges.some(
         (edge) => edge.budgeted && edge.from === node.id && (edge.when ?? "CONTINUE") === when,
@@ -2213,7 +2214,11 @@ export class LoopEngine {
                 feedback =
                   has("stage") || has("branch") ? boundedPipelineEvidence(evidence) : evidence;
               }
-              if (!backEdge(node, "CONTINUE")) break iterations;
+              // A single-pass graph: the evaluator continued but nothing repeats.
+              if (!backEdge(node, "CONTINUE")) {
+                this.finalize(run, "notAchieved", "graphHasNoRepeatEdge");
+                return;
+              }
             }
           }
         }

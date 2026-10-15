@@ -1,5 +1,6 @@
 import { Fragment } from "react";
 import {
+  loopChildStatus,
   loopGraph,
   loopGraphColumns,
   type LoopChildRecord,
@@ -11,7 +12,9 @@ import {
 /**
  * A9: a loop definition (or run) as its graph: depth columns left to right like the
  * plan panel's steps, no chart library. A run passes its latest iteration's children;
- * each node shows the status the A2 tree gives that loop child.
+ * each node shows the status the A2 tree gives that loop child (`loopChildStatus`), and a
+ * node that never ran in a finished run (an evaluator skipped by a checker FAIL, nodes
+ * after a stop) shows "skipped".
  */
 
 const KIND_LABEL: Record<LoopGraphNode["kind"], string> = {
@@ -24,32 +27,16 @@ const KIND_LABEL: Record<LoopGraphNode["kind"], string> = {
   human: "Human approval",
 };
 
-// The A2 tree's loop-child mapping (nodeTree.ts), including legacy records without a status.
-const CHILD_STATUS: Record<NonNullable<LoopChildRecord["status"]>, NodeStatus> = {
-  queued: "pending",
-  running: "running",
-  completed: "done",
-  failed: "error",
-  stopped: "stopped",
-};
-const childStatus = (child: LoopChildRecord): NodeStatus =>
-  child.status
-    ? CHILD_STATUS[child.status]
-    : child.error
-      ? "error"
-      : child.endedAt
-        ? "done"
-        : child.startedAt
-          ? "running"
-          : "pending";
+type GraphNodeStatus = NodeStatus | "skipped";
 
-const STATUS_COLOR: Record<NodeStatus, string> = {
+const STATUS_COLOR: Record<GraphNodeStatus, string> = {
   pending: "var(--color-text-muted)",
   running: "var(--color-brand-accent, var(--color-accent))",
   done: "var(--color-diff-added)",
   error: "var(--color-role-tool)",
   stopped: "var(--color-text-muted)",
   interrupted: "var(--color-warning)",
+  skipped: "var(--color-text-muted)",
 };
 
 type GraphSource = Pick<
@@ -68,10 +55,13 @@ type GraphSource = Pick<
 export function LoopGraphView({
   loop,
   runChildren,
+  finished = false,
 }: {
   loop: GraphSource;
   /** The latest iteration's children of a run; absent for a definition. */
   runChildren?: readonly LoopChildRecord[];
+  /** The run is terminal: a node without a child was skipped, not pending. */
+  finished?: boolean;
 }) {
   const graph = loopGraph(loop);
   const checked = loopGraphColumns(graph);
@@ -82,9 +72,11 @@ export function LoopGraphView({
       </div>
     );
   }
+  // Stage and branch numbers follow execution order, as in the engine.
+  const ordered = checked.columns.flat();
   const position = (node: LoopGraphNode) =>
-    graph.nodes.filter((other) => other.kind === node.kind).indexOf(node);
-  const statusOf = (node: LoopGraphNode): NodeStatus | undefined => {
+    ordered.filter((other) => other.kind === node.kind).indexOf(node);
+  const statusOf = (node: LoopGraphNode): GraphNodeStatus | undefined => {
     const child = runChildren
       ?.filter((candidate) => candidate.phase === node.kind)
       .find((candidate) =>
@@ -94,7 +86,8 @@ export function LoopGraphView({
             ? candidate.branchIndex === position(node)
             : true,
       );
-    return child ? childStatus(child) : runChildren ? "pending" : undefined;
+    if (child) return loopChildStatus(child);
+    return runChildren ? (finished ? "skipped" : "pending") : undefined;
   };
   const repeats = [
     ...new Set(

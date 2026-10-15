@@ -64,6 +64,7 @@ const RUN_STATUS_LABEL: Record<LoopRun["status"], string> = {
 const STOP_REASON_LABEL: Partial<Record<NonNullable<LoopRun["stopReason"]>, string>> = {
   success: "Success",
   maxIterationsReached: "Maximum iterations reached",
+  graphHasNoRepeatEdge: "Graph has no repeat edge",
   validationFailedAfterFinalIteration: "Validation failed after final iteration",
   validationUnavailable: "Validation unavailable",
   unsafeWriteTarget: "Unsafe write target",
@@ -1402,6 +1403,7 @@ export function LoopsScreen() {
             <LoopGraphView
               loop={activeRun.definitionSnapshot}
               runChildren={activeRun.iterations.at(-1)?.children ?? []}
+              finished={isLoopRunTerminal(activeRun.status)}
             />
           ) : null}
           {activeRun.iterations.length > 0 ? (

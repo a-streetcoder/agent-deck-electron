@@ -135,8 +135,11 @@ const PLACEHOLDER_LABEL: Record<string, string> = {
   session: "session not in view",
 };
 
-/** A legacy child record has no status: infer it from its timestamps and error. */
-function childStatus(child: PublicLoopChild): NodeStatus {
+/** A loop child's node status (also the Loops graph view's); an unknown status is running, and
+ * a legacy record without one is inferred from its timestamps and error. */
+export function loopChildStatus(
+  child: Pick<PublicLoopChild, "status" | "error" | "endedAt" | "startedAt">,
+): NodeStatus {
   if (child.status) return CHILD_STATUS[child.status] ?? "running";
   if (child.error) return "error";
   if (child.endedAt) return "done";
@@ -362,7 +365,7 @@ export function projectNodeTree(
         if (!child) break;
         node.loopChild = child;
         node.label = child.agentName ? `${child.phase}: ${child.agentName}` : child.phase;
-        setStatus(node, childStatus(child), ts);
+        setStatus(node, loopChildStatus(child), ts);
         break;
       }
       case "subagent.run.removed":
