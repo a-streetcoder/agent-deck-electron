@@ -13,6 +13,11 @@ import {
 } from "node:fs";
 import path from "node:path";
 import {
+  clearQuarantineMarker,
+  hasQuarantineMarker,
+  writeQuarantineMarker,
+} from "./storeQuarantine.ts";
+import {
   diffSubagentRuns,
   emptyTranscript,
   subagentRunResult,
@@ -1212,6 +1217,7 @@ export class SubagentRunStore {
       closeSync(fd);
       fd = undefined;
       renameSync(temp, this.filePath);
+      clearQuarantineMarker(this.filePath);
       // The rename has already replaced the authoritative file. Retain that
       // candidate in memory even if the following directory fsync reports a
       // durability failure, so a later write cannot rebuild from stale state
@@ -1266,9 +1272,15 @@ export class SubagentRunStore {
         })),
       };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        // Missing after a quarantine boot: still unknown history (no removals, no orphan cleanup).
+        this.storeQuarantined = hasQuarantineMarker(this.filePath);
+        return;
+      }
       try {
-        renameSync(this.filePath, `${this.filePath}.corrupt-${Date.now()}`);
+        const quarantine = `${this.filePath}.corrupt-${Date.now()}`;
+        renameSync(this.filePath, quarantine);
+        writeQuarantineMarker(this.filePath, quarantine);
       } catch {
         // Invalid state is never used even if quarantine cannot be written.
       }

@@ -13,6 +13,11 @@ import {
 } from "node:fs";
 import path from "node:path";
 import {
+  clearQuarantineMarker,
+  hasQuarantineMarker,
+  writeQuarantineMarker,
+} from "./storeQuarantine.ts";
+import {
   clampMaxIterations,
   diffLoopRuns,
   isLoopRunTerminal,
@@ -845,13 +850,18 @@ export class LoopEngine {
       }
       this.persist();
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        // Missing after a quarantine boot: still unknown history, not removals.
+        this.storeQuarantined = hasQuarantineMarker(this.storePath);
+        return;
+      }
       try {
         const quarantine = path.join(
           directory,
           `loop-runs.corrupt-${Date.now()}-${randomUUID()}.json`,
         );
         renameSync(this.storePath, quarantine);
+        writeQuarantineMarker(this.storePath, quarantine);
         this.warn(`Quarantined invalid Loop run store at ${quarantine}`, error);
       } catch (quarantineError) {
         this.warn("Loop run store is invalid and could not be quarantined", quarantineError);
@@ -915,6 +925,7 @@ export class LoopEngine {
     try {
       writeFileSync(temp, JSON.stringify([...this.runs.values()], null, 2));
       renameSync(temp, this.storePath);
+      clearQuarantineMarker(this.storePath);
     } finally {
       rmSync(temp, { force: true });
     }

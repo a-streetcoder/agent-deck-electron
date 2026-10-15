@@ -483,8 +483,10 @@ async function initServer(
       events.planChanged(event.sessionId, op, event, undefined, causationId),
     readLog: (sessionId) => logReaders.plans(sessionId),
   });
+  // D8: fastify is declared later (and logs nothing: logger false), so stores built
+  // before it warn to the console like their siblings.
   const loopSnapshots = new LoopSessionSnapshotStore(dataDir, (message, error) =>
-    fastify.log.warn({ err: error }, message),
+    console.warn(`[loop-snapshots] ${message}`, error ?? ""),
   );
   const subagentRuns = new SubagentRunStore(dataDir, (message, error) =>
     console.warn(`[subagent-runs] ${message}`, error),
@@ -823,7 +825,7 @@ async function initServer(
   // built per-run, bound to a parent session in the project cwd.
   const loopEngine = new LoopEngine({
     dataDir,
-    warn: (message, error) => fastify.log.warn({ err: error }, message),
+    warn: (message, error) => console.warn(`[loop-runs] ${message}`, error ?? ""),
   });
   // Interactive provider OAuth login relay (native PiProviderLoginService).
   const providerLogin = new ProviderLoginManager(options.providerLoginFn);
