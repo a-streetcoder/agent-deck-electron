@@ -445,6 +445,11 @@ export interface LoopChangedFile {
   oldPath?: string;
 }
 
+/** How a role's decision line was read: the exact first non-empty line
+ * (`strict`), a decision line after a short preamble or with markdown emphasis
+ * (`lenient`), or not found (`missing`). */
+export type LoopVerdictParse = "strict" | "lenient" | "missing";
+
 export interface LoopRunIteration {
   id: string;
   index: number;
@@ -454,8 +459,11 @@ export interface LoopRunIteration {
   output: string;
   checkerOutput?: string;
   checkerDecision?: LoopCheckerDecision;
+  checkerVerdictParse?: LoopVerdictParse;
   evaluatorOutput?: string;
   goalDecision?: LoopGoalDecision;
+  /** How the evaluator's goal decision was parsed; `missing` falls back to CONTINUE. */
+  goalVerdictParse?: LoopVerdictParse;
   pipelineStageOutputs?: LoopPipelineStageOutput[];
   parallelBranchOutputs?: LoopParallelBranchOutput[];
   /** Discovery/Triage agent's durable Markdown classification report. */

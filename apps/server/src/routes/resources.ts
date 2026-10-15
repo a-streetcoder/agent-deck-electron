@@ -1551,12 +1551,16 @@ ${content}
       id: "deck_agents",
       displayName: "Deck agents",
       summary:
-        "Lets the agent delegate to your named agents (subagents), run them in parallel, review and answer pending supervisor requests, and maintain a session plan; a subagent reports back over a supervisor channel.",
-      condition: "Always on for parent sessions",
+        "Lets the agent delegate to your named agents (subagents), run them in parallel or in the background, review and answer pending supervisor requests, and maintain a session plan; a subagent reports back over a supervisor channel. A background (spawned) subagent keeps running after the agent's turn ends, until it finishes, is cancelled, or you press Stop, which also cancels children spawned in earlier turns.",
+      condition:
+        "Parent sessions; the delegation tools are hidden when subagents are turned off in Settings",
       match: (name: string): boolean =>
         [
           "managed_subagent",
           "managed_parallel",
+          "spawn_subagent",
+          "await_subagents",
+          "cancel_subagent",
           "list_supervisor_requests",
           "answer_supervisor_request",
           "subagent_delta",

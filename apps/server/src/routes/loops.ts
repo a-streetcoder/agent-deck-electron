@@ -873,16 +873,15 @@ export function registerLoopRoutes(
           thinking,
         }) => {
           const { provider, modelId: model } = await roleModel(asked, askedModel);
-          const { toolPolicy, defaultExpectedOutcome, defaultTools } = loopRoleLaunchDefaults(
-            phase,
-            loop.writeTarget,
-          );
+          const { toolPolicy, defaultExpectedOutcome, defaultTools, checkerShell } =
+            loopRoleLaunchDefaults(phase, loop.writeTarget);
           return sessions.runSubagent(parent!.meta.id, prompt, agentName || undefined, toolPolicy, {
             provider,
             model,
             thinking: thinking as ThinkingLevel | undefined,
             defaultExpectedOutcome,
             ...(defaultTools ? { defaultTools } : {}),
+            ...(checkerShell ? { checkerShell } : {}),
           });
         },
         cancel: () => sessions.destroy(parent!.meta.id),

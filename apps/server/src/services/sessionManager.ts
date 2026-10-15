@@ -55,6 +55,7 @@ import { normalizeSessionError, processFailureMessage } from "../sessionFailure.
 import { SubagentArtifactCapabilityError } from "@agent-deck/loop-catalog-native";
 import { effectiveDeclaredReads, MAX_MANAGED_SUBAGENT_TASK_BYTES } from "../declaredReads.ts";
 import type { SubagentRunSource, SubagentRunRecord } from "../subagentRunStore.ts";
+import { CHECKER_SHELL_TOOL, writeCheckerShellExtension } from "../checkerShell.ts";
 import {
   PiExited,
   PiHost,
@@ -627,6 +628,9 @@ const SUBAGENT_TIMEOUT_MS = 120_000;
 const CHILD_FORBIDDEN_TOOLS = new Set([
   "managed_subagent",
   "managed_parallel",
+  "spawn_subagent",
+  "await_subagents",
+  "cancel_subagent",
   "list_supervisor_requests",
   "answer_supervisor_request",
   "subagent_delta",
@@ -2064,6 +2068,8 @@ export interface ChildLaunchOverrides {
   defaultExpectedOutcome?: SubagentExpectedOutcome;
   /** Tool list used when the named agent has no `tools:` frontmatter (loop triage). */
   defaultTools?: string[];
+  /** Loop checker: add `checker_shell` (read-only git, checkerShell.ts) to a readOnly child. */
+  checkerShell?: boolean;
 }
 
 export interface ChildRunOptions {
@@ -2079,8 +2085,10 @@ export interface ChildRunOptions {
   source: SubagentRunSource;
   /** The bridge tool call of this turn: parent (tree edge) of a fresh run, turn call of every run. */
   toolCallId?: string;
-  /** Fresh parallel children only; continuation and single-child callers omit it. */
+  /** Fresh children only (managed_parallel, spawn_subagent); continuations omit it. */
   worktree?: boolean;
+  /** A4: called once the durable run record is committed (spawn_subagent returns here). */
+  onAccepted?: (runId: string) => void;
 }
 
 export interface ChildRunResult {
@@ -2424,6 +2432,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
                 transcriptRegistered = true;
               });
               yield* persistChildRun(() => durable.registerTranscript?.(runId));
+              yield* Effect.sync(() => runOptions?.onAccepted?.(runId));
             }),
           );
         }
@@ -2500,13 +2509,17 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
         if (childMemoryAdopted && childMemoryContext) childMemoryContext.commitUsage();
         writeFileSync(promptFile, launchSystemPrompt);
 
+        const checkerShell =
+          toolPolicy === "readOnly" && overrides?.checkerShell
+            ? writeCheckerShellExtension(promptDir, { cwd: childCwd })
+            : undefined;
         const childTools =
           runOptions?.worktree && !resolved
             ? [...new Set([...ANONYMOUS_WORKTREE_TOOLS, ...(childBridge?.toolNames ?? [])])]
             : resolveChildTools(
                 resolved?.tools ?? overrides?.defaultTools,
                 toolPolicy,
-                childBridge?.toolNames,
+                checkerShell ? [CHECKER_SHELL_TOOL] : childBridge?.toolNames,
               );
 
         // Read Pi, not the frozen launch plan: picker changes, restored sessions,
@@ -2550,10 +2563,15 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
                     ...(helperContext.extensions ?? []),
                     ...(resolved.extensions ?? []),
                     ...(childBridge ? [childBridge.extension] : []),
+                    ...(checkerShell ? [checkerShell] : []),
                   ]),
                 ]
-              : childBridge
-                ? [...(helperContext.extensions ?? []), childBridge.extension]
+              : childBridge || checkerShell
+                ? [
+                    ...(helperContext.extensions ?? []),
+                    ...(childBridge ? [childBridge.extension] : []),
+                    ...(checkerShell ? [checkerShell] : []),
+                  ]
                 : helperContext.extensions,
           }),
           cwd: childCwd,

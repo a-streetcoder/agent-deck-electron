@@ -25,7 +25,7 @@ import { Effect, Exit, Scope } from "effect";
 import { runPromiseUnwrapped, runSyncUnwrapped } from "./effectRun.ts";
 import type { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import type { ReceiptBus } from "./receipts.ts";
-import type { SubagentRunStore } from "./subagentRunStore.ts";
+import type { SubagentRunRecord, SubagentRunStore } from "./subagentRunStore.ts";
 import type { ServerRuntime } from "./runtime.ts";
 import { SessionMutationClaims } from "./sessionMutationClaims.ts";
 import { gitIdentityEnv, type GitIdentityMap } from "./gitIdentity.ts";
@@ -90,6 +90,27 @@ export class SessionCreationError extends Error {
   }
 }
 
+/** A4: spawned children per parent; the managed_parallel concurrency maximum. */
+export const MAX_DETACHED_SUBAGENTS = 8;
+
+export interface SpawnSubagentOptions {
+  agentName?: string;
+  continueSubagentId?: string;
+  declaredReads?: readonly string[];
+  /** Fresh children only: run in an app-owned detached Git worktree. */
+  worktree?: boolean;
+  /** Cancels the child while it launches; for a non-detached spawn, until it settles. */
+  signal?: AbortSignal;
+  parentToolCallId?: string;
+  /** spawn_subagent: the child outlives its tool call and counts against the bound. */
+  detached?: boolean;
+}
+
+export interface SpawnedSubagent {
+  controller: AbortController;
+  done: Promise<ChildRunResult>;
+}
+
 /**
  * A1 event log: the route that asked for a fork announces it. `created` runs once
  * the new session has launched and seeded, BEFORE its inherited plan is restored;
@@ -149,6 +170,12 @@ export interface SessionBusView {
  * effects via `runSync`; async pi operations run them on the ManagedRuntime.
  */
 export class ManagedSession {
+  /** A4: this parent's managed children by run id, from record commit until the run settles. */
+  readonly spawnedSubagents = new Map<string, SpawnedSubagent>();
+  /** A4: children still launching (no committed record yet); a Stop cancels them too. */
+  readonly launchingSubagents = new Set<AbortController>();
+  /** A4: spawn_subagent children in flight (launching or running), bounded per parent. */
+  detachedSubagents = 0;
   private ingestionStarted = false;
   private lifecycle: "live" | "parking" | "parked" = "live";
   private parkingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -317,6 +344,14 @@ export class ManagedSession {
       }
       throw error;
     }
+  }
+
+  /** A4: an idle-deadline park returns early while a spawned child runs and nothing
+   * re-arms it; the child's end does, unless a deadline is already pending. */
+  rearmIdleParking(): void {
+    const config = this.parkingConfig;
+    if (!config || this.parkingTimer || this.lifecycle !== "live") return;
+    this.configureIdleParking(config.timeoutMs, config.resume, config.onParked);
   }
 
   async parkForResourceRefresh(onParked: (meta: SessionMeta) => void): Promise<boolean> {
@@ -491,6 +526,10 @@ export class ManagedSession {
   }
 
   async abort(): Promise<void> {
+    // A4 orphans: a parent abort (composer Stop) cancels every child still running,
+    // including spawn_subagent children no tool call is awaiting.
+    for (const child of this.spawnedSubagents.values()) child.controller.abort();
+    for (const controller of this.launchingSubagents) controller.abort();
     // Abort of a parked session is already satisfied and must not warm Pi.
     if (this.lifecycle === "parked") return;
     const session = await this.piSession();
@@ -1699,8 +1738,7 @@ export class SessionManager {
     ).text;
   }
 
-  /** Generic managed_subagent entrypoint. Continuations are validated and
-   * claimed entirely before runChildAgent can spawn or prompt a second Pi. */
+  /** Generic managed_subagent entrypoint: spawn, then await the same child. */
   async runManagedSubagent(
     parentSessionId: string,
     task: string,
@@ -1710,20 +1748,142 @@ export class SessionManager {
     signal?: AbortSignal,
     parentToolCallId?: string,
   ): Promise<ChildRunResult> {
-    signal?.throwIfAborted();
+    const { done } = await this.spawnSubagent(parentSessionId, task, {
+      agentName,
+      continueSubagentId,
+      declaredReads,
+      signal,
+      parentToolCallId,
+    });
+    return await done;
+  }
+
+  /**
+   * A4: launch a managed child and resolve with its run id once the run record is
+   * committed; the child keeps running in the parent session scope and `done`
+   * settles with its result. Failures before the commit reject this call. A
+   * detached spawn (spawn_subagent) outlives its tool call: only cancelSubagent, a
+   * parent abort or parent teardown stop it, and at most MAX_DETACHED_SUBAGENTS
+   * (managed_parallel's bound) run per parent.
+   */
+  async spawnSubagent(
+    parentSessionId: string,
+    task: string,
+    options: SpawnSubagentOptions = {},
+  ): Promise<{ runId: string; done: Promise<ChildRunResult> }> {
+    options.signal?.throwIfAborted();
     const parent = this.sessions.get(parentSessionId);
     if (!parent) throw new Error(`unknown parent session: ${parentSessionId}`);
+    if (options.detached && parent.detachedSubagents >= MAX_DETACHED_SUBAGENTS) {
+      throw new Error(
+        `at most ${MAX_DETACHED_SUBAGENTS} spawned subagents can run at once; await or cancel one first`,
+      );
+    }
+    const controller = new AbortController();
+    const forward = (): void => controller.abort();
+    options.signal?.addEventListener("abort", forward, { once: true });
+    const entry = { controller } as SpawnedSubagent;
+    let acceptedId: string | undefined;
+    let accept!: (runId: string) => void;
+    const accepted = new Promise<string>((resolve) => (accept = resolve));
+    if (options.detached) parent.detachedSubagents += 1;
+    // Tracked before the async launch, so a Stop before the commit still cancels it.
+    parent.launchingSubagents.add(controller);
+    entry.done = this.launchManagedSubagent(
+      parentSessionId,
+      parent,
+      task,
+      options,
+      controller.signal,
+      (runId) => {
+        acceptedId = runId;
+        parent.launchingSubagents.delete(controller);
+        parent.spawnedSubagents.set(runId, entry);
+        // A detached child outlives its spawning call: from its commit on, only
+        // cancelSubagent, a parent abort or parent teardown stop it.
+        if (options.detached) options.signal?.removeEventListener("abort", forward);
+        accept(runId);
+      },
+    );
+    const settle = (): void => {
+      options.signal?.removeEventListener("abort", forward);
+      parent.launchingSubagents.delete(controller);
+      if (acceptedId && parent.spawnedSubagents.get(acceptedId) === entry) {
+        parent.spawnedSubagents.delete(acceptedId);
+      }
+      if (options.detached) {
+        parent.detachedSubagents -= 1;
+        this.resumeIdleWork(parentSessionId, parent);
+      }
+    };
+    entry.done.then(settle, settle);
+    const runId = await Promise.race([accepted, entry.done.then((result) => result.runId)]);
+    return { runId, done: entry.done };
+  }
+
+  /** A4: a parent detached from its last child may park or refresh again; the idle
+   * edge that normally triggers both passed while the child was running. */
+  private resumeIdleWork(parentSessionId: string, parent: ManagedSession): void {
+    if (parent.detachedSubagents > 0 || this.sessions.get(parentSessionId) !== parent) return;
+    parent.rearmIdleParking();
+    if (!this.resourceRefreshDirty.has(parentSessionId) || !parent.resourceRefreshEligible) return;
+    this.resourceRefreshIdleSubscriptions.get(parentSessionId)?.();
+    this.resourceRefreshIdleSubscriptions.delete(parentSessionId);
+    this.armResourceRefresh(parent);
+  }
+
+  /** A4: the OWNING parent's private record of one of its runs (full summary, real paths). */
+  subagentRunRecord(parentSessionId: string, runId: string): SubagentRunRecord | undefined {
+    const run = this.subagentRuns?.get(runId);
+    return run?.parentSessionId === parentSessionId ? run : undefined;
+  }
+
+  /** A4: settles when a run launched by this process ends; undefined when none is in flight. */
+  subagentRunSettled(parentSessionId: string, runId: string): Promise<unknown> | undefined {
+    return this.sessions.get(parentSessionId)?.spawnedSubagents.get(runId)?.done;
+  }
+
+  /**
+   * A4: cancel one of the parent's running children through its delegation signal
+   * (the child scope finalizer persists `stopped`) and wait for it to settle.
+   * Returns the run's status afterwards, or undefined for a run of another parent.
+   */
+  async cancelSubagent(parentSessionId: string, runId: string): Promise<string | undefined> {
+    const child = this.sessions.get(parentSessionId)?.spawnedSubagents.get(runId);
+    if (child) {
+      child.controller.abort();
+      await child.done.catch(() => undefined);
+    }
+    return this.subagentRunRecord(parentSessionId, runId)?.status;
+  }
+
+  /** Continuations are validated and claimed entirely before runChildAgent can
+   * spawn or prompt a second Pi. */
+  private async launchManagedSubagent(
+    parentSessionId: string,
+    parent: ManagedSession,
+    task: string,
+    options: SpawnSubagentOptions,
+    signal: AbortSignal,
+    onAccepted: (runId: string) => void,
+  ): Promise<ChildRunResult> {
+    const { agentName, continueSubagentId, declaredReads, parentToolCallId } = options;
     if (!this.subagentRuns) throw new Error("subagent run persistence is unavailable");
+    const common = {
+      source: "single" as const,
+      declaredReads: [...(declaredReads ?? [])],
+      signal,
+      onAccepted,
+      ...(parentToolCallId ? { toolCallId: parentToolCallId } : {}),
+    };
 
     if (!continueSubagentId) {
       return await parent.runChildAgent(task, agentName, undefined, undefined, {
-        source: "single",
-        declaredReads: [...(declaredReads ?? [])],
-        ...(signal ? { signal } : {}),
-        ...(parentToolCallId ? { toolCallId: parentToolCallId } : {}),
+        ...common,
+        ...(options.worktree ? { worktree: true } : {}),
       });
     }
-
+    if (options.worktree) throw new Error("continued subagents cannot allocate worktrees");
     const run = this.subagentRuns.get(continueSubagentId);
     if (!run) throw new Error(`unknown Deck subagent ID: ${continueSubagentId}`);
     if (run.parentSessionId !== parentSessionId) {
@@ -1731,6 +1891,9 @@ export class SessionManager {
     }
     if (run.source !== "single") {
       throw new Error("only single managed_subagent runs can be continued");
+    }
+    if (run.worktreePath) {
+      throw new Error("a Deck subagent that ran in its own worktree cannot be continued");
     }
     if (this.claimedSubagentContinuations.has(continueSubagentId)) {
       throw new Error(`Deck subagent ${continueSubagentId} is already being continued`);
@@ -1770,10 +1933,7 @@ export class SessionManager {
       // than accidentally resuming its history as an anonymous child.
       const effectiveAgentName = agentName ?? run.agent;
       return await parent.runChildAgent(task, effectiveAgentName, undefined, undefined, {
-        source: "single",
-        declaredReads: [...(declaredReads ?? [])],
-        ...(signal ? { signal } : {}),
-        ...(parentToolCallId ? { toolCallId: parentToolCallId } : {}),
+        ...common,
         runId: continueSubagentId,
         resumeSessionPath: run.sessionFile,
         artifactRootId: run.artifactRootId,

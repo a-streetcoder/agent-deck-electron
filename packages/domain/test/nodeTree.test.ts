@@ -44,7 +44,7 @@ describe("projectNodeTree over the recorded logs", () => {
             "done",
             [
               [`loopChild:${uuid(6)}`, "done"],
-              [`loopChild:${uuid(11)}`, "done"],
+              [`loopChild:${uuid(17)}`, "done"],
               [`loopChild:${uuid(22)}`, "done"],
             ],
           ],

@@ -1,6 +1,6 @@
 ---
 id: ade-m5ku
-status: open
+status: in_progress
 deps: [ade-74y5, ade-oili]
 links: []
 created: 2026-10-14T23:39:31Z

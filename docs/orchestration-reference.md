@@ -23,12 +23,13 @@ Each Loop role child launches with a tool policy and a fallback outcome contract
 filtered by the policy; with no `tools:` the child gets the set in the table. An agent's own
 `defaultExpectedOutcome` always wins over the fallback outcome.
 
-| Role (loop write target)                                                        | Tool policy  | No `tools:` frontmatter      | Fallback outcome      |
-| ------------------------------------------------------------------------------- | ------------ | ---------------------------- | --------------------- |
-| Maker / single agent, pipeline stage (checkout or worktree)                     | `configured` | Pi defaults                  | `directProjectWrites` |
-| Triage (checkout or worktree)                                                   | `configured` | `read`, `grep`, `find`, `ls` | `reportOnly`          |
-| Checker; any non-evaluator role in an `artifactMarkdown` loop (branches always) | `readOnly`   | `read`, `grep`, `find`, `ls` | `reportOnly`          |
-| Evaluator                                                                       | `none`       | none                         | `reportOnly`          |
+| Role (loop write target)                                                     | Tool policy  | No `tools:` frontmatter      | Fallback outcome      |
+| ---------------------------------------------------------------------------- | ------------ | ---------------------------- | --------------------- |
+| Maker / single agent, pipeline stage (checkout or worktree)                  | `configured` | Pi defaults                  | `directProjectWrites` |
+| Triage (checkout or worktree)                                                | `configured` | `read`, `grep`, `find`, `ls` | `reportOnly`          |
+| Checker (also gets `checker_shell`, below)                                   | `readOnly`   | `read`, `grep`, `find`, `ls` | `reportOnly`          |
+| Any other non-evaluator role in an `artifactMarkdown` loop (branches always) | `readOnly`   | `read`, `grep`, `find`, `ls` | `reportOnly`          |
+| Evaluator                                                                    | `none`       | none                         | `reportOnly`          |
 
 Pi's default `bash` and file tools are not sandboxed to the loop checkout or worktree: a child
 can reach the main checkout through absolute paths, and an authored `tools:` list is the way to
@@ -37,6 +38,49 @@ narrow it.
 `managed_subagent` and `managed_parallel` children are unchanged: no policy, Pi defaults without
 `tools:`, and `reportOnly` when the agent sets no outcome.
 
+### Loop checker and verdicts
+
+In `makerChecker` the order is maker, validation, checker, evaluator. The validation command
+runs before the checker decides, and its result (passed or failed, classification, exit code,
+command, and the last 2,000 characters of the last 16 KiB of stdout and stderr) is part of the
+checker's prompt. A validation `spawnError` or `timeout` ends the run as `toolFailed` before any
+checker or evaluator call.
+
+A checker `FAIL` against a passed validation does not end the run. The evaluator is skipped (the
+checker keeps its veto on success), the checker's report becomes the next maker's feedback, and
+the timeline says "checker FAIL although validation passed; evaluator skipped, next iteration";
+on the last iteration the run ends `notAchieved` (`maxIterationsReached`). This diverges from the
+native app, where a checker `FAIL` is terminal: one wrong judge costs an iteration, not the run. A
+checker `FAIL` with no validation configured, or after a failed validation, still ends the run as
+`agentFailed`.
+
+Besides its read-only tools the checker has `checker_shell` (`apps/server/src/checkerShell.ts`, a
+Pi extension written per launch). It runs only `git status`, `git diff`, `git log` and `git show`
+in the loop's working directory, without a shell, with options from an exact allowlist (no
+abbreviations): `status --porcelain --short -s --branch`; `diff --stat --numstat --name-only
+--name-status --cached -U<n> --unified=<n>`; `log --oneline -n <k> --max-count=<k> --stat
+--name-only --format=oneline|short|medium`; `show --stat --name-only --format=…`; plus plain
+revisions and repository-relative paths (no absolute paths, no `..`). Git runs with every
+`GIT_*` variable removed, `GIT_CONFIG_NOSYSTEM=1`, an empty global config, empty hooks and
+attributes files, `--no-pager --no-optional-locks`, `core.fsmonitor=false`, `diff.external=`,
+`log.showSignature=false`, and `--no-ext-diff --no-textconv` on `diff`, `log` and `show`. It is
+refused when the repository config defines `filter.*`, `diff.*` or `merge.*` entries, or a
+`.gitattributes` file (or `info/attributes`) mentions `filter=`, `diff=`, `merge=` or `textconv`.
+Every other command or option is refused before it executes, and the refusal is the tool's error
+result. It does not run the validation command: the engine's result is already in the prompt.
+Timeouts (30 s) and cancellation kill the git process tree (`processTree.ts`, shared with the
+engine's validation run) and wait for it to exit.
+
+Decision lines (checker and evaluator) are read by `parseVerdict`. The exact first non-empty line
+is `strict`. Otherwise, on the first non-empty line or one of the next three, with markdown
+emphasis removed, `lenient` accepts in order: the token alone (trailing punctuation trimmed);
+`Verdict:` or `Decision:` followed by the token; an upper-case token starting the line followed by
+a separator (`SUCCESS - …`); and, on the first line only, an upper-case token ending it right after
+a sentence terminator (`…report the decision.SUCCESS`). A token inside or at the end of a sentence
+(`not yet a SUCCESS`) is `missing`. Iterations record `goalVerdictParse` (evaluator) and
+`checkerVerdictParse`. A missing verdict, from either role, is read as `CONTINUE`, and both a
+lenient read and a missing verdict add a timeline note.
+
 ### Delegation cancellation
 
 Composer Stop propagates each aborted bridge call's signal to its owned managed
@@ -44,6 +88,34 @@ children (including continuations), settles their supervisor waits, and prevents
 queued parallel tasks from allocating; unrelated children and the parent session
 remain alive. Cancellation waits for owned acquisition/process cleanup and retains
 durable run/worktree identity; it is not session destruction or worktree deletion.
+
+### Spawn, await and cancel
+
+`spawn_subagent` returns `{runId}` once the child's run record is committed; the
+parent's turn continues while the child runs in the parent session scope with its own
+Pi process, worktree (`worktree: true`, fresh children only) and policy, exactly as a
+`managed_subagent` child. `await_subagents({runIds, timeoutMs?})` subscribes to the
+event log first and then reads the store, so a `subagent.run.finished` landing in
+between is not missed; an in-process settle also wakes it when the log is read-only.
+It returns `{results, timedOut}`, one structured result per id, built from the
+caller's private run record (the owning parent gets the full summary and error with
+real paths; the event log keeps the capped, redacted public view): `id`, `status`,
+`summary`, `error`, `tokens`, `durationMs`, `model`; ids the session did not start are
+`not_found`. On timeout (default 120 s, clamped to 240 s, under the bridge fetch's 300 s
+headers timeout) unfinished runs report their current status. `cancel_subagent` aborts
+the child's delegation signal, waits for its scope finalizer, and returns `{status}`
+(`stopped`, or the final status of a finished run); a run still active afterwards
+(a `managed_parallel` child, or one owned by another server process) or an unknown id
+returns `{ok: false, reason}`. `managed_subagent` is spawn plus an in-process await of
+the same child, so its tool result is unchanged.
+
+Orphans: a parent abort (composer Stop) cancels every child of that parent still
+running or still launching, awaited or not, including children spawned in earlier
+turns; otherwise a spawned child keeps running after the turn until it finishes or is
+cancelled. At most 8 spawned children (the `managed_parallel` maximum) run per parent at
+once; spawn refuses the ninth. A running spawned child keeps its idle parent from
+parking or refreshing resources; when the last one ends, the idle-parking deadline and
+any deferred resource refresh are armed again.
 
 ### Managed child provider settlement
 
