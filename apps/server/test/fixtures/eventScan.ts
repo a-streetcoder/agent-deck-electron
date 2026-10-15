@@ -13,8 +13,10 @@ export function capabilityFields(): string[] {
   return [...body.matchAll(/"([^"]+)"/g)].map((match) => match[1]!);
 }
 
-// Windows drive or UNC path, or a POSIX path under a usual home/temp root.
-const ABSOLUTE_PATH = /^(?:[A-Za-z]:[\\/]|\\\\|[/](?:tmp|var|home|Users|private|root)[/])/;
+// Anywhere in a string: a Windows drive or UNC path, or a POSIX path under a usual
+// home/temp root. Redacted text holds placeholders (<dataDir>, <home>, <path>) instead.
+const ABSOLUTE_PATH =
+  /(?<![A-Za-z0-9])[A-Za-z]:[\\/]|(?<![\\\w])\\\\[^\s\\]|(?<![\w.~-])[/](?:tmp|var|home|Users|private|root|srv|mnt|opt)[/]/;
 
 /**
  * No capability key at any depth (plus artifactRootToken and the checkpoint

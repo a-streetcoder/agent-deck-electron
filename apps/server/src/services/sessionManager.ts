@@ -218,7 +218,69 @@ export interface ChildTurnInfo {
   readonly subagentRunId: string;
   readonly childSessionId: string;
   readonly agentName?: string;
+  /** The delegated task; its first line, redacted, labels the child's turn. */
+  readonly task: string;
 }
+
+/** An immutable snapshot of one turn, captured when its work starts (A1 causation). */
+export interface TurnContext {
+  readonly turnId: string;
+  /** The turn.prompted event Pi is acting on; absent for a turn nobody prompted over RPC. */
+  readonly promptEventId?: string;
+  /** The redacted prompt label. */
+  readonly label?: string;
+}
+
+/**
+ * A1 event log hooks for one session (eventProducers.ts implements them). They
+ * never throw into the turn; the call sites still guard them.
+ */
+export interface SessionTurnEvents {
+  /** Pi took a user message into its run: a queued prompt/steer becomes the active turn. */
+  consumed(): void;
+  /** The active turn, for work that starts now and reports later (a child run). */
+  current(): TurnContext | undefined;
+  /** A user turn ended at this idle: snapshot it and close it. */
+  end(): TurnContext | undefined;
+  completed(turn: TurnRefs, context: TurnContext | undefined, child?: ChildTurnInfo): void;
+}
+
+/** Bound on the child's get_entries after it settled; a slow Pi yields a partial report. */
+export const CHILD_ENTRIES_TIMEOUT_MS = 5_000;
+
+/**
+ * Report a settled child's turn. Never fails: a timeout or error reports the turn
+ * with empty refs and `partial: true`, so the turn still exists in the log.
+ */
+export const reportChildTurn = (
+  getEntries: Effect.Effect<EntriesData, unknown>,
+  report: (turn: TurnRefs) => void,
+  timeoutMs = CHILD_ENTRIES_TIMEOUT_MS,
+): Effect.Effect<void> =>
+  getEntries.pipe(
+    Effect.timeoutFail({
+      duration: Duration.millis(timeoutMs),
+      onTimeout: () => new Error("child get_entries timed out"),
+    }),
+    Effect.map((data) => turnRefsFromEntries(activeEntryChain(data))),
+    Effect.catchAllCause(() => Effect.succeed(null)),
+    Effect.map((turn) => {
+      try {
+        report(turn ?? { entryIds: [], toolCalls: [], label: "", partial: true });
+      } catch {
+        // The event log is not authoritative: never cost the child's result.
+      }
+    }),
+  );
+
+const quietly = <T>(run: () => T): T | undefined => {
+  try {
+    return run();
+  } catch {
+    // The event log is not authoritative: never cost the turn.
+    return undefined;
+  }
+};
 
 /** Everything one session's build needs from its manager (the class facade). */
 export interface SpawnSessionParams {
@@ -298,13 +360,13 @@ export interface SpawnSessionParams {
    * Like {@link onIdle} it must never fail or die (the facade wraps it in a
    * catch); it is fire-and-forget so it never perturbs the idle receipt timing.
    */
-  readonly captureCheckpoint?: (label: string) => Effect.Effect<void>;
+  readonly captureCheckpoint?: (label: string, turn?: TurnContext) => Effect.Effect<void>;
   /**
-   * A1 event log: a finished turn's Pi entry references, from the idle
-   * reconcile (where entry ids are stable) and from each delegated child's
-   * settle. Synchronous and must not throw into the turn.
+   * A1 event log: turn boundaries from the live ingest, and finished turns' Pi
+   * entry references from the idle reconcile (where entry ids are stable) and
+   * from each delegated child's settle.
    */
-  readonly onTurnCompleted?: (turn: TurnRefs, child?: ChildTurnInfo) => void;
+  readonly turnEvents?: SessionTurnEvents;
   /**
    * This runtime REPLACES one that was idle (the resource-refresh park +
    * relaunch), so seeding from history restores the authoritative-idle edge the
@@ -851,6 +913,9 @@ export const makeManagedSessionRuntime = (
     // consumed only by a successful idle boundary, or discarded by an explicit
     // abort/terminal outcome. Startup/resume idle therefore cannot raise attention.
     let pendingUserTurn = false;
+    // A1: the leaf the previous turn report ended at, so the next turn is every
+    // entry after it (a steer or follow-up inside a turn keeps its prompt).
+    let lastReportedEntryId: string | undefined;
     let currentTurnFailedOrCancelled = false;
     let turnAwaitingProviderRetry = false;
     const ingestionSettled = yield* Deferred.make<void>();
@@ -1258,6 +1323,7 @@ export const makeManagedSessionRuntime = (
         if (domainEvent.type === "cell_final" && domainEvent.cell.kind === "user") {
           pendingUserTurn = true;
           currentTurnFailedOrCancelled = false;
+          quietly(() => params.turnEvents?.consumed());
         }
         if (domainEvent.type === "cell_final" && domainEvent.cell.kind === "assistant") {
           receipts.emit("assistant_final", meta.id);
@@ -1272,21 +1338,23 @@ export const makeManagedSessionRuntime = (
             pendingUserTurn = false;
             currentTurnFailedOrCancelled = false;
           }
-          const reportTurn = turnEnded ? params.onTurnCompleted : undefined;
+          // The causation snapshot is taken now, not when the async work below
+          // reports: a prompt sent meanwhile must not become this turn's cause.
+          const turnEvents = turnEnded ? params.turnEvents : undefined;
+          const turnContext = turnEvents ? quietly(() => turnEvents.end()) : undefined;
           const reconcileImages = Effect.gen(function* () {
-            if (!params.reconcileImages && !reportTurn) {
+            if (!params.reconcileImages && !turnEvents) {
               params.expirePendingImages?.();
               return;
             }
             const entryData = yield* handle.getEntries;
             const chain = activeEntryChain(entryData);
-            if (reportTurn) {
-              try {
-                const turn = turnRefsFromEntries(chain);
-                if (turn) reportTurn(turn);
-              } catch {
-                // The event log is not authoritative: never cost the reconcile below.
-              }
+            if (turnEvents) {
+              quietly(() => {
+                const turn = turnRefsFromEntries(chain, lastReportedEntryId);
+                lastReportedEntryId = entryData.leafId ?? lastReportedEntryId;
+                if (turn) turnEvents.completed(turn, turnContext);
+              });
             }
             if (!params.reconcileImages) {
               params.expirePendingImages?.();
@@ -1356,7 +1424,9 @@ export const makeManagedSessionRuntime = (
           const sessionFileFiber = params.captureCheckpoint
             ? captureSessionFile.pipe(
                 Effect.andThen(
-                  Effect.suspend(() => params.captureCheckpoint!(lastUserText(transcript))),
+                  Effect.suspend(() =>
+                    params.captureCheckpoint!(lastUserText(transcript), turnContext),
+                  ),
                 ),
               )
             : captureSessionFile;
@@ -1416,6 +1486,8 @@ export const makeManagedSessionRuntime = (
       const entryData = yield* handle.getEntries.pipe(Effect.orDie);
       yield* Effect.sync(() => {
         const entries = activeEntryChain(entryData);
+        // History is not a turn: the first live turn starts after it.
+        lastReportedEntryId = entryData.leafId ?? undefined;
         const hiddenFromModel = contextHiddenEntryIds(entries);
         const durableRetries = (meta.providerRetries ?? [])
           .flatMap((record) => {
@@ -2081,6 +2153,8 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
     overrides,
     runOptions,
   } = args;
+  // A1: the parent turn this delegation belongs to, captured before the child runs.
+  const parentTurn = quietly(() => params.turnEvents?.current());
   return Effect.gen(function* () {
     const resolution = agentName ? params.resolveAgent?.(agentName, meta.projectId) : undefined;
     if (agentName && !resolution) {
@@ -2574,19 +2648,15 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
           yield* Fiber.join(collector);
           // A1: children never reach the parent's idle reconcile, so their turn is
           // reported here, while the child Pi is still alive to answer get_entries.
-          if (lifecycle.settled && params.onTurnCompleted) {
-            const report = params.onTurnCompleted;
-            yield* child.getEntries.pipe(
-              Effect.map((data) => {
-                const turn = turnRefsFromEntries(activeEntryChain(data));
-                if (turn)
-                  report(turn, {
-                    subagentRunId: runId,
-                    childSessionId,
-                    ...(agentName ? { agentName } : {}),
-                  });
+          const childTurnEvents = params.turnEvents;
+          if (lifecycle.settled && childTurnEvents) {
+            yield* reportChildTurn(child.getEntries, (turn) =>
+              childTurnEvents.completed(turn, parentTurn, {
+                subagentRunId: runId,
+                childSessionId,
+                task,
+                ...(agentName ? { agentName } : {}),
               }),
-              Effect.catchAllCause(() => Effect.void),
             );
           }
           if (!lifecycle.settled)

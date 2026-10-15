@@ -138,8 +138,8 @@ export interface ServerContext {
   composerDrafts?: ComposerDraftStore;
   /** SUB-14: durable per-session plan history (read side + delete cleanup). */
   planEvents: PlanEventServiceShape;
-  /** A1 event log producers; optional so hand-built test contexts need none. */
-  events?: EventProducers;
+  /** A1 event log producers (tests: createEventProducers(disabledEventLog())). */
+  events: EventProducers;
   sessionImages: SessionImageStore;
   agentAvatars: AgentAvatarStore;
   projectImages: ProjectImageStore;

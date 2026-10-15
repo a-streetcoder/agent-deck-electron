@@ -123,13 +123,21 @@ export function createRpcConnection(deps: {
     }
   };
   // A1 turn.prompted, at the same point: emitted before Pi sees the message so the
-  // turn's later agent events can name it as their cause. A prompt Pi then rejects
-  // keeps its event (no completion follows).
-  const promptEvent = (sessionId: string, message: string, mode: PromptMode): void => {
+  // turn's later agent events can name it as their cause. The returned callback
+  // records a rejection and restores the session's previous turn.
+  const promptEvent = (sessionId: string, message: string, mode: PromptMode): (() => void) => {
     try {
-      deps.events?.turnPrompted(sessionId, userActor(deps.user), mode, message);
+      const attempt = deps.events?.turnPrompted(sessionId, userActor(deps.user), mode, message);
+      return () => {
+        try {
+          attempt?.rejected();
+        } catch {
+          // Preserve the prompt failure.
+        }
+      };
     } catch {
       // The event log is not authoritative: never cost the prompt.
+      return () => {};
     }
   };
   const unstageAuthor = (sessionId: string, message: string): void => {
@@ -876,6 +884,7 @@ export function createRpcConnection(deps: {
         case "prompt": {
           let stagedPastes: { rollback: () => void } | undefined;
           let stagedImages: { rollback: () => void } | undefined;
+          let rejectPrompt: (() => void) | undefined;
           try {
             // Author first: the catch unstages by (session, text, author), so it
             // must only run once this request has staged its own record.
@@ -892,7 +901,16 @@ export function createRpcConnection(deps: {
             stagedImages = request.images?.length
               ? sessionImages?.stage(session.meta.id, request.message, request.images)
               : undefined;
-            promptEvent(session.meta.id, request.transcriptText ?? request.message, "prompt");
+            // The Composer sends a steer or follow-up as a prompt with a streaming behavior.
+            rejectPrompt = promptEvent(
+              session.meta.id,
+              request.transcriptText ?? request.message,
+              request.streamingBehavior === "steer"
+                ? "steer"
+                : request.streamingBehavior === "followUp"
+                  ? "follow_up"
+                  : "prompt",
+            );
             await session.prompt(
               request.message,
               request.images?.map(({ type, data, mimeType }) => ({ type, data, mimeType })),
@@ -900,6 +918,7 @@ export function createRpcConnection(deps: {
               request.titleSource,
             );
           } catch (error) {
+            rejectPrompt?.();
             try {
               stagedImages?.rollback();
             } catch {
@@ -919,22 +938,26 @@ export function createRpcConnection(deps: {
           }
           break;
         }
-        case "steer":
+        case "steer": {
           stageAuthor(session.meta.id, request.message);
-          promptEvent(session.meta.id, request.message, "steer");
+          const rejectSteer = promptEvent(session.meta.id, request.message, "steer");
           await session.steer(request.message).catch((error: unknown) => {
+            rejectSteer();
             unstageAuthor(session.meta.id, request.message);
             throw error;
           });
           break;
-        case "follow_up":
+        }
+        case "follow_up": {
           stageAuthor(session.meta.id, request.message);
-          promptEvent(session.meta.id, request.message, "follow_up");
+          const rejectFollowUp = promptEvent(session.meta.id, request.message, "follow_up");
           await session.followUp(request.message).catch((error: unknown) => {
+            rejectFollowUp();
             unstageAuthor(session.meta.id, request.message);
             throw error;
           });
           break;
+        }
         case "abort":
           await session.abort();
           break;

@@ -167,7 +167,7 @@ export function registerLoopRoutes(
     run: { id: string; projectId?: string },
     action: LoopUserAction,
   ): void =>
-    ctx.events?.loopUserAction(run.id, run.projectId, action, userActor(requestUser(request.raw)));
+    ctx.events.loopUserAction(run.id, run.projectId, action, userActor(requestUser(request.raw)));
   // Trust-boundary lock: at most one destructive Loop may own a canonical
   // checkout. Interrupted runs seed durable recovery locks before onReady.
   const checkoutLocks = new Map<
@@ -898,7 +898,6 @@ export function registerLoopRoutes(
       parent.meta.agentName = `Loop · ${loop.name}`;
       announcementAttempted = true;
       sessions.announceCreated(parent);
-      ctx.events?.sessionCreated(parent.meta, userActor(runner));
       stopSnapshotTracking = sessions.trackLoopSession?.(parent.meta.id);
     } catch (error) {
       if (run) {
@@ -981,6 +980,8 @@ export function registerLoopRoutes(
         releaseCheckoutLock();
       }
     });
+    // Only now: every fallible startup step above can still roll the parent back.
+    ctx.events.sessionCreated(parent.meta, userActor(runner));
     recordLoopAction(request, run, "start");
     return reply.status(201).send({ run, worktree });
   });

@@ -53,7 +53,11 @@ import {
   SessionWorktreeAddError,
   type GitWorktree,
 } from "../git.ts";
-import { SessionCreationError, SubagentTranscriptEvidenceError } from "../SessionManager.ts";
+import {
+  SessionCreationError,
+  SubagentTranscriptEvidenceError,
+  type SessionAnnounce,
+} from "../SessionManager.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
 import { HistoryActionCoordinator, HistoryActionError } from "../historyActions.ts";
 import { LaunchResourceResolutionError, resolveLaunchResources } from "../launchResources.ts";
@@ -112,6 +116,11 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     dropDiffCache,
   } = ctx;
 
+  // A1: a fork is announced by the request that asked for it, before its plan restore.
+  const forkAnnounce = (raw: IncomingMessage, sourceId: string): SessionAnnounce => ({
+    created: (meta) => ctx.events.sessionCreated(meta, userActor(requestUser(raw)), sourceId),
+    abandoned: (meta) => ctx.events.sessionRemoved(meta, { type: "system" }),
+  });
   const sessionMutations = sessions.mutationClaims;
   const historyActions = new HistoryActionCoordinator(
     sessions,
@@ -875,7 +884,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       }
       sessions.removeLoopSessionSnapshot(id);
       index.remove(id);
-      ctx.events?.sessionRemoved(meta, userActor(requestUser(request.raw)));
+      ctx.events.sessionRemoved(meta, userActor(requestUser(request.raw)));
       try {
         ctx.composerDrafts?.delete(id);
       } catch {
@@ -1532,7 +1541,12 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       }
       const { id } = request.params as { id: string };
       try {
-        const result = await historyActions.run(id, parsed.data.entryId, action);
+        const result = await historyActions.run(
+          id,
+          parsed.data.entryId,
+          action,
+          action === "fork" ? forkAnnounce(request.raw, id) : undefined,
+        );
         return reply.status(result.outcome === "forked" ? 201 : 200).send(result);
       } catch (error) {
         if (error instanceof HistoryActionError) {
@@ -1595,9 +1609,14 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       }
     }
     try {
-      const session = await sessions.fork(source, meta.piSessionFile, copyTo, envDefaults().env);
+      const session = await sessions.fork(
+        source,
+        meta.piSessionFile,
+        copyTo,
+        envDefaults().env,
+        forkAnnounce(request.raw, meta.id),
+      );
       index.upsert(session.meta);
-      ctx.events?.sessionCreated(session.meta, userActor(requestUser(request.raw)), meta.id);
       return reply.status(201).send({ session: session.meta });
     } catch (error) {
       return reply.status(500).send({ error: String(error) });
@@ -1966,7 +1985,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     try {
       if (body.startImmediately) {
         const { meta } = await launchSession(body, undefined, createdBy);
-        ctx.events?.sessionCreated(meta, userActor(createdBy));
+        ctx.events.sessionCreated(meta, userActor(createdBy));
         return reply.status(201).send({ session: meta });
       }
       const defaults = envDefaults();
@@ -1992,7 +2011,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         launchResourceFingerprint: resolved.fingerprint,
       };
       index.upsert(draft);
-      ctx.events?.sessionCreated(draft, userActor(createdBy));
+      ctx.events.sessionCreated(draft, userActor(createdBy));
       if (body.env) draftEnvironment.set(draft.id, body.env);
       broadcast({ type: "session_meta", session: draft });
       return reply.status(201).send({ session: draft });

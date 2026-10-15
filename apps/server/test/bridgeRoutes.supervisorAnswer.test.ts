@@ -1,6 +1,8 @@
 import Fastify from "fastify";
 import { describe, expect, it, vi } from "vitest";
 import type { ServerContext } from "../src/context.ts";
+import { disabledEventLog } from "../src/eventLog.ts";
+import { createEventProducers } from "../src/eventProducers.ts";
 import { registerBridgeRoutes } from "../src/routes/bridge.ts";
 import { SupervisorLog } from "../src/supervisor.ts";
 
@@ -48,6 +50,7 @@ function harness(requestId = "request-1", parentSessionId = "parent-a") {
     agentMemoryEnabled: () => false,
     memoryBaseDir: "",
     recallMemories: vi.fn(),
+    events: createEventProducers(disabledEventLog()),
   } as unknown as ServerContext);
   return {
     fastify,

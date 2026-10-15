@@ -174,3 +174,70 @@ export function serializeEvent(event: EventEnvelope): string {
   if (originalBytes <= MAX_EVENT_BYTES) return text;
   return JSON.stringify({ ...event, payload: { truncated: true, originalBytes } });
 }
+
+/** A known absolute root and the placeholder that replaces it in event text. */
+export interface PathPrefix {
+  path: string;
+  placeholder: string;
+}
+
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Generic absolute paths the known prefixes did not cover. A path is redacted up to
+// its first space, comma or semicolon, so the tail of a path containing one survives.
+const GENERIC_PATHS: readonly RegExp[] = [
+  /(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s"'<>|*?,;]*/g,
+  /(?<![\\\w])\\\\[^\s\\/"'<>|,;]+[\\/][^\s"'<>|,;]*/g,
+  /(?<![\w.~-])\/(?:home|Users|root|tmp|var|private|mnt|opt|srv|etc|Volumes|media|run)\/[^\s"'<>|,;]*/g,
+  /(?<![\w~])~[\\/][^\s"'<>|,;]*/g,
+];
+
+/**
+ * Replace absolute paths in free event text (A1 policy: the log holds facts and
+ * references, never a machine's layout). Known roots (data dir, home, project
+ * roots) become their placeholder, longest first, matched case-insensitively with
+ * either separator; any other drive, UNC, POSIX home/temp or ~ path becomes <path>.
+ */
+export function redactPaths(text: string, prefixes: readonly PathPrefix[]): string {
+  let result = text;
+  const roots = prefixes
+    .map((prefix) => ({ ...prefix, path: prefix.path.replace(/[\\/]+$/, "") }))
+    .filter((prefix) => prefix.path.length >= 3)
+    .sort((a, b) => b.path.length - a.path.length);
+  for (const root of roots) {
+    const pattern = root.path
+      .split(/[\\/]+/)
+      .map(escapeRegExp)
+      .join("[\\\\/]+");
+    result = result.replace(
+      new RegExp(`${pattern}(?=$|[\\\\/\\s"'<>|:;,)\\]])`, "gi"),
+      () => root.placeholder,
+    );
+  }
+  for (const generic of GENERIC_PATHS) result = result.replace(generic, "<path>");
+  return result;
+}
+
+const SECRET_PATTERNS: ReadonlyArray<[RegExp, string]> = [
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, "<secret>"],
+  [/\b(?:sk|pk|rk)-(?:[A-Za-z0-9]+-)*[A-Za-z0-9_]{16,}/g, "<secret>"],
+  [/\bgh[pousr]_[A-Za-z0-9]{20,}/g, "<secret>"],
+  [/\bgithub_pat_[A-Za-z0-9_]{20,}/g, "<secret>"],
+  [/\bxox[abprs]-[A-Za-z0-9-]{10,}/g, "<secret>"],
+  [/\bAKIA[0-9A-Z]{16}\b/g, "<secret>"],
+  [/\bAIza[0-9A-Za-z_-]{35}/g, "<secret>"],
+  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, "<secret>"],
+  [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{16,}/gi, "$1 <secret>"],
+  [
+    /\b((?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|token|secret|password|passwd|pwd)["']?\s*[:=]\s*["']?)[^\s"',;]{6,}/gi,
+    "$1<secret>",
+  ],
+];
+
+/** Replace token-like strings (provider keys, bearer tokens, key=value secrets) in free event text. */
+export function redactSecrets(text: string): string {
+  let result = text;
+  for (const [pattern, replacement] of SECRET_PATTERNS)
+    result = result.replace(pattern, replacement);
+  return result;
+}

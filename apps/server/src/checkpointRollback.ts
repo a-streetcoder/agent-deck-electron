@@ -175,7 +175,7 @@ export function makeCheckpointRollback(deps: CheckpointRollbackDeps): Checkpoint
         async ({ target, safety }) => {
           // The metadata step has committed: the safety checkpoint exists even if
           // the restore below fails.
-          if (safety) events?.checkpointCreated(sessionId, safety, actor);
+          if (safety) events?.checkpointCreated(sessionId, safety, { actor });
           // 2. Stop the live session (kills pi cleanly). From here the session
           // is out of the manager; the reopen below brings it back.
           await sessions.destroy(sessionId);

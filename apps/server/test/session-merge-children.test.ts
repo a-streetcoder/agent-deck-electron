@@ -17,6 +17,8 @@ import { SessionWorktreeStore } from "@agent-deck/loop-catalog-native";
 import type { SessionMeta } from "@agent-deck/domain";
 import { describe, expect, it, vi } from "vitest";
 import type { ServerContext } from "../src/context.ts";
+import { disabledEventLog } from "../src/eventLog.ts";
+import { createEventProducers } from "../src/eventProducers.ts";
 import { registerSessionRoutes } from "../src/routes/sessions.ts";
 import { SubagentRunStore } from "../src/subagentRunStore.ts";
 import { GIT_IDENTITIES_FILE, GitIdentityMap } from "../src/gitIdentity.ts";
@@ -117,6 +119,7 @@ async function fixture(
     broadcast: vi.fn(),
     dropDiffCache: vi.fn(),
     ...extra.ctx,
+    events: createEventProducers(disabledEventLog()),
   } as unknown as ServerContext;
   registerSessionRoutes(ctx);
   return {

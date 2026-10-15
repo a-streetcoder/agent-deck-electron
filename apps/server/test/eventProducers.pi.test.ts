@@ -20,7 +20,7 @@ import { scanEventLines } from "./fixtures/eventScan.ts";
  * A1b1 producers against a REAL pi through the full HTTP + WS stack: one user
  * prompt in which the agent sets a plan and delegates to a child that reports
  * progress. The log must hold session.created, turn.prompted, plan.changed,
- * supervisor.request.opened, the child's AND the parent's session.turn.completed,
+ * supervisor.progress.recorded, the child's AND the parent's session.turn.completed,
  * checkpoint.created and session.removed, linked by causationId, and pass the
  * secrets scan. AGENT_DECK_RECORD_EVENT_FIXTURES=1 rewrites
  * packages/domain/test/fixtures/events/plan.jsonl from this run.
@@ -155,7 +155,7 @@ describe("A1b1 producers: one prompted turn through a real pi", () => {
       actor: { type: "agent", sessionId: session.id },
       payload: { kind: "created", items: [{ id: "a", title: "Delegate the summary" }] },
     });
-    expect(one("supervisor.request.opened")).toMatchObject({
+    expect(one("supervisor.progress.recorded")).toMatchObject({
       sessionId: session.id,
       causationId: prompted.id,
       payload: { method: "progress_update", status: "recorded", message: "halfway" },

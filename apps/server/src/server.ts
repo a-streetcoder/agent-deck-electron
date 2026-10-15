@@ -290,11 +290,21 @@ async function initServer(
     eventLog = disabledEventLog();
   }
   startupCleanups.push(() => eventLog.close());
-  const events = createEventProducers(eventLog);
+  // Free event text never carries these roots (A1 policy); project roots are read live.
+  const events = createEventProducers(eventLog, {
+    pathPrefixes: () => [
+      { path: dataDir, placeholder: "<dataDir>" },
+      { path: homedir(), placeholder: "<home>" },
+      ...projects.list().map((project) => ({ path: project.path, placeholder: "<project>" })),
+    ],
+  });
   const receipts = new ReceiptBus(process.env.AGENT_DECK_TEST === "1");
   const index = new SessionIndex(dataDir);
+  // The live session first: a fork or a deferred launch emits before its index row exists.
   projectOfSession = (sessionId) =>
-    index.find((session) => session.id === sessionId)?.projectId ?? null;
+    sessions.get(sessionId)?.meta.projectId ??
+    index.find((session) => session.id === sessionId)?.projectId ??
+    null;
   const composerDrafts = options.composerDraftStore ?? new FileComposerDraftStore(dataDir);
   const settings = new SettingsStore(dataDir);
   const mcpPolicy = options.mcpPolicyStore ?? new FileMcpPolicyStore(settings);
@@ -700,14 +710,18 @@ async function initServer(
     // the diff refresh above, so it never perturbs the idle / diff_refreshed
     // receipt timing. Best-effort — a capture failure is swallowed by the
     // facade; the receipt lets tests synchronize on the capture attempt.
-    async (meta, label) => {
+    async (meta, label, turn) => {
       const record = await checkpoints.capture({
         sessionId: meta.id,
         cwd: meta.worktreePath ?? meta.cwd,
         sessionFile: meta.piSessionFile,
         label,
       });
-      if (record) events.checkpointCreated(meta.id, record);
+      try {
+        if (record) events.checkpointCreated(meta.id, record, { turn });
+      } catch {
+        // The event log is not authoritative: the receipt below must still fire.
+      }
       receipts.emit("checkpoint_captured", meta.id);
     },
     loopSnapshots,
@@ -781,16 +795,7 @@ async function initServer(
     () => settings.get().subagentsEnabled,
     gitIdentities,
     userAgentDirs,
-    (meta, turn, child) =>
-      events.turnCompleted(
-        meta,
-        turn,
-        child && {
-          ...child,
-          parentSessionId: meta.id,
-          ...(meta.projectId ? { projectId: meta.projectId } : {}),
-        },
-      ),
+    (meta) => events.turnHooks(meta),
   );
   // Loop run engine (native single-agent loop). Each run's agent executor is
   // built per-run, bound to a parent session in the project cwd.

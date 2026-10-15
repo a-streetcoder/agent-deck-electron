@@ -120,7 +120,7 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
         title,
         message,
       });
-      events?.supervisorOpened(progress, childSessionId);
+      events.supervisorOpened(progress, childSessionId);
       parent?.appendSubagentProgress(route.cellId, title ? `${title}: ${message}` : message);
       return { content: "Progress recorded." };
     }
@@ -139,7 +139,7 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
       title,
       message,
     });
-    events?.supervisorOpened(opened, childSessionId);
+    events.supervisorOpened(opened, childSessionId);
     parent?.openSupervisorQuestion({
       requestId,
       subagentCellId: route.cellId,
@@ -178,7 +178,7 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     reason: string,
   ): void {
     const cancelled = supervisor.markCancelled(requestId, reason);
-    if (cancelled) events?.supervisorCancelled(cancelled);
+    if (cancelled) events.supervisorCancelled(cancelled);
     sessions.get(parentSessionId)?.closeSupervisorQuestion(requestId, reason);
   }
 
@@ -222,7 +222,7 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     const answered = supervisor.markAnswered(requestId, response);
     // REST passes the person; the parent-only bridge tool answers as its agent.
     if (answered)
-      events?.supervisorAnswered(
+      events.supervisorAnswered(
         answered,
         actor ??
           (expectedParentSessionId
