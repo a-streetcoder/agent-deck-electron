@@ -82,8 +82,8 @@ See [`release-windows.md`](release-windows.md). Tickets in `.tickets/`.
 - ade-4sjs — D4: owner decisions (ANA-01, FINAL push gating, A0 timing) — open
 - ade-u8qg — D6 — closed 2026-10-15: loop children default tools and directProjectWrites for maker/stage roles (A0 finding) — open
 - ade-rnrd — D7 — closed 2026-10-15: tolerant verdict parsing, validation before checker, checker can run validation (A0 finding) — open
-- ade-scu0 — D8: corrupt loop-runs.json crashes startServer; quarantine marker for the following boot — open
-- ade-p5ik — D9: server warnings dropped by logger: false (route fastify.log calls) — open
+- ade-scu0 — D8: corrupt or missing run stores no longer crash startServer nor tombstone logged runs — closed 2026-10-15
+- ade-p5ik — D9: server warnings through one serverLog helper — closed 2026-10-15
 - ade-w87w — D5: Playwright run + visual baselines on a machine with memory — open, blocks ade-s625
 - `docs/agent-guidelines/ARCHITECTURE.md` — trimmed (D2); the orchestration reference will change again when A2 settles the node shapes.
 - `docs/sync-seams.md` — closed under ADR 0005 (D2).
