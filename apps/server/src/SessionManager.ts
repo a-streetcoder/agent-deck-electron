@@ -666,8 +666,9 @@ export class SessionManager {
   private onParkingRebind: (sessionId: string) => void = () => {};
   /** In-flight resumes by session id — double-resume returns the same promise. */
   private readonly resuming = new Map<string, Promise<ManagedSession>>();
-  /** Same-run continuation claims. JS's synchronous Set mutation is the lock. */
-  private readonly claimedSubagentContinuations = new Set<string>();
+  /** Same-run continuation claims, each with its owner's token. JS's synchronous
+   * Map mutation is the lock. */
+  private readonly claimedSubagentContinuations = new Map<string, symbol>();
   private resourceRefreshGeneration = 0;
   private resourceRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly resourceRefreshInFlight = new Map<string, Promise<void>>();
@@ -1926,7 +1927,14 @@ export class SessionManager {
         throw new Error("Deck subagent Pi session path is not a regular file");
       }
     }
-    this.claimedSubagentContinuations.add(continueSubagentId);
+    const claim = Symbol(continueSubagentId);
+    this.claimedSubagentContinuations.set(continueSubagentId, claim);
+    // Only this claim's owner releases it, so a late release cannot drop a newer one.
+    const release = (): void => {
+      if (this.claimedSubagentContinuations.get(continueSubagentId) === claim) {
+        this.claimedSubagentContinuations.delete(continueSubagentId);
+      }
+    };
     try {
       // Native continuation permits an explicit agent change. When omitted,
       // preserve the durable run's original named persona/capabilities rather
@@ -1934,13 +1942,19 @@ export class SessionManager {
       const effectiveAgentName = agentName ?? run.agent;
       return await parent.runChildAgent(task, effectiveAgentName, undefined, undefined, {
         ...common,
+        // Accepted = the record is active again, so "still active" guards duplicates
+        // from here; the claim must not outlive the terminal write (await wakes there).
+        onAccepted: (runId) => {
+          release();
+          onAccepted(runId);
+        },
         runId: continueSubagentId,
         resumeSessionPath: run.sessionFile,
         artifactRootId: run.artifactRootId,
         artifactRootToken: run.artifactRootToken,
       });
     } finally {
-      this.claimedSubagentContinuations.delete(continueSubagentId);
+      release();
     }
   }
 

@@ -629,7 +629,7 @@ describe("SubagentRunStore", () => {
     expect(() => store.updateLiveTranscript(run.id, transcript)).not.toThrow();
   });
 
-  it("re-registers a live transcript for a continuation and releases it on unregister", () => {
+  it("refuses a second live registration until the first is released", () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "subagent-live-reregister-"));
     const store = new SubagentRunStore(dataDir, vi.fn());
     const run = record({ status: "running" });
@@ -640,16 +640,16 @@ describe("SubagentRunStore", () => {
       ...emptyTranscript(),
       cells: [{ kind: "user" as const, id: "first-turn", text: "first turn" }],
     });
-    // A continuation of the same run starts over instead of throwing.
-    store.registerLiveTranscript(run.id);
-    expect(store.liveTranscript(PARENT_A, run.id)?.cells).toEqual([]);
+    // A continuation registering before the previous turn released is a bug, not a reset.
+    expect(() => store.registerLiveTranscript(run.id)).toThrow(/already registered/);
+    expect(store.liveTranscript(PARENT_A, run.id)?.cells).toHaveLength(1);
     store.unregisterLiveTranscript(run.id);
     expect(store.liveTranscript(PARENT_A, run.id)).toBeUndefined();
     // Updates after release are dropped, not resurrected.
     store.updateLiveTranscript(run.id, emptyTranscript());
     expect(store.liveTranscript(PARENT_A, run.id)).toBeUndefined();
     store.registerLiveTranscript(run.id);
-    expect(store.liveTranscript(PARENT_A, run.id)?.source).toBe("live");
+    expect(store.liveTranscript(PARENT_A, run.id)?.cells).toEqual([]);
   });
 
   it.each([

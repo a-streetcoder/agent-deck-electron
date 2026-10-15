@@ -268,8 +268,7 @@ it("continues a spawned run with managed_subagent and a managed run with spawn_s
           case 0:
             return { name: "spawn_subagent", arguments: { task: "TASK_S1: report" } };
           case 1:
-            // Await, then continue at once: the continuation lands right after the
-            // finish event, before the spawned child's scope has closed.
+            // Await, then continue at once, right after the spawned child finished.
             return { name: "await_subagents", arguments: { runIds: [spawned] } };
           case 2:
             return {
