@@ -1,6 +1,6 @@
 ---
 id: ade-wgkk
-status: in_progress
+status: closed
 deps: [ade-gfs4]
 links: []
 created: 2026-10-15T07:37:06Z
@@ -30,3 +30,7 @@ Server tests: repo form creates the project with origin/repoId/defaultBranch/cre
 **2026-10-15T12:53:13Z**
 
 2026-10-15 fix round (c8fe51c): clone into hidden .agent-deck-clone-uuid sibling then rename, in-flight 409 still cloning, registry re-check after the clone (409 with projectId, no duplicate), stale temp folders removed at registration; same repoId hidden project is un-hidden (200), visible is 409; folder held by another repository falls back to owner-name, else 409 naming the holder; repo flow needs AGENT_DECK_PROJECT_ROOT (409), dot, Windows reserved and trailing-dot names refused; anonymous clones clear inherited credential helpers (noCredentialHelperEnv); refs follow git check-ref-format (validGitRef) for ref and default_branch; GitHub 401 with token 409 reconnect, 403 502 with redacted message, anonymous 403 409 rate limit; new folder projects on a shared server record createdBy, legacy unrestricted (runbook); web: 524 or non-JSON 5xx on a repo add reads still cloning, 409 with projectId reloads projects, GitHub hint only when configured, startup card selects only for the draft that started the add. Tests: repoProjects.test.ts 21 passed (full-history check via file URL, confirmed failing with --depth=1); web ProjectPicker 7, ProjectsScreen 3, SessionStartupCard.remote 2 (guard confirmed by removing it), SessionStartupCard 3, wsBridge.addProject 2 passed; githubConnections 6, projectImageRoutes 1, remoteServerIdentity 20 passed 6 skipped; tsc server and web clean; eslint and prettier clean.
+
+**2026-10-15T12:55:59Z**
+
+2026-10-15 reviewed (contrarian + GPT), fix round merged as b13f9ea / merge 6d844d7, deployed to the VM (health 200). Follow-ups not ticketed: a cancelled request still finishes the clone and registers the project (a background job would fix it); in-flight guard is per process; hidden project un-hidden without checking the folder still exists.
