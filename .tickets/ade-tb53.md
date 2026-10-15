@@ -18,3 +18,9 @@ deploy/compose.yaml with two services: agent-deck (image from 14a, named volume 
 
 docker compose config validates in CI (workflow step); .env.example complete; runbook reviewed; roadmap and DST stub updated.
 
+
+## Notes
+
+**2026-10-15T22:21:25Z**
+
+2026-10-15 constraints from 17a (binding): the server trusts the Cloudflare proxy only from loopback, so the cloudflared sidecar must run with network_mode: service:agent-deck (shared network namespace) and point at 127.0.0.1:4200; the image listens on AGENT_DECK_HOST=0.0.0.0 by default: Compose must NOT publish the port, or publish on 127.0.0.1 only; Pi credentials (~/.pi/agent), the gh login and git config live in /home/agentdeck: mount a second named volume for the home (or set the relevant *_HOME variables into /data) so they survive container replacement; a fresh --tmpfs /data must be uid=1000,gid=1000 (named volumes inherit the owner automatically); image is linux/amd64 only.
