@@ -172,13 +172,20 @@ export function aggregateCapabilityProfiles(
     .map((group) => ({
       agent: group[0]!.agent,
       role: group[0]!.role,
-      window: stats(group.filter((sample) => Date.parse(sample.at) >= since)),
+      // [since, now], both ends inclusive.
+      window: stats(
+        group.filter((sample) => {
+          const time = Date.parse(sample.at);
+          return time >= since && time <= options.now;
+        }),
+      ),
       allTime: stats(group),
     }))
     .sort((a, b) => a.agent.localeCompare(b.agent) || a.role.localeCompare(b.role));
 }
 
-/** The same profiles from the event log (subagent.run.* and loop.* facts). */
+/** The same profiles from the event log, for A1e projections; not a source of truth: the
+ * store path is authoritative (history before A1 and removed runs differ). */
 export function capabilityProfilesFromEvents(
   events: Parameters<typeof projectLoopRuns>[0],
   options: CapabilityProfileOptions,

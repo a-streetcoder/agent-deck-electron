@@ -325,7 +325,7 @@ describe("AgentRunProfile (A6)", () => {
     ...extra,
   });
 
-  it("shows runs, pass rate, median tokens and duration per role, with a 30d/all toggle", async () => {
+  it("shows runs, finished rate, median tokens and duration per role, with a 30d/all toggle", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({

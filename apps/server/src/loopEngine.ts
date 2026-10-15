@@ -219,25 +219,50 @@ export type ExecuteLoopRole = (request: {
   signal: AbortSignal;
 }) => Promise<string | LoopRoleResult>;
 
-/** A role's text plus, when the executor reports them, its model and Pi token usage. */
-export interface LoopRoleResult {
-  text: string;
+/** A child's model and summed Pi token usage, when the executor reports them. */
+export interface LoopRoleUsage {
   model?: string;
   inputTokens?: number;
   outputTokens?: number;
 }
 
-/** A6: record the child's model and tokens at settle; returns the role text. */
-function settleRoleResult(child: LoopChildRecord, result: string | LoopRoleResult): string {
-  if (typeof result === "string") return result;
-  if (result.model) child.model = result.model;
-  if (result.inputTokens !== undefined || result.outputTokens !== undefined) {
+/** A role's text plus its usage. */
+export interface LoopRoleResult extends LoopRoleUsage {
+  text: string;
+}
+
+const count = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+
+/** A6: record the child's model and tokens at settle. */
+function recordRoleUsage(child: LoopChildRecord, usage: LoopRoleUsage | undefined): void {
+  if (!usage) return;
+  if (typeof usage.model === "string" && usage.model) child.model = usage.model;
+  const input = count(usage.inputTokens);
+  const output = count(usage.outputTokens);
+  if (input !== undefined || output !== undefined) {
     child.tokens = {
-      ...(result.inputTokens !== undefined ? { input: result.inputTokens } : {}),
-      ...(result.outputTokens !== undefined ? { output: result.outputTokens } : {}),
+      ...(input !== undefined ? { input } : {}),
+      ...(output !== undefined ? { output } : {}),
     };
   }
+}
+
+function settleRoleResult(child: LoopChildRecord, result: string | LoopRoleResult): string {
+  if (typeof result === "string") return result;
+  recordRoleUsage(child, result);
   return result.text;
+}
+
+/** A failed child's usage: executors attach it to the thrown error (or its cause) as
+ * `childUsage` (services/sessionManager.ts). */
+function errorRoleUsage(error: unknown): LoopRoleUsage | undefined {
+  for (let at = error, depth = 0; at && typeof at === "object" && depth < 3; depth += 1) {
+    const usage = (at as { childUsage?: unknown }).childUsage;
+    if (usage && typeof usage === "object") return usage as LoopRoleUsage;
+    at = (at as { cause?: unknown }).cause;
+  }
+  return undefined;
 }
 
 /** Launch defaults per loop role. An agent's own `tools:` and
@@ -1662,6 +1687,7 @@ export class LoopEngine {
       this.changed(run);
       return output;
     } catch (error) {
+      recordRoleUsage(child, errorRoleUsage(error));
       child.error = error instanceof Error ? error.message : String(error);
       child.status = signal.aborted ? "stopped" : "failed";
       child.endedAt = this.now();
@@ -1736,6 +1762,7 @@ export class LoopEngine {
       this.changed(run);
       return output;
     } catch (error) {
+      recordRoleUsage(child, errorRoleUsage(error));
       child.endedAt = this.now();
       if (signal.aborted || isLoopRunTerminal(run.status)) {
         child.status = "stopped";

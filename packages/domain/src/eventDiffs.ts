@@ -417,6 +417,18 @@ const TIMELINE_KEYS = [
   "branchIndex",
 ] as const satisfies readonly (keyof LoopTimelineEvent)[];
 
+const tokenCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+/** Only the numeric input/output counts of a loop child's tokens reach the log. */
+function publicTokens(tokens: LoopChildRecord["tokens"]): PublicLoopChild["tokens"] {
+  const out = {
+    ...(tokenCount(tokens?.input) ? { input: tokens.input } : {}),
+    ...(tokenCount(tokens?.output) ? { output: tokens.output } : {}),
+  };
+  return Object.keys(out).length ? out : undefined;
+}
+
 function toPublicIteration(
   iteration: LoopRunIteration,
   options: PublicViewOptions,
@@ -451,7 +463,11 @@ function toPublicIteration(
     children: (iteration.children ?? []).map((child) => {
       const out = pick(child, CHILD_KEYS);
       if (out.error !== undefined) out.error = errorText(out.error, options);
-      if (out.tokens) out.tokens = { ...out.tokens };
+      if (out.tokens) {
+        const tokens = publicTokens(out.tokens);
+        if (tokens) out.tokens = tokens;
+        else delete out.tokens;
+      }
       return out;
     }),
     artifacts: (iteration.artifacts ?? []).map((artifact) => pick(artifact, ARTIFACT_KEYS)),

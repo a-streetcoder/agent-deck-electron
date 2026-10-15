@@ -237,7 +237,7 @@ export function AgentRunProfile({ name }: { name: string }) {
             <tr>
               <th className="py-1 font-medium">Role</th>
               <th className="py-1 font-medium">Runs</th>
-              <th className="py-1 font-medium">Pass rate</th>
+              <th className="py-1 font-medium">Finished</th>
               <th className="py-1 font-medium">Median tokens</th>
               <th className="py-1 font-medium">Median duration</th>
               <th className="py-1 font-medium">Last run</th>

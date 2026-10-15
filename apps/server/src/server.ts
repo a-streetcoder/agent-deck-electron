@@ -1077,8 +1077,13 @@ async function initServer(
   registerListAgentsTool(bridge, {
     agents: (sessionId, wanted) => {
       const own = projectOfSession(sessionId);
+      // An id first; a name only when exactly one project has it.
+      const named = (name: string) => {
+        const matches = projects.list().filter((item) => item.name === name);
+        return matches.length === 1 ? matches[0] : undefined;
+      };
       const project = wanted
-        ? projects.find((item) => item.id === wanted || item.name === wanted)
+        ? (projects.find((item) => item.id === wanted) ?? named(wanted))
         : own
           ? projects.find((item) => item.id === own)
           : undefined;

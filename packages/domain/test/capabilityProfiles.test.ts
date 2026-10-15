@@ -117,6 +117,18 @@ describe("aggregateCapabilityProfiles", () => {
     });
   });
 
+  it("windows [now - windowDays, now] inclusive on both ends", () => {
+    const runs = [
+      subagent("Edge", "completed", 30), // exactly since: in
+      subagent("Edge", "completed", 0), // exactly now: in
+      subagent("Edge", "completed", 30 + 1 / 86_400_000), // 1 ms before since: out
+      subagent("Edge", "completed", -1 / 86_400_000), // 1 ms after now: out
+    ];
+    const [profile] = aggregateCapabilityProfiles(runs, [], options);
+    expect(profile!.window.runs).toBe(2);
+    expect(profile!.allTime.runs).toBe(4);
+  });
+
   it("has a null pass rate and no medians in an empty window", () => {
     const [profile] = aggregateCapabilityProfiles(
       [subagent("Old", "completed", 90, { durationMs: 1 })],

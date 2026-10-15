@@ -80,7 +80,7 @@ describe("GET /runtime/bridges", () => {
       );
     const listed = await call({});
     expect(listed.isError).toBeUndefined();
-    expect(listed.content).toMatch(/^(- |No agents)/);
+    expect(listed.content).toMatch(/^(Loop role defaults|No agents)/);
     expect(await call({ project: "no-such-project" })).toMatchObject({ isError: true });
     const response = await fetch(`http://127.0.0.1:${server.port}/agents/profiles`);
     expect(await response.json()).toEqual({ windowDays: 30, profiles: [] });

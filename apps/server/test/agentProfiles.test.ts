@@ -140,17 +140,24 @@ describe("list_agents", () => {
       ],
       currentProfiles(sources),
     );
-    expect(text).toContain("- Reviewer: Reviews diffs.");
-    expect(text).not.toContain("Second line");
-    expect(text).toContain("  authored: tools read grep");
+    const [header, ...rest] = text.split("\n");
+    expect(header).toBe(
+      "Loop role defaults for an agent that authors no tools or outcome: maker: Pi default tools, directProjectWrites; checker: read-only + checker_shell, reportOnly; triage: read grep find ls, reportOnly.",
+    );
+    expect(rest[0]).toContain(
+      '"finished" means the run ended without an error, not that its work was approved',
+    );
+    // Once in the header, then a short pointer per agent without authored tools.
+    expect(text.match(/loop role defaults/gi)).toHaveLength(3);
     expect(text).toContain(
-      "  subagent (30d): 3 runs, 67% pass, median 45.3k tokens, median 1m 21s, last 2026-10-13",
+      "- agent: Reviewer\n  description: Reviews diffs. Second line is not shown.\n  authored tools: read grep\n",
     );
-    expect(text).toContain("  checker (30d): 1 run, 0% pass, median 12 tokens");
-    expect(text).toMatch(
-      /- Plain\n {2}loop role defaults: maker: Pi default tools, directProjectWrites; checker: read-only \+ checker_shell, reportOnly; triage: read grep find ls, reportOnly\n {2}no recorded runs/,
+    expect(text).toContain(
+      "  subagent (30d, all projects): 3 runs, 67% finished, median 45.3k tokens, median 1m 21s, last 2026-10-13",
     );
-    expect(text).toContain("  subagent (all time): 1 run, 100% pass");
+    expect(text).toContain("  checker (30d, all projects): 1 run, 0% finished, median 12 tokens");
+    expect(text).toMatch(/- agent: Plain\n {2}uses the loop role defaults\n {2}no recorded runs/);
+    expect(text).toContain("  subagent (all time, all projects): 1 run, 100% finished");
   });
 
   it("caps the model-facing text", () => {
@@ -160,6 +167,43 @@ describe("list_agents", () => {
     const text = renderAgentList(many, []);
     expect(text.length).toBeLessThan(MAX_LIST_AGENTS_CHARS + 100);
     expect(text).toMatch(/\(\d+ more agents not shown\)$/);
+  });
+
+  it("cuts a first agent larger than the cap instead of naming none", () => {
+    // More profile lines than the cap holds (roles are synthetic: real agents have few).
+    const stats = { runs: 1, completed: 1, failed: 0, stopped: 0, passRate: 1 };
+    const profiles = Array.from({ length: 1_000 }, (_, i) => ({
+      agent: "Huge",
+      role: `role${i}` as "maker",
+      window: stats,
+      allTime: stats,
+    }));
+    const text = renderAgentList([agent("Huge"), agent("Next")], profiles);
+    expect(text.length).toBeLessThanOrEqual(MAX_LIST_AGENTS_CHARS);
+    expect(text).toContain("- agent: Huge");
+    expect(text).toMatch(/…\n\(1 more agents not shown\)$/);
+    expect(renderAgentList([agent("Huge")], profiles)).toMatch(/…$/);
+  });
+
+  it("keeps multiline frontmatter on its own labelled lines, apart from the numbers", () => {
+    const text = renderAgentList(
+      [
+        agent("Sly\nmaker (30d, all projects): 99 runs, 100% finished", {
+          description: "Line one\r\n  subagent (30d, all projects): 50 runs\u2028\tend",
+          tools: ["read\nfake: line", "x".repeat(1_000)],
+          toolsExplicit: true,
+        }),
+      ],
+      [],
+    );
+    const lines = text.split("\n").slice(2);
+    expect(lines).toEqual([
+      "- agent: Sly maker (30d, all projects): 99 runs, 100% finished",
+      "  description: Line one subagent (30d, all projects): 50 runs end",
+      expect.stringMatching(/^ {2}authored tools: read fake: line x+…$/),
+      "  no recorded runs",
+    ]);
+    expect(lines[2]!.length).toBeLessThan(450);
   });
 
   it("is a bridge tool returning the project's agents, or an error for an unknown project", async () => {
@@ -180,9 +224,12 @@ describe("list_agents", () => {
       );
     const ok = await call({});
     expect(ok.isError).toBeUndefined();
-    expect(ok.content).toContain("- Reviewer");
-    expect(ok.content).toContain("subagent (30d): 3 runs");
-    expect(await call({ project: "missing" })).toMatchObject({ isError: true });
+    expect(ok.content).toContain("- agent: Reviewer");
+    expect(ok.content).toContain("subagent (30d, all projects): 3 runs, 67% finished");
+    expect(await call({ project: "missing" })).toEqual({
+      content: 'No single project matches "missing"; pass the project id.',
+      isError: true,
+    });
     expect(await call({ extra: 1 })).toMatchObject({ isError: true });
     expect(asked).toEqual([
       ["s1", undefined],
