@@ -28,3 +28,7 @@ No reference to AGENT_DECK_REMOTE_SERVER_URL remains outside the changelog/archi
 **2026-10-15T23:10:52Z**
 
 2026-10-16 implemented as 6f59d26: remote bootstrap, in-window sign-in, navigation guard, header listener, remote flags/branches and the two Remote launchers removed; remote-server.js → cloudflared-access.js (token helpers only); web has two modes (browser, local desktop); docs/ARCHITECTURE/electron-builder updated. Known gap for the fix round: AGENT_DECK_SERVER_URL pointing at a non-loopback backend would hand server paths to the local shell (guard: localShellActionsAllowed only when the control-plane origin is loopback). Contrarian + GPT (review59) running.
+
+**2026-10-15T23:15:59Z**
+
+2026-10-16 reviews: GPT (review59) no findings (external backend URL already loopback-only); contrarian no blocker, should-fix: AGENT_DECK_RENDERER_URL unvalidated (a remote page could become the trusted renderer origin), no main-window navigation guard, skills:trashRecovery lacks the origin check, docs overclaim + recovery token still recommended for the VM, handover doc names the removed variable, leftover REMOTE_SERVER_URL ignored silently. Fix round sent.
