@@ -4,6 +4,12 @@ import type { ProjectMeta } from "@agent-deck/contracts";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SharedServerResponse } from "@/lib/native";
+import {
+  beginOriginChange,
+  endOriginChange,
+  ORIGIN_CHANGING_ERROR,
+  transferRunning,
+} from "@/lib/sharedTransfers";
 import { updateProject } from "../state/wsBridge.ts";
 import {
   ShareProjectControl,
@@ -247,6 +253,30 @@ describe("ShareProjectControl", () => {
     finish({ ok: false, error: "Sign-in cancelled." });
     expect((await screen.findByRole("status")).textContent).toBe("Sign-in cancelled.");
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+  });
+
+  it("Make shared counts as a transfer and does not start while a Save is pending", async () => {
+    let answer: (value: SharedServerResponse) => void = () => {};
+    request.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    const { unmount } = render(<ShareProjectControl project={project} shared={shared()} />);
+    makeShared();
+    await waitFor(() => expect(request).toHaveBeenCalled());
+    expect(transferRunning()).toBe(true);
+    expect(beginOriginChange()).toBe(false);
+    answer({ status: 201, body: { project: { id: "s1", repoId: 1 } } });
+    await waitFor(() => expect(transferRunning()).toBe(false));
+    unmount();
+
+    request.mockClear();
+    expect(beginOriginChange()).toBe(true);
+    try {
+      render(<ShareProjectControl project={project} shared={shared()} />);
+      makeShared();
+      expect(await screen.findByText(ORIGIN_CHANGING_ERROR)).toBeTruthy();
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      endOriginChange();
+    }
   });
 
   it("re-reads the origin on every click", async () => {

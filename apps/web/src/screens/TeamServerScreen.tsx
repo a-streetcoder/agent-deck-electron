@@ -12,12 +12,35 @@ import {
   type CloudflaredStatus,
   type TeamServerBridge,
   type TeamServerState,
+  type TeamServerStatus,
 } from "@/lib/native";
+import { beginOriginChange, endOriginChange } from "@/lib/sharedTransfers";
+import { useTeamServerStatus } from "../components/TeamServerIndicator.tsx";
 
-/** SRV-16a: the status line; SRV-16b adds the signed-in states. */
-export function teamServerStatus(state: TeamServerState): string {
-  if (state.overridden) return "Set by AGENT_DECK_SHARED_SERVER_URL (dev override)";
-  return state.origin ? "Configured, sign-in pending" : "Not configured";
+export const TRANSFER_RUNNING_ERROR =
+  "A session is moving to or from the team server. Save again once it has finished.";
+
+export const CLOUDFLARED_MISSING = "cloudflared is not available. Download it below.";
+
+/** The status line: the setting (SRV-16a), then main's sign-in status (SRV-16b). */
+export function teamServerStatus(state: TeamServerState, status: TeamServerStatus | null): string {
+  if (!state.origin) return "Not configured";
+  if (!status || status.checking) return "Checking the sign-in…";
+  const team = status.team ? ` (${status.team})` : "";
+  switch (status.state) {
+    case "signedIn":
+      return status.user ? `Signed in as ${status.user.name}${team}` : `Signed in${team}`;
+    case "signingIn":
+      return "Signing in: finish the login in your browser.";
+    case "needsSignIn":
+      return status.warning ? `Sign-in waiting for confirmation${team}` : "Not signed in";
+    case "unreachable":
+      return `Unreachable: ${status.error ?? "the team server did not answer."}`;
+    case "forbidden":
+      return status.error ?? "Your account is not allowed on this server.";
+    case "off":
+      return "Configured";
+  }
 }
 
 const errorText = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
@@ -43,10 +66,20 @@ function progressText({ received, total }: CloudflaredProgress): string {
     : `Downloading… ${mb(received)} MB`;
 }
 
-/** Whether sign-in has a cloudflared to run, and the verified download when not. */
-function CloudflaredSection({ bridge }: { bridge: TeamServerBridge }) {
-  // undefined: loading; null: not found.
-  const [found, setFound] = useState<CloudflaredStatus | null | undefined>(undefined);
+/**
+ * Whether sign-in has a cloudflared to run, and the verified download when not.
+ * SRV-16b: `found` lives in the screen, whose Sign in waits for a non-null one.
+ */
+function CloudflaredSection({
+  bridge,
+  found,
+  setFound,
+}: {
+  bridge: TeamServerBridge;
+  /** undefined: loading; null: not found (or the lookup failed). */
+  found: CloudflaredStatus | null | undefined;
+  setFound: (found: CloudflaredStatus | null) => void;
+}) {
   const [downloadVersion, setDownloadVersion] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [progress, setProgress] = useState<CloudflaredProgress | null>(null);
@@ -71,7 +104,7 @@ function CloudflaredSection({ bridge }: { bridge: TeamServerBridge }) {
     return () => {
       live = false;
     };
-  }, [bridge]);
+  }, [bridge, setFound]);
 
   const download = async () => {
     if (!bridge.downloadCloudflared || downloading) return;
@@ -144,10 +177,21 @@ function CloudflaredSection({ bridge }: { bridge: TeamServerBridge }) {
 
 export function TeamServerScreen() {
   const [bridge] = useState(teamServer);
+  const status = useTeamServerStatus();
   const [state, setState] = useState<TeamServerState | null>(null);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
+  const [acting, setActing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // SRV-16c lookup, shared with CloudflaredSection (which asks again after a
+  // download resolves): Sign in runs only once a cloudflared was found.
+  const [cloudflared, setCloudflared] = useState<CloudflaredStatus | null | undefined>(undefined);
+
+  // Opening the screen re-checks a signed-in, unreachable or refused status.
+  useEffect(() => {
+    void bridge?.check?.().catch(() => undefined);
+  }, [bridge]);
 
   useEffect(() => {
     if (!bridge) return;
@@ -167,20 +211,52 @@ export function TeamServerScreen() {
 
   const save = async () => {
     if (!bridge || saving) return;
+    // Save may reload the window, which would cut a running move in half; from
+    // here until that reload no move or bring-back may start.
+    if (!beginOriginChange()) return setError(TRANSFER_RUNNING_ERROR);
     setSaving(true);
     setError(null);
+    let reloads = false;
     try {
       const result = await bridge.set({ serverUrl: draft.trim() || null });
       if (!result.ok) return setError(result.error);
       const { ok: _ok, ...next } = result;
+      reloads = next.restartRequired;
       setState(next);
       setDraft(next.serverUrl ?? "");
     } catch (cause) {
       setError(errorText(cause));
     } finally {
+      // A reload replaces this page (and the barrier with it).
+      if (!reloads) endOriginChange();
       setSaving(false);
     }
   };
+
+  /** Sign in, sign out or confirm the team; main pushes the new status. */
+  const act = async (run?: () => Promise<{ ok: boolean; held?: boolean; error?: string }>) => {
+    if (!run || acting) return;
+    setActing(true);
+    setError(null);
+    try {
+      const result = await run();
+      // A held sign-in shows its warning through the status instead.
+      if (!result.ok && !result.held && result.error) setError(result.error);
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setActing(false);
+    }
+  };
+
+  const signingIn = status?.state === "signingIn";
+  const canSignIn =
+    status !== null &&
+    !status.checking &&
+    !status.warning &&
+    (status.state === "needsSignIn" || status.state === "unreachable");
+  const canSignOut =
+    status !== null && (status.state === "signedIn" || status.state === "forbidden");
 
   return (
     <PageShell
@@ -243,21 +319,94 @@ export function TeamServerScreen() {
               {error}
             </p>
           ) : null}
-          <p
-            className="mt-3 text-detail text-text-muted"
-            role="status"
-            data-testid="team-server-status"
-          >
-            {teamServerStatus(state)}
-          </p>
+          <div className="mt-3 flex items-center gap-2">
+            <p
+              className="min-w-0 flex-1 text-detail text-text-muted"
+              role="status"
+              data-testid="team-server-status"
+            >
+              {teamServerStatus(state, status)}
+            </p>
+            {state.origin && canSignIn ? (
+              <Button
+                size="sm"
+                disabled={acting || !cloudflared}
+                aria-describedby={cloudflared ? undefined : "team-server-cloudflared"}
+                onClick={() => void act(bridge.signIn)}
+              >
+                Sign in
+              </Button>
+            ) : null}
+            {state.origin && signingIn ? (
+              <Button size="sm" variant="ghost" onClick={() => void bridge.cancelSignIn?.()}>
+                Cancel
+              </Button>
+            ) : null}
+            {state.origin && canSignOut ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={acting}
+                onClick={() => void act(bridge.signOut)}
+              >
+                Sign out
+              </Button>
+            ) : null}
+            {state.origin && canSignOut && bridge.forgetToken ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={acting}
+                title="Sign out and delete this server's cached cloudflared token, to sign in with another account"
+                onClick={() => void act(bridge.forgetToken)}
+              >
+                Remove cached token
+              </Button>
+            ) : null}
+          </div>
+          {state.origin && canSignIn && !cloudflared ? (
+            <p id="team-server-cloudflared" className="mt-1 text-detail text-text-muted">
+              {CLOUDFLARED_MISSING}
+            </p>
+          ) : null}
+          {state.origin && status?.warning ? (
+            <AppInlineNotice
+              tone="warning"
+              className="mt-2"
+              action={
+                <span className="flex gap-2">
+                  <Button size="sm" disabled={acting} onClick={() => void act(bridge.acceptTeam)}>
+                    Confirm
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={acting}
+                    onClick={() => void act(bridge.signOut)}
+                  >
+                    Sign out
+                  </Button>
+                </span>
+              }
+            >
+              {status.warning}
+            </AppInlineNotice>
+          ) : null}
+          {state.overridden ? (
+            <p className="mt-1 text-detail text-text-muted" data-testid="team-server-override">
+              Set by AGENT_DECK_SHARED_SERVER_URL (dev override)
+            </p>
+          ) : null}
           {state.restartRequired ? (
             <p className="mt-1 text-detail text-text-muted">
-              Restart Agent Deck to use this setting for Make shared.
+              Agent Deck reloads to use this setting. If it does not, restart Agent Deck.
             </p>
           ) : null}
         </Card>
       )}
-      {bridge?.cloudflared ? <CloudflaredSection bridge={bridge} /> : null}
+      {bridge?.cloudflared ? (
+        <CloudflaredSection bridge={bridge} found={cloudflared} setFound={setCloudflared} />
+      ) : null}
     </PageShell>
   );
 }

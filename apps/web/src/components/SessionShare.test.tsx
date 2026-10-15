@@ -4,6 +4,7 @@ import type { ProjectMeta, SessionMeta } from "@agent-deck/contracts";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SharedServerResponse } from "@/lib/native";
+import { transferRunning } from "@/lib/sharedTransfers";
 import { useAppStore } from "../state/store.ts";
 import { forkSession, switchToSession } from "../state/wsBridge.ts";
 import { SessionRow } from "./SessionsPanel.tsx";
@@ -287,8 +288,11 @@ describe("Share to server", () => {
     render(<ShareSessionButton />);
     fireEvent.click(screen.getByTestId("share-session"));
     const text = await screen.findByText("Wait until the session has finished responding.");
+    // SRV-16b: an open dialog (even one only showing an error) keeps Save refused.
+    expect(transferRunning()).toBe(true);
     fireEvent.keyDown(text, { key: "Escape" });
     expect(screen.queryByTestId("share-session-dialog")).toBeNull();
+    expect(transferRunning()).toBe(false);
 
     vi.mocked(fetch).mockRejectedValueOnce(new Error("Failed to fetch"));
     fireEvent.click(screen.getByTestId("share-session"));

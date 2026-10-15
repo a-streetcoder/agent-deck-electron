@@ -7,8 +7,17 @@ import type {
   CloudflaredStatus,
   TeamServerBridge,
   TeamServerState,
+  TeamServerStatus,
 } from "@/lib/native";
-import { cloudflaredFoundText, TeamServerScreen, teamServerStatus } from "./TeamServerScreen.tsx";
+import { endOriginChange, ORIGIN_CHANGING_ERROR, trackTransfer } from "@/lib/sharedTransfers";
+import { TeamServerIndicator } from "../components/TeamServerIndicator.tsx";
+import {
+  CLOUDFLARED_MISSING,
+  cloudflaredFoundText,
+  TeamServerScreen,
+  TRANSFER_RUNNING_ERROR,
+  teamServerStatus,
+} from "./TeamServerScreen.tsx";
 
 const empty: TeamServerState = {
   serverUrl: null,
@@ -16,9 +25,50 @@ const empty: TeamServerState = {
   origin: null,
   restartRequired: false,
 };
+const configured: TeamServerState = {
+  ...empty,
+  serverUrl: "https://deck.example.com",
+  origin: "https://deck.example.com",
+};
+const signedIn: TeamServerStatus = {
+  state: "signedIn",
+  user: { name: "Ann", email: "ann@x.test" },
+  team: "acme.cloudflareaccess.com",
+};
+
+/** A bridge whose pushed status the test drives through `push`. */
+function fakeBridge(
+  state: TeamServerState,
+  status: TeamServerStatus = { state: "off" },
+  overrides: Partial<TeamServerBridge> = {},
+) {
+  let handler: ((next: TeamServerStatus) => void) | null = null;
+  const bridge: TeamServerBridge = {
+    get: async () => state,
+    set: vi.fn(),
+    status: async () => status,
+    onStatus: (next) => {
+      handler = next;
+      return () => {
+        handler = null;
+      };
+    },
+    signIn: vi.fn(async () => ({ ok: true })),
+    signOut: vi.fn(async () => ({ ok: true })),
+    acceptTeam: vi.fn(async () => ({ ok: true })),
+    cancelSignIn: vi.fn(async () => ({ ok: true })),
+    forgetToken: vi.fn(async () => ({ ok: true, removed: 1 })),
+    check: vi.fn(async () => ({ ok: true })),
+    cloudflared: async () => ({ path: "C:/cf.exe", source: "path", version: null, warning: null }),
+    ...overrides,
+  };
+  window.agentDeck = { isElectron: true, teamServer: bridge };
+  const push = (next: TeamServerStatus) => act(() => handler?.(next));
+  return { bridge, push };
+}
 
 function mountBridge(state: TeamServerState, set = vi.fn()) {
-  window.agentDeck = { isElectron: true, teamServer: { get: async () => state, set } };
+  fakeBridge(state, { state: state.origin ? "needsSignIn" : "off" }, { set });
   render(<TeamServerScreen />);
   return set;
 }
@@ -35,32 +85,43 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // The Save barrier is module state that only a window reload would clear.
+  endOriginChange();
   cleanup();
   vi.unstubAllGlobals();
   delete window.agentDeck;
 });
 
 describe("TeamServerScreen", () => {
-  it("names the three states", () => {
-    expect(teamServerStatus(empty)).toBe("Not configured");
-    expect(
-      teamServerStatus({ ...empty, serverUrl: "https://a.example", origin: "https://a.example" }),
-    ).toBe("Configured, sign-in pending");
-    expect(teamServerStatus({ ...empty, overridden: true, origin: "https://env.example" })).toBe(
-      "Set by AGENT_DECK_SHARED_SERVER_URL (dev override)",
+  it("names the states", () => {
+    expect(teamServerStatus(empty, null)).toBe("Not configured");
+    expect(teamServerStatus(configured, null)).toBe("Checking the sign-in…");
+    expect(teamServerStatus(configured, { state: "needsSignIn", checking: true })).toBe(
+      "Checking the sign-in…",
     );
+    expect(teamServerStatus(configured, signedIn)).toBe(
+      "Signed in as Ann (acme.cloudflareaccess.com)",
+    );
+    expect(teamServerStatus(configured, { state: "needsSignIn" })).toBe("Not signed in");
+    expect(teamServerStatus(configured, { state: "signingIn" })).toMatch(/browser/);
+    expect(
+      teamServerStatus(configured, {
+        state: "unreachable",
+        error: "The shared server could not be reached.",
+      }),
+    ).toBe("Unreachable: The shared server could not be reached.");
+    expect(
+      teamServerStatus(configured, {
+        state: "forbidden",
+        error: "Your account is not allowed on x.",
+      }),
+    ).toBe("Your account is not allowed on x.");
   });
 
-  it("saves the URL and shows the new status and the restart note", async () => {
+  it("saves the URL and shows the reload note", async () => {
     const set = mountBridge(
       empty,
-      vi.fn(async () => ({
-        ok: true,
-        serverUrl: "https://deck.example.com",
-        overridden: false,
-        origin: "https://deck.example.com",
-        restartRequired: true,
-      })),
+      vi.fn(async () => ({ ok: true, ...configured, restartRequired: true })),
     );
     expect((await screen.findByTestId("team-server-status")).textContent).toBe("Not configured");
 
@@ -69,9 +130,56 @@ describe("TeamServerScreen", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(await screen.findByText("Configured, sign-in pending")).toBeTruthy();
+    expect(await screen.findByText(/Agent Deck reloads/)).toBeTruthy();
     expect(set).toHaveBeenCalledWith({ serverUrl: "https://deck.example.com" });
-    expect(screen.getByText(/Restart Agent Deck/)).toBeTruthy();
+  });
+
+  it("refuses Save while a session move is running", async () => {
+    const set = mountBridge(empty);
+    fireEvent.change(await screen.findByLabelText(/Server address/), {
+      target: { value: "https://deck.example.com" },
+    });
+    let finish = () => {};
+    const move = trackTransfer(() => new Promise<void>((resolve) => (finish = resolve)));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(TRANSFER_RUNNING_ERROR);
+    expect(set).not.toHaveBeenCalled();
+    finish();
+    await move;
+  });
+
+  it("refuses a move from Save until the reload, and lifts the barrier when none follows", async () => {
+    let answer: (value: { ok: true } & TeamServerState) => void = () => {};
+    const set = mountBridge(
+      empty,
+      vi.fn(() => new Promise<{ ok: true } & TeamServerState>((resolve) => (answer = resolve))),
+    );
+    fireEvent.change(await screen.findByLabelText(/Server address/), {
+      target: { value: "https://deck.example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(set).toHaveBeenCalled();
+    const move = vi.fn(async () => undefined);
+    await expect(trackTransfer(move)).rejects.toThrow(ORIGIN_CHANGING_ERROR);
+    // A reloading Save keeps the barrier: the reload replaces the page.
+    await act(async () => answer({ ok: true, ...configured, restartRequired: true }));
+    await expect(trackTransfer(move)).rejects.toThrow(ORIGIN_CHANGING_ERROR);
+    expect(move).not.toHaveBeenCalled();
+
+    // A Save that does not reload (same origin in effect) lifts it.
+    endOriginChange();
+    cleanup();
+    mountBridge(
+      empty,
+      vi.fn(async () => ({ ok: true, ...configured, overridden: true, restartRequired: false })),
+    );
+    fireEvent.change(await screen.findByLabelText(/Server address/), {
+      target: { value: "https://deck.example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByTestId("team-server-override");
+    await trackTransfer(move);
+    expect(move).toHaveBeenCalledTimes(1);
   });
 
   it("shows main's validation message and keeps the draft", async () => {
@@ -88,13 +196,11 @@ describe("TeamServerScreen", () => {
 
     expect((await screen.findByRole("alert")).textContent).toContain("must start with https://");
     expect(field.value).toBe("http://deck.example.com");
-    expect(screen.getByTestId("team-server-status").textContent).toBe("Not configured");
   });
 
   it("clears the setting with an empty field", async () => {
-    const stored = { ...empty, serverUrl: "https://a.example", origin: "https://a.example" };
     const set = mountBridge(
-      stored,
+      configured,
       vi.fn(async () => ({ ok: true, ...empty })),
     );
     fireEvent.change(await screen.findByLabelText(/Server address/), { target: { value: "" } });
@@ -104,9 +210,129 @@ describe("TeamServerScreen", () => {
     expect(set).toHaveBeenCalledWith({ serverUrl: null });
   });
 
+  it("signs in, follows the pushed status and signs out", async () => {
+    const { bridge, push } = fakeBridge(configured, { state: "needsSignIn" });
+    render(<TeamServerScreen />);
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+    expect(bridge.signIn).toHaveBeenCalled();
+    push({ state: "signingIn" });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(bridge.cancelSignIn).toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    push(signedIn);
+    expect(screen.getByTestId("team-server-status").textContent).toBe(
+      "Signed in as Ann (acme.cloudflareaccess.com)",
+    );
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(bridge.signOut).toHaveBeenCalled();
+  });
+
+  it("keeps Sign in disabled while the cloudflared lookup is pending, then enables it", async () => {
+    let resolveLookup: (found: CloudflaredStatus | null) => void = () => {};
+    fakeBridge(
+      configured,
+      { state: "needsSignIn" },
+      { cloudflared: () => new Promise((resolve) => (resolveLookup = resolve)) },
+    );
+    render(<TeamServerScreen />);
+    const signIn = (await screen.findByRole("button", { name: "Sign in" })) as HTMLButtonElement;
+    expect(signIn.disabled).toBe(true);
+    expect(screen.getByText(CLOUDFLARED_MISSING)).toBeTruthy();
+    await act(async () =>
+      resolveLookup({ path: "C:/cf.exe", source: "path", version: null, warning: null }),
+    );
+    expect((screen.getByRole("button", { name: "Sign in" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    expect(screen.queryByText(CLOUDFLARED_MISSING)).toBeNull();
+  });
+
+  it("keeps Sign in disabled when the lookup fails or finds nothing, until a download lands", async () => {
+    fakeBridge(
+      configured,
+      { state: "needsSignIn" },
+      { cloudflared: () => Promise.reject(new Error("probe failed")) },
+    );
+    render(<TeamServerScreen />);
+    expect(await screen.findByText("probe failed")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Sign in" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    cleanup();
+
+    const cloudflared = vi.fn(async (): Promise<CloudflaredStatus | null> => null);
+    fakeBridge(
+      configured,
+      { state: "needsSignIn" },
+      {
+        cloudflared,
+        cloudflaredInfo: async () => ({ downloadVersion: "2026.10.0", warning: null }),
+        downloadCloudflared: async () => ({ ok: true, path: "C:/cf.exe", version: "2026.10.0" }),
+      },
+    );
+    render(<TeamServerScreen />);
+    fireEvent.click(await screen.findByRole("button", { name: /Download cloudflared/ }));
+    expect((screen.getByRole("button", { name: "Sign in" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    cloudflared.mockResolvedValue({
+      path: "C:/cf.exe",
+      source: "setting",
+      version: null,
+      warning: null,
+    });
+    await screen.findByTestId("cloudflared-found");
+    expect((screen.getByRole("button", { name: "Sign in" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it("re-checks the status on mount and offers Remove cached token when signed in or refused", async () => {
+    const { bridge, push } = fakeBridge(configured, signedIn);
+    render(<TeamServerScreen />);
+    expect(bridge.check).toHaveBeenCalledTimes(1);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove cached token" }));
+    expect(bridge.forgetToken).toHaveBeenCalled();
+    await act(async () => {});
+    push({ state: "forbidden", error: "Your account is not allowed on x." });
+    expect(screen.getByRole("button", { name: "Remove cached token" })).toBeTruthy();
+    push({ state: "needsSignIn" });
+    expect(screen.queryByRole("button", { name: "Remove cached token" })).toBeNull();
+  });
+
+  it("shows a failed sign-in's text", async () => {
+    fakeBridge(
+      configured,
+      { state: "needsSignIn" },
+      {
+        signIn: async () => ({ ok: false, error: "Sign-in cancelled." }),
+      },
+    );
+    render(<TeamServerScreen />);
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("Sign-in cancelled.");
+  });
+
+  it("asks to confirm a sign-in from an unexpected Access team", async () => {
+    const { bridge } = fakeBridge(configured, {
+      state: "needsSignIn",
+      team: "evil.cloudflareaccess.com",
+      warning: "This server signed you in through the Access team evil.cloudflareaccess.com.",
+    });
+    render(<TeamServerScreen />);
+    expect(await screen.findByText(/through the Access team evil/)).toBeTruthy();
+    expect(screen.getByTestId("team-server-status").textContent).toBe(
+      "Sign-in waiting for confirmation (evil.cloudflareaccess.com)",
+    );
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    expect(bridge.acceptTeam).toHaveBeenCalled();
+  });
+
   it("shows the dev override", async () => {
-    mountBridge({ ...empty, overridden: true, origin: "https://env.example" });
-    expect((await screen.findByTestId("team-server-status")).textContent).toBe(
+    mountBridge({ ...configured, overridden: true });
+    expect((await screen.findByTestId("team-server-override")).textContent).toBe(
       "Set by AGENT_DECK_SHARED_SERVER_URL (dev override)",
     );
   });
@@ -114,6 +340,27 @@ describe("TeamServerScreen", () => {
   it("explains that the setting needs the desktop app", () => {
     render(<TeamServerScreen />);
     expect(screen.getByText(/available in the desktop app/)).toBeTruthy();
+  });
+});
+
+describe("TeamServerIndicator", () => {
+  it("shows the state with a configured server only", async () => {
+    const { push } = fakeBridge(configured, signedIn);
+    render(<TeamServerIndicator />);
+    expect((await screen.findByTestId("team-server-indicator")).textContent).toBe(
+      "Team server: signed in",
+    );
+    push({ state: "unreachable", error: "The shared server could not be reached." });
+    expect(screen.getByTestId("team-server-indicator").textContent).toBe(
+      "Team server: unreachable",
+    );
+    push({ state: "off" });
+    expect(screen.queryByTestId("team-server-indicator")).toBeNull();
+  });
+
+  it("renders nothing outside the desktop app", () => {
+    render(<TeamServerIndicator />);
+    expect(screen.queryByTestId("team-server-indicator")).toBeNull();
   });
 });
 

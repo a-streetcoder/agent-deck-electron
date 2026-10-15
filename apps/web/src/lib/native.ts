@@ -82,6 +82,19 @@ export interface TeamServerState {
   restartRequired: boolean;
 }
 
+/** SRV-16b: the sign-in status Electron main keeps for the team server (never a token). */
+export interface TeamServerStatus {
+  state: "off" | "needsSignIn" | "signingIn" | "signedIn" | "unreachable" | "forbidden";
+  /** The silent startup check (cached token, GET /me) is still running. */
+  checking?: boolean;
+  user?: { name: string; email?: string };
+  /** The Cloudflare Access team domain of the token (or of the held one). */
+  team?: string;
+  error?: string;
+  /** A sign-in from an unexpected Access team waits for acceptTeam(). */
+  warning?: string;
+}
+
 // --- SRV-16c: cloudflared ---
 /** The cloudflared Electron main resolved, and where it came from. */
 export interface CloudflaredStatus {
@@ -111,6 +124,16 @@ export interface TeamServerBridge {
   set(input: {
     serverUrl: string | null;
   }): Promise<({ ok: true } & TeamServerState) | { ok: false; error: string }>;
+  status?(): Promise<TeamServerStatus>;
+  onStatus?(handler: (status: TeamServerStatus) => void): () => void;
+  signIn?(): Promise<{ ok: boolean; held?: boolean; error?: string }>;
+  signOut?(): Promise<{ ok: boolean; error?: string }>;
+  acceptTeam?(): Promise<{ ok: boolean; error?: string }>;
+  cancelSignIn?(): Promise<{ ok: boolean; error?: string }>;
+  /** Remove cached token: sign out and delete this host's cloudflared token files. */
+  forgetToken?(): Promise<{ ok: boolean; removed?: number; error?: string }>;
+  /** Re-check a signed-in, unreachable or refused status (GET /me). */
+  check?(): Promise<{ ok: boolean; error?: string }>;
   // --- SRV-16c: cloudflared (non-null = sign-in can run) ---
   cloudflared?(): Promise<CloudflaredStatus | null>;
   cloudflaredInfo?(): Promise<CloudflaredInfo>;

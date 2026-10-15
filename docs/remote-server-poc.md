@@ -29,13 +29,13 @@ Server (`apps/server`):
 
 Desktop (`apps/desktop/main.js`):
 
-| Variable                            | Example                                        | Meaning                                                                                                                                  |
-| ----------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `AGENT_DECK_REMOTE_SERVER_URL`      | `https://deck.moretti.cc`                      | Attach to this origin: spawn no server, load the renderer from it, treat it as the control plane.                                        |
-| `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`  | `streetcoding-collective.cloudflareaccess.com` | Optional. Pins the in-window login round-trip to this team's Access pages (else any `*.cloudflareaccess.com`).                           |
-| `AGENT_DECK_DESKTOP_RECOVERY_TOKEN` | _(same as the VM)_                             | Optional. Honored instead of a random per-launch token.                                                                                  |
-| `AGENT_DECK_SHARED_SERVER_URL`      | `https://deck.moretti.cc`                      | Dev override of **Settings > Team server** (local mode). Set, it wins over the stored setting and the screen says so.                    |
-| `AGENT_DECK_CLOUDFLARED`            | `C:\Tools\cloudflared.exe`                     | Dev override (wins over the saved one): the cloudflared used to sign in. When unset it is found or downloaded (see Desktop login below). |
+| Variable                            | Example                                        | Meaning                                                                                                                                                                                                                     |
+| ----------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AGENT_DECK_REMOTE_SERVER_URL`      | `https://deck.moretti.cc`                      | Attach to this origin: spawn no server, load the renderer from it, treat it as the control plane.                                                                                                                           |
+| `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`  | `streetcoding-collective.cloudflareaccess.com` | Optional. Pins the in-window login round-trip to this team's Access pages (else any `*.cloudflareaccess.com`), and the team a team server sign-in may use without a check against it (see [Desktop login](#desktop-login)). |
+| `AGENT_DECK_DESKTOP_RECOVERY_TOKEN` | _(same as the VM)_                             | Optional. Honored instead of a random per-launch token.                                                                                                                                                                     |
+| `AGENT_DECK_SHARED_SERVER_URL`      | `https://deck.moretti.cc`                      | Dev override of **Settings > Team server** (local mode). Set, it wins over the stored setting and the screen says so.                                                                                                       |
+| `AGENT_DECK_CLOUDFLARED`            | `C:\Tools\cloudflared.exe`                     | Dev override (wins over the saved one): the cloudflared used to sign in. When unset it is found or downloaded (see Desktop login below).                                                                                    |
 
 `AGENT_DECK_SERVER_URL` (loopback attach, used by `pnpm dev` and the SSH-tunnel launcher) is
 unchanged and mutually exclusive with `AGENT_DECK_REMOTE_SERVER_URL`.
@@ -177,19 +177,25 @@ and from a signed-in browser: `https://deck.moretti.cc/me` shows your identity.
   Electron userData (`team-server.json`, `{ serverUrl, cloudflaredPath? }`; `cloudflaredPath`
   is the cloudflared Settings downloaded, see [Desktop login](#desktop-login); keys the app
   does not know are kept on Save; a
-  missing or corrupt file reads as not configured) and the status line reads "Not configured",
-  "Configured, sign-in pending", or "Set by AGENT_DECK_SHARED_SERVER_URL (dev override)" when
-  that variable is set: it is a dev override and wins over the setting. Saving a different
+  missing or corrupt file reads as not configured). The status line reads "Not configured" or
+  the sign-in status (see [Desktop login](#desktop-login)), and the screen adds "Set by
+  AGENT_DECK_SHARED_SERVER_URL (dev override)" when that variable is set: it is a dev override
+  and wins over the setting. Saving a different
   address replaces main's shared-server client (its token and sign-in state start over; an
-  empty address drops it, so no network call is made), but the page keeps the server it
-  started with: Make shared and the mirror refuse with "Restart Agent Deck" until the app is
-  restarted. Sign-in needs cloudflared, found or downloaded as in
-  [Desktop login](#desktop-login). With a
+  empty address drops it, so no network call is made), flushes the composer drafts and reloads
+  the window, which then works with the new server (SRV-16b; the preload asks main for the
+  origin at every load). Save is refused while a session move or bring-back runs in this
+  window, and no move or bring-back starts between a Save and its reload. If the draft flush
+  fails or times out the window is not reloaded, and Make shared and the mirror refuse with
+  "Restart Agent Deck" until it is. The status line and the sidebar footer ("Team server:
+  signed in") show the sign-in, with **Sign in**, **Sign out** and **Remove cached token**
+  next to it. Save is also refused while Make shared runs. Sign-in needs
+  cloudflared, found or downloaded as in [Desktop login](#desktop-login). With a
   server set, the Projects screen offers **Make shared** on each local project (see
   [Make shared from the desktop](#make-shared-from-the-desktop)). Not configured, the app looks
   exactly like local Agent Deck (the setting is reached from Settings or the command palette).
-  In remote mode none of it is shown, and main refuses `team-server:get`/`set` (that page comes
-  from the server).
+  In remote mode none of it is shown, and main refuses every `team-server:*` call (that page
+  comes from the server).
 - **Desktop over SSH** (`win\Agent Deck Remote (dev VM).cmd`) still works, but through the
   tunnel the server sees loopback requests with no assertion, so with the proxy mode on it
   answers 401. Use one mode or the other on the VM.
@@ -319,43 +325,88 @@ private GitHub email: GitHub rejects pushes whose commits expose it.
 
 ### Desktop login
 
-Spike ade-1vjx, **decision 2026-10-14: candidate 1 (cloudflared non-browser flow) works**. Goal:
-sign in through the system browser (passkeys work there) and never render a GitHub page inside
-Electron.
+The local desktop app signs in to the team server set in **Settings > Team server** (SRV-16a)
+through cloudflared in the **system browser** (passkeys work there); no GitHub or Access page is
+ever rendered inside Electron, and the Access token stays in Electron main.
 
-- **Mechanism**: `cloudflared access login https://deck.moretti.cc` opens the system browser,
-  completes the Access/GitHub login there and caches a per-user, per-application token in
-  `%USERPROFILE%\.cloudflared` (`deck.moretti.cc-<aud>-token`, plus an org token).
-  `cloudflared access token -app=https://deck.moretti.cc` prints it without a browser while it
-  is valid. The edge accepts it in a `cf-access-token` request header and forwards the usual
-  `cf-access-jwt-assertion` to the server, so `trustedProxy.ts` needed no change.
-- **Proof (Windows PC, cloudflared 2025.8.1)**: login completed in the already signed-in system
-  browser with no prompt; `GET /me` with the header → 200 and the user JSON; `GET /health` → 200;
-  WebSocket upgrade to `/rpc` with the header → 101; without the header `/me` → 302 to Access.
-  The recovery routes also pass through: `trash-path` → 403 without
-  `x-agent-deck-desktop-recovery-token`, a store answer with it.
-  Electron: a shell started with `AGENT_DECK_CLOUDFLARED` set and a fresh `--user-data-dir`
-  (no Access cookie) opened straight on `https://deck.moretti.cc/` showing "Signed in as" the
-  GitHub user, with no Access or GitHub page or frame in the window.
-- **Token lifetime**: `exp - iat` = 168 h (the Access session length), `type: app`, `aud` =
-  the application AUD the server verifies.
-- **Code (opt-in)**: with `AGENT_DECK_CLOUDFLARED` set to the cloudflared path, remote-mode
-  `bootstrap()` in `apps/desktop/main.js` runs `access token` (`cloudflaredToken` in
-  `remote-server.js`), then adds `cf-access-token` to every `https://` and `wss://` request to
-  the remote host via `session.defaultSession.webRequest.onBeforeSendHeaders`. That covers
-  renderer fetches, the `/rpc` WebSocket upgrade and `controlPlaneFetch`. With no valid cached
-  token (ade-zvv5) the window opens at once on `apps/desktop/sign-in.html` ("Sign in with your
-  browser", team domain shown); only the click runs `access login` (`cloudflaredLogin`, through
-  the `remote-sign-in` IPC), the page waits with Cancel, and on success main attaches the header
-  and loads the app in the same window. A cancel or a cloudflared error stays on the page with
-  the error text and "Try again". The token never reaches the page. Unset keeps the in-window
-  login. The launcher `win\Agent Deck Remote (cloudflare).cmd` sets it.
-- **Renewal**: the token is read once per launch. An expired token fails `access token`, so the
-  next launch shows the sign-in page again (system browser on click). Mid-run expiry is not handled: Access
-  would redirect the window to its login. Restart the app. No exchange endpoint is needed, so
-  the server-minted token design in
-  [handover-shared-server-poc.md](handover-shared-server-poc.md) stays shelved.
-- **Not covered**: candidate 2 (`agentdeck://` callback plus cookie copy) was not tried.
+- **Mechanism** (spike ade-1vjx, decided 2026-10-14): `cloudflared access login <origin>` opens
+  the system browser, completes the Access/GitHub login there and caches a per-user,
+  per-application token in `%USERPROFILE%\.cloudflared`. `cloudflared access token -app=<origin>`
+  prints it without a browser while it is valid (168 h, the Access session length). The edge
+  accepts it in a `cf-access-token` request header and forwards the usual
+  `cf-access-jwt-assertion`, so `trustedProxy.ts` needed no change. Proven on Windows with
+  cloudflared 2025.8.1: `/me` 200, `/rpc` upgrade 101, without the header 302 to Access.
+- **Status** (`apps/desktop/team-server-status.js`): main keeps one status per configured
+  server, `off` (no server), `needsSignIn`, `signingIn`, `signedIn` (with the `/me` user's name
+  and email and the Access team, only when `/me` answers 200 with a user that has a string
+  email or name), `unreachable` (no answer, or any status other than 200 and 403; a 200 of
+  another shape reads "The server answered unexpectedly.") or `forbidden` (a 403: Access
+  refused the account; the server's JSON `error` text is shown when it sent one). The `/me`
+  check waits at most 10 s. It is pushed to the window as `team-server:status` and answered on
+  demand; it is built from the `/me` user fields, the team name and the client's fixed error
+  texts only, never the token. The Settings screen shows "Signed in as <name> (<team>)", the
+  sidebar footer a dot and "Team server: <state>".
+- **Silent startup**: with a server set, main asks `access token` for the cached token (no
+  browser) and calls `GET /me`; the status follows the answer. No dialog ever blocks startup.
+- **Recovery**: `signedIn`, `unreachable` and `forbidden` are checked again with `GET /me`
+  when the Team server screen opens (`team-server:check`) and when the window gets focus (at
+  most once per 60 s); `unreachable` and `forbidden` are also checked again as soon as any
+  renderer request to the server answers 2xx. A 401 or login redirect on any request turns
+  `signedIn` into `needsSignIn`. Answers from a client that was replaced (another address)
+  change nothing.
+- **Sign in** runs `access login` (one at a time; Cancel, `team-server:sign-in-cancel`,
+  kills it), then `GET /me`. The same
+  path serves the **Sign in to** buttons of Make shared, the move and the mirror. Sign in is
+  disabled with "cloudflared is not available" until SRV-16c resolves a cloudflared.
+- **Sign out** forgets the token in main and records the host as signed out in
+  `team-server.json` (`signedOut`), so the next launch does not pick the cached cloudflared
+  token up silently; a later Sign in clears it. When the cloudflared in use lists an
+  `access logout` command it is run for the host (best effort). The pinned 2026.10.0 has none
+  (its `access` commands are login, curl, token, tcp, ssh-config and ssh-gen), so the token file
+  stays in `.cloudflared` until it expires or is removed.
+- **Remove cached token** (`team-server:forget-token`, shown when signed in or refused) signs
+  out as above and deletes cloudflared's cached application token for the configured host:
+  only the files `~/.cloudflared/<host>-<aud>-token` (and their `.lock`), where `<aud>` is the
+  hex AUD tag, so no other host's file and not the team's org token
+  (`<team>-org-token`) is touched. The org token keeps the team's Access session, so the next
+  `access login` may sign the same account in again without asking: to switch to a different
+  GitHub account, also sign out of the team's Access page (`https://<team>/cdn-cgi/access/logout`)
+  or of GitHub in the system browser.
+- **Access team pinning** (phishing of the token). A typed-in address can be hostile:
+  `https://evil.example` can redirect `access login` to the real team's Access page, the user
+  signs in there as usual, and cloudflared stores the real team's token under the hostile host,
+  which then receives it in `cf-access-token` and can replay it against the real server. The
+  token such a host gets names the real team, so neither a per-host pin nor
+  `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN` can tell it apart; the mitigation is that no token is sent
+  to a host before its team is pinned, and a first sign-in is pinned without asking only when it
+  is unambiguous. After every sign-in (and for a cached token) main reads the token's `iss`
+  claim without verifying it (the edge and the server verify) and takes its host as the Access
+  team. The token is held (not sent anywhere; status `needsSignIn` with a warning and
+  **Confirm**, `team-server:accept-team`; Sign out discards it) when:
+  - the host has no pinned team yet and `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN` is unset ("This
+    server uses the <team> Access team. Continue only if that is your team.");
+  - the host has no pinned team yet and another origin already pinned the same team, or the
+    token's Access application audience (`aud`) is already pinned for another origin (the
+    phishing case, also with the env variable set): "<other origin> signs in through this same
+    Access team. A different address presenting it is very likely relaying your login. Continue
+    only if you are sure.";
+  - the team differs from the host's pinned team, or from `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`
+    when set.
+
+  Confirm pins the team and the audience for the host (`teams` and `auds`, `{ [origin]: value }`,
+  in `team-server.json`); the status line shows the team from then on. Only a host's first team
+  that equals `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN` and is not pinned elsewhere is pinned without
+  asking.
+
+- **Renewal**: an expired token makes `/me` and every call answer "sign in required"; the
+  status turns `needsSignIn` and a Sign in renews it. No exchange endpoint is needed, so the
+  server-minted token design in [handover-shared-server-poc.md](handover-shared-server-poc.md)
+  stays shelved.
+- **Remote mode** (until SRV-16d removes it): with `AGENT_DECK_CLOUDFLARED` set, remote-mode
+  `bootstrap()` reads the cached token once per launch and adds `cf-access-token` to every
+  `https://` and `wss://` request to the remote host; without one the window opens on
+  `apps/desktop/sign-in.html` and only its button runs `access login`. Mid-run expiry is not
+  handled there: restart the app.
 - **cloudflared** (SRV-16c, `apps/desktop/cloudflared-resolver.js`): main uses the first that
   exists of `AGENT_DECK_CLOUDFLARED` (dev override; it wins like `AGENT_DECK_SHARED_SERVER_URL`,
   and when it points at a missing file the next source is used and the screen says

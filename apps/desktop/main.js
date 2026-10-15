@@ -7,8 +7,10 @@
 
 import { execFile, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import nodeFs from "node:fs";
 import { lstat, realpath, stat } from "node:fs/promises";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -24,8 +26,10 @@ import {
   accessTokenHeaders,
   allowRemoteShellNavigation,
   cloudflaredLogin,
+  cloudflaredLogout,
   cloudflaredToken,
   createRemoteSignIn,
+  forgetCachedTokens,
   isControlPlanePage,
   remoteServerOrigin,
   retryInSlots,
@@ -38,14 +42,17 @@ import {
   lazyCloudflaredRunner,
   resolveCloudflared,
 } from "./cloudflared-resolver.js";
-import { createSharedServerClient } from "./shared-server.js";
+import { createSharedServerClient, relaySharedRequest } from "./shared-server.js";
 import {
+  createTeamPins,
   createTeamServerHandlers,
   nextSharedServerClient,
   readTeamServerSettings,
   REMOTE_MODE_ERROR,
   restartGate,
+  windowOriginFor,
 } from "./team-server-settings.js";
+import { createTeamServerStatus } from "./team-server-status.js";
 import { localShellActionsAllowed, resolveResourceFile } from "./resource-file-request.js";
 import { checkForUpdates } from "./update-check.js";
 import {
@@ -112,8 +119,9 @@ let remoteSignIn = null;
 // value, or AGENT_DECK_SHARED_SERVER_URL as a dev override); Make shared calls
 // that server through this client (the Access token stays in main).
 let sharedServer = null;
-// The origin the main window's preload was given (fixed per window): after the
-// setting changes, renderer calls are refused until a restart picks it up.
+// The origin the main window's preload was given on its current load (SRV-16b:
+// it asks over shared-server:window-origin). Save reloads the window when the
+// setting changes it; until that reload, renderer calls are refused (restartGate).
 let windowSharedOrigin = null;
 let mainWindow = null;
 let draftsFlushedForQuit = false;
@@ -122,18 +130,33 @@ let draftFlushRequest = null;
 // Keep the backend alive until unsent composer writes have reached durable
 // storage. Closing the window and Cmd/Ctrl-Q use the same handshake.
 function flushDraftsBeforeQuit() {
-  if (draftFlushRequest || !mainWindow || mainWindow.isDestroyed()) return;
+  requestDraftFlush(true);
+}
+
+/**
+ * SRV-16b: the same handshake before a reload for a changed team server. A
+ * failed or late flush skips the reload (the restart gate then keeps the page
+ * off the new server); a quit asked meanwhile takes over the pending flush.
+ */
+function requestDraftFlush(quit) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (draftFlushRequest) {
+    draftFlushRequest.quit ||= quit;
+    return;
+  }
   const token = randomUUID();
   const fail = () => {
     if (draftFlushRequest?.token !== token) return;
     clearTimeout(draftFlushRequest.timer);
+    const quitting = draftFlushRequest.quit;
     draftFlushRequest = null;
+    if (!quitting) return;
     dialog.showErrorBox(
       "Your draft could not be saved",
       "Agent Deck is still open so your message is safe. Check the connection and try quitting again.",
     );
   };
-  draftFlushRequest = { token, timer: setTimeout(fail, 15_000), fail };
+  draftFlushRequest = { token, quit, timer: setTimeout(fail, 15_000), fail };
   mainWindow.webContents.send("drafts:flush", { token });
 }
 
@@ -156,7 +179,13 @@ ipcMain.on("drafts:flushed", (event, payload) => {
     return;
   }
   clearTimeout(draftFlushRequest.timer);
+  const { quit } = draftFlushRequest;
   draftFlushRequest = null;
+  if (!quit) {
+    // The preload asks for the origin again on this load (shared-server:window-origin).
+    mainWindow.webContents.reload();
+    return;
+  }
   draftsFlushedForQuit = true;
   app.quit();
 });
@@ -432,7 +461,6 @@ function checkRemoteHealth() {
 function createWindow() {
   const { width: workAreaWidth } = screen.getPrimaryDisplay().workAreaSize;
   const initialWidth = Math.max(940, Math.round(workAreaWidth * 0.6));
-  windowSharedOrigin = remoteServer ? null : (sharedServer?.origin ?? null);
   mainWindow = new BrowserWindow({
     width: initialWidth,
     height: 860,
@@ -457,11 +485,7 @@ function createWindow() {
       sandbox: true,
       // Tells the preload (and so the renderer) that local pickers pick on the
       // wrong machine; the renderer then uses the server-side path flows.
-      additionalArguments: remoteServer
-        ? ["--agent-deck-remote-server"]
-        : windowSharedOrigin
-          ? [`--agent-deck-shared-server=${windowSharedOrigin}`]
-          : [],
+      additionalArguments: remoteServer ? ["--agent-deck-remote-server"] : [],
       // Enable the <webview> tag so the Slice L2 general-purpose browser can
       // mount a REAL Chromium guest (not an iframe). The guest's own security
       // posture is force-hardened in the web-contents-created handler below —
@@ -552,6 +576,10 @@ function createWindow() {
 
   // Focus alone is not review: the selected renderer chat acknowledges only
   // after it is both visible and focused. Main never globally clears attention.
+  // SRV-16b: focus re-checks the team server status (at most once a minute).
+  mainWindow.on("focus", () => {
+    if (!remoteServer) void teamStatus.focused();
+  });
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -787,20 +815,39 @@ ipcMain.handle("remote-sign-in", (event, action) => {
 // { status: 401, signInRequired: true }; the token never crosses IPC.
 // SRV-16a: a changed setting answers a soft restart error (checked first, so
 // clearing a configured server says restart too).
-ipcMain.handle("shared-server:request", (event, method, pathname, body) => {
+ipcMain.handle("shared-server:request", async (event, method, pathname, body) => {
   assertTrustedPickerSender(event, "The shared server is unavailable");
   const restart = restartGate(sharedServer, windowSharedOrigin);
   if (restart) return { status: 0, error: restart };
-  if (!sharedServer) throw new Error("The shared server is unavailable");
-  return sharedServer.request(method, pathname, body);
+  if (!sharedServer) return { status: 0, error: "The shared server is unavailable." };
+  // SRV-16b: a refused request is an answer, not a rejected invoke; the answer
+  // is tagged with its client so a late one from a replaced client is ignored.
+  return relaySharedRequest(sharedServer, [method, pathname, body], (answer, client) =>
+    teamStatus.observe(answer, client),
+  );
 });
 
+// SRV-16b: through teamStatus, so the Settings status follows every sign-in.
 ipcMain.handle("shared-server:sign-in", (event) => {
   assertTrustedPickerSender(event, "The shared server is unavailable");
   const restart = restartGate(sharedServer, windowSharedOrigin);
   if (restart) return { ok: false, error: restart };
   if (!sharedServer) return { ok: false, error: "No shared server is configured." };
-  return sharedServer.signIn();
+  return teamStatus.signIn();
+});
+
+// SRV-16b: the preload asks for the origin at every load of the main window's
+// main frame (instead of a command-line switch fixed per window), so a reload
+// after Save picks up a changed team server. Other senders get null.
+ipcMain.on("shared-server:window-origin", (event) => {
+  const origin = windowOriginFor(
+    event,
+    mainWindow,
+    remoteServer ? null : (sharedServer?.origin ?? null),
+    expectedRendererOriginNow(),
+  );
+  if (origin !== undefined) windowSharedOrigin = origin;
+  event.returnValue = origin ?? null;
 });
 
 ipcMain.handle("shared-server:sign-in-cancel", (event) => {
@@ -820,12 +867,41 @@ const teamServerHandlers = createTeamServerHandlers({
   apply: applyTeamServerSetting,
 });
 
+// SRV-16b: the sign-in status (team-server-status.js), pushed to the window as
+// "team-server:status"; the Access team of each host is pinned in team-server.json.
+const teamStatus = createTeamServerStatus({
+  publish: (status) => {
+    if (!remoteServer && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("team-server:status", status);
+    }
+  },
+  pins: createTeamPins(app.getPath("userData"), process.env.AGENT_DECK_CF_ACCESS_TEAM_DOMAIN),
+  logout: async (origin) => {
+    const run = cloudflaredRunner();
+    return run ? cloudflaredLogout(run, origin) : false;
+  },
+  // Remove cached token: only this host's application token files in ~/.cloudflared.
+  forget: (origin) =>
+    forgetCachedTokens({
+      dir: path.join(os.homedir(), ".cloudflared"),
+      host: new URL(origin).hostname,
+      fs: nodeFs,
+    }),
+});
+
 /** Point the shared-server client at the configured origin (none in remote mode). */
 function applyTeamServerSetting() {
   const origin = remoteServer ? null : teamServerHandlers.state().origin;
+  const previous = sharedServer;
   sharedServer = nextSharedServerClient(sharedServer, origin, (next) =>
-    createSharedServerClient({ origin: next, run: cloudflaredRunner() }),
+    createSharedServerClient({
+      origin: next,
+      run: cloudflaredRunner(),
+      trustTeam: (team, aud) => teamStatus.trustTeam(next, team, aud),
+    }),
   );
+  // Startup and a changed origin: silent cached-token check, never a browser.
+  if (sharedServer !== previous) void teamStatus.attach(sharedServer);
 }
 
 ipcMain.handle("team-server:get", (event) => {
@@ -835,8 +911,54 @@ ipcMain.handle("team-server:get", (event) => {
 
 ipcMain.handle("team-server:set", (event, input) => {
   assertTrustedPickerSender(event, "Team server settings are unavailable");
-  return teamServerHandlers.set(input);
+  const result = teamServerHandlers.set(input);
+  // SRV-16b: a changed origin reloads the window once its drafts are flushed.
+  if (result.ok && result.restartRequired) requestDraftFlush(false);
+  return result;
 });
+
+/** SRV-16b: the sign-in status and actions; refused in remote mode like get/set. */
+const teamServerAction = (event, run) => {
+  assertTrustedPickerSender(event, "Team server settings are unavailable");
+  if (remoteServer) return { ok: false, error: REMOTE_MODE_ERROR };
+  return run();
+};
+
+ipcMain.handle("team-server:status", (event) => {
+  assertTrustedPickerSender(event, "Team server settings are unavailable");
+  return remoteServer ? { state: "off" } : teamStatus.get();
+});
+
+ipcMain.handle("team-server:sign-in", (event) =>
+  teamServerAction(event, () => teamStatus.signIn()),
+);
+
+ipcMain.handle("team-server:sign-out", (event) =>
+  teamServerAction(event, () => teamStatus.signOut()),
+);
+
+ipcMain.handle("team-server:accept-team", (event) =>
+  teamServerAction(event, () => teamStatus.acceptTeam()),
+);
+
+ipcMain.handle("team-server:sign-in-cancel", (event) =>
+  teamServerAction(event, () => {
+    sharedServer?.cancelSignIn();
+    return { ok: true };
+  }),
+);
+
+ipcMain.handle("team-server:forget-token", (event) =>
+  teamServerAction(event, () => teamStatus.forgetToken()),
+);
+
+// The Team server screen mounted: re-check a signed-in, unreachable or refused status.
+ipcMain.handle("team-server:check", (event) =>
+  teamServerAction(event, async () => {
+    await teamStatus.recheck();
+    return { ok: true };
+  }),
+);
 
 /** Native folder chooser (the NSOpenPanel equivalent) for the project flow. */
 ipcMain.handle("shell:openExternal", async (_event, rawUrl) => {

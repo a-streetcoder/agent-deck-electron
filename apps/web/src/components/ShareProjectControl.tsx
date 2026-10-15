@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { ProjectMeta } from "@agent-deck/contracts";
 import { Button } from "@/design-system/components/Button";
 import { openExternal, sharedServer } from "@/lib/native";
+import { trackTransfer } from "@/lib/sharedTransfers";
 import { updateProject } from "../state/wsBridge.ts";
 
 /**
@@ -165,7 +166,13 @@ export function ShareProjectControl({
       },
     });
 
-  const share = async () => {
+  // SRV-16b: Make shared is a transfer too: no Save (and reload) in its middle.
+  const share = () =>
+    trackTransfer(shareNow).catch((failure: unknown) =>
+      setNotice({ text: failure instanceof Error ? failure.message : String(failure) }),
+    );
+
+  const shareNow = async () => {
     setBusy("sharing");
     setNotice(null);
     try {

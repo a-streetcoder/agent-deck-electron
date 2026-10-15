@@ -7,7 +7,13 @@
  */
 import { Buffer } from "node:buffer";
 import { CLOUDFLARED_MISSING } from "./cloudflared-resolver.js";
-import { cloudflaredLogin, cloudflaredToken, signInErrorText } from "./remote-server.js";
+import {
+  accessTokenAudience,
+  accessTokenTeam,
+  cloudflaredLogin,
+  cloudflaredToken,
+  signInErrorText,
+} from "./remote-server.js";
 
 /** The only requests a renderer may ask for, as "METHOD /path". */
 const ALLOWED = new Set(["GET /projects", "POST /projects", "GET /me"]);
@@ -61,11 +67,25 @@ const redactParsed = (value, secret) => {
 
 /**
  * `run(args, timeoutMs, signal)` runs cloudflared (null when none is found:
- * every request then needs a sign-in that points to the download in Settings). `fetchImpl` is Node's fetch in main.
+ * every request then needs a sign-in that points to the download in Settings).
+ * `fetchImpl` is Node's fetch in main.
+ * SRV-16b: `trustTeam(team, aud)` (optional) sees the Access team and
+ * application audience of every token before it is used (see accessTokenTeam);
+ * false holds the token back until acceptHeldTeam(), and the client stays
+ * signed out meanwhile. A request may pass { timeoutMs } to shorten the wait.
  */
-export function createSharedServerClient({ origin, run, fetchImpl = fetch, timeoutMs = 120_000 }) {
+export function createSharedServerClient({
+  origin,
+  run,
+  fetchImpl = fetch,
+  timeoutMs = 120_000,
+  trustTeam,
+}) {
   const host = new URL(origin).host;
   let token = null;
+  let team = null;
+  // A token whose team trustTeam refused: { token, team, aud }, never used as is.
+  let held = null;
   // A failed lookup (or a token the server refused) holds until signIn()
   // succeeds, so a signed-out user does not spawn cloudflared on every call.
   let needsSignIn = false;
@@ -73,21 +93,43 @@ export function createSharedServerClient({ origin, run, fetchImpl = fetch, timeo
   let signingIn = null;
   let controller = null;
 
+  /** Take `fresh` when its team is trusted (true), else hold it (false). */
+  function adopt(fresh) {
+    const freshTeam = accessTokenTeam(fresh);
+    const aud = accessTokenAudience(fresh);
+    if (trustTeam && !trustTeam(freshTeam, aud)) {
+      held = { token: fresh, team: freshTeam, aud };
+      token = null;
+      needsSignIn = true;
+      return false;
+    }
+    token = fresh;
+    team = freshTeam;
+    held = null;
+    needsSignIn = false;
+    return true;
+  }
+
   function currentToken() {
     if (token || needsSignIn || !run) return Promise.resolve(token);
-    lookup ??= cloudflaredToken(run, origin)
-      .then((value) => (token = value))
+    if (lookup) return lookup.promise;
+    // SRV-16b: signOut() aborts this lookup; a late answer is then dropped.
+    const mine = { controller: new AbortController() };
+    const { signal } = mine.controller;
+    mine.promise = cloudflaredToken(run, origin, signal)
+      .then((value) => (!signal.aborted && adopt(value) ? token : null))
       .catch(() => {
-        needsSignIn = true;
+        if (!signal.aborted) needsSignIn = true;
         return null;
       })
       .finally(() => {
-        lookup = null;
+        if (lookup === mine) lookup = null;
       });
-    return lookup;
+    lookup = mine;
+    return mine.promise;
   }
 
-  async function request(method, path, body) {
+  async function request(method, path, body, options = {}) {
     const sessionImport = method === "POST" && typeof path === "string" && IMPORT_PATH.test(path);
     const prompt = method === "POST" && typeof path === "string" && PROMPT_PATH.test(path);
     const sessionReturn = method === "POST" && typeof path === "string" && RETURN_PATH.test(path);
@@ -198,7 +240,7 @@ export function createSharedServerClient({ origin, run, fetchImpl = fetch, timeo
           ...(payload !== undefined ? { "content-type": "application/json" } : {}),
         },
         ...(payload !== undefined ? { body: payload } : {}),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(options.timeoutMs ?? timeoutMs),
       });
     } catch (error) {
       // Fixed text: a fetch error never needs to reach the page verbatim.
@@ -245,9 +287,12 @@ export function createSharedServerClient({ origin, run, fetchImpl = fetch, timeo
     signingIn = cloudflaredLogin(run, origin, signal)
       .then((fresh) => {
         if (signal.aborted) throw new Error("Sign-in cancelled.");
-        token = fresh;
-        needsSignIn = false;
-        return { ok: true };
+        if (adopt(fresh)) return { ok: true };
+        return {
+          ok: false,
+          held: true,
+          error: "Confirm the sign-in team in Settings > Team server.",
+        };
       })
       .catch((error) => ({ ok: false, error: signInErrorText(error, signal.aborted) }))
       .finally(() => {
@@ -262,5 +307,57 @@ export function createSharedServerClient({ origin, run, fetchImpl = fetch, timeo
     controller?.abort();
   }
 
-  return { origin, request, signIn, cancelSignIn };
+  /** SRV-16b: forget the token (and a held one); no lookup until signIn(). */
+  function signOut() {
+    cancelSignIn();
+    lookup?.controller.abort();
+    lookup = null;
+    token = null;
+    team = null;
+    held = null;
+    needsSignIn = true;
+  }
+
+  /** SRV-16b: use the held token after the user confirmed its team; answers that team. */
+  function acceptHeldTeam() {
+    if (!held) return null;
+    const accepted = held;
+    token = accepted.token;
+    team = accepted.team;
+    held = null;
+    needsSignIn = false;
+    return accepted.team;
+  }
+
+  return {
+    origin,
+    request,
+    signIn,
+    cancelSignIn,
+    signOut,
+    acceptHeldTeam,
+    /** The Access team of the token in use, or null. */
+    team: () => (token ? team : null),
+    /** The Access team of a held token, or undefined when none is held. */
+    heldTeam: () => (held ? held.team : undefined),
+    /** The audience of a held token (null when it names none), or undefined. */
+    heldAudience: () => (held ? held.aud : undefined),
+  };
+}
+
+/**
+ * SRV-16b: one renderer request through `client`, always answered: a refused
+ * request (not allow-listed, a bad body) becomes { status: 0, error } with the
+ * client's text. `onAnswer(answer, client)` sees each answer with the client
+ * that produced it.
+ */
+export async function relaySharedRequest(client, [method, path, body], onAnswer = () => {}) {
+  let answer;
+  try {
+    answer = await client.request(method, path, body);
+  } catch (error) {
+    answer = { status: 0, error: error instanceof Error ? error.message : String(error) };
+  }
+  onAnswer(answer, client);
+  return answer;
 }

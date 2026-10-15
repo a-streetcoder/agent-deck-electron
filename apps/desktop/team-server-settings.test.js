@@ -7,12 +7,14 @@ import {
   REMOTE_MODE_ERROR,
   RESTART_ERROR,
   SETTINGS_FILE,
+  createTeamPins,
   createTeamServerHandlers,
   nextSharedServerClient,
   readTeamServerSettings,
   resolveServerOrigin,
   restartGate,
   validateServerUrl,
+  windowOriginFor,
   writeTeamServerSettings,
 } from "./team-server-settings.js";
 
@@ -167,6 +169,75 @@ test("set validates, keeps cloudflaredPath and unknown keys, re-points the clien
     assert.throws(() => handlers.get(), { message: REMOTE_MODE_ERROR });
     assert.equal(readTeamServerSettings(dir).serverUrl, "https://deck.example.com");
     assert.equal(applied, 1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the window origin goes only to the main window's main frame on the renderer origin", () => {
+  const mainFrame = { url: "http://127.0.0.1:4200/" };
+  const contents = { mainFrame };
+  const win = { webContents: contents, isDestroyed: () => false };
+  const origin = "https://deck.example.com";
+  const renderer = "http://127.0.0.1:4200";
+  const ask = (event, window = win, value = origin, expected = renderer) =>
+    windowOriginFor(event, window, value, expected);
+  const fromMain = { sender: contents, senderFrame: mainFrame };
+  assert.equal(ask(fromMain), origin);
+  assert.equal(ask(fromMain, win, null), null);
+  for (const event of [
+    { sender: contents, senderFrame: { url: "https://evil.example/" } },
+    { sender: contents, senderFrame: null },
+    { sender: { mainFrame }, senderFrame: mainFrame },
+    {},
+  ]) {
+    assert.equal(ask(event), undefined);
+  }
+  // The main frame itself, but showing another page: nothing is answered or recorded.
+  for (const url of ["https://evil.example/", "http://127.0.0.1:4201/", "", "not a url"]) {
+    // Same window and frame shape as the accepted case above; only the page differs.
+    const frame = { url };
+    const other = { mainFrame: frame };
+    const window = { webContents: other, isDestroyed: () => false };
+    assert.equal(ask({ sender: other, senderFrame: frame }, window), undefined, url);
+  }
+  assert.equal(ask(fromMain, win, origin, null), undefined);
+  assert.equal(ask(fromMain, null), undefined);
+  assert.equal(ask(fromMain, { ...win, isDestroyed: () => true }), undefined);
+});
+
+test("team pins and sign-outs are stored per host next to the URL", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "team-pins-"));
+  try {
+    writeTeamServerSettings(dir, { serverUrl: "https://a.example", extra: 1 });
+    const pins = createTeamPins(dir, " Acme.CloudflareAccess.com ");
+    assert.equal(pins.expected(), "acme.cloudflareaccess.com");
+    assert.equal(createTeamPins(dir, "").expected(), null);
+    assert.equal(pins.pinned("https://a.example"), null);
+    pins.pin("https://a.example", "acme.cloudflareaccess.com", "f".repeat(64));
+    pins.setSignedOut("https://a.example", true);
+    pins.setSignedOut("https://a.example", true);
+    assert.equal(pins.pinned("https://a.example"), "acme.cloudflareaccess.com");
+    assert.equal(pins.pinned("https://b.example"), null);
+    assert.equal(pins.pinned("toString"), null);
+    assert.equal(
+      pins.pinnedElsewhere("https://b.example", "acme.cloudflareaccess.com"),
+      "https://a.example",
+    );
+    assert.equal(pins.pinnedElsewhere("https://a.example", "acme.cloudflareaccess.com"), null);
+    assert.equal(pins.pinnedElsewhere("https://b.example", "other.cloudflareaccess.com"), null);
+    assert.equal(pins.audElsewhere("https://b.example", "f".repeat(64)), "https://a.example");
+    assert.equal(pins.audElsewhere("https://a.example", "f".repeat(64)), null);
+    assert.equal(pins.signedOut("https://a.example"), true);
+    assert.deepEqual(readTeamServerSettings(dir), {
+      serverUrl: "https://a.example",
+      extra: 1,
+      teams: { "https://a.example": "acme.cloudflareaccess.com" },
+      auds: { "https://a.example": "f".repeat(64) },
+      signedOut: ["https://a.example"],
+    });
+    pins.setSignedOut("https://a.example", false);
+    assert.equal(pins.signedOut("https://a.example"), false);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

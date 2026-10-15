@@ -10,6 +10,7 @@ import {
   type SharedServerResponse,
 } from "@/lib/native";
 
+import { trackTransfer, useTransferHold } from "../lib/sharedTransfers.ts";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { useAppStore } from "../state/store.ts";
 import { useSharedSessionMirror } from "../state/useSharedSessionMirror.ts";
@@ -306,11 +307,13 @@ export function ReturnPendingBanner({ session }: { session: SessionMeta }) {
     setBusy(true);
     setError(null);
     try {
-      const result = await finishReturn(session, server);
+      const result = await trackTransfer(() => finishReturn(session, server));
       if (!result.ok) {
         if (result.code === "return_stale") setStale(true);
         else setError(result.error);
       }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
     }
@@ -390,6 +393,8 @@ type BackStep =
  */
 function BringBack({ session, host }: { session: SessionMeta; host: string }) {
   const [step, setStep] = useState<BackStep | null>(null);
+  // SRV-16b: Save stays refused while this dialog is open (also when it waits for a sign-in).
+  useTransferHold(step !== null);
   const server = sharedServer();
   const link = session.sharedTo;
   if (!server || !link?.serverOrigin || !link.serverSessionId) return null;
@@ -408,7 +413,7 @@ function BringBack({ session, host }: { session: SessionMeta; host: string }) {
   };
   const guarded = (run: () => Promise<void>) => async (): Promise<void> => {
     try {
-      await run();
+      await trackTransfer(run);
     } catch (error) {
       setStep({ kind: "error", text: error instanceof Error ? error.message : String(error) });
     }
@@ -650,6 +655,8 @@ export function ShareSessionButton() {
   const session = useAppStore((state) => state.session);
   const projects = useAppStore((state) => state.projects);
   const [step, setStep] = useState<Step | null>(null);
+  // SRV-16b: from the freeze until the dialog closes, Save stays refused.
+  useTransferHold(step !== null);
   const server = sharedServer();
   const link = projects.find((project) => project.id === session?.projectId)?.sharedTo;
   if (!server || !session || !link) return null;
@@ -666,7 +673,7 @@ export function ShareSessionButton() {
   // Every failed local request ends in a closable error, never a stuck dialog.
   const guarded = (run: () => Promise<void>) => async (): Promise<void> => {
     try {
-      await run();
+      await trackTransfer(run);
     } catch (error) {
       setStep({ kind: "error", text: error instanceof Error ? error.message : String(error) });
     }

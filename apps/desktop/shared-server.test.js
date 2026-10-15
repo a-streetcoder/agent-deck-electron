@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createSharedServerClient } from "./shared-server.js";
+import { createSharedServerClient, relaySharedRequest } from "./shared-server.js";
 
 const ORIGIN = "https://deck.example.test";
 // A fake JWT-shaped value, never a real credential.
@@ -390,4 +390,44 @@ test("bringing a session back: return, abort and returned with exact bodies", as
   assert.equal(calls.at(-1).init.method, "PATCH");
   assert.equal(calls.at(-1).init.body, JSON.stringify({ deviceSessionId: other, handoff: other }));
   assert.equal(calls.length, 4);
+});
+
+test("sign-out drops a token lookup still running, so its late answer is never used", async () => {
+  let print;
+  let aborted = false;
+  const run = (args, _timeout, signal) =>
+    new Promise((resolve) => {
+      signal?.addEventListener("abort", () => (aborted = true));
+      print = () => resolve(`${TOKEN}\n`);
+    });
+  const { fetchImpl, calls } = fakeFetch();
+  const client = createSharedServerClient({ origin: ORIGIN, run, fetchImpl });
+  const pending = client.request("GET", "/me");
+  await Promise.resolve();
+  client.signOut();
+  assert.equal(aborted, true);
+  print();
+  assert.deepEqual(await pending, { status: 401, signInRequired: true });
+  assert.deepEqual(await client.request("GET", "/me"), { status: 401, signInRequired: true });
+  assert.equal(calls.length, 0);
+  assert.equal(client.team(), null);
+});
+
+test("a refused request is relayed as status 0 with the client's text, tagged with its client", async () => {
+  const { run } = fakeRun();
+  const { fetchImpl } = fakeFetch();
+  const client = createSharedServerClient({ origin: ORIGIN, run, fetchImpl });
+  const seen = [];
+  const answer = await relaySharedRequest(client, ["POST", "/projects", { path: "/etc" }], (a, c) =>
+    seen.push([a, c]),
+  );
+  assert.deepEqual(answer, {
+    status: 0,
+    error: "This request to the shared server is not allowed.",
+  });
+  assert.deepEqual(seen, [[answer, client]]);
+  assert.deepEqual(await relaySharedRequest(client, ["GET", "/me"]), {
+    status: 200,
+    body: { ok: true },
+  });
 });
