@@ -7,6 +7,7 @@ import {
   projectPlans,
   projectSubagentRuns,
   projectSupervisor,
+  SubagentDeltaIndex,
   type LoopRunsProjection,
   type ProjectedPlanChange,
   type ProjectedSupervisorRequest,
@@ -19,6 +20,8 @@ export interface LogProjections {
   loop: LoopRunsProjection;
   supervisor: Map<string, ProjectedSupervisorRequest>;
   plans: Map<string, ProjectedPlanChange[]>;
+  /** A3: per-run delta trackers (cursor-compacted; removed runs dropped). */
+  subagentDeltas: SubagentDeltaIndex;
   /** ts of the log's first event: older store history predates the log. */
   startedAt?: string;
 }
@@ -29,6 +32,8 @@ export interface LogReaders {
   /** Undefined for the disabled log: read the store. */
   supervisor(): ReadonlyMap<string, ProjectedSupervisorRequest> | undefined;
   plans(sessionId: string): readonly ProjectedPlanChange[] | undefined;
+  /** A3: the delta trackers, caught up; undefined for the disabled log. */
+  subagentDeltas(): SubagentDeltaIndex | undefined;
 }
 
 // ponytail: every boot folds all history; projection snapshots when startup passes ~1 s.
@@ -41,6 +46,7 @@ export function createLogReaders(log: EventLog): LogReaders {
     loop: new Map(),
     supervisor: new Map(),
     plans: new Map(),
+    subagentDeltas: new SubagentDeltaIndex(),
   };
   const catchUp = (): LogProjections => {
     while (log.lastSeq() > afterSeq) {
@@ -50,6 +56,7 @@ export function createLogReaders(log: EventLog): LogReaders {
       state.loop = projectLoopRuns(page.events, state.loop.values());
       state.supervisor = projectSupervisor(page.events, state.supervisor);
       state.plans = projectPlans(page.events, state.plans);
+      for (const event of page.events) state.subagentDeltas.apply(event);
       if (page.nextAfterSeq === undefined || page.nextAfterSeq <= afterSeq) break;
       afterSeq = page.nextAfterSeq;
     }
@@ -59,5 +66,6 @@ export function createLogReaders(log: EventLog): LogReaders {
     projections: catchUp,
     supervisor: () => (disabled ? undefined : catchUp().supervisor),
     plans: (sessionId) => (disabled ? undefined : (catchUp().plans.get(sessionId) ?? [])),
+    subagentDeltas: () => (disabled ? undefined : catchUp().subagentDeltas),
   };
 }

@@ -56,6 +56,7 @@ import { bridgeAvailable } from "./claudeTransport.ts";
 import {
   registerDeckBridgeTools,
   registerSupervisorAnswerBridgeTool,
+  registerSubagentDeltaBridgeTool,
   registerSupervisorListBridgeTool,
 } from "./bridgeTools.ts";
 import { EngineSkillStore } from "./skills/engineSkillStore.ts";
@@ -105,7 +106,12 @@ import { InjectedCommandStore } from "./injectedCommands.ts";
 import { ReceiptBus } from "./receipts.ts";
 import { makeServerRuntime, type ServerRuntime } from "./runtime.ts";
 import { registerBridgeRoutes } from "./routes/bridge.ts";
-import { registerEventRoutes, startProjectEventNudges } from "./routes/events.ts";
+import {
+  registerEventRoutes,
+  registerSubagentDeltaRoute,
+  startProjectEventNudges,
+} from "./routes/events.ts";
+import { createSubagentDeltaReader } from "./subagentDelta.ts";
 import { registerGitRoutes } from "./routes/git.ts";
 import { registerLoopRoutes } from "./routes/loops.ts";
 import { registerMcpRoutes } from "./routes/mcp.ts";
@@ -148,13 +154,14 @@ const CHILD_MEMORY_TOOL_NAMES = new Set([
   "agent_deck_memory_search",
   "agent_deck_memory_mark_stale",
 ]);
-/** The bridge tools that start a child pi, withheld when delegation is off. */
+/** The delegation bridge tools (child launch, await, cancel, delta), withheld when delegation is off. */
 const DELEGATION_TOOL_NAMES = new Set([
   "managed_subagent",
   "managed_parallel",
   "spawn_subagent",
   "await_subagents",
   "cancel_subagent",
+  "subagent_delta",
 ]);
 
 /**
@@ -1042,8 +1049,18 @@ async function initServer(
 
   // Native subagents, supervisor listing, and the session activity plan: the
   // Deck-agent bridge tools every parent session gets.
-  registerDeckBridgeTools(bridge, sessions, eventLog);
+  // A3: what changed in a child run since its parent last looked; the trackers are
+  // part of the log readers' fold, the cursor is the parent's subagent.result.read.
+  const subagentDeltas = createSubagentDeltaReader({
+    index: () => logReaders.subagentDeltas(),
+    runs: subagentRuns,
+    recordRead: (parentSessionId, runId, uptoSeq) =>
+      events.subagentResultRead(parentSessionId, runId, uptoSeq),
+    warn: (message, error) => console.warn(message, error),
+  });
+  registerDeckBridgeTools(bridge, sessions, eventLog, subagentDeltas);
   registerSupervisorListBridgeTool(bridge, supervisor);
+  registerSubagentDeltaBridgeTool(bridge, subagentDeltas);
 
   // Resource scanning follows the Pi subprocess HOME override so scanners,
   // configuration reloads, and Pi all observe the same user-owned files.
@@ -1600,6 +1617,7 @@ async function initServer(
   registerSessionRoutes(ctx);
   registerComposerDraftRoutes(ctx, composerDrafts);
   registerEventRoutes(fastify, eventLog);
+  registerSubagentDeltaRoute(fastify, subagentDeltas);
   // A1c: coalesced project_events nudges to every client (same reach as resources_changed).
   const stopEventNudges = startProjectEventNudges(eventLog, broadcast);
   const bridgeRouteHandles = registerBridgeRoutes(ctx);
