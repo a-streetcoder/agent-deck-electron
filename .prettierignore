@@ -5,6 +5,10 @@ pnpm-lock.yaml
 **/coverage/
 packages/loop-catalog-native/target/
 packages/loop-catalog-native/native/
+packages/skill-engine-native/target/
+packages/skill-engine-native/native/
+# NAPI-RS output kept byte-identical to the vendored engine-v0.2.0 typings.
+packages/skill-engine-native/src/binding.d.ts
 apps/web/public/fonts/
 # Byte-exact on-disk data-dir fixtures: these mirror what the app writes via
 # JSON.stringify(x, null, 2) (no trailing newline), so the persistence

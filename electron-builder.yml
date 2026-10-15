@@ -24,7 +24,7 @@ extraResources:
     to: loop-catalog-native
     filter:
       - "*.node"
-  - from: build/skill-engine-native
+  - from: packages/skill-engine-native/native
     to: skill-engine-native
     filter:
       - "*.node"

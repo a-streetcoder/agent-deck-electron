@@ -13,16 +13,8 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Read-only token, plus package read so `pnpm install` can fetch the private
-# @a-streetcoder/skill-engine-native from GitHub Packages (the .npmrc reads GITHUB_TOKEN).
-# The built-in token works if the package grants this repo read access; otherwise set a
-# PACKAGES_READ_TOKEN secret (a PAT with read:packages) and it is preferred automatically.
 permissions:
   contents: read
-  packages: read
-
-env:
-  GITHUB_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}
 
 jobs:
   # Fast fail-fast feedback (~30s): static checks on one OS.
@@ -87,7 +79,9 @@ jobs:
           rustup default 1.88.0
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          workspaces: packages/loop-catalog-native -> packages/loop-catalog-native/target
+          workspaces: |
+            packages/loop-catalog-native -> packages/loop-catalog-native/target
+            packages/skill-engine-native -> packages/skill-engine-native/target
           shared-key: loop-catalog-native-${{ matrix.name }}
       - run: pnpm install --frozen-lockfile
       - name: Rust formatting, lint, and security tests
@@ -96,6 +90,9 @@ jobs:
           cargo fmt --manifest-path packages/loop-catalog-native/Cargo.toml -- --check
           cargo clippy --manifest-path packages/loop-catalog-native/Cargo.toml --all-targets --locked -- -D warnings
           cargo test --manifest-path packages/loop-catalog-native/Cargo.toml --locked
+          cargo fmt --manifest-path packages/skill-engine-native/Cargo.toml --all -- --check
+          cargo clippy --manifest-path packages/skill-engine-native/Cargo.toml --all-targets --locked -- -D warnings
+          cargo test --manifest-path packages/skill-engine-native/Cargo.toml --locked
       - run: pnpm build:native
       - run: pnpm --filter @agent-deck/resources test
       - name: Focused Loop retention and engine tests
@@ -151,7 +148,9 @@ jobs:
           rustup default 1.88.0
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          workspaces: packages/loop-catalog-native -> packages/loop-catalog-native/target
+          workspaces: |
+            packages/loop-catalog-native -> packages/loop-catalog-native/target
+            packages/skill-engine-native -> packages/skill-engine-native/target
           shared-key: loop-catalog-native-tests-${{ runner.os }}
       - run: pnpm build:native
       - run: pnpm test
@@ -188,7 +187,9 @@ jobs:
           rustup default 1.88.0
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          workspaces: packages/loop-catalog-native -> packages/loop-catalog-native/target
+          workspaces: |
+            packages/loop-catalog-native -> packages/loop-catalog-native/target
+            packages/skill-engine-native -> packages/skill-engine-native/target
           shared-key: loop-catalog-native-test-pi-${{ runner.os }}
       - run: pnpm build:native
       - run: pnpm --filter @agent-deck/web build
@@ -226,7 +227,9 @@ jobs:
           rustup default 1.88.0
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          workspaces: packages/loop-catalog-native -> packages/loop-catalog-native/target
+          workspaces: |
+            packages/loop-catalog-native -> packages/loop-catalog-native/target
+            packages/skill-engine-native -> packages/skill-engine-native/target
           shared-key: loop-catalog-native-e2e-${{ runner.os }}
       - run: pnpm build:native
       # pnpm may not run Electron's postinstall on a frozen install; fetch its

@@ -1576,7 +1576,7 @@ async function initServer(
   for (const project of projects.list()) watchProject(project.path);
 
   // The skill catalog/authoring/version seam (ADR-0002 P3): reads stay agent-deck's
-  // pi-shaped scanner; writes/recovery go to the shared @a-streetcoder skill engine
+  // pi-shaped scanner; writes/recovery go to the vendored skill engine
   // behind the same SkillStore interface. The engine owns storage now, so its addon is
   // required — loadSkillEngineNative() surfaces a clear, actionable error if it can't load.
   const skillStore = new EngineSkillStore({
