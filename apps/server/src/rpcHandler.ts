@@ -3,6 +3,7 @@ import {
   type DiffPush,
   type RpcServerFrame,
   type ServerMessage,
+  type SessionMeta,
 } from "@agent-deck/contracts";
 import { Either, Schema } from "effect";
 import { emptyTranscript } from "@agent-deck/domain";
@@ -92,6 +93,8 @@ export function createRpcConnection(deps: {
   events?: EventProducers;
   /** Verified identity of this connection's user (trusted proxy); absent on loopback. */
   user?: AuthenticatedUser;
+  /** SRV-06: owner env layered over the in-app terminal's env (GitHub token). */
+  terminalEnv?: (meta: SessionMeta) => Record<string, string>;
   /** SRV-09: behind the trusted proxy, host launchers (external terminal, editor) refuse. */
   sharedServer?: boolean;
   send: (frame: RpcServerFrame) => void;
@@ -529,9 +532,11 @@ export function createRpcConnection(deps: {
       }
       try {
         // cwd comes from the session, server-side (worktree-aware meta.cwd).
+        const ownerEnv = deps.terminalEnv?.(session.meta) ?? {};
         const opened = await terminals.open({
           sessionId: session.meta.id,
           cwd: session.meta.cwd,
+          ...(Object.keys(ownerEnv).length > 0 ? { env: { ...process.env, ...ownerEnv } } : {}),
           cols: request.cols,
           rows: request.rows,
         });
@@ -1060,6 +1065,8 @@ export function setupRpcEndpoint(deps: {
   sessionAuthors?: SessionAuthorStore;
   /** A1 event log producers (turn.prompted). */
   events?: EventProducers;
+  /** SRV-06: owner env layered over the in-app terminal's env (GitHub token). */
+  terminalEnv?: (meta: SessionMeta) => Record<string, string>;
   sharedServer?: boolean;
 }): RpcEndpoint {
   const {
@@ -1112,6 +1119,7 @@ export function setupRpcEndpoint(deps: {
       sessionAuthors: deps.sessionAuthors,
       events: deps.events,
       sharedServer: deps.sharedServer,
+      terminalEnv: deps.terminalEnv,
       user: upgradeRequest ? requestUser(upgradeRequest) : undefined,
       send: (frame) => sendTo(socket, frame),
       // Terminal push backpressure reads the real socket send-buffer depth.

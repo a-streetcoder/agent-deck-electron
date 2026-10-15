@@ -24,6 +24,7 @@ Server (`apps/server`):
 | `AGENT_DECK_CF_ACCESS_JWKS_URL`     | _(unset)_                                      | Override of the JWKS URL. Tests and staging only.                                                                                                                                               |
 | `AGENT_DECK_DESKTOP_RECOVERY_TOKEN` | _(any secret)_                                 | Pre-existing. Set the same value on the VM and in the desktop launcher so the shell's "reveal" calls are accepted.                                                                              |
 | `AGENT_DECK_OPERATOR_EMAIL`         | `operator@example.com`                         | The Access email whose sessions keep using the shared `~/.pi/agent` (see [Credentials](#credentials)). Unset: every user, the operator included, gets an own agent dir.                         |
+| `AGENT_DECK_GITHUB_CLIENT_ID`       | `Ov23li...`                                    | GitHub OAuth App client id for per-user GitHub connections (see [GitHub](#github-connection)). Unset: connecting answers 409 "GitHub app not configured".                                       |
 
 Desktop (`apps/desktop/main.js`):
 
@@ -193,8 +194,9 @@ generic setup above in two places: the checkout is `~/ai-playground/a-streetcodi
   (`ssh dev`, `cd /srv/streetcoding && git clone <url>`), then Projects → Add Projects… and either
   use the folder browser (rooted at `AGENT_DECK_PROJECT_ROOT=/srv/streetcoding`) or Monitored
   folders (`/srv/streetcoding` → Add folder → add each discovered repo). Registration is server
-  state (`projects.json`). Private repos and pushes need `gh auth login` on the VM, which is not
-  done yet; a bot account would be cleaner than a personal login.
+  state (`projects.json`). Pushes and pull requests run as the session owner once they connect
+  GitHub under Settings > Providers (see [GitHub connection](#github-connection)); otherwise
+  they use whatever `gh auth login` or git credentials the VM has.
 
 ### Dev loop and deploy
 
@@ -341,7 +343,8 @@ Electron.
 `AGENT_DECK_TRUSTED_PROXY=cloudflare`, `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`,
 `AGENT_DECK_CF_ACCESS_AUD`, `AGENT_DECK_PUBLIC_ORIGIN=https://deck.moretti.cc` and
 `AGENT_DECK_PROJECT_ROOT=/srv/streetcoding` (and, once ticket ade-gloc is done,
-`AGENT_DECK_DESKTOP_RECOVERY_TOKEN`). The tunnel runs as `cloudflared-agent-deck.service`.
+`AGENT_DECK_DESKTOP_RECOVERY_TOKEN`; once the GitHub OAuth App exists,
+`AGENT_DECK_GITHUB_CLIENT_ID`). The tunnel runs as `cloudflared-agent-deck.service`.
 
 ## Origins
 
@@ -444,6 +447,56 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
   everyone. Pi locks `settings.json` and `trust.json` beside the link (`realpath: false`), so two
   users writing them at the same time are not locked against each other.
 
+### GitHub connection
+
+Each user connects their own GitHub account (ticket ade-gfs4,
+`apps/server/src/githubConnections.ts`). Identity follows the owner; with one Unix user every
+agent can read every token, so this is attribution, not an authorization boundary (ADR SRV-01,
+[ADR 0003](adr/0003-shared-server-trust-model.md)).
+
+- **Operator setup, once.** On github.com, Settings > Developer settings > OAuth Apps > New OAuth
+  App (an organization's OAuth App works too): any homepage and callback URL (the device flow
+  does not use the callback), then tick **Enable Device Flow**. No client secret is needed.
+  Put the client id in the systemd drop-in and restart:
+
+  ```ini
+  # ~/.config/systemd/user/agent-deck-server.service.d/remote.conf
+  Environment=AGENT_DECK_GITHUB_CLIENT_ID=<client id>
+  ```
+
+  `systemctl --user daemon-reload && systemctl --user restart agent-deck-server`. For an
+  organization that restricts OAuth Apps, an org owner must also approve the app.
+
+- **Device flow.** Settings > Providers > GitHub > Connect calls `POST /runtime/github/connect`,
+  which asks GitHub for a device code (scopes `repo read:user`) and returns only the user code,
+  the verification URL and the poll interval; the device code stays on the server. The card
+  shows the code and a link, and polls `GET /runtime/github/connect/:id`, which asks GitHub at
+  most once per interval (`slow_down` lengthens it) and answers `pending`, `done`, `expired`,
+  `denied` or `error`. Only the user who started a flow can poll it (anyone else gets 404).
+  `GET /runtime/github` returns the login, avatar URL, scopes and connection time, never the
+  token. `DELETE /runtime/github` forgets the token on the server; revoke it on github.com
+  (Settings > Applications > Authorized OAuth Apps), since that needs the app secret otherwise.
+- **Where the token lives.** `<dataDir>/users/<hash>/github.json` (next to the user's `agent`
+  dir, same hash, same alias refusal), written 0600 through a fresh file renamed into place. The
+  operator's (`AGENT_DECK_OPERATOR_EMAIL`) is `<dataDir>/github.json`. Never in a log, a
+  preview, an API answer or the UI.
+- **Injection.** A session whose owner is connected spawns Pi with `GH_TOKEN` (used by `gh`) and
+  git configuration in the environment (`GIT_CONFIG_COUNT`, git 2.31 or later): every inherited
+  credential helper for `https://github.com` is cleared and replaced by one that answers `get`
+  with `$GH_TOKEN` and ignores `store` and `erase`, so the VM's own credential store never sees
+  the token; SSH remotes on github.com are pushed over HTTPS (`pushInsteadOf`) so the owner's
+  token, not the VM's key, is used. Resumes, forks and subagents keep it, as with the agent dir.
+  The in-app terminal of a session gets the same GitHub environment from the session owner. Push and
+  Commit & Push on the Git screen use the connection of whoever clicks; the screen says which
+  identity that is.
+- **No connection.** A session whose owner has not connected (and a session without an owner)
+  gets nothing extra: git and `gh` fall back to the VM default, and the Git screen says
+  "Pushing as the server default".
+- **Limits.** Any agent can print `GH_TOKEN` (for example by running `env`) into its own
+  transcript, and can read every `github.json`; the event log redacts GitHub token prefixes
+  (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), the Pi transcript does not. The
+  release action (tag and push) and fetches still use the VM default.
+
 ## Security model
 
 - **Trust is loopback-only.** The server believes `cf-access-jwt-assertion` only when the TCP
@@ -510,5 +563,7 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
   loopback, which the user's browser cannot reach. On a shared server the sign-in sheet shows
   the paste field at once; for Anthropic choose "Copy code login (headless)" and paste the code
   Anthropic shows (the browser login also works by pasting the final redirect URL).
+- GitHub tokens are per user (ade-gfs4, see [GitHub connection](#github-connection)) and, like
+  provider credentials, readable by every agent: attribution, not an authorization boundary.
 - Per-user credentials are storage, not isolation: every user's agent can read every
   `auth.json`. Sessions without an owner, Doctor and the Pi CLI use the operator's.

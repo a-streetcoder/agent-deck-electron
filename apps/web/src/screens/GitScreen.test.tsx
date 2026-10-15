@@ -66,6 +66,37 @@ it("selects locally without a session and commits/pushes the selected project", 
   expect(useAppStore.getState().currentProjectId).toBeNull();
 });
 
+it("says which GitHub identity a push uses on a shared server (SRV-06)", async () => {
+  let github: unknown = { available: true, configured: true, connection: null };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) =>
+      Response.json(url === "/settings" ? settings : url === "/runtime/github" ? github : dirty),
+    ),
+  );
+  useAppStore.setState({ me: { id: "ale@example.com", email: "ale@example.com" } });
+  try {
+    render(<GitScreen />);
+    select("b");
+    expect((await screen.findByTestId("git-push-identity")).textContent).toContain(
+      "Pushing as the server default",
+    );
+    cleanup();
+    github = {
+      available: true,
+      configured: true,
+      connection: { login: "ale-gh", avatarUrl: "", scopes: [], connectedAt: "" },
+    };
+    render(<GitScreen />);
+    select("b");
+    expect((await screen.findByTestId("git-push-identity")).textContent).toContain(
+      "Pushing as @ale-gh",
+    );
+  } finally {
+    useAppStore.setState({ me: null });
+  }
+});
+
 it("defaults to the active session project but keeps explicit selection and scopes merge", async () => {
   useAppStore.setState({
     session: {

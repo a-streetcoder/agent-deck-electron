@@ -8,6 +8,7 @@ import { PageToolbar } from "@/design-system/components/PageToolbar";
 import { SectionHero } from "@/design-system/components/SectionHero";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, ChevronRight, KeyRound, LogOut, Search, UserRound } from "lucide-react";
+import { GitHubConnectionCard } from "../components/GitHubConnectionCard.tsx";
 import { ProviderLoginSheet } from "../components/ProviderLoginSheet.tsx";
 import { ProviderLogo } from "../components/ProviderLogo.tsx";
 import { useAppStore } from "../state/store.ts";
@@ -131,6 +132,7 @@ export function ProvidersScreen({
             These sign-ins are yours only and apply to the sessions you create on this server.
           </p>
         ) : null}
+        {sharedServer ? <GitHubConnectionCard /> : null}
         {!loaded ? (
           <AppEmptyState heading="Loading providers…" icon={<AppSpinner size="md" />} />
         ) : null}

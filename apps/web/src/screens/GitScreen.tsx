@@ -15,6 +15,7 @@ import { flushSync } from "react-dom";
 import { Sparkles, Tag } from "lucide-react";
 import { useAppStore } from "../state/store.ts";
 import { mergeWorktreeSession } from "../state/wsBridge.ts";
+import { useGitHubStatus } from "../components/GitHubConnectionCard.tsx";
 
 /**
  * Git screen (native GitRepositoryService): the current project's working-tree
@@ -122,6 +123,9 @@ function GitProjectScreen({
   // and the CheckpointsPanel Restore use.
   const agentRunning = useAppStore((state) => state.transcript.agentStatus === "running");
   const pushToast = useAppStore((state) => state.pushToast);
+  // SRV-06: pushes from this screen use the viewer's GitHub connection.
+  const sharedServer = useAppStore((state) => state.me !== null);
+  const { status: github } = useGitHubStatus(sharedServer);
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const gitActionRequest = useAppStore((state) => state.gitActionRequest);
   const clearGitActionRequest = useAppStore((state) => state.clearGitActionRequest);
@@ -1037,6 +1041,16 @@ function GitProjectScreen({
                   Commit &amp; Push
                 </Button>
               </div>
+              {github?.available ? (
+                <p
+                  className="text-right text-caption text-text-muted"
+                  data-testid="git-push-identity"
+                >
+                  {github.connection
+                    ? `Pushing as @${github.connection.login} (your GitHub connection).`
+                    : "Pushing as the server default. Connect GitHub under Settings > Providers to push as you."}
+                </p>
+              ) : null}
             </div>
           )}
         </>

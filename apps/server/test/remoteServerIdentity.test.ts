@@ -6,6 +6,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -70,6 +71,29 @@ const endpoint = (pathname: string) => `http://127.0.0.1:${server.port}${pathnam
 const ale = { "cf-access-jwt-assertion": assertionFor("ale@example.com", "Ale") };
 const AUTHORED_SESSION = randomUUID();
 const loginAuthPaths: string[] = [];
+// SRV-06: github.com stand-in for the device flow; token answers are queued per test.
+const tokenAnswers: Array<Record<string, unknown>> = [];
+const githubJson = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+const githubFetch = (async (url: string | URL) => {
+  const target = String(url);
+  if (target === "https://github.com/login/device/code") {
+    return githubJson({
+      device_code: "device-secret",
+      user_code: "ABCD-1234",
+      verification_uri: "https://github.com/login/device",
+      interval: 0,
+      expires_in: 900,
+    });
+  }
+  if (target === "https://github.com/login/oauth/access_token") {
+    return githubJson(tokenAnswers.shift() ?? { error: "authorization_pending" });
+  }
+  if (target === "https://api.github.com/user") {
+    return githubJson({ login: "ale-gh", avatar_url: "https://avatars.example/ale" });
+  }
+  return githubJson({}, 404);
+}) as typeof fetch;
 const authorRowIds = (): string[] =>
   new SessionAuthorIndex(dataDir).list().map((record) => record.id);
 
@@ -109,6 +133,7 @@ beforeAll(async () => {
     dataDir,
     providerLoginFn: async (authPath) => void loginAuthPaths.push(authPath),
     claudeCodeLoggedIn: async () => claudeCodeLoggedIn,
+    githubFetch,
   });
 });
 afterAll(async () => {
@@ -585,5 +610,81 @@ describe("SessionAuthorStore", () => {
     store.unstage("s4", "retry me", ale);
     expect(store.attachToUserCell("s4", cell, undefined).author).toEqual(andrea);
     expect(store.attachToUserCell("s4", cell, undefined).author).toBeUndefined();
+  });
+});
+
+describe("SRV-06 GitHub connection on a shared server", () => {
+  const andrea = { "cf-access-jwt-assertion": assertionFor("andrea@example.com") };
+  const status = async (headers: Record<string, string>) =>
+    (await fetch(endpoint("/runtime/github"), { headers })).json();
+  const connect = () =>
+    fetch(endpoint("/runtime/github/connect"), { method: "POST", headers: ale });
+  const poll = (id: string, headers: Record<string, string>) =>
+    fetch(endpoint(`/runtime/github/connect/${id}`), { headers });
+  const githubFile = () =>
+    path.join(path.dirname(userAgentDir(realpathSync(dataDir), "ale@example.com")), "github.json");
+  const TOKEN = "gho_aleToken0123456789abcdefXYZ";
+
+  it("answers 409 until the GitHub app's client id is set", async () => {
+    delete process.env.AGENT_DECK_GITHUB_CLIENT_ID;
+    expect(await status(ale)).toEqual({ available: true, configured: false, connection: null });
+    const refused = await connect();
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: "GitHub app not configured" });
+  });
+
+  it("connects through the device flow for the initiator only, then disconnects", async () => {
+    process.env.AGENT_DECK_GITHUB_CLIENT_ID = "client-1";
+    const started = await connect();
+    expect(started.status).toBe(201);
+    const flow = (await started.json()) as Record<string, unknown>;
+    expect(flow).toMatchObject({
+      userCode: "ABCD-1234",
+      verificationUri: "https://github.com/login/device",
+      interval: 0,
+    });
+    expect(JSON.stringify(flow)).not.toContain("device-secret");
+    const id = flow.id as string;
+    expect((await poll(id, andrea)).status).toBe(404);
+    tokenAnswers.push(
+      { error: "authorization_pending" },
+      { error: "slow_down", interval: 0 },
+      { access_token: TOKEN, token_type: "bearer", scope: "repo,read:user" },
+    );
+    expect(await (await poll(id, ale)).json()).toEqual({ status: "pending", interval: 0 });
+    expect(await (await poll(id, ale)).json()).toEqual({ status: "pending", interval: 0 });
+    expect(await (await poll(id, ale)).json()).toEqual({ status: "done", login: "ale-gh" });
+    expect((await poll(id, andrea)).status).toBe(404);
+
+    const connected = await status(ale);
+    expect(connected).toMatchObject({
+      configured: true,
+      connection: {
+        login: "ale-gh",
+        avatarUrl: "https://avatars.example/ale",
+        scopes: ["repo", "read:user"],
+      },
+    });
+    expect(JSON.stringify(connected)).not.toContain(TOKEN);
+    expect((await status(andrea)) as { connection: unknown }).toMatchObject({ connection: null });
+    expect(JSON.parse(readFileSync(githubFile(), "utf8")).token).toBe(TOKEN);
+    if (process.platform !== "win32") {
+      expect(statSync(githubFile()).mode & 0o777).toBe(0o600);
+    }
+
+    const removed = await fetch(endpoint("/runtime/github"), { method: "DELETE", headers: ale });
+    expect(removed.status).toBe(200);
+    expect(existsSync(githubFile())).toBe(false);
+    expect(await status(ale)).toMatchObject({ connection: null });
+  });
+
+  it("reports an expired code", async () => {
+    process.env.AGENT_DECK_GITHUB_CLIENT_ID = "client-1";
+    const { id } = (await (await connect()).json()) as { id: string };
+    tokenAnswers.push({ error: "expired_token" });
+    expect(await (await poll(id, ale)).json()).toEqual({
+      status: "expired",
+      error: "The GitHub code expired.",
+    });
   });
 });

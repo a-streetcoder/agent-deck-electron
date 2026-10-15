@@ -57,7 +57,14 @@ afterEach(() => {
 
 describe("SRV-11 shared server", () => {
   it("keeps Connect and Sign out enabled and says the sign-ins are per user", async () => {
-    vi.mocked(fetch).mockResolvedValue(jsonResponse({ providers: [connected] }));
+    // SRV-06: the shared server also loads the GitHub connection card.
+    vi.mocked(fetch).mockImplementation(async (input) =>
+      jsonResponse(
+        String(input) === "/runtime/github"
+          ? { available: true, configured: true, connection: null }
+          : { providers: [connected] },
+      ),
+    );
     useAppStore.setState({ me: { id: "ale@example.com", email: "ale@example.com" } });
     render(<ProvidersScreen />);
     const signOut = await screen.findByRole("button", { name: "Sign out of Provider A" });
@@ -67,6 +74,7 @@ describe("SRV-11 shared server", () => {
     expect(screen.getByTestId("providers-shared-notice").textContent).toBe(
       "These sign-ins are yours only and apply to the sessions you create on this server.",
     );
+    expect(await screen.findByTestId("github-connection")).toBeTruthy();
   });
 
   it("keeps the controls enabled without a signed-in user", async () => {

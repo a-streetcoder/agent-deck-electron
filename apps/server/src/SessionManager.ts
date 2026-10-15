@@ -30,6 +30,7 @@ import type { ServerRuntime } from "./runtime.ts";
 import { SessionMutationClaims } from "./sessionMutationClaims.ts";
 import { gitIdentityEnv, type GitIdentityMap } from "./gitIdentity.ts";
 import { userAgentDirEnv, type UserAgentDirs } from "./userAgentDirs.ts";
+import { githubEnv, type GitHubConnections } from "./githubConnections.ts";
 import { normalizeSessionError } from "./sessionFailure.ts";
 import type { LaunchResourceConfigV1, ResolvedLaunchResources } from "./launchResources.ts";
 import type { PiSpawnOptions } from "./services/piHost.ts";
@@ -810,6 +811,8 @@ export class SessionManager {
     private readonly userAgentDirs?: UserAgentDirs,
     /** A1 event log: per-session turn hooks (server.ts wires the producers). */
     private readonly turnEventsFor?: (meta: SessionMeta) => SessionTurnEvents,
+    /** SRV-06: the session owner's GitHub connection (githubConnections.ts). */
+    private readonly githubConnections?: GitHubConnections,
   ) {}
 
   /** Reconfigure all live deadlines. Existing parked placeholders remain cold. */
@@ -1320,6 +1323,9 @@ export class SessionManager {
           // SRV-11: the OWNER's credentials (own agent dir), re-derived on every
           // resume. Storage separation, not isolation (userAgentDirs.ts).
           ...userAgentDirEnv(meta.createdBy, this.userAgentDirs),
+          // SRV-06: pushes and PRs as the OWNER (GH_TOKEN + a github.com git
+          // credential helper); no connection leaves the server default.
+          ...githubEnv(meta.createdBy, this.githubConnections),
         },
         tempDirs,
         publishMeta,

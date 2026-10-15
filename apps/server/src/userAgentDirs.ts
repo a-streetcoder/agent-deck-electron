@@ -88,6 +88,26 @@ const linkTarget = (link: string): string | undefined => {
   }
 };
 
+function refuseAliases(dirs: readonly string[]): void {
+  for (const dir of dirs) {
+    const stat = lstatOrUndefined(dir);
+    if (stat && (stat.isSymbolicLink() || !stat.isDirectory())) {
+      throw new Error(`[user-agent-dir] refusing ${dir}: not a real directory`);
+    }
+  }
+}
+
+/**
+ * `<dataDir>/users/<hash>` (the parent of the agent dir), created 0700, for
+ * per-user files outside Pi's dir (SRV-06 github.json). Same alias refusal.
+ */
+export function ensureUserDir(dataDir: string, userId: string): string {
+  const dir = path.dirname(userAgentDir(dataDir, userId));
+  refuseAliases([path.dirname(dir), dir]);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
+}
+
 /**
  * Create the user dir (0700) and its private auth.json ("{}", 0600) when
  * missing, then link the fixed shared entries. auth.json is written BEFORE any
@@ -100,13 +120,7 @@ export function ensureUserAgentDir(sharedAgentDir: string, userDir: string): voi
   // Refuse aliases (review3 R2): a symlinked `users`, `<hash>` or `agent` dir, or
   // an auth.json that is a link or not a regular file, could point a sign-in or
   // a spawn at someone else's credentials. Throwing stops the login or spawn.
-  const users = path.dirname(path.dirname(userDir));
-  for (const dir of [users, path.dirname(userDir), userDir]) {
-    const stat = lstatOrUndefined(dir);
-    if (stat && (stat.isSymbolicLink() || !stat.isDirectory())) {
-      throw new Error(`[user-agent-dir] refusing ${dir}: not a real directory`);
-    }
-  }
+  refuseAliases([path.dirname(path.dirname(userDir)), path.dirname(userDir), userDir]);
   mkdirSync(userDir, { recursive: true, mode: 0o700 });
   const auth = path.join(userDir, "auth.json");
   const authStat = lstatOrUndefined(auth);
@@ -148,12 +162,14 @@ export class UserAgentDirs {
     private readonly operatorEmail?: string,
   ) {}
 
+  isOperator(user: UserIdentity): boolean {
+    return !!this.operatorEmail && user.id.toLowerCase() === this.operatorEmail.toLowerCase();
+  }
+
   /** The prepared agent dir for `user`; the shared dir for the operator. */
   resolve(user: UserIdentity): string {
     const shared = this.sharedAgentDir();
-    if (this.operatorEmail && user.id.toLowerCase() === this.operatorEmail.toLowerCase()) {
-      return shared;
-    }
+    if (this.isOperator(user)) return shared;
     const dir = userAgentDir(this.dataDir, user.id);
     ensureUserAgentDir(shared, dir);
     return dir;

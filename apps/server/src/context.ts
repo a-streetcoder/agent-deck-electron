@@ -29,6 +29,7 @@ import type { SessionPasteStore } from "./sessionPastes.ts";
 import type { SessionAuthorStore } from "./sessionAuthors.ts";
 import type { GitIdentityMap } from "./gitIdentity.ts";
 import type { UserAgentDirs } from "./userAgentDirs.ts";
+import type { GitHubConnections } from "./githubConnections.ts";
 import type { SkillStore } from "./skills/skillStore.ts";
 import type { InjectedCommandStore } from "./injectedCommands.ts";
 import type { SupervisorLog } from "./supervisor.ts";
@@ -152,6 +153,8 @@ export interface ServerContext {
   gitIdentities?: GitIdentityMap;
   /** SRV-11: per-user Pi agent dirs (userAgentDirs.ts); absent without a trusted proxy. */
   userAgentDirs?: UserAgentDirs;
+  /** SRV-06: per-user GitHub connections (githubConnections.ts); absent without a trusted proxy. */
+  githubConnections?: GitHubConnections;
   /** SRV-09: AGENT_DECK_TRUSTED_PROXY is set; host launchers (terminal, editor) refuse. */
   sharedServer?: boolean;
   index: SessionIndex;
