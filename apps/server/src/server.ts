@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { homedir, tmpdir } from "node:os";
 import nodePath from "node:path";
 import type { DiffPush, ServerMessage, SessionMeta } from "@agent-deck/contracts";
-import { extensionBridgeConflict } from "@agent-deck/domain";
+import { equivalenceReport, extensionBridgeConflict } from "@agent-deck/domain";
 import {
   addResourceWatchPaths,
   appendSystemPromptPath,
@@ -133,12 +133,7 @@ import { SubagentRunStore } from "./subagentRunStore.ts";
 import { createEventLog, disabledEventLog, type EventLog } from "./eventLog.ts";
 import { createEventProducers } from "./eventProducers.ts";
 import { createLogReaders } from "./eventReaders.ts";
-import {
-  equivalenceReport,
-  localPathPrefixes,
-  reconcilePlanHistory,
-  startEventProducers,
-} from "./eventReconcile.ts";
+import { localPathPrefixes, reconcilePlanHistory, startEventProducers } from "./eventReconcile.ts";
 import { resolveTrustedDataDir } from "./trustedDataDir.ts";
 import { SupervisorLog } from "./supervisor.ts";
 import { createTerminalGateway } from "./terminalGateway.ts";
@@ -819,7 +814,10 @@ async function initServer(
   const projects = new ProjectIndex(dataDir);
   // A1b2: both diff-producing stores have loaded. Attach their sinks, import or repair
   // the log against them, then record boot recovery (eventReconcile.ts).
-  const eventCounts = startEventProducers(
+  const strictEvents = process.env.AGENT_DECK_TEST === "1";
+  const readOnlyAtBoot = !eventLog.writable;
+  let reconcileFailures = 0;
+  const runCounts = startEventProducers(
     eventLog,
     { subagentRuns, loopRuns: loopEngine },
     {
@@ -830,17 +828,33 @@ async function initServer(
         ),
       }),
       warn: (message, error) => console.warn(message, error ?? ""),
-      strict: process.env.AGENT_DECK_TEST === "1",
+      strict: strictEvents,
+      readers: logReaders,
     },
   );
-  if (eventCounts) {
-    const planReconciled = reconcilePlanHistory(planEvents.all(), logReaders, (event) =>
-      events.planChanged(event.sessionId, "set", event, "reconcile"),
-    );
-    if (planReconciled !== undefined) {
-      console.info("[events] equivalence", equivalenceReport(eventCounts, planReconciled));
+  if (!runCounts && !readOnlyAtBoot) reconcileFailures += 1;
+  let planCounts: ReturnType<typeof reconcilePlanHistory> | undefined;
+  if (!readOnlyAtBoot) {
+    try {
+      planCounts = reconcilePlanHistory(planEvents.all(), logReaders, (event, afterId) =>
+        events.planChanged(event.sessionId, "set", event, { afterId }),
+      );
+    } catch (error) {
+      if (strictEvents) throw error;
+      reconcileFailures += 1;
+      console.warn("[events] plan history reconcile failed", error);
     }
   }
+  // Logged once per boot, always (A1d): zero mismatches on a clean boot.
+  console.info(
+    "[events] equivalence",
+    equivalenceReport({
+      readOnly: readOnlyAtBoot,
+      failures: reconcileFailures,
+      runs: runCounts,
+      plans: planCounts,
+    }),
+  );
   const mcpAssignments =
     options.mcpAssignmentStore ?? new FileMcpAssignmentStore(settings, projects);
   // App-owned command files are materialized under trusted app data at startup.

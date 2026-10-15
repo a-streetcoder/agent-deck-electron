@@ -513,6 +513,14 @@ export function createEventLog(dataDir: string, options: EventLogOptions = {}): 
         writable = true;
         startHeartbeat();
         warn("acquired events/writer.lock; this process is now the writer");
+        // A boundary like server.started: the previous writer's in-memory state (its
+        // pending supervisor requests) died with it (A1d restart rule).
+        append({
+          kind: "writer.acquired",
+          subject: { type: "server", id: randomId() },
+          actor: { type: "system" },
+          payload: {},
+        });
       } catch (error) {
         warn("could not retry events/writer.lock", error);
       }
@@ -643,6 +651,8 @@ export function createEventLog(dataDir: string, options: EventLogOptions = {}): 
     return lastSeq;
   };
 
+  // One parsed segment: a paged replay reads the same file once, not once per page.
+  let parsed: { name: string; size: number; mtimeMs: number; events: EventEnvelope[] } | undefined;
   const read = (query: EventReadQuery): EventPage => {
     const { afterSeq, projectId } = query;
     const limit = Math.min(Math.max(Math.floor(query.limit), 0), MAX_EVENT_READ_LIMIT);
@@ -655,8 +665,17 @@ export function createEventLog(dataDir: string, options: EventLogOptions = {}): 
     // A read-only process's ring is a boot snapshot, so it always reads the files.
     const useRing = writable && !closed;
     const index = useRing ? segments : buildIndex();
-    const segmentEvents = (i: number): EventEnvelope[] =>
-      readSegment(path.join(dir, (index[i] as SegmentInfo).name)).events;
+    const segmentEvents = (i: number): EventEnvelope[] => {
+      const name = (index[i] as SegmentInfo).name;
+      const file = path.join(dir, name);
+      const { size, mtimeMs } = statSync(file);
+      if (parsed?.name === name && parsed.size === size && parsed.mtimeMs === mtimeMs) {
+        return parsed.events;
+      }
+      const events = readSegment(file).events;
+      parsed = { name, size, mtimeMs, events };
+      return events;
+    };
 
     if (afterSeq !== undefined) {
       // Collect limit + 1 to know whether there is more.

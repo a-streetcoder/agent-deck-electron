@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ProjectedSupervisorRequest } from "@agent-deck/domain";
+import { mergeSupervisorRequests, type ProjectedSupervisorRequest } from "@agent-deck/domain";
 
 /**
  * The supervisor channel: a child subagent talks UP to its parent through the
@@ -97,29 +97,21 @@ export class SupervisorLog {
       : [...this.entries];
     const logged = this.readLog?.();
     if (!logged) return own;
-    // The log decides membership across restarts: what an earlier process left pending
-    // reads as interrupted (the restart rule). This process's own entries stay exact
-    // (full text, live status), and one whose append failed still shows.
-    const mine = new Map(own.map((entry) => [entry.id, entry]));
-    const out: SupervisorRequest[] = [];
-    for (const request of logged.values()) {
-      if (parentSessionId && request.parentSessionId !== parentSessionId) continue;
-      const entry = mine.get(request.id);
-      mine.delete(request.id);
-      out.push(
-        entry ?? {
-          id: request.id,
-          parentSessionId: request.parentSessionId ?? "",
-          cellId: request.cellId ?? "",
-          method: (request.method ?? "progress_update") as SupervisorMethod,
-          ...(request.title ? { title: request.title } : {}),
-          message: request.message ?? "",
-          status: request.status,
-          ...(request.response !== undefined ? { response: request.response } : {}),
-          createdAt: request.createdAt ?? "",
-        },
-      );
-    }
-    return [...out, ...mine.values()];
+    return mergeSupervisorRequests(
+      logged,
+      own,
+      (request) => ({
+        id: request.id,
+        parentSessionId: request.parentSessionId ?? "",
+        cellId: request.cellId ?? "",
+        method: (request.method ?? "progress_update") as SupervisorMethod,
+        ...(request.title ? { title: request.title } : {}),
+        message: request.message ?? "",
+        status: request.status,
+        ...(request.response !== undefined ? { response: request.response } : {}),
+        createdAt: request.createdAt ?? "",
+      }),
+      parentSessionId,
+    );
   }
 }

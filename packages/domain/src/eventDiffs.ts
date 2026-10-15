@@ -18,6 +18,7 @@ import {
   type NodeRef,
   type PathPrefix,
 } from "./events.ts";
+import { capText, EVENT_LABEL_MAX_CHARS } from "./turnRefs.ts";
 import {
   isLoopRunTerminal,
   type LoopChildRecord,
@@ -97,7 +98,7 @@ export function sameJson(a: unknown, b: unknown): boolean {
 const SYSTEM: EventActor = { type: "system" };
 
 type ProjectedEvent = Pick<EventEnvelope, "kind" | "subject" | "payload"> &
-  Partial<Pick<EventEnvelope, "id" | "ts" | "sessionId">>;
+  Partial<Pick<EventEnvelope, "id" | "ts" | "sessionId" | "origin">>;
 
 // ---------------------------------------------------------------------------
 // Subagent runs
@@ -719,7 +720,8 @@ export interface ProjectedSupervisorRequest {
  * supervisor.progress.recorded and supervisor.request.opened / answered / cancelled,
  * payload = the request fields. The
  * supervisor log is memory-only, so a request still pending at a later server.started
- * is closed as interrupted (the restart rule).
+ * (or writer.acquired: a read-only process became the writer) is closed as interrupted
+ * (the restart rule).
  */
 export function projectSupervisor(
   events: Iterable<ProjectedEvent>,
@@ -727,7 +729,7 @@ export function projectSupervisor(
 ): Map<string, ProjectedSupervisorRequest> {
   const state = new Map<string, ProjectedSupervisorRequest>(initial);
   for (const event of events) {
-    if (event.kind === "server.started") {
+    if (event.kind === "server.started" || event.kind === "writer.acquired") {
       for (const [id, request] of state) {
         if (request.status === "pending") state.set(id, { ...request, status: "interrupted" });
       }
@@ -758,11 +760,18 @@ export interface ProjectedPlanChange {
   items: unknown[];
   /** The event ts. */
   at?: string;
+  /**
+   * Reconcile imports only: the id of the store entry it followed (absent = the first).
+   * Imports land after newer live events in the log, so readers place them by this
+   * anchor, never by clock.
+   */
+  imported?: { afterId?: string };
 }
 
 /**
- * plan.changed, payload = SessionPlanEvent minus id/sessionId (`at` only on reconcile
- * imports, which keep the store's time), grouped by session in log order. Extends a
+ * plan.changed, payload = SessionPlanEvent minus id/sessionId (`at` and `afterId` only on
+ * reconcile imports, which keep the store's time and position), grouped by session in
+ * log order. Extends a
  * copy of initial (arrays are copied on first touch).
  */
 export function projectPlans(
@@ -773,7 +782,12 @@ export function projectPlans(
   const copied = new Set<string>();
   for (const event of events) {
     if (event.kind !== "plan.changed" || !event.sessionId) continue;
-    const payload = (event.payload ?? {}) as { kind?: string; items?: unknown[]; at?: string };
+    const payload = (event.payload ?? {}) as {
+      kind?: string;
+      items?: unknown[];
+      at?: string;
+      afterId?: string;
+    };
     if (typeof payload.kind !== "string" || !Array.isArray(payload.items)) continue;
     let history = state.get(event.sessionId);
     if (!history || !copied.has(event.sessionId)) {
@@ -787,7 +801,192 @@ export function projectPlans(
       kind: payload.kind,
       items: payload.items,
       ...(at ? { at } : {}),
+      ...(event.origin === "reconcile"
+        ? { imported: typeof payload.afterId === "string" ? { afterId: payload.afterId } : {} }
+        : {}),
     });
   }
   return state;
+}
+
+// ---------------------------------------------------------------------------
+// A1d cut-over merges: readers take membership and order from the log and exact detail
+// from the store ("move readers, not stores"); the startup equivalence report.
+
+/** plan.changed carries at most this many items (the producer's whitelist). */
+export const MAX_PLAN_EVENT_ITEMS = 200;
+
+/**
+ * Insert each anchored item right after the item whose id is afterId (at the start when
+ * afterId is absent, at the end when it is unknown), after the items already placed on
+ * the same anchor: ties keep the anchored order, never a clock.
+ */
+export function placeAfterAnchors<T extends { id: string }>(
+  base: readonly T[],
+  anchored: readonly { item: T; afterId?: string }[],
+): T[] {
+  const out = [...base];
+  const anchorOf = new Map<T, string | undefined>();
+  for (const { item, afterId } of anchored) {
+    let at = 0;
+    if (afterId !== undefined) {
+      const found = out.findIndex((candidate) => candidate.id === afterId);
+      at = found < 0 ? out.length : found + 1;
+    }
+    while (at < out.length && anchorOf.has(out[at] as T) && anchorOf.get(out[at] as T) === afterId)
+      at += 1;
+    out.splice(at, 0, item);
+    anchorOf.set(item, afterId);
+  }
+  return out;
+}
+
+/**
+ * A session's plan history: logged transitions in log order, reconcile imports at their
+ * store position (after their recorded store predecessor), store entries the log lacks
+ * after their store predecessor. Exact entries come from the store by id; the rest from
+ * fromLog (capped and redacted copies).
+ */
+export function mergePlanHistory<T extends { id: string }>(
+  logged: readonly ProjectedPlanChange[],
+  stored: readonly T[],
+  fromLog: (change: ProjectedPlanChange & { id: string }) => T,
+): T[] {
+  const exact = new Map(stored.map((event) => [event.id, event]));
+  const seen = new Set<string>();
+  const base: T[] = [];
+  const anchored: { item: T; afterId?: string }[] = [];
+  for (const change of logged) {
+    if (change.id === undefined || seen.has(change.id)) continue;
+    seen.add(change.id);
+    const item = exact.get(change.id) ?? fromLog({ ...change, id: change.id });
+    if (change.imported) anchored.push({ item, afterId: change.imported.afterId });
+    else base.push(item);
+  }
+  stored.forEach((event, index) => {
+    if (!seen.has(event.id)) anchored.push({ item: event, afterId: stored[index - 1]?.id });
+  });
+  return placeAfterAnchors(base, anchored);
+}
+
+/**
+ * The supervisor view: membership and status from the log (requests an earlier writer
+ * left pending read as interrupted); this process's own entries stay exact, and one
+ * whose append failed is placed in createdAt order.
+ */
+export function mergeSupervisorRequests<T extends { id: string; createdAt: string }>(
+  logged: ReadonlyMap<string, ProjectedSupervisorRequest>,
+  own: readonly T[],
+  fromLog: (request: ProjectedSupervisorRequest) => T,
+  parentSessionId?: string,
+): T[] {
+  const exact = new Map(own.map((entry) => [entry.id, entry]));
+  const out: T[] = [];
+  for (const request of logged.values()) {
+    if (parentSessionId !== undefined && request.parentSessionId !== parentSessionId) continue;
+    out.push(exact.get(request.id) ?? fromLog(request));
+    exact.delete(request.id);
+  }
+  for (const entry of exact.values()) {
+    const at = out.findIndex((candidate) => candidate.createdAt > entry.createdAt);
+    out.splice(at < 0 ? out.length : at, 0, entry);
+  }
+  return out;
+}
+
+export interface StoredPlanEventLike {
+  id: string;
+  kind: string;
+  items: readonly { id: string; status: string }[];
+  at: string;
+}
+
+export interface PlanHistoryComparison<T> {
+  /** Store entries the log lacks, with their store predecessor, oldest first. */
+  missing: { event: T; afterId?: string; imported: boolean }[];
+  /** Same id, different kind, item ids or statuses (titles are redacted in the log). */
+  contentMismatches: number;
+}
+
+/**
+ * Compare a session's stored history with its log projection. A missing entry older
+ * than the log itself (logStartedAt) is history from before A1 (imported); a newer one
+ * is a lost append. The clock only labels the count, it never orders entries.
+ */
+export function comparePlanHistory<T extends StoredPlanEventLike>(
+  stored: readonly T[],
+  logged: readonly ProjectedPlanChange[],
+  logStartedAt?: string,
+): PlanHistoryComparison<T> {
+  const byId = new Map(logged.map((change) => [change.id, change]));
+  const result: PlanHistoryComparison<T> = { missing: [], contentMismatches: 0 };
+  stored.forEach((event, index) => {
+    const change = byId.get(event.id);
+    if (!change) {
+      result.missing.push({
+        event,
+        afterId: stored[index - 1]?.id,
+        imported: logStartedAt === undefined || event.at < logStartedAt,
+      });
+      return;
+    }
+    const items = event.items.slice(0, MAX_PLAN_EVENT_ITEMS);
+    const same =
+      change.kind === event.kind &&
+      change.items.length === items.length &&
+      items.every((item, i) => {
+        const other = change.items[i] as { id?: unknown; status?: unknown } | undefined;
+        return (
+          other?.id === capText(item.id, EVENT_LABEL_MAX_CHARS) && other.status === item.status
+        );
+      });
+    if (!same) result.contentMismatches += 1;
+  });
+  return result;
+}
+
+export interface EquivalenceReport {
+  /** Another process holds writer.lock (or the log is disabled): it reconciles. */
+  readOnly: boolean;
+  /** Reconcile steps that threw (run stores, plan history). */
+  failures: number;
+  subagentReconciled: number;
+  subagentRecovered: number;
+  loopReconciled: number;
+  loopRecovered: number;
+  /** Plan history from before the log, imported once (not a mismatch). */
+  planImported: number;
+  /** Plan store entries the log lacked (lost appends), written back. */
+  planReconciled: number;
+  planContentMismatches: number;
+  /** Zero on a clean boot. Recovered counts are boot recovery, not mismatches. */
+  mismatches: number;
+}
+
+export function equivalenceReport(input: {
+  readOnly: boolean;
+  failures: number;
+  runs?: Pick<
+    EquivalenceReport,
+    "subagentReconciled" | "subagentRecovered" | "loopReconciled" | "loopRecovered"
+  >;
+  plans?: { imported: number; reconciled: number; contentMismatches: number };
+}): EquivalenceReport {
+  const runs = input.runs ?? {
+    subagentReconciled: 0,
+    subagentRecovered: 0,
+    loopReconciled: 0,
+    loopRecovered: 0,
+  };
+  const plans = input.plans ?? { imported: 0, reconciled: 0, contentMismatches: 0 };
+  return {
+    readOnly: input.readOnly,
+    failures: input.failures,
+    ...runs,
+    planImported: plans.imported,
+    planReconciled: plans.reconciled,
+    planContentMismatches: plans.contentMismatches,
+    mismatches:
+      runs.subagentReconciled + runs.loopReconciled + plans.reconciled + plans.contentMismatches,
+  };
 }

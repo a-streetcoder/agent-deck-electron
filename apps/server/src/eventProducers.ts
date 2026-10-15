@@ -10,6 +10,7 @@ import {
   EVENT_LABEL_MAX_CHARS,
   EVENT_TEXT_MAX_CHARS,
   eventLabel,
+  MAX_PLAN_EVENT_ITEMS,
   PROMPT_LABEL_MAX_CHARS,
   redactPaths,
   redactSecrets,
@@ -24,7 +25,6 @@ import type { PlanChangeOperation } from "./services/planEvents.ts";
 import type { SessionTurnEvents, TurnContext } from "./services/sessionManager.ts";
 import type { SupervisorRequest } from "./supervisor.ts";
 
-const MAX_PLAN_ITEMS = 200;
 const ACTOR_FIELD_MAX = 320;
 
 export type PromptMode = "prompt" | "steer" | "follow_up";
@@ -42,12 +42,15 @@ export interface EventProducers {
   turnPrompted(sessionId: string, actor: EventActor, mode: PromptMode, text: string): PromptAttempt;
   /** The live session's turn boundaries and completions (SessionManager calls them). */
   turnHooks(meta: SessionMeta): SessionTurnEvents;
-  /** origin reconcile: a store event the log missed (A1d import); keeps the store's `at`. */
+  /**
+   * reconcile: a store event the log missed (A1d import), with the id of the store entry
+   * it follows; keeps the store's `at`.
+   */
   planChanged(
     sessionId: string,
     op: PlanChangeOperation,
     event: SessionPlanEvent,
-    origin?: "reconcile",
+    reconcile?: { afterId?: string },
   ): void;
   checkpointCreated(
     sessionId: string,
@@ -277,8 +280,8 @@ export function createEventProducers(
       };
     },
 
-    planChanged(sessionId, op, event, origin) {
-      const system = op === "restore" || origin === "reconcile";
+    planChanged(sessionId, op, event, reconcile) {
+      const system = op === "restore" || reconcile !== undefined;
       append({
         // The store's own id: A1d compares the projection with the store exactly.
         id: event.id,
@@ -288,11 +291,12 @@ export function createEventProducers(
         // A restore republishes a plan the session already had (reopen or fork).
         actor: system ? SYSTEM : agentActor(sessionId),
         ...(system ? {} : causeOf(sessionId)),
-        ...(origin ? { origin } : {}),
+        ...(reconcile ? { origin: "reconcile" as const } : {}),
         payload: {
           kind: event.kind,
-          ...(origin ? { at: event.at } : {}),
-          items: event.items.slice(0, MAX_PLAN_ITEMS).map((item) => ({
+          ...(reconcile ? { at: event.at } : {}),
+          ...(reconcile?.afterId ? { afterId: reconcile.afterId } : {}),
+          items: event.items.slice(0, MAX_PLAN_EVENT_ITEMS).map((item) => ({
             id: capText(item.id, EVENT_LABEL_MAX_CHARS),
             title: clean(item.title, EVENT_LABEL_MAX_CHARS),
             status: item.status,

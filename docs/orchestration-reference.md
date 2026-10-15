@@ -97,35 +97,47 @@ projection of the event log (`<dataDir>/events/YYYY-MM-DD.jsonl`) one store at a
 store keeps supplying detail by id. Loop runs and subagent runs stay authoritative for run
 detail (outputs, validation stdio, definitionSnapshot, ownership proofs); checkpoints never move.
 
-- **Plan history** (`GET /sessions/:id/plan-events`) takes its membership from `projectPlans`,
-  without the store's 100-per-session cap. Items come from the store for the events it still
-  holds (the log copy is capped and redacted), from the log for older ones.
+One fold of the log (`apps/server/src/eventReaders.ts`) feeds all four projections (subagent
+runs, loop runs, supervisor requests, plan history): the startup reconcile, the after-gap
+resync and both readers share it, and each read first folds what was appended since the last.
+A read-only process (another one holds `writer.lock`) reads the writer's files the same way;
+only the disabled log (it could not open) falls back to the stores. The merges are pure, in
+`packages/domain/src/eventDiffs.ts`.
+
+- **Plan history** (`GET /sessions/:id/plan-events`) takes membership and order from
+  `projectPlans`, without the store's 100-per-session cap. Logged transitions keep log order;
+  imported entries sit after their store predecessor (recorded as `afterId`); no clock orders
+  anything. Items come from the store for the events it still holds; older ones are the log's
+  copy, marked `source: "log"` (titles capped at 200 characters, paths redacted, and only id,
+  title and status per item: a richer panel must widen the `plan.changed` whitelist first).
 - **Supervisor requests** (`list_supervisor_requests`) take membership and status from
-  `projectSupervisor`. The memory log still holds this process's requests and their full
-  text. The restart rule: a request still pending at a later `server.started` reads as
-  `interrupted`, so it is never offered for an answer again.
-- Both readers fall back to the store when the log is read-only (another process holds
-  `writer.lock`) or disabled (`apps/server/src/eventReaders.ts`).
+  `projectSupervisor`; this process's own requests stay exact (full text, live status), and
+  one whose append failed is placed by `createdAt`. The restart rule: a request still pending
+  at a later `server.started`, or at `writer.acquired` (a read-only process became the writer
+  after the previous one died), reads as `interrupted` and is never offered for an answer.
 
-At startup the server logs one `[events] equivalence` line: the subagent and loop reconcile
-counts, `planReconciled` (store plan events the log lacked, imported with origin `reconcile`
-and their own time: history from before A1, or a lost append) and `mismatches`. A clean boot
-reports zero. The supervisor store is memory-only, so it has nothing to compare. A store is
-ready for its readers to move after 7 days of two-user use with zero mismatches.
+At every boot the server logs one `[events] equivalence` line: `readOnly`, `failures`
+(reconcile steps that threw), the subagent and loop reconcile and recovery counts,
+`planImported` (plan history older than the log, imported once), `planReconciled` (store
+entries the log lacked, written back), `planContentMismatches` (same id, different kind, item
+ids or statuses) and `mismatches`. A clean boot reports zero mismatches. The supervisor store
+is memory-only, so it has nothing to compare. A store is ready for its readers to move after
+7 days of two-user use with zero mismatches.
 
-Measured on one synthetic busy day (`apps/server/test/eventCutover.test.ts`; 10 sessions,
-5,212 events of every kind written through the real log, Windows dev machine, 2026-10-15):
+Measured on one synthetic busy day (`AGENT_DECK_MEASURE=1`, `apps/server/test/eventCutover.test.ts`;
+10 sessions, 5,212 events of every kind written through the real log, Windows dev machine,
+2026-10-15, two runs):
 
 | Measure                                                                     | Value                        |
 | --------------------------------------------------------------------------- | ---------------------------- |
 | Segment size                                                                | 3.6 MB (725 bytes per event) |
-| Replay of the whole log into the four projections                           | 156 ms                       |
-| Cold startup (open the log, reconcile both run stores and the plan history) | 341 ms                       |
+| Fold into the four projections from the writer's in-memory ring             | 2 to 3 ms                    |
+| Fold from disk (a read-only open: parse the segment, then fold)             | 93 to 95 ms                  |
+| Cold startup (open the log, reconcile both run stores and the plan history) | 93 to 95 ms                  |
 
-Startup replays all history (two passes: the run-store reconcile and the readers), so its cost
-grows with every day the log keeps. Projection snapshots become due when startup reconcile
-exceeds about 1 s: at this rate about 10 MB of log, or three busy days, well before the
-~50 MB first estimated.
+Startup cost is dominated by parsing, and it grows with every day the log keeps. Projection
+snapshots become due when startup reconcile exceeds about 1 s: at this rate about 35 MB of
+log, or ten busy days.
 
 ## Collaboration
 

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ProjectedPlanChange } from "@agent-deck/domain";
+import { mergePlanHistory, type ProjectedPlanChange } from "@agent-deck/domain";
 import type {
   SessionPlanEvent,
   SessionPlanEventKind,
@@ -106,26 +106,16 @@ export const makePlanEventService = (options: PlanEventServiceOptions): PlanEven
       const stored = Effect.runSync(store.get(sessionId));
       const logged = options.readLog?.(sessionId);
       if (!logged) return stored;
-      // The log decides membership (uncapped); the store, which keeps the last `cap`,
-      // supplies exact items by id (the log's titles are capped and redacted). A store
-      // event the log missed (a failed append, imported at the next boot) still shows.
-      const byId = new Map(stored.map((event) => [event.id, event]));
-      const out = logged.map((change): SessionPlanEvent => {
-        const exact = change.id === undefined ? undefined : byId.get(change.id);
-        if (exact) byId.delete(exact.id);
-        return (
-          exact ?? {
-            id: change.id ?? "",
-            sessionId,
-            kind: change.kind as SessionPlanEventKind,
-            items: change.items as SessionPlanItem[],
-            at: change.at ?? "",
-          }
-        );
-      });
-      out.push(...byId.values());
-      // Imports land after newer live events; ISO times restore the order (stable sort).
-      return out.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+      // The log decides membership and order (uncapped); the store, which keeps the
+      // last `cap`, supplies exact items by id.
+      return mergePlanHistory(logged, stored, (change) => ({
+        id: change.id,
+        sessionId,
+        kind: change.kind as SessionPlanEventKind,
+        items: change.items as SessionPlanItem[],
+        at: change.at ?? "",
+        source: "log",
+      }));
     },
 
     all: () => Effect.runSync(store.all),
