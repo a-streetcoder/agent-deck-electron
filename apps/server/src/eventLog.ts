@@ -46,6 +46,7 @@ const FSYNC_DELAY_MS = 1_000;
 // is stale when its pid is dead or the owner stopped touching it.
 const LOCK_HEARTBEAT_MS = 10_000;
 const LOCK_STALE_MS = 120_000;
+const LOCK_RETRY_MS = 30_000;
 // After a stale-lock takeover, skip seqs a crashed writer may have used before its fsync.
 const TAKEOVER_SEQ_GAP = 1_000;
 export const MAX_EVENT_READ_LIMIT = 1_000;
@@ -361,70 +362,16 @@ export function createEventLog(dataDir: string, options: EventLogOptions = {}): 
     readdirSync(dir)
       .filter((name) => SEGMENT_NAME.test(name))
       .sort();
-  const files = segmentFiles();
-  const lastFile = files.at(-1);
 
-  if (writable && POSIX) {
-    // A synced or restored directory may come back 0755/0644.
-    const tighten = (file: string, mode: number): void => {
-      try {
-        if ((statSync(file).mode & 0o777 & ~mode) !== 0) chmodSync(file, mode);
-      } catch (error) {
-        warn(`could not restrict ${path.basename(file)}`, error);
-      }
-    };
-    tighten(dir, 0o700);
-    for (const name of ["log.json", "writer.lock", ...files]) tighten(path.join(dir, name), 0o600);
-  }
-
-  // Boot repair: a crash mid-append leaves an unterminated last line; cut it so the
-  // next append starts on a fresh line. Only the writer may touch the files.
-  let repairedBytes = 0;
-  if (writable && lastFile) {
-    const file = path.join(dir, lastFile);
-    const bytes = readFileSync(file);
-    const keep = bytes.lastIndexOf(0x0a) + 1;
-    if (keep < bytes.length) {
-      repairedBytes = bytes.length - keep;
-      const fd = openSync(file, "r+");
-      try {
-        ftruncateSync(fd, keep);
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-      warn(`truncated a torn tail of ${repairedBytes} bytes in ${lastFile}`);
-    }
-  }
-
-  // Load the newest two segments into the ring and the dedupe sets; walk further back
-  // only while no seq was found, so lastSeq survives empty or corrupt days.
-  const today = segmentNameFor(clock());
   let currentIds = new Set<string>();
   let previousIds = new Set<string>();
   let lastSeq = 0;
   let unparsableLines = 0;
   let ring: EventEnvelope[] = [];
-  let loadedFiles = 0;
+  let ringComplete = false;
+  let lastFile: string | undefined;
   const startSeqs = new Map<string, number>();
-  for (let i = files.length - 1; i >= 0 && (loadedFiles < 2 || lastSeq === 0); i -= 1) {
-    const name = files[i] as string;
-    const scan = readSegment(path.join(dir, name));
-    if (scan.firstSeq !== undefined) startSeqs.set(name, scan.firstSeq);
-    lastSeq = Math.max(lastSeq, scan.maxSeq);
-    if (loadedFiles < 2) {
-      unparsableLines += scan.unparsable;
-      const ids = name === today ? currentIds : previousIds;
-      for (const event of scan.events) ids.add(event.id);
-      ring = scan.events.concat(ring);
-    }
-    loadedFiles += 1;
-  }
-  // True while the ring holds every event ever written (backward reads need no disk).
-  let ringComplete = files.length <= 2 && ring.length <= RING_SIZE;
-  ring = ring.slice(-RING_SIZE);
-  if (unparsableLines > 0) warn(`${unparsableLines} unparsable event lines skipped at boot`);
-  if (lock === "takenOver" && lastSeq > 0) lastSeq += TAKEOVER_SEQ_GAP;
+  let segments: SegmentInfo[] = [];
 
   const buildIndex = (): SegmentInfo[] => {
     const index: SegmentInfo[] = [];
@@ -438,9 +385,86 @@ export function createEventLog(dataDir: string, options: EventLogOptions = {}): 
     }
     return index;
   };
-  // The writer keeps its index current; a read-only process rebuilds it per read
-  // (start seqs are cached) because another process is appending.
-  const segments = buildIndex();
+
+  /**
+   * Load state from disk: at boot, and again when a read-only process becomes the
+   * writer. Only a writer tightens modes and repairs the torn tail. Returns the
+   * number of torn bytes cut.
+   */
+  const loadFromDisk = (asWriter: boolean, tookOver: boolean): number => {
+    const files = segmentFiles();
+    lastFile = files.at(-1);
+
+    if (asWriter && POSIX) {
+      // A synced or restored directory may come back 0755/0644.
+      const tighten = (file: string, mode: number): void => {
+        try {
+          if ((statSync(file).mode & 0o777 & ~mode) !== 0) chmodSync(file, mode);
+        } catch (error) {
+          warn(`could not restrict ${path.basename(file)}`, error);
+        }
+      };
+      tighten(dir, 0o700);
+      for (const name of ["log.json", "writer.lock", ...files]) {
+        tighten(path.join(dir, name), 0o600);
+      }
+    }
+
+    // A crash mid-append leaves an unterminated last line; cut it so the next append
+    // starts on a fresh line.
+    let repairedBytes = 0;
+    if (asWriter && lastFile) {
+      const file = path.join(dir, lastFile);
+      const bytes = readFileSync(file);
+      const keep = bytes.lastIndexOf(0x0a) + 1;
+      if (keep < bytes.length) {
+        repairedBytes = bytes.length - keep;
+        const fd = openSync(file, "r+");
+        try {
+          ftruncateSync(fd, keep);
+          fsyncSync(fd);
+        } finally {
+          closeSync(fd);
+        }
+        warn(`truncated a torn tail of ${repairedBytes} bytes in ${lastFile}`);
+      }
+    }
+
+    // Load the newest two segments into the ring and the dedupe sets; walk further
+    // back only while no seq was found, so lastSeq survives empty or corrupt days.
+    const today = segmentNameFor(clock());
+    currentIds = new Set();
+    previousIds = new Set();
+    unparsableLines = 0;
+    ring = [];
+    let loadedFiles = 0;
+    let diskSeq = 0;
+    for (let i = files.length - 1; i >= 0 && (loadedFiles < 2 || diskSeq === 0); i -= 1) {
+      const name = files[i] as string;
+      const scan = readSegment(path.join(dir, name));
+      if (scan.firstSeq !== undefined) startSeqs.set(name, scan.firstSeq);
+      diskSeq = Math.max(diskSeq, scan.maxSeq);
+      if (loadedFiles < 2) {
+        unparsableLines += scan.unparsable;
+        const ids = name === today ? currentIds : previousIds;
+        for (const event of scan.events) ids.add(event.id);
+        ring = scan.events.concat(ring);
+      }
+      loadedFiles += 1;
+    }
+    // True while the ring holds every event ever written (backward reads need no disk).
+    ringComplete = files.length <= 2 && ring.length <= RING_SIZE;
+    ring = ring.slice(-RING_SIZE);
+    if (unparsableLines > 0) warn(`${unparsableLines} unparsable event lines skipped at boot`);
+    lastSeq = Math.max(lastSeq, diskSeq);
+    if (tookOver && lastSeq > 0) lastSeq += TAKEOVER_SEQ_GAP;
+    // The writer keeps its index current; a read-only process rebuilds it per read
+    // (start seqs are cached) because another process is appending.
+    segments = buildIndex();
+    return repairedBytes;
+  };
+
+  const repairedBytes = loadFromDisk(writable, lock === "takenOver");
 
   let fd: number | undefined;
   let openSegment: string | undefined;
@@ -449,23 +473,54 @@ export function createEventLog(dataDir: string, options: EventLogOptions = {}): 
   let closed = false;
   let dispatching = false;
   const subscribers = new Set<EventSubscriber>();
+  let heartbeat: NodeJS.Timeout | undefined;
+  let lockRetry: NodeJS.Timeout | undefined;
 
-  const heartbeat = writable
-    ? setInterval(() => {
-        try {
-          if (readLock(lockPath)?.token !== token) {
-            warn("events/writer.lock was taken over; this process is now read-only");
-            writable = false;
-            clearInterval(heartbeat);
-            return;
-          }
-          const now = new Date();
-          utimesSync(lockPath, now, now);
-        } catch (error) {
-          warn("could not refresh events/writer.lock", error);
+  const startHeartbeat = (): void => {
+    heartbeat = setInterval(() => {
+      try {
+        if (readLock(lockPath)?.token !== token) {
+          warn("events/writer.lock was taken over; this process is now read-only");
+          writable = false;
+          clearInterval(heartbeat);
+          heartbeat = undefined;
+          startLockRetry();
+          return;
         }
-      }, LOCK_HEARTBEAT_MS).unref()
-    : undefined;
+        const now = new Date();
+        utimesSync(lockPath, now, now);
+      } catch (error) {
+        warn("could not refresh events/writer.lock", error);
+      }
+    }, LOCK_HEARTBEAT_MS).unref();
+  };
+
+  // A read-only process keeps trying: a lock held by a reused pid or a writer that
+  // died goes stale after LOCK_STALE_MS, and this process then becomes the writer.
+  const startLockRetry = (): void => {
+    lockRetry = setInterval(() => {
+      if (closed) return;
+      try {
+        const result = acquireLock(lockPath, token);
+        if (result === "refused") return;
+        clearInterval(lockRetry);
+        lockRetry = undefined;
+        if (fd !== undefined) closeSync(fd);
+        fd = undefined;
+        openSegment = undefined;
+        tornWrite = false;
+        loadFromDisk(true, result === "takenOver");
+        writable = true;
+        startHeartbeat();
+        warn("acquired events/writer.lock; this process is now the writer");
+      } catch (error) {
+        warn("could not retry events/writer.lock", error);
+      }
+    }, LOCK_RETRY_MS).unref();
+  };
+
+  if (writable) startHeartbeat();
+  else startLockRetry();
 
   const flush = (): void => {
     if (fsyncTimer) clearTimeout(fsyncTimer);
@@ -669,7 +724,9 @@ export function createEventLog(dataDir: string, options: EventLogOptions = {}): 
     get writable() {
       return writable && !closed;
     },
-    unparsableLines,
+    get unparsableLines() {
+      return unparsableLines;
+    },
     lastSeq: currentLastSeq,
     append,
     read,
@@ -683,6 +740,7 @@ export function createEventLog(dataDir: string, options: EventLogOptions = {}): 
       if (closed) return;
       closed = true;
       if (heartbeat) clearInterval(heartbeat);
+      if (lockRetry) clearInterval(lockRetry);
       flush();
       if (fd !== undefined) closeSync(fd);
       fd = undefined;

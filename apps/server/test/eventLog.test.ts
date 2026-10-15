@@ -344,6 +344,36 @@ describe("event log", () => {
     }
   });
 
+  it("retries the lock while read-only and becomes the writer once it goes stale", () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const dataDir = tempDataDir();
+      clockNow = new Date("2026-10-15T12:00:00.000Z");
+      const first = open(dataDir);
+      first.append(draft()); // seq 2
+      first.close();
+      // A live pid holding a fresh lock: this boot starts read-only.
+      plantLock(dataDir, process.ppid);
+      const warn = vi.fn();
+      const log = open(dataDir, { warn });
+      expect(log.writable).toBe(false);
+      vi.advanceTimersByTime(30_000);
+      expect(log.writable).toBe(false);
+      // The holder stopped refreshing: past 2 minutes the next retry takes over.
+      const old = new Date(Date.now() - 3 * 60_000);
+      utimesSync(lockFile(dataDir), old, old);
+      vi.advanceTimersByTime(30_000);
+      expect(log.writable).toBe(true);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("now the writer"));
+      expect(JSON.parse(readFileSync(lockFile(dataDir), "utf8")).pid).toBe(process.pid);
+      // lastSeq reloaded from disk (2), then the takeover gap.
+      expect(seqOf(log)).toBe(2 + 1_000 + 1);
+      expect(seqs(log.read({ afterSeq: 0, limit: 10 }).events)).toEqual([1, 2, 1_003]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not delete a lock another process took over", () => {
     const dataDir = tempDataDir();
     clockNow = new Date("2026-10-15T12:00:00.000Z");
