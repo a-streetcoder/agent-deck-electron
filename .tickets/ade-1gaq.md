@@ -1,6 +1,6 @@
 ---
 id: ade-1gaq
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-15T18:49:40Z
@@ -35,3 +35,7 @@ With a key set and analyticsEnabled true, a unit test with a fake transport asse
 **2026-10-15T19:26:58Z**
 
 2026-10-15 fix round 1 landed as 6119eae (catalog-checked provider/model else custom, session_created at launch, onChildStarted hook, quiet fetch, engines 22.22, capabilities.analytics + AnalyticsNotice component, AGENT_DECK_TEST guard, lazy import, @opentelemetry/api external in build-backend). GPT verification pass (review48) launched. Follow-up candidates: custom models under a built-in provider are in the launch catalog and travel; sessions from fork/import/Loop parent are not counted; HTTP>=400 answers are not retried.
+
+**2026-10-15T19:42:56Z**
+
+2026-10-15 fix round 2 (static built-in model list, 1.5 s request abort, error bodies cancelled) verified by the architect; squashed as 894099f, merged 91812e5 (--no-ff), typecheck + design-system + analytics/AnalyticsNotice/PerformanceScreen tests green in the main checkout, deployed to the VM (pnpm install --frozen-lockfile, build:web, restart, health 200). CLOSED. Owner items: AGENT_DECK_POSTHOG_KEY must be set in the local launcher / release workflows for any build to send (shared .env has it); verify the first events in PostHog 'Default project'. Follow-ups (non-ticketed): sessions from fork/import/Loop parent are not counted; HTTP>=400 answers not retried; models newer than the pinned pi-ai list report as custom; thinking suffix stripped for any level.
