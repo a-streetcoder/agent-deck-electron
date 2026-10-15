@@ -519,6 +519,13 @@ export class ManagedSession {
     return Effect.runSync(this.rt.isRunning);
   }
 
+  /** SRV-15b: an agent run is in progress on this runtime. */
+  get agentRunning(): boolean {
+    return this.rt.agentRunning
+      ? Effect.runSync(this.rt.agentRunning)
+      : this.snapshot().state.agentStatus === "running";
+  }
+
   async prompt(
     message: string,
     images?: Parameters<ManagedSessionRuntime["prompt"]>[1],
@@ -2131,6 +2138,12 @@ export class SessionManager {
       // SRV-15a: a fork belongs to the forker and runs on their credentials;
       // without an identity (desktop) it keeps the source owner.
       ...(owner ? { createdBy: owner } : {}),
+      // SRV-15b: the provenance line ("forked from Alice's session ...").
+      forkedFrom: {
+        sessionId: source.id,
+        ...(source.title ? { title: source.title } : {}),
+        ...(source.createdBy ? { owner: source.createdBy } : {}),
+      },
       ...(source.worktreeOwnerSessionId
         ? { worktreeOwnerSessionId: source.worktreeOwnerSessionId }
         : source.worktreePath

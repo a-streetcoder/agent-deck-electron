@@ -616,6 +616,16 @@ function QuestionCellView({ cell }: { cell: QuestionCell }) {
 }
 
 function UserHistoryActions({ entryId }: { entryId: string }) {
+  // SRV-15b: these resume and replace the source runtime on its owner's
+  // credentials, so another member's session offers only the plain fork.
+  const othersSession = useAppStore((state) => {
+    const owner = state.session?.createdBy;
+    return Boolean(state.me && owner && owner.id !== state.me.id);
+  });
+  return othersSession ? null : <OwnUserHistoryActions entryId={entryId} />;
+}
+
+function OwnUserHistoryActions({ entryId }: { entryId: string }) {
   const sessionId = useAppStore((state) => state.session?.id);
   const sessionPending = useSyncExternalStore(
     subscribeHistoryActionPending,

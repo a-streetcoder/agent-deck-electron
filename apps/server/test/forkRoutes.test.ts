@@ -173,9 +173,11 @@ describe("SRV-15a fork routes on a shared server", () => {
       });
       expect(response.status).toBe(201);
       const { session } = (await response.json()) as {
-        session: { id: string; createdBy?: unknown };
+        session: { id: string; createdBy?: unknown; forkedFrom?: unknown };
       };
       expect(session.createdBy).toEqual(bob);
+      // SRV-15b: a plain fork records whose session it copies (provenance line).
+      if (route === "fork") expect(session.forkedFrom).toEqual({ sessionId: SOURCE, owner: alice });
       expect(new SessionIndex(dataDir).find((item) => item.id === session.id)?.createdBy).toEqual(
         bob,
       );

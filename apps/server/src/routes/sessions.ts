@@ -486,7 +486,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const all = [...index.list().filter((s) => !liveIds.has(s.id)), ...live].sort((a, b) =>
       a.createdAt.localeCompare(b.createdAt),
     );
-    return { sessions: projectId ? all.filter((s) => s.projectId === projectId) : all };
+    const listed = projectId ? all.filter((s) => s.projectId === projectId) : all;
+    return { sessions: ctx.withActivity?.(listed) ?? listed };
   });
 
   // Content search across sessions (native Sessions search 18.1 "by title or

@@ -302,6 +302,10 @@ rl.on("line", (line) => {
             assistantMessageEvent: { type: "text_delta", delta: `chunk-${streamed} ` },
           });
         }, 15);
+      } else if (cmd.message === "run-until-abort") {
+        // SRV-15b: an agent run (agent_start) that only `abort` ends.
+        send({ type: "agent_start" });
+        streamTimer = setInterval(() => {}, 1000);
       } else if (cmd.message === "stream-forever" || process.env.FAKE_PI_HANG === "1") {
         // A turn that never ends by itself — only `abort` stops it.
         streamTimer = setInterval(() => {

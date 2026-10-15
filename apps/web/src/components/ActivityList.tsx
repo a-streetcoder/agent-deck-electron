@@ -13,6 +13,7 @@ import { cn } from "@/lib/cn";
 import { userDisplayName } from "@/lib/userIdentity";
 import { useAppStore, type AppView } from "../state/store.ts";
 import { refreshProjectLog, switchToSession } from "../state/wsBridge.ts";
+import { forkOriginText } from "./ForkProvenanceCard.tsx";
 
 // ponytail: renders the newest rows only; virtualize if the full 2,000 are ever wanted.
 const SHOWN = 100;
@@ -74,21 +75,47 @@ export function formatEventTime(iso: string): string {
     : date.toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
 }
 
-/** A1c: the open project's event stream (every project when none is open), newest first. */
-export function ActivityList() {
+/**
+ * SRV-15b: the member a row belongs to: the person who acted, else the owner of
+ * the session it happened in (an agent's or the system's work in Alice's session).
+ */
+export function memberOf(
+  actor: EventActor,
+  sessionId: string | undefined,
+  sessions: readonly SessionMeta[],
+): string | undefined {
+  if (actor.type === "user") return actor.id;
+  const id = sessionId ?? (actor.type === "agent" ? actor.sessionId : undefined);
+  return sessions.find((candidate) => candidate.id === id)?.createdBy?.id;
+}
+
+/** A1c: the open project's event stream (every project when none is open), newest first.
+ * `member`: the sessions list's member chip (SRV-15b); null shows everyone. */
+export function ActivityList({ member = null }: { member?: string | null } = {}) {
   const projectId = useAppStore((state) => state.currentProjectId);
   const log = useAppStore((state) => state.projectLog);
   const sessions = useAppStore((state) => state.sessions);
+  const me = useAppStore((state) => state.me);
   const setView = useAppStore((state) => state.setView);
   useEffect(() => {
     void refreshProjectLog();
   }, [projectId]);
 
   const all = log?.projectId === projectId ? log.events : undefined;
-  const events = useMemo(() => (all ?? []).filter((event) => !SERVER_KINDS.has(event.kind)), [all]);
+  const events = useMemo(
+    () =>
+      (all ?? []).filter(
+        (event) =>
+          !SERVER_KINDS.has(event.kind) &&
+          (member === null || memberOf(event.actor, event.sessionId, sessions) === member),
+      ),
+    [all, member, sessions],
+  );
   const shown = events.slice(-SHOWN).reverse();
   // A8: requests waiting on a person, first and outside the collapsed list.
-  const waiting = useOpenHumanRequests(projectId, log?.lastSeq);
+  const waiting = useOpenHumanRequests(projectId, log?.lastSeq).filter(
+    (request) => member === null || memberOf(request.actor, request.sessionId, sessions) === member,
+  );
   return (
     <>
       {waiting.length > 0 ? (
@@ -143,6 +170,22 @@ export function ActivityList() {
           <ul className="max-h-40 space-y-0.5 overflow-y-auto pt-1">
             {shown.map((event) => {
               const link = subjectLink(event, sessions);
+              // SRV-15b: who forked whom (session.created names the source as parent).
+              const forkParent =
+                event.kind === "session.created" && event.parent?.type === "session"
+                  ? event.parent.id
+                  : undefined;
+              const forkSource = sessions.find((candidate) => candidate.id === forkParent);
+              const forkedFrom =
+                forkParent !== undefined
+                  ? forkOriginText(
+                      link.session?.forkedFrom?.title ??
+                        link.session?.forkProvenance?.sourceTitle ??
+                        forkSource?.title,
+                      link.session?.forkedFrom?.owner ?? forkSource?.createdBy,
+                      me,
+                    )
+                  : null;
               return (
                 <li
                   key={event.seq}
@@ -167,6 +210,14 @@ export function ActivityList() {
                   ) : (
                     <span className="min-w-0 truncate">{link.label}</span>
                   )}
+                  {forkedFrom ? (
+                    <span
+                      className="min-w-0 truncate text-text-muted"
+                      data-testid="activity-forked-from"
+                    >
+                      {forkedFrom.replace(/^Forked/, "forked")}
+                    </span>
+                  ) : null}
                 </li>
               );
             })}

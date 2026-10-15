@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "../state/store.ts";
 import { SessionRow, SessionsMainPanel } from "./SessionsPanel.tsx";
@@ -263,5 +263,117 @@ describe("SessionRow fork action on Loop sessions (SRV-15a)", () => {
       expect(button.hasAttribute("disabled")).toBe(true);
       expect(button.getAttribute("title")).toContain("A Loop session cannot be forked");
     }
+  });
+});
+
+describe("SRV-15b: status, member chips and links", () => {
+  const at = "2026-01-01T00:00:00.000Z";
+  const alice = { id: "alice@example.com", name: "Alice" };
+  const bob = { id: "bob@example.com", name: "Bob" };
+  const rows = [
+    { id: "a1", cwd: "/a", createdAt: at, createdBy: alice, activity: "running" as const },
+    { id: "a2", cwd: "/a", createdAt: at, createdBy: alice, activity: "needsInput" as const },
+    { id: "b1", cwd: "/b", createdAt: at, createdBy: bob, parkedAt: at },
+  ];
+  const turn = (
+    seq: number,
+    actor: { type: "user"; id: string } | { type: "system" },
+    sessionId: string,
+  ) => ({
+    v: 1 as const,
+    id: `e${seq}`,
+    seq,
+    ts: at,
+    logId: "log",
+    kind: "turn.prompted",
+    projectId: null,
+    sessionId,
+    subject: { type: "turn", id: `t${seq}` },
+    actor,
+    payload: {},
+  });
+  const show = (sessions: typeof rows) => {
+    useAppStore.setState({
+      connection: "open",
+      currentProjectId: null,
+      session: null,
+      projects: [],
+      sessions,
+      projectLog: {
+        projectId: null,
+        logId: "log",
+        lastSeq: 2,
+        events: [turn(1, { type: "user", id: alice.id }, "a1"), turn(2, { type: "system" }, "b1")],
+      },
+    });
+    render(<SessionsMainPanel />);
+  };
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useAppStore.setState({ sessions: [], projectLog: null, me: null });
+  });
+
+  it("puts a status dot on every row, not only the open one", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
+    show(rows);
+    expect(screen.getByTestId("chat-activity-a1").getAttribute("data-activity")).toBe("running");
+    expect(screen.getByTestId("chat-activity-a2").getAttribute("data-activity")).toBe("needsInput");
+    // No pushed activity yet: the meta decides (parked).
+    expect(screen.getByTestId("chat-activity-b1").getAttribute("data-activity")).toBe("parked");
+  });
+
+  it("hides the member chips with one owner", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
+    show(rows.slice(0, 2));
+    expect(screen.queryByTestId("member-chips")).toBeNull();
+  });
+
+  it("filters the sessions list and the Activity list by the chosen member", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
+    show(rows);
+    const chips = within(screen.getByTestId("member-chips"));
+    expect(screen.getByText("Activity (2)")).toBeTruthy();
+    fireEvent.click(chips.getByRole("button", { name: "Bob" }));
+    expect(screen.queryByTestId("chat-a1")).toBeNull();
+    expect(screen.getByTestId("chat-b1")).toBeTruthy();
+    // The system's turn in Bob's session is Bob's activity.
+    expect(screen.getByText("Activity (1)")).toBeTruthy();
+    expect(screen.getByTestId("activity-2")).toBeTruthy();
+    fireEvent.click(chips.getByRole("button", { name: "Bob" }));
+    expect(screen.getByTestId("chat-a1")).toBeTruthy();
+    expect(screen.getByText("Activity (2)")).toBeTruthy();
+  });
+
+  it("copies a link that opens the session", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const onSelect = vi.fn();
+    render(
+      <SessionRow
+        session={rows[0]!}
+        displayTitle="a1"
+        active={false}
+        running={false}
+        onSelect={onSelect}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("chat-copy-link-a1"));
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/?session=a1`),
+    );
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });

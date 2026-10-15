@@ -19,6 +19,7 @@ export * from "./events.ts";
 export * from "./turnRefs.ts";
 export * from "./nodeTree.ts";
 export * from "./humanNode.ts";
+export * from "./sessionActivity.ts";
 export * from "./eventDiffs.ts";
 export * from "./capabilityProfiles.ts";
 export * from "./planScheduler.ts";

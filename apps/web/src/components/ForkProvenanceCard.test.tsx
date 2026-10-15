@@ -87,3 +87,36 @@ describe("ForkProvenanceCard", () => {
     expect(container.childElementCount).toBe(0);
   });
 });
+
+describe("plain fork provenance (SRV-15b)", () => {
+  const alice = { id: "alice@example.com", name: "Alice" };
+  const plain: SessionMeta = {
+    id: "plain",
+    cwd: "/tmp",
+    createdAt: "later",
+    createdBy: { id: "bob@example.com" },
+    forkedFrom: { sessionId: "source", title: "Captured", owner: alice },
+  };
+  afterEach(() => useAppStore.setState({ me: null }));
+
+  it("says whose session a plain fork copies and opens it", () => {
+    render(<ForkProvenanceCard session={plain} />);
+    expect(screen.getByTestId("fork-origin-line").textContent).toContain(
+      "Forked from Alice's session “Captured”",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open source" }));
+    expect(switchToSession).toHaveBeenCalledWith(source);
+  });
+
+  it("says 'your session' to the source owner, and names the owner on a message fork", () => {
+    useAppStore.setState({
+      me: { id: alice.id, email: alice.id },
+      sessions: [{ ...source, createdBy: { id: "carol@example.com", name: "Carol" } }, plain],
+    });
+    render(<ForkProvenanceCard session={plain} />);
+    expect(screen.getByTestId("fork-origin-line").textContent).toContain("your session");
+    cleanup();
+    render(<ForkProvenanceCard session={target()} />);
+    expect(screen.getByText("Forked from Carol's session “Captured source title”")).toBeTruthy();
+  });
+});

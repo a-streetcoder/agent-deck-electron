@@ -404,6 +404,23 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
   shares. MCP sign-ins do not carry over: they live in each user's own `mcp-auth.json`, so the
   forker signs in to the session's MCP servers themselves. Without an identity (desktop,
   loopback) a fork keeps the source owner, as before.
+  Uncommitted edits a deleted fork leaves in the shared checkout are swept into the owner's
+  merge auto-commit. The per-message Fork and Re-run buttons show on your own sessions only
+  (they resume and replace the source runtime on its owner's credentials); another member's
+  session offers the plain fork. A plain fork records `forkedFrom` (source id, title and owner
+  at fork time), so the session shows "Forked from Alice's session …" and the Activity row of
+  its `session.created` says who forked whose session (SRV-15b).
+- **Using shared sessions (SRV-15b).** Every session row has a status dot computed by the
+  server: running (a live Pi run), needs input (an open human node: ask_user, a supervisor
+  decision, an extension dialog, a loop approval), attention, failed, parked, idle. It comes
+  from the live runtime and the meta, never from the event log alone (a turn left open by a
+  restart reads idle). `GET /sessions` carries it as `activity`, and every `session_meta`
+  push re-computes it; the turn-idle edge and each human node opening or closing re-push the
+  row. With sessions from two or more members, a row of avatar chips above the search box
+  filters the list (projects stay the groups) and the Activity list, where a row belongs to the
+  member who acted, else to the owner of the session it happened in. Copy link on a row copies
+  `<origin>/?session=<id>`; opening it switches to that session once the socket is up and
+  removes the parameter (an unknown id is ignored).
 - **Providers screen.** `GET /runtime/providers`, sign-in and sign-out act on the requesting
   user's dir. A sign-in in progress belongs to whoever started it: polling, answering or
   cancelling it as anyone else answers 404. Responses carry status only, never a credential

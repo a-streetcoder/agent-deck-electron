@@ -8,7 +8,12 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { homedir, tmpdir } from "node:os";
 import nodePath from "node:path";
 import type { DiffPush, ServerMessage, SessionMeta } from "@agent-deck/contracts";
-import { equivalenceReport, extensionBridgeConflict, planGeneration } from "@agent-deck/domain";
+import {
+  equivalenceReport,
+  extensionBridgeConflict,
+  planGeneration,
+  sessionActivity,
+} from "@agent-deck/domain";
 import {
   addResourceWatchPaths,
   appendSystemPromptPath,
@@ -732,6 +737,8 @@ async function initServer(
     // turn reaches idle; when the set CHANGED vs the previous one, push it to
     // clients and emit the diff_refreshed receipt (tests synchronize on it).
     async (meta) => {
+      // SRV-15b: the turn-idle edge is an activity change (running -> idle).
+      nudgeSessionActivity(meta.id);
       const base = await sessionDiffBase(meta);
       const { changed, set } = await diffs.refresh(meta.id, meta.cwd, base);
       if (!changed) return;
@@ -1580,8 +1587,31 @@ async function initServer(
     publicOrigin: trustedProxy?.publicOrigin,
     accessVerifier,
   });
+  // SRV-15b: every row's activity, computed at send time from the live runtime,
+  // the meta and the open human nodes; the records themselves never carry it.
+  const withActivity = (metas: readonly SessionMeta[]): SessionMeta[] => {
+    const waiting = new Set<string>();
+    for (const request of logReaders.openHuman().values()) {
+      if (request.sessionId) waiting.add(request.sessionId);
+    }
+    return metas.map((meta) => {
+      const live = sessions.get(meta.id);
+      const runtime =
+        live && !live.isParked && live.isRunning ? { idle: !live.agentRunning } : undefined;
+      return { ...meta, activity: sessionActivity(meta, runtime, waiting.has(meta.id)) };
+    });
+  };
+  // Re-push a session's row (its activity changed). Unannounced sessions stay unpublished.
+  const nudgeSessionActivity = (sessionId: string): void => {
+    const meta = index.find((item) => item.id === sessionId);
+    if (meta) broadcast({ type: "session_meta", session: sessions.get(sessionId)?.meta ?? meta });
+  };
   broadcast = (message) => {
-    wsBroadcast(message);
+    wsBroadcast(
+      message.type === "session_meta"
+        ? { ...message, session: withActivity([message.session])[0]! }
+        : message,
+    );
     if (message.type === "resources_changed") sessions.queueResourceRefresh();
   };
   broadcastDiff = wsBroadcastDiff;
@@ -1654,6 +1684,7 @@ async function initServer(
     userAgentDirs,
     githubConnections,
     sharedServer: trustedProxy !== null,
+    withActivity,
     index,
     projects,
     settings,
@@ -1736,6 +1767,10 @@ async function initServer(
   registerSubagentDeltaRoute(fastify, subagentDeltas);
   // A1c: coalesced project_events nudges to every client (same reach as resources_changed).
   const stopEventNudges = startProjectEventNudges(eventLog, broadcast);
+  // SRV-15b: a human node opening or closing flips its session's needsInput.
+  const stopHumanActivityNudges = eventLog.subscribe((event) => {
+    if (event.subject.type === "human" && event.sessionId) nudgeSessionActivity(event.sessionId);
+  });
   const bridgeRouteHandles = registerBridgeRoutes(ctx);
   ({ cancelChildSupervisorRequests } = bridgeRouteHandles);
   // This parent-only tool delegates to the route coordinator's exactly-once
@@ -1798,6 +1833,7 @@ async function initServer(
         await step(() => subagentRuns.close());
         await step(() => sessionWorktreeStore.close());
         await step(() => stopEventNudges());
+        await step(() => stopHumanActivityNudges());
         await step(() => eventLog.close());
       } finally {
         // Dispose LAST, after the HTTP/WS surface is gone (see startServer).

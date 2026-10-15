@@ -439,6 +439,9 @@ export interface ManagedSessionRuntime {
 
   readonly snapshot: Effect.Effect<{ seq: number; state: TranscriptState }>;
   readonly isRunning: Effect.Effect<boolean>;
+  /** SRV-15b: an agent run is in progress (agent_start seen, agent_end not yet);
+   * set before agent_start's meta publication, unlike the transcript status. */
+  readonly agentRunning?: Effect.Effect<boolean>;
   readonly plan: Effect.Effect<SessionPlanItem[]>;
   /** Run exit handling now if the stream hasn't already (post scope-close guard). */
   readonly ensureExitHandled: Effect.Effect<void>;
@@ -1763,6 +1766,7 @@ export const makeManagedSessionRuntime = (
         }),
       snapshot: Effect.sync(() => ({ seq: bus.unsafeLastSeq(), state: transcript })),
       isRunning: handle.isRunning,
+      agentRunning: Effect.sync(() => agentRunning),
       plan: Effect.sync(() => transcript.plan),
       ensureExitHandled: Effect.gen(function* () {
         if (exitHandled) return;

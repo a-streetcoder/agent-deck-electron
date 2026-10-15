@@ -112,8 +112,28 @@ const transportHost: TransportHost = {
     useAppStore.getState().setSessionSubscriptionSettled(true);
     void refreshDiffFiles(sessionId);
     void refreshCheckpoints(sessionId);
+    openLinkedSession(sessionId);
   },
 };
+
+/**
+ * SRV-15b: a shared link (`?session=<id>`, see sessionLink) opens that session once
+ * the first socket is up. The param is consumed so a reload or reconnect keeps
+ * whatever the user opened since; an unknown id is ignored (the notification path
+ * checks the catalog first).
+ */
+function openLinkedSession(subscribedId: string): void {
+  const url = new URL(window.location.href);
+  const linked = url.searchParams.get("session");
+  if (linked === null) return;
+  url.searchParams.delete("session");
+  window.history.replaceState(window.history.state, "", url);
+  if (linked && linked !== subscribedId) void focusSessionFromNotification(linked);
+}
+
+/** SRV-15b: the link that opens a session for any member of this server. */
+export const sessionLink = (sessionId: string): string =>
+  `${window.location.origin}/?session=${encodeURIComponent(sessionId)}`;
 
 const transport: ClientTransport = new RpcClientTransport(transportHost);
 
