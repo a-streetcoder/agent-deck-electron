@@ -2,7 +2,6 @@
 name = "skill-engine"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
 description = "The shared skill engine: catalog scope + precedence, atomic materialization, containment, and fan-out. No database, no watcher, no network."
 
 # The dependency list IS the contract. This crate is linked into agent-deck's Electron process as

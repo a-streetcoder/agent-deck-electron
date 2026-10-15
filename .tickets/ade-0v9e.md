@@ -1,6 +1,6 @@
 ---
 id: ade-0v9e
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-14T23:39:28Z

@@ -30,7 +30,3 @@ All gates green or failures documented as environmental; review findings disposi
 **2026-10-15T07:39:27Z**
 
 2026-10-15 push checklist addition (from the D1 contrarian): packages/skill-engine-native vendors ~9k lines of Rust from the private UNLICENSED Syncr repository into this public MIT repository. Before the first push the owner must confirm publication under MIT (or add a licence note for that folder); also delete the unused PACKAGES_READ_TOKEN repository secret in GitHub settings, and expect the first CI run to exercise the engine's cargo test/clippy on Windows and macOS for the first time.
-
-**2026-10-15T07:46:33Z**
-
-2026-10-15 owner: the licence is not a problem, Syncr and this repository are both theirs; the vendored engine is MIT with the rest of the repo (license = MIT added to both Cargo.toml, VENDORED.md updated). The checklist item is resolved; the PACKAGES_READ_TOKEN secret deletion and the first-CI-run note stay.
