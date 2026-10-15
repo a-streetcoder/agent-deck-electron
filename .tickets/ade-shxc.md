@@ -1,6 +1,6 @@
 ---
 id: ade-shxc
-status: open
+status: in_progress
 deps: [ade-wgkk, ade-t77e]
 links: []
 created: 2026-10-15T07:37:07Z
