@@ -1,0 +1,140 @@
+/**
+ * SRV-16a: the team server setting, stored per machine in Electron userData
+ * (team-server.json: { serverUrl: string | null, cloudflaredPath?: string }).
+ * AGENT_DECK_SHARED_SERVER_URL stays as a dev override that wins when set.
+ */
+import fs from "node:fs";
+import path from "node:path";
+import { remoteServerOrigin } from "./remote-server.js";
+
+export const SETTINGS_FILE = "team-server.json";
+const MAX_URL_CHARS = 2048;
+
+/**
+ * `raw` as a team server origin: `{ origin }` (null for an empty value, which
+ * clears the setting) or `{ error }` with a text for the Settings screen.
+ * Only a bare https origin is accepted: no credentials, path, query or fragment.
+ */
+export function validateServerUrl(raw) {
+  if (raw === null || raw === undefined) return { origin: null };
+  if (typeof raw !== "string" || raw.length > MAX_URL_CHARS) {
+    return { error: "Enter the team server's https address." };
+  }
+  const value = raw.trim();
+  if (!value) return { origin: null };
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return { error: "Enter a full address, for example https://deck.example.com." };
+  }
+  if (url.protocol !== "https:")
+    return { error: "The team server address must start with https://." };
+  if (url.username || url.password)
+    return { error: "Leave the user name and password out of the address." };
+  if (url.pathname !== "/" || url.search || url.hash) {
+    return { error: "Enter only the server address, without a path or query." };
+  }
+  // The parser keeps "*", empty labels, edge hyphens and a trailing dot; allow
+  // only plain host name labels (IPv4 passes as digits) or a bracketed IPv6.
+  const host = url.hostname;
+  const label = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+  if (!host.startsWith("[") && !host.split(".").every((part) => label.test(part))) {
+    return { error: "Enter a valid server name, for example deck.example.com." };
+  }
+  if (url.port === "0") return { error: "Port 0 is not a valid port." };
+  return { origin: url.origin };
+}
+
+/**
+ * The origin the shared-server client uses: the env override when set (an
+ * invalid one throws, as at startup before), else the stored URL when valid.
+ */
+export function resolveServerOrigin(stored, env) {
+  if (env) {
+    return { origin: remoteServerOrigin(env, "AGENT_DECK_SHARED_SERVER_URL"), overridden: true };
+  }
+  const { origin } = validateServerUrl(stored);
+  return { origin: origin ?? null, overridden: false };
+}
+
+/**
+ * The client for `origin`: `current` when it already talks to that origin,
+ * else a new one (its own token and single-flight state) or null; a replaced
+ * client's pending sign-in is cancelled.
+ */
+export function nextSharedServerClient(current, origin, create) {
+  if ((current?.origin ?? null) === origin) return current;
+  current?.cancelSignIn();
+  return origin ? create(origin) : null;
+}
+
+export const RESTART_ERROR = "The team server changed. Restart Agent Deck to use it.";
+
+/**
+ * The page keeps the origin its window started with; while main's client
+ * points elsewhere (another server, or none after clearing) the renderer's
+ * calls get this soft error instead of reaching a server it does not show.
+ */
+export function restartGate(client, windowOrigin) {
+  return (client?.origin ?? null) !== windowOrigin ? RESTART_ERROR : null;
+}
+
+export const REMOTE_MODE_ERROR = "Team server settings are not available in remote mode.";
+
+/**
+ * The team-server:get / team-server:set logic. `context()` gives
+ * { dir, env, remote, windowOrigin } at call time; `apply()` re-points the client.
+ * In remote mode the page comes from the server, so both refuse: remote
+ * content must not choose the server the next local launch talks to.
+ */
+export function createTeamServerHandlers({ context, apply }) {
+  const state = () => {
+    const { dir, env, windowOrigin } = context();
+    const { serverUrl } = readTeamServerSettings(dir);
+    const { origin, overridden } = resolveServerOrigin(serverUrl, env);
+    return { serverUrl, overridden, origin, restartRequired: origin !== windowOrigin };
+  };
+  return {
+    state,
+    get() {
+      if (context().remote) throw new Error(REMOTE_MODE_ERROR);
+      return state();
+    },
+    set(input) {
+      const { dir, remote } = context();
+      if (remote) return { ok: false, error: REMOTE_MODE_ERROR };
+      const result = validateServerUrl(input?.serverUrl);
+      if (result.error) return { ok: false, error: result.error };
+      writeTeamServerSettings(dir, { ...readTeamServerSettings(dir), serverUrl: result.origin });
+      apply();
+      return { ok: true, ...state() };
+    },
+  };
+}
+
+/** The stored settings; a missing or unreadable file reads as not configured. */
+export function readTeamServerSettings(dir) {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(path.join(dir, SETTINGS_FILE), "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") console.warn(`[team-server] ignoring ${SETTINGS_FILE}: ${error}`);
+    return { serverUrl: null };
+  }
+  // Keys this version does not know (added by later tickets) survive a Save.
+  const settings =
+    parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? { ...parsed } : {};
+  if (typeof settings.serverUrl !== "string") settings.serverUrl = null;
+  if (typeof settings.cloudflaredPath !== "string") delete settings.cloudflaredPath;
+  return settings;
+}
+
+/** Replace the stored settings (write then rename, so a crash leaves the old file). */
+export function writeTeamServerSettings(dir, settings) {
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, SETTINGS_FILE);
+  const temp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, `${JSON.stringify(settings, null, 2)}\n`);
+  fs.renameSync(temp, file);
+}

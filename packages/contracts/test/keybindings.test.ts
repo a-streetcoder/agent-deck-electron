@@ -138,6 +138,12 @@ describe("resolveKeybindings + commandForChordEvent", () => {
     expect(commandForChordEvent(event({ key: "z", ctrlKey: true }), resolved, WIN)).toBeNull();
   });
 
+  it("keeps a user shortcut for the Team server screen", () => {
+    expect(isKeybindingCommand("view.team-server")).toBe(true);
+    const resolved = resolveKeybindings([{ command: "view.team-server", key: "mod+shift+t" }]);
+    expect(resolved.get("view.team-server")).toBe("mod+shift+t");
+  });
+
   it("ignores unknown commands and unbinds on an empty override", () => {
     const resolved = resolveKeybindings([
       { command: "not-a-command" as never, key: "mod+z" },

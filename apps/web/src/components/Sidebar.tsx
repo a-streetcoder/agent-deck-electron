@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronUp,
   CircleDot,
+  Cloud,
   Cpu,
   FileText,
   Folder,
@@ -24,7 +25,7 @@ import {
 import { useEffect, useRef, type RefObject } from "react";
 import { sectionHeaderClass } from "@/design-system/styles";
 import { cn } from "@/lib/cn";
-import { isMacDesktop } from "@/lib/native";
+import { isMacDesktop, teamServer } from "@/lib/native";
 import { userDisplayName, userInitials } from "@/lib/userIdentity";
 import { useAppStore, type AppView, type CurrentUser } from "../state/store.ts";
 import { PANEL_FADE, PANEL_MOVE, SessionsMainPanel } from "./SessionsPanel.tsx";
@@ -57,6 +58,7 @@ const WORKSPACE_NAV: Array<{ id: AppView; label: string; icon: typeof Send }> = 
 const RUNTIME_NAV: Array<{ id: AppView; label: string; icon: typeof Send }> = [
   { id: "themes", label: "Themes", icon: Palette },
   { id: "performance", label: "Performance", icon: Gauge },
+  { id: "team-server", label: "Team server", icon: Cloud },
   { id: "models", label: "Models", icon: Cpu },
   { id: "providers", label: "Providers", icon: ShieldCheck },
   { id: "environment", label: "Environment", icon: Key },
@@ -217,7 +219,10 @@ export function OrchestrateExpandedOverlay({
           {sectionHeader("Workspace")}
           {navSection(WORKSPACE_NAV)}
           {sectionHeader("Runtime")}
-          {navSection(RUNTIME_NAV)}
+          {navSection(
+            // SRV-16a: a desktop-only setting; the browser has no team server bridge.
+            teamServer() ? RUNTIME_NAV : RUNTIME_NAV.filter((item) => item.id !== "team-server"),
+          )}
         </div>
       </div>
     </div>

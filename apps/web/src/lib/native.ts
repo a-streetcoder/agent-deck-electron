@@ -70,6 +70,25 @@ export interface SharedServerBridge {
   cancelSignIn(): Promise<boolean>;
 }
 
+/** SRV-16a: the stored team server setting as Electron main resolves it. */
+export interface TeamServerState {
+  /** The stored value (null: not configured). */
+  serverUrl: string | null;
+  /** AGENT_DECK_SHARED_SERVER_URL is set and wins over the stored value. */
+  overridden: boolean;
+  /** The origin in effect, or null. */
+  origin: string | null;
+  /** The origin differs from the one this window started with. */
+  restartRequired: boolean;
+}
+
+export interface TeamServerBridge {
+  get(): Promise<TeamServerState>;
+  set(input: {
+    serverUrl: string | null;
+  }): Promise<({ ok: true } & TeamServerState) | { ok: false; error: string }>;
+}
+
 export interface AgentDeckBridge {
   isElectron?: boolean;
   /** The shell is attached to a remote server; local file/folder pickers are wrong-machine. */
@@ -100,6 +119,7 @@ export interface AgentDeckBridge {
   revealResourceFile?(request: NativeResourceFileRequest): Promise<boolean>;
   openExternal?(url: string): Promise<boolean>;
   sharedServer?: SharedServerBridge;
+  teamServer?: TeamServerBridge;
   openAppMenu?(name: AppMenuName, anchor: { x: number; y: number }): Promise<boolean>;
   /** Subscribe to native-menu commands; returns an unsubscribe function. */
   onMenu?(handler: (action: NativeMenuAction) => void): () => void;
@@ -151,6 +171,12 @@ export function canPickLocalPaths(): boolean {
 export function sharedServer(): SharedServerBridge | undefined {
   const bridge = nativeBridge();
   return isElectron() && bridge?.remote !== true ? bridge?.sharedServer : undefined;
+}
+
+/** SRV-16a: the team server setting; undefined outside the local desktop app. */
+export function teamServer(): TeamServerBridge | undefined {
+  const bridge = nativeBridge();
+  return isElectron() && bridge?.remote !== true ? bridge?.teamServer : undefined;
 }
 
 /** Whether this renderer has the purpose-built desktop reveal capability. */

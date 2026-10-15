@@ -151,6 +151,7 @@ export type AppView =
   | "memory"
   | "mcp"
   | "performance"
+  | "team-server"
   | "themes"
   | "doctor";
 
