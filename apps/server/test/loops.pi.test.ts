@@ -65,6 +65,15 @@ beforeAll(async () => {
     path.join(agentsDir, "Triage Agent.md"),
     "---\nname: Triage Agent\ntools: read, grep, bash, edit, write\n---\nClassify discovery evidence.\n",
   );
+  // D6: no `tools:` and no `defaultExpectedOutcome` — the loop role defaults apply.
+  writeFileSync(
+    path.join(agentsDir, "Plain Maker.md"),
+    "---\nname: Plain Maker\n---\nMake the requested change.\n",
+  );
+  writeFileSync(
+    path.join(agentsDir, "Plain Checker.md"),
+    "---\nname: Plain Checker\n---\nReview the change.\n",
+  );
   process.env.AGENT_DECK_PI_ENV = JSON.stringify({
     HOME: tmpHome,
     USERPROFILE: tmpHome,
@@ -72,6 +81,12 @@ beforeAll(async () => {
   });
   mock = await startMockProvider({
     chunkDelayMs: 15,
+    // The default-tools maker writes one file through Pi's built-in write tool.
+    toolCall: (_message, body) =>
+      JSON.stringify(body.messages[0]).includes("# Agent: Plain Maker") &&
+      !body.messages.some((message) => message.role === "tool")
+        ? { name: "write", arguments: { path: "d6-made.txt", content: "made by maker\n" } }
+        : null,
     reply: (message) => {
       if (message.includes("exact first non-empty line must be APPROVE")) {
         return "APPROVE\nChecker streamed concrete ordered evidence before approving.";
@@ -419,6 +434,47 @@ describe("loop run engine (real pi)", () => {
       expect(artifact.filePath.startsWith(project + path.sep)).toBe(false);
       expect(existsSync(artifact.filePath)).toBe(true);
     }
+  });
+
+  it("lets a maker without tools or outcome frontmatter edit the checkout (D6)", async () => {
+    const put = await fetch(`${base}/loops`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "plain-maker-checker-loop",
+        goal: "Create the requested file.",
+        structure: "makerChecker",
+        makerName: "Plain Maker",
+        checkerName: "Plain Checker",
+        checkerRubric: "Require concrete evidence.",
+        validationCommand: `node -e "require('fs').statSync('d6-made.txt')"`,
+        maxIterations: 1,
+        writeTarget: "currentCheckout",
+      }),
+    });
+    expect(put.ok).toBe(true);
+    const requestStart = mock.requests.length;
+    const run = await waitTerminal(await startRun("plain-maker-checker-loop"));
+    expect(run.status).toBe("completed");
+    expect(run.iterations[0]).toMatchObject({ checkerDecision: "APPROVE", validationPassed: true });
+    expect(readFileSync(path.join(project, "d6-made.txt"), "utf8")).toBe("made by maker\n");
+    const roleRequests = mock.requests.slice(requestStart);
+    const firstFor = (agent: string) =>
+      roleRequests.find((item) => JSON.stringify(item.messages[0]).includes(`# Agent: ${agent}`))!;
+    const toolNames = (request: (typeof roleRequests)[number]): string[] =>
+      (Array.isArray(request.tools) ? request.tools : []).map(
+        (tool) => (tool as { function: { name: string } }).function.name,
+      );
+    const maker = firstFor("Plain Maker");
+    const checker = firstFor("Plain Checker");
+    expect(toolNames(maker)).toEqual(expect.arrayContaining(["read", "bash", "edit", "write"]));
+    expect(JSON.stringify(maker.messages[0])).toContain(
+      "Configured default outcome: Direct project writes",
+    );
+    expect(toolNames(checker).sort()).toEqual(["find", "grep", "ls", "read"]);
+    expect(JSON.stringify(checker.messages[0])).toContain(
+      "Configured default outcome: Report only",
+    );
   });
 
   it("streams real Pi Pipeline stages in strict order before evaluator finalization", async () => {

@@ -1352,6 +1352,16 @@ describe("child tool capability policy", () => {
     expect(resolveChildTools(dangerous, "readOnly", [])).toEqual(["read", "grep", "find", "ls"]);
     expect(resolveChildTools(dangerous, "none", [])).toEqual([]);
   });
+
+  it("gives an agent without a tools allowlist Pi defaults or the read-only built-ins", () => {
+    // Loop makers/stages ("configured") get Pi's default set, like a policy-free child.
+    expect(resolveChildTools(undefined, undefined, [])).toBeUndefined();
+    expect(resolveChildTools(undefined, "configured", [])).toBeUndefined();
+    expect(resolveChildTools(undefined, "readOnly", [])).toEqual(["read", "grep", "find", "ls"]);
+    expect(resolveChildTools(undefined, "none", [])).toEqual([]);
+    // An authored empty list is still an explicit "no tools".
+    expect(resolveChildTools([], "configured", [])).toEqual([]);
+  });
 });
 
 describe("SessionManager Effect service (services/sessionManager.ts)", () => {

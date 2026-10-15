@@ -35,6 +35,7 @@ import {
   type LoopRunStatus,
   type LoopValidationResult,
   type LoopStopReason,
+  type SubagentExpectedOutcome,
   type LoopWorktreeReview,
 } from "@agent-deck/domain";
 import { z } from "zod";
@@ -217,6 +218,27 @@ export type ExecuteLoopRole = (request: {
   projectId?: string;
   signal: AbortSignal;
 }) => Promise<string>;
+
+/** Launch defaults per loop role. An agent's own `tools:` and
+ * `defaultExpectedOutcome` frontmatter win; these apply when it authors none.
+ * Makers and pipeline stages writing to a checkout edit directly; checkers,
+ * evaluators, triage, branches and artifact-only loops stay report-only. */
+export function loopRoleLaunchDefaults(
+  phase: Parameters<ExecuteLoopRole>[0]["phase"],
+  writeTarget: LoopDefinition["writeTarget"],
+): {
+  toolPolicy: "configured" | "readOnly" | "none";
+  defaultExpectedOutcome: SubagentExpectedOutcome;
+} {
+  if (phase === "evaluator") return { toolPolicy: "none", defaultExpectedOutcome: "reportOnly" };
+  if (phase === "checker" || writeTarget === "artifactMarkdown")
+    return { toolPolicy: "readOnly", defaultExpectedOutcome: "reportOnly" };
+  return {
+    toolPolicy: "configured",
+    defaultExpectedOutcome:
+      phase === "maker" || phase === "stage" ? "directProjectWrites" : "reportOnly",
+  };
+}
 
 export interface LoopEngineDeps {
   executeAgent?: ExecuteAgent;

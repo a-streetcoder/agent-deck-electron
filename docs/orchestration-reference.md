@@ -16,6 +16,23 @@ Loop structures, `managed_parallel` and the session plan are listed in
 
 ## Agent coordination
 
+### Loop role launch defaults
+
+Each Loop role child launches with a tool policy and a fallback outcome contract from
+`loopRoleLaunchDefaults` (`apps/server/src/loopEngine.ts`). An agent's own `tools:` list is
+filtered by the policy; with no `tools:` the child gets the set in the table. An agent's own
+`defaultExpectedOutcome` always wins over the fallback outcome.
+
+| Role (loop write target)                                          | Tool policy  | No `tools:` frontmatter      | Fallback outcome      |
+| ----------------------------------------------------------------- | ------------ | ---------------------------- | --------------------- |
+| Maker / single agent, pipeline stage (checkout or worktree)       | `configured` | Pi defaults                  | `directProjectWrites` |
+| Triage (checkout or worktree)                                     | `configured` | Pi defaults                  | `reportOnly`          |
+| Checker; any role in an `artifactMarkdown` loop (branches always) | `readOnly`   | `read`, `grep`, `find`, `ls` | `reportOnly`          |
+| Evaluator                                                         | `none`       | none                         | `reportOnly`          |
+
+`managed_subagent` and `managed_parallel` children are unchanged: no policy, Pi defaults without
+`tools:`, and `reportOnly` when the agent sets no outcome.
+
 ### Delegation cancellation
 
 Composer Stop propagates each aborted bridge call's signal to its owned managed

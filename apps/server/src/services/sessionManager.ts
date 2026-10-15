@@ -641,15 +641,18 @@ export function resolveChildTools(
   toolPolicy: ChildToolPolicy | undefined,
   bridgeToolNames: readonly string[] = [],
 ): string[] | undefined {
-  // No authored allowlist means Pi defaults. Generated extension tools remain
+  // No authored allowlist means Pi defaults, for managed children and loop
+  // makers/stages alike ("configured"). Generated extension tools remain
   // available under those defaults without inventing a restrictive allowlist.
-  if (configured === undefined && toolPolicy === undefined) return undefined;
+  // A read-only role without an allowlist gets the read-only built-ins.
+  if (configured === undefined && (toolPolicy === undefined || toolPolicy === "configured"))
+    return undefined;
   const allowed = configured?.filter((tool) => !CHILD_FORBIDDEN_TOOLS.has(tool));
   const tools =
     toolPolicy === "none"
       ? []
       : toolPolicy === "readOnly"
-        ? (allowed ?? []).filter((tool) => CHILD_READ_ONLY_TOOLS.has(tool))
+        ? (allowed ?? [...CHILD_READ_ONLY_TOOLS]).filter((tool) => CHILD_READ_ONLY_TOOLS.has(tool))
         : (allowed ?? []);
   return [...new Set([...tools, ...bridgeToolNames])];
 }
@@ -1940,6 +1943,9 @@ export interface ChildLaunchOverrides {
   provider?: string;
   model?: string;
   thinking?: ThinkingLevel;
+  /** Outcome used when the named agent authors no `defaultExpectedOutcome`
+   * (loop makers/stages); managed_subagent omits it and keeps `reportOnly`. */
+  defaultExpectedOutcome?: SubagentExpectedOutcome;
 }
 
 export interface ChildRunOptions {
@@ -2077,7 +2083,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
     });
     const outcomeContract = resolved
       ? `\n\n${managedNamedOutcomeContract(
-          resolved.defaultExpectedOutcome ?? "reportOnly",
+          resolved.defaultExpectedOutcome ?? overrides?.defaultExpectedOutcome ?? "reportOnly",
           runOptions?.worktree === true,
         )}`
       : "";
