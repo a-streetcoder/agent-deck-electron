@@ -56,6 +56,7 @@ import { bridgeAvailable } from "./claudeTransport.ts";
 import {
   registerDeckBridgeTools,
   registerSupervisorAnswerBridgeTool,
+  registerSubagentDeltaBridgeTool,
   registerSupervisorListBridgeTool,
 } from "./bridgeTools.ts";
 import { EngineSkillStore } from "./skills/engineSkillStore.ts";
@@ -105,7 +106,12 @@ import { InjectedCommandStore } from "./injectedCommands.ts";
 import { ReceiptBus } from "./receipts.ts";
 import { makeServerRuntime, type ServerRuntime } from "./runtime.ts";
 import { registerBridgeRoutes } from "./routes/bridge.ts";
-import { registerEventRoutes, startProjectEventNudges } from "./routes/events.ts";
+import {
+  registerEventRoutes,
+  registerSubagentDeltaRoute,
+  startProjectEventNudges,
+} from "./routes/events.ts";
+import { createSubagentDeltaReader } from "./subagentDelta.ts";
 import { registerGitRoutes } from "./routes/git.ts";
 import { registerLoopRoutes } from "./routes/loops.ts";
 import { registerMcpRoutes } from "./routes/mcp.ts";
@@ -1038,6 +1044,13 @@ async function initServer(
   // Deck-agent bridge tools every parent session gets.
   registerDeckBridgeTools(bridge, sessions);
   registerSupervisorListBridgeTool(bridge, supervisor);
+  // A3: what changed in a child run since its parent last looked (cursor events in the log).
+  const subagentDeltas = createSubagentDeltaReader(eventLog, subagentRuns, (message, error) =>
+    console.warn(message, error),
+  );
+  registerSubagentDeltaBridgeTool(bridge, subagentDeltas, (parentSessionId, runId, uptoSeq) =>
+    events.subagentResultRead(parentSessionId, runId, uptoSeq),
+  );
 
   // Resource scanning follows the Pi subprocess HOME override so scanners,
   // configuration reloads, and Pi all observe the same user-owned files.
@@ -1594,6 +1607,7 @@ async function initServer(
   registerSessionRoutes(ctx);
   registerComposerDraftRoutes(ctx, composerDrafts);
   registerEventRoutes(fastify, eventLog);
+  registerSubagentDeltaRoute(fastify, subagentDeltas);
   // A1c: coalesced project_events nudges to every client (same reach as resources_changed).
   const stopEventNudges = startProjectEventNudges(eventLog, broadcast);
   const bridgeRouteHandles = registerBridgeRoutes(ctx);

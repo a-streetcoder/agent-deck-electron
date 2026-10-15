@@ -12,6 +12,7 @@ import {
 import type { BridgeRouteHandles } from "./routes/bridge.ts";
 import type { SessionManager } from "./SessionManager.ts";
 import { ChildRunError } from "./services/sessionManager.ts";
+import { renderSubagentDelta, type SubagentDeltaReader } from "./subagentDelta.ts";
 import { supervisorRequestTitle, type SupervisorLog } from "./supervisor.ts";
 
 /**
@@ -496,6 +497,59 @@ export function registerSupervisorListBridgeTool(
           runID: request.cellId,
         }));
       return { content: JSON.stringify(requests) };
+    },
+  );
+}
+
+/**
+ * A3: the parent-only delta of one of its subagent runs (VISION_ORCHESTRATION
+ * principle 5): what changed since this parent last looked, not the transcript.
+ */
+export function registerSubagentDeltaBridgeTool(
+  bridge: BridgeRegistry,
+  reader: SubagentDeltaReader,
+  delivered: (parentSessionId: string, runId: string, uptoSeq: number) => void,
+): void {
+  const paramsSchema = z.object({ runId: z.string().uuid() }).strict();
+  bridge.register(
+    {
+      name: "subagent_delta",
+      label: "Subagent delta",
+      description:
+        "Get what changed in one of this session's Deck subagent runs since you last looked: status, completed turns, tool calls, open questions, answered decisions, the newest result head and the files touched in its worktree. The first look is a full summary; later looks report only what is new. Pass the Deck subagent ID from managed_subagent or managed_parallel. The full child transcript stays available in the Deck UI.",
+      parameters: {
+        type: "object",
+        properties: {
+          runId: {
+            type: "string",
+            description: "The Deck subagent ID (a UUID) of a run this session started.",
+          },
+        },
+        required: ["runId"],
+        additionalProperties: false,
+      },
+      promptSnippet:
+        "subagent_delta(runId) — what changed in a subagent run since you last looked (first look: full summary).",
+    },
+    async (params, ctx) => {
+      const parsed = paramsSchema.safeParse(params);
+      if (!parsed.success) {
+        return {
+          content: `Invalid subagent_delta arguments: ${parsed.error.message}`,
+          isError: true,
+        };
+      }
+      const read = await reader.read(ctx.sessionId, parsed.data.runId, "lastRead");
+      if (!read.ok) {
+        return {
+          content: `not_found: no subagent run \`${parsed.data.runId}\` belongs to this session.`,
+          isError: true,
+        };
+      }
+      if (read.hasEvents && read.delta.uptoSeq > read.delta.sinceSeq) {
+        delivered(ctx.sessionId, read.delta.runId, read.delta.uptoSeq);
+      }
+      return { content: renderSubagentDelta(read) };
     },
   );
 }

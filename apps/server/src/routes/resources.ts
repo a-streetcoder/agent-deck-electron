@@ -1559,6 +1559,7 @@ ${content}
           "managed_parallel",
           "list_supervisor_requests",
           "answer_supervisor_request",
+          "subagent_delta",
           "set_session_plan",
           "update_session_plan",
         ].includes(name),

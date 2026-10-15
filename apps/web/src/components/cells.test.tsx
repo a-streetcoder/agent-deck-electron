@@ -350,6 +350,17 @@ describe("subagent durable status and content", () => {
       },
     });
 
+  /** The open card also reads its delta; these tests count transcript reads only. */
+  const stubTranscriptFetch = (transcript: ReturnType<typeof vi.fn>) =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) =>
+        url.endsWith("/delta")
+          ? Promise.resolve({ ok: false, json: async () => ({}) })
+          : transcript(url, init),
+      ),
+    );
+
   const renderSubagent = (overrides: Partial<SubagentCell> = {}) => {
     const cell: SubagentCell = {
       kind: "subagent",
@@ -534,7 +545,7 @@ describe("subagent durable status and content", () => {
           },
         }),
       });
-    vi.stubGlobal("fetch", fetchMock);
+    stubTranscriptFetch(fetchMock);
     renderSubagent({ status: "done", error: undefined });
     fireEvent.click(screen.getByRole("button", { name: /Subagent result/i }));
     fireEvent.click(screen.getByRole("button", { name: "Open child transcript" }));
@@ -574,7 +585,7 @@ describe("subagent durable status and content", () => {
       .fn()
       .mockResolvedValueOnce(response("live"))
       .mockResolvedValue(response("canonical"));
-    vi.stubGlobal("fetch", fetchMock);
+    stubTranscriptFetch(fetchMock);
     renderSubagent({ status: "done", error: undefined });
     fireEvent.click(screen.getByRole("button", { name: /Subagent result/i }));
     fireEvent.click(screen.getByRole("button", { name: "Open child transcript" }));
@@ -629,7 +640,7 @@ describe("subagent durable status and content", () => {
       .mockResolvedValueOnce(response("canonical", "done", "first result"))
       .mockResolvedValueOnce(response("live", "running", "follow-up delta"))
       .mockResolvedValue(response("canonical", "done", "final follow-up"));
-    vi.stubGlobal("fetch", fetchMock);
+    stubTranscriptFetch(fetchMock);
     const terminal: SubagentCell = {
       kind: "subagent",
       id: "durable-run",
@@ -666,6 +677,64 @@ describe("subagent durable status and content", () => {
     const terminalCalls = fetchMock.mock.calls.length;
     await new Promise((resolve) => setTimeout(resolve, 850));
     expect(fetchMock).toHaveBeenCalledTimes(terminalCalls);
+  });
+
+  it("shows the run's delta (activity, files, open questions, decisions) above the result", async () => {
+    setParentSession();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        hasEvents: true,
+        delta: {
+          runId: "durable-run",
+          sinceSeq: 0,
+          uptoSeq: 12,
+          full: true,
+          statusNow: "completed",
+          turnsCompleted: 2,
+          toolCallsSinceLastLook: [
+            { id: "a", name: "read", isError: false },
+            { id: "b", name: "bash", isError: true },
+          ],
+          openQuestions: [{ id: "q1", method: "interview_request", message: "Which folder?" }],
+          decisions: [{ id: "q0", title: "Pick a format", response: "JSON" }],
+          filesTouched: ["src/a.ts", "new.txt"],
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderSubagent({ status: "done", error: undefined });
+    fireEvent.click(screen.getByRole("button", { name: /Subagent result/i }));
+
+    expect((await screen.findByTestId("subagent-delta-activity")).textContent).toBe(
+      "2 turns · 2 tool calls · 1 failed",
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/sessions/12345678-1234-4234-8234-123456789abc/subagent-runs/durable-run/delta",
+      expect.anything(),
+    );
+    expect(screen.getByTestId("subagent-delta-files").textContent).toBe("src/a.tsnew.txt");
+    expect(screen.getByTestId("subagent-delta-questions").textContent).toBe("Which folder?");
+    expect(screen.getByTestId("subagent-delta-decisions").textContent).toBe("Pick a format → JSON");
+    // The text result stays, and the full transcript is one click away.
+    expect(screen.getByTestId("subagent-output").textContent).toBe("partial output");
+    expect(screen.getByRole("button", { name: "Open child transcript" })).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps only the text result when the log has no events for the run", async () => {
+    setParentSession();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ hasEvents: false, delta: { turnsCompleted: 0 } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderSubagent({ status: "done", error: undefined });
+    fireEvent.click(screen.getByRole("button", { name: /Subagent result/i }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("subagent-delta")).toBeNull();
+    expect(screen.getByTestId("subagent-output").textContent).toBe("partial output");
+    vi.unstubAllGlobals();
   });
 
   it("bounds long task and output regions while keeping them keyboard focusable", () => {

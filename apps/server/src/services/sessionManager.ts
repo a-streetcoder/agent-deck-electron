@@ -629,6 +629,7 @@ const CHILD_FORBIDDEN_TOOLS = new Set([
   "managed_parallel",
   "list_supervisor_requests",
   "answer_supervisor_request",
+  "subagent_delta",
   "set_session_plan",
   "update_session_plan",
   "contact_supervisor",
