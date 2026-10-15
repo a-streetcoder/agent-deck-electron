@@ -820,6 +820,42 @@ export function projectPlans(
   return state;
 }
 
+/** A5: the latest plan.item.dispatched of one plan item. */
+export interface ProjectedPlanDispatch {
+  runId: string;
+  agentName?: string;
+  /** The dispatch event's id. */
+  eventId?: string;
+}
+
+/** A5: plan.item.dispatched, latest per (session, item). Extends a copy of initial. */
+export function projectPlanDispatches(
+  events: Iterable<ProjectedEvent>,
+  initial: Iterable<[string, Map<string, ProjectedPlanDispatch>]> = [],
+): Map<string, Map<string, ProjectedPlanDispatch>> {
+  const state = new Map(initial);
+  const copied = new Set<string>();
+  for (const event of events) {
+    if (event.kind !== "plan.item.dispatched" || !event.sessionId) continue;
+    const payload = (event.payload ?? {}) as {
+      itemId?: unknown;
+      runId?: unknown;
+      agentName?: unknown;
+    };
+    if (typeof payload.itemId !== "string" || typeof payload.runId !== "string") continue;
+    if (!copied.has(event.sessionId)) {
+      state.set(event.sessionId, new Map(state.get(event.sessionId)));
+      copied.add(event.sessionId);
+    }
+    state.get(event.sessionId)!.set(payload.itemId, {
+      runId: payload.runId,
+      ...(typeof payload.agentName === "string" ? { agentName: payload.agentName } : {}),
+      ...(event.id ? { eventId: event.id } : {}),
+    });
+  }
+  return state;
+}
+
 // ---------------------------------------------------------------------------
 // A1d cut-over merges: readers take membership and order from the log and exact detail
 // from the store ("move readers, not stores"); the startup equivalence report.

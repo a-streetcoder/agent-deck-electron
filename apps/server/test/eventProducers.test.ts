@@ -162,6 +162,37 @@ describe("A1b1 producers", () => {
     });
   });
 
+  it("A5: plan.changed carries the graph fields; plan.item.dispatched names its cause", () => {
+    const h = harness();
+    h.events.planChanged("s1", "set", {
+      ...plan("p-graph"),
+      items: [
+        { id: "a", title: "Build", status: "in_progress", assignee: "coder", runId: "r1" },
+        { id: "b", title: "Ship", status: "todo", dependsOn: ["a"], verifiedBy: "reviewer" },
+      ],
+    });
+    expect(
+      h.events.planItemDispatched(
+        "s1",
+        { itemId: "a", runId: "r1", agentName: "coder" },
+        "p-graph",
+      ),
+    ).toBe(true);
+    const [changed, dispatched] = h.all();
+    expect((changed!.payload as { items: unknown[] }).items).toEqual([
+      { id: "a", title: "Build", status: "in_progress", assignee: "coder", runId: "r1" },
+      { id: "b", title: "Ship", status: "todo", dependsOn: ["a"], verifiedBy: "reviewer" },
+    ]);
+    expect(dispatched).toMatchObject({
+      kind: "plan.item.dispatched",
+      sessionId: "s1",
+      subject: { type: "plan", id: "s1" },
+      actor: { type: "agent", sessionId: "s1" },
+      causationId: "p-graph",
+      payload: { itemId: "a", runId: "r1", agentName: "coder" },
+    });
+  });
+
   it("a steer joins the running turn: one turn id, one completion, caused by the steer once Pi takes it", () => {
     const h = harness();
     const hooks = h.events.turnHooks(meta());

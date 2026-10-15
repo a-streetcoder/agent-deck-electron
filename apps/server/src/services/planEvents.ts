@@ -60,6 +60,16 @@ export interface PlanEventServiceShape {
   readonly deleteSession: (sessionId: string) => void;
 }
 
+const samePlanItem = (a: SessionPlanItem, b: SessionPlanItem | undefined): boolean =>
+  b !== undefined &&
+  a.id === b.id &&
+  a.title === b.title &&
+  a.status === b.status &&
+  a.assignee === b.assignee &&
+  a.verifiedBy === b.verifiedBy &&
+  a.runId === b.runId &&
+  (a.dependsOn ?? []).join("\n") === (b.dependsOn ?? []).join("\n");
+
 /**
  * Which kind of event a before→after transition is, or undefined when it is not
  * an event at all. Emptying a plan that was already empty is a no-op, not a
@@ -74,13 +84,7 @@ function classify(
     // Native's updateSessionPlan patches items by id and returns early on
     // `guard changed else`, so an unknown id or a patch that rewrites a value
     // with itself appends nothing. It never empties a plan.
-    return before.length === after.length &&
-      before.every(
-        (item, i) =>
-          item.id === after[i]?.id &&
-          item.title === after[i]?.title &&
-          item.status === after[i]?.status,
-      )
+    return before.length === after.length && before.every((item, i) => samePlanItem(item, after[i]))
       ? undefined
       : "updated";
   }

@@ -175,6 +175,7 @@ export function Transcript() {
                   ? questionNavigationLabel(cell, position, navigationCells.length)
                   : undefined
               }
+              data-cell-id={cell.id}
               data-question-navigation-cell={navigable ? cell.id : undefined}
               className={navigable ? "question-navigation-target" : undefined}
             >

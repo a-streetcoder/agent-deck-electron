@@ -117,6 +117,35 @@ once; spawn refuses the ninth. A running spawned child keeps its idle parent fro
 parking or refreshing resources; when the last one ends, the idle-parking deadline and
 any deferred resource refresh are armed again.
 
+### Plan dependencies and dispatch
+
+A plan item may carry `dependsOn` (item ids), `assignee` and `verifiedBy` (agent names);
+`set_session_plan` / `update_session_plan` refuse a cycle, an unknown or self dependency, an
+unknown agent and `verifiedBy` equal to `assignee`. A plan without `dependsOn` is the old
+checklist. The graph logic is pure (`packages/domain/src/planScheduler.ts`): an item is ready
+when it is `todo` and every dependency is `done`; `skipped` is not done, so a skipped or
+blocked item marks its `todo` dependants `blocked`.
+
+The dispatcher (`apps/server/src/planDispatcher.ts`) re-evaluates a session's plan on each
+`plan.changed`, `subagent.run.finished` and `subagent.run.removed` of that session. It
+spawns each ready assigned item through the `spawn_subagent` path (detached, the 8-child cap,
+the delegation setting), with the item title as the task plus the summaries of its
+dependencies (2,000 characters each), logs `plan.item.dispatched {itemId, runId, agentName}`
+caused by the event that made it ready, and sets the item `in_progress` with its `runId`.
+A completed run makes the item `done`; any other end (failed, stopped, interrupted by a
+restart, record gone) makes it `blocked`. With `verifiedBy`, a completed run is first reviewed
+by that agent with the Loop checker profile (read-only tools plus git-only `checker_shell`);
+`APPROVE` (D7 `parseVerdict`) makes it `done`, anything else `blocked`. Only plans the
+session's own agent set or updated in this process, or that already hold a dispatched item,
+are dispatched; a fork's inherited plan waits for its agent. Nothing is dispatched while the
+log is read-only. The plan panel draws a plan with dependencies as columns by depth.
+
+Not covered: verifier runs are constrained children and are not durable, so a restart during
+verification runs the verifier again; reassigning a running item does not cancel its run (the
+result is discarded and the item re-dispatched to the new assignee once the run ends); an item
+whose agent changes the status while it runs keeps that status (a reset to `todo` is dispatched
+again once the run ends).
+
 ### Managed child provider settlement
 
 Managed children consume the pinned Pi 1.2.0 stream through `agent_settled`,
@@ -201,8 +230,8 @@ only the disabled log (it could not open) falls back to the stores. The merges a
   `projectPlans`, without the store's 100-per-session cap. Logged transitions keep log order;
   imported entries sit after their store predecessor (recorded as `afterId`); no clock orders
   anything. Items come from the store for the events it still holds; older ones are the log's
-  copy, marked `source: "log"` (titles capped at 200 characters, paths redacted, and only id,
-  title and status per item: a richer panel must widen the `plan.changed` whitelist first).
+  copy, marked `source: "log"` (titles capped at 200 characters, paths redacted; per item id,
+  title, status and, since A5, `dependsOn`, `assignee`, `verifiedBy` and `runId`).
 - **Supervisor requests** (`list_supervisor_requests`) take membership and status from
   `projectSupervisor`; this process's own requests stay exact (full text, live status), and
   one whose append failed is placed by `createdAt`. The restart rule: a request still pending

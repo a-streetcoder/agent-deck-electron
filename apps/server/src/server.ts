@@ -132,6 +132,7 @@ import { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import { SubagentRunStore } from "./subagentRunStore.ts";
 import { createEventLog, disabledEventLog, type EventLog } from "./eventLog.ts";
 import { createEventProducers } from "./eventProducers.ts";
+import { createPlanDispatcher } from "./planDispatcher.ts";
 import { createLogReaders } from "./eventReaders.ts";
 import { localPathPrefixes, reconcilePlanHistory, startEventProducers } from "./eventReconcile.ts";
 import { resolveTrustedDataDir } from "./trustedDataDir.ts";
@@ -1043,6 +1044,34 @@ async function initServer(
   // Native subagents, supervisor listing, and the session activity plan: the
   // Deck-agent bridge tools every parent session gets.
   registerDeckBridgeTools(bridge, sessions, eventLog);
+  // A5: run assigned plan items through the A4 spawn path as they become ready.
+  const planDispatcher = createPlanDispatcher({
+    subscribe: (subscriber) => eventLog.subscribe(subscriber),
+    writable: () => eventLog.writable,
+    plan: (sessionId) => sessions.get(sessionId)?.plan,
+    updatePlan: (sessionId, updates) => sessions.get(sessionId)?.updatePlan(updates),
+    dispatches: (sessionId) => logReaders.projections().dispatches.get(sessionId),
+    run: (sessionId, runId) => sessions.subagentRunRecord(sessionId, runId),
+    slots: (sessionId) => {
+      const meta = sessions.get(sessionId)?.meta;
+      return meta && sessions.delegationAllowed(meta) ? sessions.detachedSlots(sessionId) : 0;
+    },
+    spawn: (sessionId, task, { agentName, verifier }) =>
+      sessions.spawnSubagent(sessionId, task, {
+        agentName,
+        detached: true,
+        // The verifier gets the loop checker profile: read-only tools plus git-only checker_shell.
+        ...(verifier
+          ? {
+              toolPolicy: "readOnly" as const,
+              overrides: { checkerShell: true, defaultExpectedOutcome: "reportOnly" as const },
+            }
+          : {}),
+      }),
+    recordDispatch: (sessionId, dispatch, causationId) =>
+      events.planItemDispatched(sessionId, dispatch, causationId),
+    warn: (message, error) => console.warn(`[plan-dispatch] ${message}`, error),
+  });
   registerSupervisorListBridgeTool(bridge, supervisor);
 
   // Resource scanning follows the Pi subprocess HOME override so scanners,
@@ -1641,6 +1670,7 @@ async function initServer(
         await step(() => askUser.close());
         // First pass stops every session visible when shutdown began. Session
         // teardown also settles child supervisor bridge calls.
+        planDispatcher.close();
         await step(() => sessions.stopAll());
         // Pre-admitted HTTP handlers and already-dispatched WS frames may now
         // finish rollback/publication without deadlocking on stopped sessions.

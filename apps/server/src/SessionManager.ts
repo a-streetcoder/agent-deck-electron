@@ -104,6 +104,9 @@ export interface SpawnSubagentOptions {
   parentToolCallId?: string;
   /** spawn_subagent: the child outlives its tool call and counts against the bound. */
   detached?: boolean;
+  /** A5 plan verifier: a constrained (read-only) fresh child; such runs are not durable. */
+  toolPolicy?: ChildToolPolicy;
+  overrides?: ChildLaunchOverrides;
 }
 
 export interface SpawnedSubagent {
@@ -1491,11 +1494,7 @@ export class SessionManager {
       // not validate it, so a PRESENT non-boolean (`"false"`, `0`) must DENY
       // rather than slide past a `=== false` test and fail open. Only genuine
       // absence follows the app default (Codex).
-      subagentsEnabled: () => {
-        const override: unknown = meta.subagentsEnabled;
-        if (override === undefined) return this.subagentsEnabled();
-        return override === true;
-      },
+      subagentsEnabled: () => this.delegationAllowed(meta),
       autoTitle: this.autoTitle,
       autoUpdateTitles: this.autoUpdateTitles,
       ...(this.decorateUserCell
@@ -1656,6 +1655,27 @@ export class SessionManager {
 
   get(id: string): ManagedSession | undefined {
     return this.sessions.get(id);
+  }
+
+  /** The session's effective delegation policy (see the subagentsEnabled launch param). */
+  delegationAllowed(meta: Pick<SessionMeta, "subagentsEnabled">): boolean {
+    const override: unknown = meta.subagentsEnabled;
+    if (override === undefined) return this.subagentsEnabled();
+    return override === true;
+  }
+
+  /** A5: free detached-child slots of a live session (MAX_DETACHED_SUBAGENTS bound). */
+  detachedSlots(sessionId: string): number {
+    const session = this.sessions.get(sessionId);
+    return session ? MAX_DETACHED_SUBAGENTS - session.detachedSubagents : 0;
+  }
+
+  /** A5: why agentName cannot be launched from this session, or undefined when it can. */
+  agentResolutionError(sessionId: string, agentName: string): string | undefined {
+    if (!this.resolveAgent) return undefined;
+    const resolution = this.resolveAgent(agentName, this.sessions.get(sessionId)?.meta.projectId);
+    if (!resolution) return `unknown agent: ${agentName}`;
+    return "error" in resolution ? resolution.error : undefined;
   }
 
   /** Apply the internal Pi prompt-audit callback to the authoritative live
@@ -1878,7 +1898,7 @@ export class SessionManager {
     };
 
     if (!continueSubagentId) {
-      return await parent.runChildAgent(task, agentName, undefined, undefined, {
+      return await parent.runChildAgent(task, agentName, options.toolPolicy, options.overrides, {
         ...common,
         ...(options.worktree ? { worktree: true } : {}),
       });

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { SessionPlanItem } from "@agent-deck/domain";
+import { applyPlanUpdates, validatePlanGraph, type SessionPlanItem } from "@agent-deck/domain";
 import { z } from "zod";
 import type { BridgeRegistry } from "./bridge.ts";
 import {
@@ -467,6 +467,12 @@ export function registerDeckBridgeTools(
   // update_session_plan patches items by id. The plan rides the session's push
   // bus as domain state (plan_set / plan_update), so clients mirror it.
   const planStatus = z.enum(["todo", "in_progress", "done", "blocked", "skipped"]);
+  // A5: the graph fields. dependsOn holds item ids; assignee / verifiedBy are agent names.
+  const graphFields = {
+    dependsOn: z.array(z.string().trim().min(1)).max(50).optional(),
+    assignee: z.string().trim().min(1).max(200).optional(),
+    verifiedBy: z.string().trim().min(1).max(200).optional(),
+  };
   const setPlanParams = z.object({
     items: z
       .array(
@@ -474,6 +480,7 @@ export function registerDeckBridgeTools(
           id: z.string().trim().min(1).optional(),
           title: z.string().trim().min(1),
           status: planStatus.optional(),
+          ...graphFields,
         }),
       )
       .max(50),
@@ -485,21 +492,60 @@ export function registerDeckBridgeTools(
           id: z.string().trim().min(1),
           title: z.string().trim().min(1).optional(),
           status: planStatus.optional(),
+          ...graphFields,
         }),
       )
       .min(1)
       .max(50),
   });
+  const graphSchema = {
+    dependsOn: {
+      type: "array",
+      items: { type: "string" },
+      maxItems: 50,
+      description: "Optional ids of the items this one waits for (no cycles).",
+    },
+    assignee: {
+      type: "string",
+      description:
+        "Optional installed agent name: Agent Deck runs the item as a subagent of that agent once every dependency is done.",
+    },
+    verifiedBy: {
+      type: "string",
+      description:
+        "Optional installed agent name that reviews the assignee's result read-only (APPROVE or REJECT); must differ from assignee.",
+    },
+  };
   const renderPlan = (items: SessionPlanItem[]): string =>
     items.length === 0
       ? "(empty plan)"
-      : items.map((it) => `- [${it.status}] ${it.id}: ${it.title}`).join("\n");
+      : items
+          .map((it) => {
+            const graph = [
+              it.dependsOn?.length ? `after ${it.dependsOn.join(", ")}` : "",
+              it.assignee ? `assignee ${it.assignee}` : "",
+              it.verifiedBy ? `verified by ${it.verifiedBy}` : "",
+              it.runId ? `run ${it.runId}` : "",
+            ].filter(Boolean);
+            return `- [${it.status}] ${it.id}: ${it.title}${graph.length ? ` (${graph.join("; ")})` : ""}`;
+          })
+          .join("\n");
+  /** The graph and every named agent must hold before a plan is stored. */
+  const planError = (sessionId: string, items: readonly SessionPlanItem[]): string | undefined => {
+    const graph = validatePlanGraph(items);
+    if (graph) return graph;
+    for (const name of new Set(items.flatMap((it) => [it.assignee, it.verifiedBy]))) {
+      const error = name ? sessions.agentResolutionError(sessionId, name) : undefined;
+      if (error) return error;
+    }
+    return undefined;
+  };
   bridge.register(
     {
       name: "set_session_plan",
       label: "Set plan",
       description:
-        "Set (replace) this session's activity plan — a short checklist of the steps you'll take. Each item has a title and an optional status (todo/in_progress/done/blocked/skipped, default todo). The result lists each item's assigned id; use those ids with update_session_plan.",
+        "Set (replace) this session's activity plan — a short checklist of the steps you'll take. Each item has a title and an optional status (todo/in_progress/done/blocked/skipped, default todo). Items may form a dependency graph: `dependsOn` lists the ids of items that must be done first (a skipped or blocked dependency blocks its dependants). An item with an `assignee` is run by Agent Deck as a subagent of that agent as soon as its dependencies are done, and marked done or blocked from the result; `verifiedBy` names a different agent that must APPROVE the result first. The result lists each item's assigned id; use those ids with update_session_plan.",
       parameters: {
         type: "object",
         properties: {
@@ -515,6 +561,7 @@ export function registerDeckBridgeTools(
                   type: "string",
                   enum: ["todo", "in_progress", "done", "blocked", "skipped"],
                 },
+                ...graphSchema,
               },
               required: ["title"],
               additionalProperties: false,
@@ -524,7 +571,8 @@ export function registerDeckBridgeTools(
         required: ["items"],
         additionalProperties: false,
       },
-      promptSnippet: "set_session_plan — set/replace the session's activity plan checklist.",
+      promptSnippet:
+        "set_session_plan — set/replace the session's activity plan (checklist, or a graph with dependsOn / assignee / verifiedBy).",
     },
     (params, ctx) => {
       const parsed = setPlanParams.safeParse(params);
@@ -538,14 +586,31 @@ export function registerDeckBridgeTools(
       if (!session) return { content: "No such session for the plan.", isError: true };
       // Ids MUST be unique: a duplicate id would make update_session_plan patch
       // every matching item and collides React keys in the panel. Coin a fresh
-      // id for anything missing or duplicated.
+      // id for anything missing or duplicated — except in a graph, where a
+      // dependsOn would silently point at the wrong item.
+      const graph = parsed.data.items.some((it) => it.dependsOn?.length);
       const seen = new Set<string>();
-      const items: SessionPlanItem[] = parsed.data.items.map((it) => {
+      const items: SessionPlanItem[] = [];
+      for (const it of parsed.data.items) {
         let id = it.id ?? randomUUID();
-        if (seen.has(id)) id = randomUUID();
+        if (seen.has(id)) {
+          if (graph) {
+            return { content: `Invalid set_session_plan: duplicate item id ${id}.`, isError: true };
+          }
+          id = randomUUID();
+        }
         seen.add(id);
-        return { id, title: it.title, status: it.status ?? "todo" };
-      });
+        items.push({
+          id,
+          title: it.title,
+          status: it.status ?? "todo",
+          ...(it.dependsOn?.length ? { dependsOn: [...new Set(it.dependsOn)] } : {}),
+          ...(it.assignee ? { assignee: it.assignee } : {}),
+          ...(it.verifiedBy ? { verifiedBy: it.verifiedBy } : {}),
+        });
+      }
+      const error = planError(ctx.sessionId, items);
+      if (error) return { content: `Invalid set_session_plan: ${error}.`, isError: true };
       session.setPlan(items);
       return { content: `Plan set (${items.length} item(s)):\n${renderPlan(items)}` };
     },
@@ -555,7 +620,7 @@ export function registerDeckBridgeTools(
       name: "update_session_plan",
       label: "Update plan",
       description:
-        "Update items in this session's activity plan by id (from set_session_plan). Each update carries an id and a new status and/or title. Unknown ids are ignored.",
+        "Update items in this session's activity plan by id (from set_session_plan). Each update carries an id and a new status, title, dependsOn, assignee and/or verifiedBy. Unknown ids are ignored; an update that would create a dependency cycle is refused.",
       parameters: {
         type: "object",
         properties: {
@@ -572,6 +637,7 @@ export function registerDeckBridgeTools(
                   type: "string",
                   enum: ["todo", "in_progress", "done", "blocked", "skipped"],
                 },
+                ...graphSchema,
               },
               required: ["id"],
               additionalProperties: false,
@@ -581,7 +647,8 @@ export function registerDeckBridgeTools(
         required: ["updates"],
         additionalProperties: false,
       },
-      promptSnippet: "update_session_plan — patch plan items by id (status/title).",
+      promptSnippet:
+        "update_session_plan — patch plan items by id (status/title/dependsOn/assignee/verifiedBy).",
     },
     (params, ctx) => {
       const parsed = updatePlanParams.safeParse(params);
@@ -593,6 +660,8 @@ export function registerDeckBridgeTools(
       }
       const session = sessions.get(ctx.sessionId);
       if (!session) return { content: "No such session for the plan.", isError: true };
+      const error = planError(ctx.sessionId, applyPlanUpdates(session.plan, parsed.data.updates));
+      if (error) return { content: `Invalid update_session_plan: ${error}.`, isError: true };
       session.updatePlan(parsed.data.updates);
       return { content: `Plan updated.\n${renderPlan(session.plan)}` };
     },

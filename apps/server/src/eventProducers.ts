@@ -52,6 +52,12 @@ export interface EventProducers {
     event: SessionPlanEvent,
     reconcile?: { afterId?: string },
   ): void;
+  /** A5: the server dispatched a ready plan item to a subagent run; false when not logged. */
+  planItemDispatched(
+    sessionId: string,
+    dispatch: { itemId: string; runId: string; agentName: string },
+    causationId?: string,
+  ): boolean;
   checkpointCreated(
     sessionId: string,
     record: CheckpointRecord,
@@ -303,9 +309,36 @@ export function createEventProducers(
             id: capText(item.id, EVENT_LABEL_MAX_CHARS),
             title: clean(item.title, EVENT_LABEL_MAX_CHARS),
             status: item.status,
+            // A5: graph fields are ids and agent names, capped like ids.
+            ...(item.dependsOn
+              ? {
+                  dependsOn: item.dependsOn
+                    .slice(0, MAX_PLAN_EVENT_ITEMS)
+                    .map((id) => capText(id, EVENT_LABEL_MAX_CHARS)),
+                }
+              : {}),
+            ...(item.assignee ? { assignee: capText(item.assignee, ACTOR_FIELD_MAX) } : {}),
+            ...(item.verifiedBy ? { verifiedBy: capText(item.verifiedBy, ACTOR_FIELD_MAX) } : {}),
+            ...(item.runId ? { runId: capText(item.runId, EVENT_LABEL_MAX_CHARS) } : {}),
           })),
         },
       });
+    },
+
+    planItemDispatched(sessionId, dispatch, causationId) {
+      return log.append({
+        kind: "plan.item.dispatched",
+        sessionId,
+        subject: { type: "plan", id: sessionId },
+        // On behalf of the agent that set the plan (the dispatcher only runs its plans).
+        actor: agentActor(sessionId),
+        ...(causationId ? { causationId } : {}),
+        payload: {
+          itemId: capText(dispatch.itemId, EVENT_LABEL_MAX_CHARS),
+          runId: dispatch.runId,
+          agentName: capText(dispatch.agentName, ACTOR_FIELD_MAX),
+        },
+      }).ok;
     },
 
     checkpointCreated(sessionId, record, { actor = SYSTEM, turn } = {}) {

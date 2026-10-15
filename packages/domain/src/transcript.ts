@@ -348,13 +348,38 @@ export interface SessionPlanItem {
   id: string;
   title: string;
   status: PlanItemStatus;
+  /** A5: ids of the items this one waits for (planScheduler.ts). */
+  dependsOn?: string[];
+  /** A5: the agent the server dispatches this item to once it is ready. */
+  assignee?: string;
+  /** A5: the agent that verifies the assignee's result; never the assignee itself. */
+  verifiedBy?: string;
+  /** A5: server-owned: the subagent run the item was last dispatched to. */
+  runId?: string;
 }
 
-/** A patch to one plan item, addressed by id (title/status optional). */
+/** A patch to one plan item, addressed by id (every other field optional). */
 export interface SessionPlanUpdate {
   id: string;
   title?: string;
   status?: PlanItemStatus;
+  dependsOn?: string[];
+  assignee?: string;
+  verifiedBy?: string;
+  runId?: string;
+}
+
+/** update_session_plan semantics: patch items by id; unknown ids are ignored. */
+export function applyPlanUpdates(
+  plan: readonly SessionPlanItem[],
+  updates: readonly SessionPlanUpdate[],
+): SessionPlanItem[] {
+  return plan.map((item) => {
+    const patch = updates.find((u) => u.id === item.id);
+    if (!patch) return item;
+    const defined = Object.entries(patch).filter(([, value]) => value !== undefined);
+    return { ...item, ...Object.fromEntries(defined) } as SessionPlanItem;
+  });
 }
 
 export type AgentStatus = "idle" | "running";
@@ -597,19 +622,8 @@ export function reduceTranscript(state: TranscriptState, event: DomainEvent): Tr
     case "plan_set":
       // set_session_plan REPLACES the whole plan.
       return { ...state, plan: event.items };
-    case "plan_update": {
-      // update_session_plan patches items by id; unknown ids are ignored.
-      const plan = state.plan.map((item) => {
-        const patch = event.updates.find((u) => u.id === item.id);
-        if (!patch) return item;
-        return {
-          ...item,
-          ...(patch.title !== undefined ? { title: patch.title } : {}),
-          ...(patch.status !== undefined ? { status: patch.status } : {}),
-        };
-      });
-      return { ...state, plan };
-    }
+    case "plan_update":
+      return { ...state, plan: applyPlanUpdates(state.plan, event.updates) };
     case "cell_open":
       return { ...state, cells: upsertCell(state.cells, event.cell) };
     case "cell_final": {
