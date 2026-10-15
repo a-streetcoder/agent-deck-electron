@@ -38,3 +38,11 @@ All gates green or failures documented as environmental; review findings disposi
 **2026-10-15T18:45:43Z**
 
 2026-10-15 gates run on the Windows checkout (memory-limited machine, one thing at a time): pnpm -r typecheck GREEN; pnpm format:check GREEN; pnpm lint: design-system check failed on two raw controls from the A6 merge, fixed in 321063d, then check + eslint GREEN; Sidebar.test.tsx 12/12. Real-Pi suites touched by identity/git changes (session-worktree, sessionMove, sessionReturn, git-commit-message, session-delete-recovery, release, server) running one at a time; result in the next note. Owner decision (D4): push gate no longer waits for the SRV-06 live check. Still owner-only: full unit suites, focused Playwright, two-user smoke, cross-vendor review of main...HEAD, the push.
+
+**2026-10-15T18:48:01Z**
+
+2026-10-15 real-Pi suites one at a time, all GREEN: session-worktree 9/9, sessionMove 1/1, sessionReturn 1/1, git-commit-message 2/2, session-delete-recovery 2/2, release 1/1, server 6/6. Static gates all green at 321063d.
+
+**2026-10-15T18:49:14Z**
+
+2026-10-15 non-blocking finding during the gates: three tracked sources contain a literal NUL byte used as a string separator (apps/server/src/routes/bridge.ts:340, apps/server/src/services/persistence.ts:284, apps/web/src/components/preview/PreviewPanel.test.tsx:240). All three are already on main; tsc, eslint and prettier accept them. Follow-up: replace with the \0 escape when those files are next touched.
