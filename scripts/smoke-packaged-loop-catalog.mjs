@@ -51,16 +51,19 @@ const asarPath = asars[0];
 const resourcesPath = path.dirname(asarPath);
 const addonPath = path.join(resourcesPath, "loop-catalog-native", addonName);
 if (!existsSync(addonPath)) throw new Error(`packaged addon is missing: ${addonPath}`);
-// The shared skill engine addon is staged as an extraResource too — validate the copy landed and
-// point the server's loader at it explicitly (like the loop-catalog addon).
+// The vendored skill engine addon (packages/skill-engine-native) ships as an extraResource
+// too — validate exactly one architecture-matched copy landed and point the server's loader at it.
+const skillEngineName = `skill-engine-native.${expectedPlatform}-${expectedArch}.node`;
 const skillEngineDir = path.join(resourcesPath, "skill-engine-native");
-const skillEngineBinary = existsSync(skillEngineDir)
-  ? readdirSync(skillEngineDir).find((entry) => entry.endsWith(".node"))
-  : undefined;
-if (!skillEngineBinary) {
-  throw new Error(`packaged skill engine addon is missing under ${skillEngineDir}`);
+const skillEngineAddons = existsSync(skillEngineDir)
+  ? readdirSync(skillEngineDir).filter((entry) => entry.endsWith(".node"))
+  : [];
+if (skillEngineAddons.length !== 1 || skillEngineAddons[0] !== skillEngineName) {
+  throw new Error(
+    `expected only ${skillEngineName} under ${skillEngineDir}, found ${skillEngineAddons.join(", ")}`,
+  );
 }
-const skillEnginePath = path.join(skillEngineDir, skillEngineBinary);
+const skillEnginePath = path.join(skillEngineDir, skillEngineName);
 const packagedAddons = readdirSync(path.dirname(addonPath)).filter((entry) =>
   entry.endsWith(".node"),
 );

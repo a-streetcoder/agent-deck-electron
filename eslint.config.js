@@ -10,6 +10,10 @@ export default tseslint.config(
       "release/",
       "packages/loop-catalog-native/native/",
       "packages/loop-catalog-native/target/",
+      "packages/skill-engine-native/native/",
+      "packages/skill-engine-native/target/",
+      // NAPI-RS output kept byte-identical to the vendored engine-v0.2.0 typings.
+      "packages/skill-engine-native/src/binding.d.ts",
     ],
   },
   js.configs.recommended,

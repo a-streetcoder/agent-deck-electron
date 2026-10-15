@@ -1,0 +1,24 @@
+[package]
+name = "skill-engine"
+version = "0.1.0"
+edition = "2021"
+description = "The shared skill engine: catalog scope + precedence, atomic materialization, containment, and fan-out. No database, no watcher, no network."
+
+# The dependency list IS the contract. This crate is linked into agent-deck's Electron process as
+# a NAPI addon, so every dependency here becomes something their packaging carries. It previously
+# lived inside `syncr-core`, which meant the addon linked BUNDLED SQLITE, a filesystem watcher and
+# a diff library it never calls (handoff task 1). Anything needing those belongs in syncr-core,
+# which depends on this crate — never the reverse.
+[dependencies]
+sha2 = "0.10"
+hex = "0.4"
+serde_json = "1"
+
+# Windows directory junctions. Unlike symlinks (SeCreateSymbolicLinkPrivilege — admin or
+# Developer Mode), a junction needs no elevation, which is why fan-out silently failed for every
+# non-elevated Windows user.
+[target.'cfg(windows)'.dependencies]
+junction = "2"
+
+[dev-dependencies]
+tempfile = "3"

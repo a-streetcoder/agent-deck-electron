@@ -14,7 +14,7 @@
     "predev": "pnpm build:native",
     "dev": "pnpm --filter @agent-deck/desktop dev",
     "dev:onboarding-empty": "node scripts/dev-onboarding-empty.mjs",
-    "build:native": "pnpm --filter @agent-deck/loop-catalog-native build && pnpm --filter @agent-deck/loop-catalog-native smoke",
+    "build:native": "pnpm --filter @agent-deck/loop-catalog-native build && pnpm --filter @agent-deck/loop-catalog-native smoke && pnpm --filter @agent-deck/skill-engine-native build",
     "build": "pnpm build:native && pnpm build:web && pnpm build:backend && pnpm build:pi-runtime",
     "build:web": "pnpm --filter @agent-deck/web build",
     "build:backend": "node scripts/build-backend.mjs",

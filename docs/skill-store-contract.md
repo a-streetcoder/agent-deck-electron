@@ -1,11 +1,15 @@
-# Skill engine integration & the Syncr contract
+# Skill engine integration & contract
 
-Being retired under [ADR 0005](adr/0005-retire-skill-engine-addon.md); this contract holds as written until D1 (ade-0v9e) lands. How agent-deck consumes the shared, Syncr-owned skill engine, the current state of the lift, and
-the contract between the two. Decision + rationale: [ADR-0002](adr/0002-consolidate-skill-engine.md).
-Historical extension request (now shipped): [skill-engine-git-import-request.md](archive/syncr-requests/skill-engine-git-import-request.md).
+How agent-deck consumes the skill engine and the contract at that seam. The engine was built in
+Syncr (decision + rationale: [ADR-0002](adr/0002-consolidate-skill-engine.md)); under
+[ADR 0005](adr/0005-retire-skill-engine-addon.md) option B its Rust crate is **vendored** into
+`packages/skill-engine-native` (`@agent-deck/skill-engine-native`, from Syncr `engine-v0.2.0`,
+commit `76ec7d4`; see the package's `VENDORED.md`). There is no Syncr pin and no private registry:
+this repository owns the code and its tests. The NAPI surface and the `RESOURCE_*` error contract
+below are unchanged by the move. Historical extension request (now shipped):
+[skill-engine-git-import-request.md](archive/syncr-requests/skill-engine-git-import-request.md).
 
-The engine ships as **`@a-streetcoder/skill-engine-native`** (private GitHub Packages, Syncr-owned).
-agent-deck consumes it for skill **storage**; it keeps the **reader** (pi's loader) and all
+agent-deck consumes the engine for skill **storage**; it keeps the **reader** (pi's loader) and all
 **runtime** (assignment → `--skill`, Loops, worktrees).
 
 ---
@@ -54,7 +58,8 @@ acceptance slice added the real-addon route/store test described under P4 below.
 
 ## The contract — historical core NAPI surface (0.1.3)
 
-Verified against the shipped binary via Syncr `crates/skill-engine-napi/scripts/smoke.mjs`.
+Verified against the built binary (originally by Syncr's napi smoke script; in this repository by
+`packages/skill-engine-native/scripts/verify-native.mjs` and `apps/server/test/skillEngineLoader.test.ts`).
 camelCase **named** exports; errors thrown as `Error` with a `RESOURCE_*` code prefix.
 
 ```
@@ -84,17 +89,11 @@ listRecoveries(root) / restoreRecovery(root, token) / acknowledgeRecovery(root, 
 
 ### Distribution
 
-Private GitHub Packages, scope `@a-streetcoder` (must match repo owner). Project `.npmrc`:
-
-```
-@a-streetcoder:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
-```
-
-Install needs a `GITHUB_TOKEN` with `read:packages` (`gh auth token`); **end users need none** — the
-`.node` is resolved via `optionalDependencies` (win32-x64, darwin-arm64/x64, linux-x64-gnu) and
-bundled at build. agent-deck currently pins `@a-streetcoder/skill-engine-native` **0.2.0** in
-`apps/server`.
+Built in-repo, like `loop-catalog-native`: `pnpm build:native` runs `napi build` in
+`packages/skill-engine-native` (napi-rs CLI 3.7.4, Rust 1.88.0, targets win32-x64, darwin-arm64/x64,
+linux-x64-gnu) and writes `native/skill-engine-native.<platform>-<arch>.node`. No token is needed to
+install or build. The engine's version is still 0.2.0 (the API Agent Deck pinned before vendoring).
+Until 2026-10-15 it shipped from Syncr's private package registry.
 
 **0.2.0 (Syncr #206) — filesets carry BYTES.** A skill folder or repo with a non-UTF-8 file (PNG icons
 under `assets/`, as Codex's bundled `.system` skills ship) inspects and imports with every file present
@@ -182,22 +181,22 @@ P4 = delete agent-deck's duplicate skill machinery.
   Runtime acceptance was macOS arm64; Windows/Linux packages exist but were not executed in this
   slice. The synchronous API exposes no deterministic interrupted-operation state; its supported
   stale refresh/retry path is covered.
-- **Question out to Syncr — symlinked skill-tree mutation.** agent-deck's old native rename REFUSED
+- **Open question (now this repository's, in `packages/skill-engine-native/engine`) — symlinked
+  skill-tree mutation.** agent-deck's old native rename REFUSED
   a skill whose `SKILL.md` is a symlink (409 "unsafe"); the engine renames it (200). Safe in
   practice (the rename never dereferences the link; engine discovery doesn't follow symlinks), so
-  the old refusal was agent-deck-side belt-and-suspenders — but confirm the engine should either
-  refuse or knowingly allow symlinked skill trees on mutation. The unix-only regression test is
+  the old refusal was agent-deck-side belt-and-suspenders — but decide whether the vendored engine
+  should refuse or knowingly allow symlinked skill trees on mutation. The unix-only regression test is
   `it.skip`-ped pending that answer (`apps/server/test/skill-rename.test.ts`).
 
 ## Packaging (Electron)
 
-The engine addon is **external to `app.asar`**, mirroring `loop-catalog-native`: `build-backend.mjs`
-stages the platform `.node` into `build/skill-engine-native/`, electron-builder copies it to
-`resources/skill-engine-native/` (`extraResources`), and `loadSkillEngineNative()` requires it via
-`process.resourcesPath`. A bare package import can't resolve from inside the bundled asar — that was
+The engine addon is **external to `app.asar`**, mirroring `loop-catalog-native`: electron-builder
+copies `packages/skill-engine-native/native/` to `resources/skill-engine-native/` (`extraResources`),
+and the package loader requires it via `process.resourcesPath`. A bare package import can't resolve from inside the bundled asar — that was
 the cause of the packaged-app "skill engine addon unavailable" boot failure. The env override
-`AGENT_DECK_SKILL_ENGINE_NATIVE_PATH` short-circuits the ladder for hermetic runs; dev/tests fall
-back to resolving the package from `node_modules`.
+`AGENT_DECK_SKILL_ENGINE_NATIVE_PATH` short-circuits the ladder for hermetic runs; dev/tests use
+the package's `native/` folder.
 
 ## Contributor rule
 

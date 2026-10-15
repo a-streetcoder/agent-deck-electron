@@ -69,9 +69,6 @@ importers:
 
   apps/server:
     dependencies:
-      '@a-streetcoder/skill-engine-native':
-        specifier: 0.2.0
-        version: 0.2.0
       '@agent-deck/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -93,6 +90,9 @@ importers:
       '@agent-deck/resources':
         specifier: workspace:*
         version: link:../../packages/resources
+      '@agent-deck/skill-engine-native':
+        specifier: workspace:*
+        version: link:../../packages/skill-engine-native
       '@earendil-works/pi-ai':
         specifier: 1.2.0
         version: 1.2.0(@aws-sdk/credential-provider-node@3.972.86)(@modelcontextprotocol/sdk@1.30.0(zod@3.25.67))(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.18.2)(zod@3.25.67)
@@ -370,6 +370,15 @@ importers:
         specifier: 22.15.29
         version: 22.15.29
 
+  packages/skill-engine-native:
+    devDependencies:
+      '@napi-rs/cli':
+        specifier: 3.7.4
+        version: 3.7.4(@emnapi/runtime@1.11.2)(@types/node@22.15.29)(node-addon-api@7.1.1)
+      '@types/node':
+        specifier: 22.15.29
+        version: 22.15.29
+
   packages/testkit:
     dependencies:
       '@modelcontextprotocol/sdk':
@@ -390,29 +399,6 @@ importers:
         version: 22.15.29
 
 packages:
-
-  '@a-streetcoder/skill-engine-native-darwin-arm64@0.2.0':
-    resolution: {integrity: sha512-9E7oEeMA3sakzklwsCsxqu2Lh/UcXgi1SpAh/TLVd5ntc8BEInNHxKG9mMmEBawMxTvbWwqFDvpd/xzsG1oing==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native-darwin-arm64/0.2.0/73c3e444a626ca77b7dd3ba696eb06db140b9943}
-    cpu: [arm64]
-    os: [darwin]
-
-  '@a-streetcoder/skill-engine-native-darwin-x64@0.2.0':
-    resolution: {integrity: sha512-KfvDKpbwJjI3YOkoFbzffJUhQVI/Ca/OU7C2i+SGk1Vt+dU6fH4zDeGkrUsXCOVrGfBbmfRhLYXMQgfraWU6bg==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native-darwin-x64/0.2.0/347420540db3560e3aed4dc20cb42bbb3b56312a}
-    cpu: [x64]
-    os: [darwin]
-
-  '@a-streetcoder/skill-engine-native-linux-x64-gnu@0.2.0':
-    resolution: {integrity: sha512-GvEJ+1o+E6L8mzVs/Ha7AMN/F86FH9G6jARb/Gqa1gRkxP6f2PtyhkZTufMoSkWU4ofimYPV36USApWmBo0EFw==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native-linux-x64-gnu/0.2.0/4fefd6ffe8ba1bfa115f5fd26702082f1f340b40}
-    cpu: [x64]
-    os: [linux]
-
-  '@a-streetcoder/skill-engine-native-win32-x64-msvc@0.2.0':
-    resolution: {integrity: sha512-u2KCxKtLhAbKVy6OkQ4hth7Yo+u0p7ea8VaYG97OffCAy/LrScx7rT1og0LK7TYAwVHa3pIgq5IkTW6djF0D3g==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native-win32-x64-msvc/0.2.0/ea48903318e575460b7b5955801299f245b270f1}
-    cpu: [x64]
-    os: [win32]
-
-  '@a-streetcoder/skill-engine-native@0.2.0':
-    resolution: {integrity: sha512-jl1HO7DKGS6dCCM2sK3CMzJnc6oKcNyVpWaS+Y/x7JEuxZl2a/+uu0EYOubX4Ek1y714mBDqHgKXgZXgcmMJaA==, tarball: https://npm.pkg.github.com/download/@a-streetcoder/skill-engine-native/0.2.0/cc509b9038ba6d089fabb9ab7473219e62ce1b2a}
 
   '@alloc/quick-lru@5.2.0':
     resolution: {integrity: sha512-UrcABB+4bUrFABwbluTIBErXwvbsU/V7TZWfmbgJfbkwiBuziS9gxdODUyuiecfdGQ85jglMW6juS3+z5TsKLw==}
@@ -4991,25 +4977,6 @@ ignoredOptionalDependencies:
 
 snapshots:
 
-  '@a-streetcoder/skill-engine-native-darwin-arm64@0.2.0':
-    optional: true
-
-  '@a-streetcoder/skill-engine-native-darwin-x64@0.2.0':
-    optional: true
-
-  '@a-streetcoder/skill-engine-native-linux-x64-gnu@0.2.0':
-    optional: true
-
-  '@a-streetcoder/skill-engine-native-win32-x64-msvc@0.2.0':
-    optional: true
-
-  '@a-streetcoder/skill-engine-native@0.2.0':
-    optionalDependencies:
-      '@a-streetcoder/skill-engine-native-darwin-arm64': 0.2.0
-      '@a-streetcoder/skill-engine-native-darwin-x64': 0.2.0
-      '@a-streetcoder/skill-engine-native-linux-x64-gnu': 0.2.0
-      '@a-streetcoder/skill-engine-native-win32-x64-msvc': 0.2.0
-
   '@alloc/quick-lru@5.2.0': {}
 
   '@anthropic-ai/claude-agent-sdk@0.3.300(@anthropic-ai/sdk@0.129.0(zod@3.25.67))(@modelcontextprotocol/sdk@1.30.0(zod@3.25.67))(zod@3.25.67)':
@@ -6491,6 +6458,37 @@ snapshots:
       zod: 3.25.67
       zod-to-json-schema: 3.25.2(zod@3.25.67)
     transitivePeerDependencies:
+      - supports-color
+
+  '@napi-rs/cli@3.7.4(@emnapi/runtime@1.11.2)(@types/node@22.15.29)(node-addon-api@7.1.1)':
+    dependencies:
+      '@inquirer/prompts': 8.5.2(@types/node@22.15.29)
+      '@napi-rs/cross-toolchain': 1.0.3
+      '@napi-rs/wasm-tools': 1.1.0
+      '@octokit/rest': 22.0.1
+      clipanion: 4.0.0-rc.4(typanion@3.14.0)
+      colorette: 2.0.20
+      emnapi: 1.11.2(node-addon-api@7.1.1)
+      es-toolkit: 1.50.0
+      js-yaml: 4.3.0
+      obug: 2.1.4
+      semver: 7.8.5
+      typanion: 3.14.0
+    optionalDependencies:
+      '@emnapi/runtime': 1.11.2
+    transitivePeerDependencies:
+      - '@napi-rs/cross-toolchain-arm64-target-aarch64'
+      - '@napi-rs/cross-toolchain-arm64-target-armv7'
+      - '@napi-rs/cross-toolchain-arm64-target-ppc64le'
+      - '@napi-rs/cross-toolchain-arm64-target-s390x'
+      - '@napi-rs/cross-toolchain-arm64-target-x86_64'
+      - '@napi-rs/cross-toolchain-x64-target-aarch64'
+      - '@napi-rs/cross-toolchain-x64-target-armv7'
+      - '@napi-rs/cross-toolchain-x64-target-ppc64le'
+      - '@napi-rs/cross-toolchain-x64-target-s390x'
+      - '@napi-rs/cross-toolchain-x64-target-x86_64'
+      - '@types/node'
+      - node-addon-api
       - supports-color
 
   '@napi-rs/cli@3.7.4(@emnapi/runtime@1.9.2)(@types/node@22.15.29)(node-addon-api@7.1.1)':

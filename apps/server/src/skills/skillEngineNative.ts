@@ -1,11 +1,8 @@
 /**
- * Typed contract for the shared skill engine's NAPI addon
- * (`@a-streetcoder/skill-engine-native`, built in the Syncr repo — Syncr ADR-0004;
- * handover `Syncr/docs/handover-agent-deck-p3.md`). Published privately to GitHub
- * Packages under the `@a-streetcoder` scope (it must match the repo owner). Two entry
- * points: `@a-streetcoder/skill-engine-native` is the typed soft-loading surface;
- * `@a-streetcoder/skill-engine-native/native` is the raw ESM binding. A build-time token
- * installs it; end users never need one.
+ * Typed contract for the skill engine's NAPI addon: the Rust crate vendored in
+ * `packages/skill-engine-native` (`@agent-deck/skill-engine-native`, from Syncr engine-v0.2.0;
+ * see its VENDORED.md and ADR 0005). Built in-repo by `pnpm build:native` like
+ * `loop-catalog-native`; no registry or token.
  *
  * agent-deck consumes the engine for WRITES + versioning + fan-out + recovery. It does
  * NOT consume the engine's `listSkills` reader — that is for Syncr's Tauri app, which has
@@ -18,10 +15,8 @@
  * catalog during the migration window), while `scope` bounds the search. Mutations must
  * NOT resolve unconditionally to the canonical catalog.
  *
- * The package is consumable (tarball today; tagged GitHub Packages release wiring landed).
- * `EngineSkillStore` still depends on THIS interface, not the concrete module, so it
- * compiles and unit-tests against an injected fake; `loadSkillEngineNative()` binds the real
- * addon once the dependency is installed into the workspace.
+ * `EngineSkillStore` depends on THIS interface, not the concrete module, so it compiles and
+ * unit-tests against an injected fake; `loadSkillEngineNative()` binds the real addon.
  */
 
 import type { SkillInfo } from "@agent-deck/domain";
@@ -240,54 +235,23 @@ export interface SkillEngineNative {
 }
 
 /**
- * Resolve the native addon, mirroring how `loop-catalog-native` is loaded:
+ * Resolve the native addon through `@agent-deck/skill-engine-native`, which shares
+ * `loop-catalog-native`'s ladder: `AGENT_DECK_SKILL_ENGINE_NATIVE_PATH` → the package's
+ * `native/` → the cwd workspace path → `resources/skill-engine-native/` in packaged Electron.
  *
- * 1. **Packaged Electron** — the platform `.node` is staged into `resources/skill-engine-native/`
- *    by `build-backend.mjs` + electron-builder `extraResources`; require it directly via
- *    `process.resourcesPath`. The bundled server can't resolve the private package from inside
- *    app.asar, so a bare import fails there.
- * 2. **Env override** — `AGENT_DECK_SKILL_ENGINE_NATIVE_PATH` for hermetic/dev runs.
- * 3. **Dev / tests** — resolve `@a-streetcoder/skill-engine-native/native` from node_modules (the
- *    widened specifier keeps `tsc` from statically resolving it before the dep is installed).
- *
- * A missing addon throws a clear, actionable error rather than a raw module-not-found.
+ * A missing addon, or a missing workspace link (no `pnpm install` yet), rejects with one
+ * actionable `RESOURCE_NATIVE_UNAVAILABLE` error rather than a raw module-not-found. The server
+ * still refuses to start without the engine.
  */
 export async function loadSkillEngineNative(): Promise<SkillEngineNative> {
-  const { existsSync, readdirSync } = await import("node:fs");
-  const nodePath = (await import("node:path")).default;
-  const { createRequire } = await import("node:module");
-  const req = createRequire(import.meta.url);
-
-  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-  const stagedDir = resourcesPath ? nodePath.join(resourcesPath, "skill-engine-native") : undefined;
-  const stagedBinary =
-    stagedDir && existsSync(stagedDir)
-      ? readdirSync(stagedDir)
-          .map((entry) => nodePath.join(stagedDir, entry))
-          .find((candidate) => candidate.endsWith(".node"))
-      : undefined;
-  const override = process.env.AGENT_DECK_SKILL_ENGINE_NATIVE_PATH?.trim() || undefined;
-
-  for (const candidate of [override, stagedBinary]) {
-    if (candidate && existsSync(candidate)) {
-      // A NAPI `.node` exports the surface directly (the meta package's loader only picks the
-      // right binary, which we've already done).
-      return req(candidate) as SkillEngineNative;
-    }
-  }
-
   try {
-    const specifier: string = "@a-streetcoder/skill-engine-native/native";
-    const mod = (await import(specifier)) as {
-      default?: SkillEngineNative;
-    } & Partial<SkillEngineNative>;
-    return (mod.default ?? (mod as unknown as SkillEngineNative)) satisfies SkillEngineNative;
+    const { loadSkillEngineBinding } = await import("@agent-deck/skill-engine-native");
+    return loadSkillEngineBinding() as SkillEngineNative;
   } catch (cause) {
     throw new Error(
-      "skill engine addon unavailable: install `@a-streetcoder/skill-engine-native` " +
-        "(published privately to GitHub Packages under the @a-streetcoder scope; a build-time " +
-        "token is required to install, not to run). See docs/skill-store-contract.md and " +
-        "Syncr/docs/handover-agent-deck-p3.md.",
+      "RESOURCE_NATIVE_UNAVAILABLE: skill engine addon unavailable: run `pnpm install`, then " +
+        "`pnpm --filter @agent-deck/skill-engine-native build` (or `pnpm build:native`). " +
+        "See docs/skill-store-contract.md.",
       { cause },
     );
   }

@@ -15,9 +15,8 @@ import { loadSkillEngineNative, type SkillEngineNative } from "../src/skills/ski
  * resource routes → EngineSkillStore → the NAPI addon, with local bare remotes. Inspect must
  * materialize nothing, import must honor the selection, and cancel must be idempotent.
  *
- * Capability-gated: with a 0.1.5 addon (no `inspectGitRepo`) the suite SKIPS — it runs fully
- * once the `@a-streetcoder/skill-engine-native` pin reaches 0.1.6, and locally today via
- * `AGENT_DECK_SKILL_ENGINE_NATIVE_PATH` pointing at a 0.1.6 build.
+ * Capability-gated: with an addon that lacks `inspectGitRepo` the suite SKIPS; the vendored
+ * engine (`packages/skill-engine-native`, 0.2.0) has it, so it runs fully.
  */
 const root = mkdtempSync(path.join(tmpdir(), "skill-git-preview-"));
 const resourceHome = path.join(root, "home");

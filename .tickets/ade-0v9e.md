@@ -8,7 +8,7 @@ type: feature
 priority: 2
 assignee: almoretti
 ---
-# D1: retire the Syncr skill-engine addon (ADR 0005): skill writes, recoveries and git import in TypeScript
+# D1: retire the Syncr skill-engine addon (ADR 0005): skill writes, recoveries and git import
 
 
 Owner decision 2026-10-15 ("if we have too many things on that seam we can also move away from it"), recorded as docs/adr/0005-retire-skill-engine-addon.md. ADR 0004 already removed Syncr as the coordination plane; this retires the last code dependency, the pinned native addon @a-streetcoder/skill-engine-native 0.2.0 (private registry, native build per platform, the WINDOWS.md packaging pitfalls, the EngineSkillStore contract in docs/skill-store-contract.md).
@@ -23,7 +23,7 @@ GUARDRAILS (every ticket): work in a worktree E:/agent-deck-wt/<ticket> on wt/<t
 
 ## Acceptance Criteria
 
-No reference to skill-engine-native remains in apps/, packages/, package.json or scripts (grep); existing skills, recoveries and imported git repos in a real store open and round-trip (write, rename, delete, restore, import, sync) with the ported unit tests and the real-Pi skill tests; typecheck, lint, format pass; Windows pack:win no longer needs the addon (documented, run by the owner when memory allows).
+No reference to the private @a-streetcoder scope remains outside docs/archive and CHANGELOG (grep); existing skills, recoveries and imported git repos in a real store open and round-trip (write, rename, delete, restore, import, sync) with the ported unit tests and the real-Pi skill tests; typecheck, lint, format pass; Windows pack:win no longer needs the addon (documented, run by the owner when memory allows).
 
 ## Notes
 
@@ -50,3 +50,13 @@ No reference to skill-engine-native remains in apps/, packages/, package.json or
 **2026-10-15T07:39:15Z**
 
 2026-10-15 contrarian + GPT review30 on the vendoring: no code defect blocks the local merge. Deploy risk: the engine loads before fastify.listen, so a VM restart without the built native kills the server in a restart loop (502 through the tunnel); deploy order on the VM with no session running: wait for sync, pnpm install --frozen-lockfile (no token), PATH=$HOME/.cargo/bin:$PATH pnpm --filter @agent-deck/skill-engine-native build (not the full build:native: its prebuild wipes the loop binary), check native/skill-engine-native.linux-x64.node, pnpm build:web, restart, curl /health. PUSH BLOCKER for the owner: the engine source comes from the private UNLICENSED Syncr repo and this repo is public MIT; the owner must accept publication/relicensing (or add a folder licence note) before any push. Fix round sent to the developer: import inside the try (helpful message), AGENT_DECK_SKILL_ENGINE_NATIVE_PATH from main.js, loader test distinguishes override from discovery and asserts missing-binary rejection, ADR 0005 normative text to option B, ADR 0002 superseded, doc leftovers (sync-seams, remote-server-poc, handover, skill-store-contract), VENDORED.md provenance paragraph, ticket title/acceptance amended, follow-ups listed for ticketing. CI on Windows/macOS for the engine tests is unverified until the first push.
+
+**2026-10-15T07:41:22Z**
+
+Follow-ups (to ticket separately):
+- NAPI calls off the event loop: make the engine calls async (napi AsyncTask / worker) so git and filesystem work stops blocking the server.
+- Git timeout in the engine (clone/fetch have none today), plus per-user git credentials.
+- macOS /private/var canonicalize risk in the vendored Rust tests (tempdir paths under /var vs their canonical /private/var form).
+- CI has never run the engine's Rust tests on Windows or macOS, nor on Rust 1.88 with the cfg(unix) code compiled; the first push is the first run.
+- rust-cache shared-key names still say loop-catalog-native-* although they now cache both crates.
+- PACKAGES_READ_TOKEN repository secret is now unused; delete it.

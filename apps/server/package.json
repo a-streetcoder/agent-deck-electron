@@ -14,7 +14,6 @@
     "test:pi": "vitest run --config vitest.pi.config.ts"
   },
   "dependencies": {
-    "@a-streetcoder/skill-engine-native": "0.2.0",
     "@agent-deck/contracts": "workspace:*",
     "@agent-deck/domain": "workspace:*",
     "@agent-deck/loop-catalog-native": "workspace:*",
@@ -22,6 +21,7 @@
     "@agent-deck/memory": "workspace:*",
     "@agent-deck/pi-host": "workspace:*",
     "@agent-deck/resources": "workspace:*",
+    "@agent-deck/skill-engine-native": "workspace:*",
     "@earendil-works/pi-ai": "1.2.0",
     "@earendil-works/pi-coding-agent": "1.2.0",
     "@fastify/static": "8.2.0",
