@@ -63,6 +63,7 @@ import {
 } from "../lib/native.ts";
 import { ChildTranscriptDialog } from "./ChildTranscriptDialog.tsx";
 import { SubagentDeltaSummary } from "./SubagentDeltaSummary.tsx";
+import { VerdictChip } from "./VerdictChip.tsx";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { sectionHeaderClass } from "@/design-system/styles";
 import { cn } from "@/lib/cn";
@@ -396,6 +397,13 @@ function SubagentCellView({ cell }: { cell: SubagentCell }) {
               >
                 <Send size={11} className="shrink-0" />
                 <span className="truncate">{cell.agentName}</span>
+              </div>
+            ) : null}
+            {/* A7: the verifier's verdict on this run, with its reason. */}
+            {cell.verdict ? <VerdictChip verdict={cell.verdict} /> : null}
+            {cell.targetRunId ? (
+              <div className="text-detail text-text-muted" data-testid="subagent-verifies">
+                Verifies run {cell.targetRunId}
               </div>
             ) : null}
             <div className={cn(sectionHeaderClass, "text-text-muted")}>Task</div>

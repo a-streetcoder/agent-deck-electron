@@ -46,6 +46,36 @@ function stub(initial: Record<string, SubagentRunRecord>) {
 }
 
 describe("awaitSubagentRuns", () => {
+  it("A7: each verifier returns its own verdict, whatever the target holds now", async () => {
+    const verdict = (decision: "APPROVE" | "REJECT", verifierRunId: string) => ({
+      decision,
+      reason: decision.toLowerCase(),
+      verifierRunId,
+    });
+    const verifier = (id: string, decision: "APPROVE" | "REJECT"): SubagentRunRecord => ({
+      ...run(id, "completed"),
+      role: "verify",
+      targetRunId: "p",
+      verdict: verdict(decision, id),
+    });
+    // The producer holds the second verifier's verdict, then a continuation clears it.
+    const log = stub({
+      p: { ...run("p", "completed"), verdict: verdict("REJECT", "v2") },
+      v1: verifier("v1", "APPROVE"),
+      v2: verifier("v2", "REJECT"),
+    });
+    const first = await awaitSubagentRuns(["v1", "v2"], log.deps, { timeoutMs: 1_000 });
+    expect(first.results.map((result) => result.verdict)).toEqual([
+      verdict("APPROVE", "v1"),
+      verdict("REJECT", "v2"),
+    ]);
+    log.store.p = { ...run("p", "completed") };
+    const again = await awaitSubagentRuns(["v1", "p"], log.deps, { timeoutMs: 1_000 });
+    expect(again.results[0]?.verdict).toEqual(verdict("APPROVE", "v1"));
+    // A producer's result never carries a verdict field of its own.
+    expect(again.results[1]).not.toHaveProperty("verdict");
+  });
+
   it("subscribes before the first store read, so a finish between them is not missed", async () => {
     const log = stub({ a: run("a", "running") });
     // The run finishes right after the subscription, before the check: the commit

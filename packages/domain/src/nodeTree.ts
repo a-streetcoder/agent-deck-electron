@@ -321,6 +321,7 @@ export function projectNodeTree(
         break;
       case "subagent.run.created":
       case "subagent.run.updated":
+      case "subagent.run.verified":
       case "subagent.run.finished": {
         const run = payload.run as PublicSubagentRun | undefined;
         if (!run) break;
@@ -512,6 +513,8 @@ export function deckRunsFromTree(tree: NodeTree): DeckRun[] {
         outputTokens: run.outputTokens,
         durationMs: run.durationMs,
         error: run.error,
+        ...(run.targetRunId ? { parentRunId: run.targetRunId } : {}),
+        ...(run.verdict ? { verdict: run.verdict } : {}),
       },
     ];
   });

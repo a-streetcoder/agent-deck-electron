@@ -16,16 +16,112 @@ import {
   normalizeDeclaredReads,
 } from "./declaredReads.ts";
 import type { EventLog } from "./eventLog.ts";
+import { gitHead } from "./git.ts";
+import { runValidationCommand } from "./loopEngine.ts";
 import type { BridgeRouteHandles } from "./routes/bridge.ts";
-import type { SessionManager } from "./SessionManager.ts";
+import { SubagentCapError, type SessionManager } from "./SessionManager.ts";
 import { ChildRunError } from "./services/sessionManager.ts";
-import { renderSubagentDelta, type SubagentDeltaReader } from "./subagentDelta.ts";
+import { filesChanged, renderSubagentDelta, type SubagentDeltaReader } from "./subagentDelta.ts";
 import {
   awaitSubagentRuns,
   DEFAULT_AWAIT_TIMEOUT_MS,
   MAX_AWAIT_TIMEOUT_MS,
 } from "./subagentRunStore.ts";
 import { supervisorRequestTitle, type SupervisorLog } from "./supervisor.ts";
+import { launchVerifier, VERIFIER_PROFILE, type VerifierDeps } from "./verifier.ts";
+
+/** A7: the verifier role over the session manager (bridge tools and the plan dispatcher). */
+export function sessionVerifierDeps(
+  sessions: SessionManager,
+  warn: (message: string, error?: unknown) => void,
+): VerifierDeps {
+  return {
+    run: (parentSessionId, runId) => sessions.subagentRunRecord(parentSessionId, runId),
+    cwd: (parentSessionId) => sessions.get(parentSessionId)?.meta.cwd,
+    mayRunShell: (parentSessionId) => sessions.sessionMayRunShell(parentSessionId),
+    assertCanSpawn: (parentSessionId, detached) => {
+      const meta = sessions.get(parentSessionId)?.meta;
+      if (!meta) throw new Error(`unknown parent session: ${parentSessionId}`);
+      if (!sessions.delegationAllowed(meta)) {
+        throw new Error("subagent delegation is off for this session");
+      }
+      if (detached && sessions.detachedSlots(parentSessionId) <= 0) throw new SubagentCapError();
+    },
+    head: (worktreePath) => gitHead(worktreePath),
+    filesChanged: async (target) =>
+      target.worktreePath ? (await filesChanged(target, warn)).filesChangedSinceBase : undefined,
+    runValidation: (parentSessionId, cwd, command, signal) =>
+      runValidationCommand(
+        cwd,
+        command,
+        signal,
+        undefined,
+        undefined,
+        sessions.sessionLaunchEnv(parentSessionId),
+      ),
+    spawn: (
+      parentSessionId,
+      task,
+      { agentName, targetRunId, detached, signal, parentToolCallId, cwd },
+    ) =>
+      sessions.spawnSubagent(parentSessionId, task, {
+        ...(agentName ? { agentName } : {}),
+        ...(detached ? { detached } : {}),
+        ...(signal ? { signal } : {}),
+        ...(parentToolCallId ? { parentToolCallId } : {}),
+        toolPolicy: VERIFIER_PROFILE.toolPolicy,
+        overrides: {
+          checkerShell: VERIFIER_PROFILE.checkerShell,
+          defaultExpectedOutcome: VERIFIER_PROFILE.defaultExpectedOutcome,
+          durable: true,
+          verifyTarget: targetRunId,
+          ...(cwd ? { cwd } : {}),
+        },
+      }),
+    recordVerdict: (parentSessionId, targetRunId, verdict) =>
+      sessions.recordSubagentVerdict(parentSessionId, targetRunId, verdict),
+    warn,
+  };
+}
+
+const MAX_VALIDATION_COMMAND_CHARS = 2_000;
+
+/** A7: `role: "verify"` on managed_subagent / spawn_subagent. */
+const verifyFields = {
+  role: z.literal("verify").optional(),
+  targetRunId: z.string().uuid().optional(),
+  validationCommand: z.string().trim().min(1).max(MAX_VALIDATION_COMMAND_CHARS).optional(),
+};
+const verifyRule = (value: {
+  role?: "verify";
+  targetRunId?: string;
+  validationCommand?: string;
+  continueSubagentID?: string;
+  reads?: string[];
+  worktree?: boolean;
+}): boolean =>
+  value.role === "verify"
+    ? Boolean(value.targetRunId) && !value.continueSubagentID && !value.reads && !value.worktree
+    : !value.targetRunId && !value.validationCommand;
+const VERIFY_RULE_MESSAGE =
+  'role "verify" needs targetRunId and takes no continueSubagentID, reads or worktree; targetRunId and validationCommand need role "verify"';
+const VERIFY_SCHEMA_PROPERTIES = {
+  role: {
+    type: "string",
+    enum: ["verify"],
+    description:
+      'Optional. "verify": a read-only verifier reviews a FINISHED run of this session (targetRunId) and answers with a typed verdict: APPROVE, REJECT, CONTINUE or ASK_HUMAN plus a reason. It gets the producer\'s summary, its changed files and, with validationCommand, the validation result run by Agent Deck first. Choose an agent other than the producer.',
+  },
+  targetRunId: {
+    type: "string",
+    description: 'With role "verify": the Deck run ID of the finished run to verify.',
+  },
+  validationCommand: {
+    type: "string",
+    description:
+      "Optional, with role \"verify\": a shell command Agent Deck runs before the verifier starts (in the target's worktree, else the session checkout); its result is handed to the verifier. It runs with this session's launch environment (its owner's credentials and git identity, as its Pi gets), and only when this session's agent may use bash itself.",
+  },
+} as const;
 
 /**
  * The parent Deck-agent bridge tools — subagent launch and the session activity
@@ -40,11 +136,18 @@ export function registerDeckBridgeTools(
   },
   // A3: a result hand-back moves the parent's delta cursor past the finished event.
   results: Pick<SubagentDeltaReader, "resultsDelivered"> = { resultsDelivered: () => {} },
+  verifierDeps?: VerifierDeps,
 ): void {
+  let defaultVerifier: VerifierDeps | undefined;
+  const verifier = (): VerifierDeps =>
+    verifierDeps ??
+    (defaultVerifier ??= sessionVerifierDeps(sessions, (message, error) =>
+      console.warn(message, error),
+    ));
   // Native subagents (native-subagent-bridge.md): a parent session can launch a
   // focused child pi to complete one task and report back. v1 is text-returning
   // (managed_subagent); parallel / supervisor / plan tools + the deck UI follow.
-  const subagentParams = z
+  const subagentBase = z
     .object({
       task: z
         .string()
@@ -57,8 +160,10 @@ export function registerDeckBridgeTools(
       agent: z.string().trim().min(1).optional(),
       continueSubagentID: z.string().uuid().optional(),
       reads: z.array(z.string()).max(MAX_DECLARED_READS).optional(),
+      ...verifyFields,
     })
     .strict();
+  const subagentParams = subagentBase.refine(verifyRule, { message: VERIFY_RULE_MESSAGE });
   bridge.register(
     {
       name: "managed_subagent",
@@ -89,12 +194,13 @@ export function registerDeckBridgeTools(
             maxItems: MAX_DECLARED_READS,
             description: `Optional current project-relative file paths the child should read first as hints. File contents are not preloaded. Maximum ${MAX_DECLARED_READ_BYTES} UTF-8 bytes per path and ${MAX_DECLARED_READS_TOTAL_BYTES.toLocaleString("en-US")} UTF-8 bytes total after trimming and stable deduplication.`,
           },
+          ...VERIFY_SCHEMA_PROPERTIES,
         },
         required: ["task"],
         additionalProperties: false,
       },
       promptSnippet:
-        "managed_subagent(task, agent?, continueSubagentID?, reads?) — start fresh or directly follow up using a stable Deck run ID; reads are project-relative read-first hints.",
+        'managed_subagent(task, agent?, continueSubagentID?, reads?, role?, targetRunId?, validationCommand?) — start fresh or directly follow up using a stable Deck run ID; reads are project-relative read-first hints; role "verify" + targetRunId returns a typed verdict on a finished run.',
     },
     async (params, ctx) => {
       const parsed = subagentParams.safeParse(params);
@@ -103,6 +209,30 @@ export function registerDeckBridgeTools(
           content: `Invalid managed_subagent arguments: ${parsed.error.message}`,
           isError: true,
         };
+      }
+      if (parsed.data.role === "verify") {
+        try {
+          const { runId, done } = await launchVerifier(verifier(), {
+            parentSessionId: ctx.sessionId,
+            targetRunId: parsed.data.targetRunId!,
+            task: parsed.data.task,
+            agentName: parsed.data.agent,
+            validationCommand: parsed.data.validationCommand,
+            signal: ctx.signal,
+            parentToolCallId: ctx.toolCallId,
+          });
+          const { decision, reason, verifierRunId } = await done;
+          if (!ctx.signal?.aborted) results.resultsDelivered(ctx.sessionId, [runId]);
+          return {
+            content: JSON.stringify({
+              runId,
+              targetRunId: parsed.data.targetRunId,
+              verdict: { decision, reason, verifierRunId },
+            }),
+          };
+        } catch (error) {
+          return { content: `Verifier failed.\n\n${String(error)}`, isError: true };
+        }
       }
       let reads: string[] | undefined;
       try {
@@ -146,16 +276,18 @@ export function registerDeckBridgeTools(
   // keeps its own Pi process, worktree and policy exactly as managed_subagent's.
   const spawnParams = z
     .object({
-      task: subagentParams.shape.task,
+      task: subagentBase.shape.task,
       agentName: z.string().trim().min(1).optional(),
       continueSubagentID: z.string().uuid().optional(),
       reads: z.array(z.string()).max(MAX_DECLARED_READS).optional(),
       worktree: z.boolean().optional(),
+      ...verifyFields,
     })
     .strict()
     .refine((value) => !(value.worktree && value.continueSubagentID), {
       message: "worktree cannot be combined with continueSubagentID",
-    });
+    })
+    .refine(verifyRule, { message: VERIFY_RULE_MESSAGE });
   bridge.register(
     {
       name: "spawn_subagent",
@@ -192,12 +324,13 @@ export function registerDeckBridgeTools(
             description:
               "Optional. When true, the fresh child runs in its own retained app-owned detached Git worktree. Not allowed with continueSubagentID.",
           },
+          ...VERIFY_SCHEMA_PROPERTIES,
         },
         required: ["task"],
         additionalProperties: false,
       },
       promptSnippet:
-        "spawn_subagent(task, agentName?, continueSubagentID?, reads?, worktree?) — start a child without waiting; returns {runId} for await_subagents / cancel_subagent.",
+        'spawn_subagent(task, agentName?, continueSubagentID?, reads?, worktree?, role?, targetRunId?, validationCommand?) — start a child without waiting; returns {runId} for await_subagents / cancel_subagent; role "verify" + targetRunId starts a verifier whose awaited result carries the verdict.',
     },
     async (params, ctx) => {
       const parsed = spawnParams.safeParse(params);
@@ -206,6 +339,23 @@ export function registerDeckBridgeTools(
           content: `Invalid spawn_subagent arguments: ${parsed.error.message}`,
           isError: true,
         };
+      }
+      if (parsed.data.role === "verify") {
+        try {
+          const { runId } = await launchVerifier(verifier(), {
+            parentSessionId: ctx.sessionId,
+            targetRunId: parsed.data.targetRunId!,
+            task: parsed.data.task,
+            agentName: parsed.data.agentName,
+            validationCommand: parsed.data.validationCommand,
+            detached: true,
+            signal: ctx.signal,
+            parentToolCallId: ctx.toolCallId,
+          });
+          return { content: JSON.stringify({ runId, targetRunId: parsed.data.targetRunId }) };
+        } catch (error) {
+          return { content: `Verifier spawn failed.\n\n${String(error)}`, isError: true };
+        }
       }
       let reads: string[] | undefined;
       try {

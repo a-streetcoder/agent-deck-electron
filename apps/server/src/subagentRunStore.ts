@@ -23,6 +23,7 @@ import {
   type PublicViewOptions,
   type RunResult,
   type SubagentCell,
+  type SubagentVerdict,
   type TranscriptCell,
   type TranscriptState,
 } from "@agent-deck/domain";
@@ -70,6 +71,8 @@ export interface StructuredSubagentResult extends RunResult {
   id: string;
   /** Omitted while subagent runs record no public artifacts. */
   artifacts?: string[];
+  /** A7: a verifier run's verdict on its target. */
+  verdict?: SubagentVerdict;
 }
 
 export const DEFAULT_AWAIT_TIMEOUT_MS = 120_000;
@@ -91,7 +94,13 @@ function structuredResult(
   id: string,
   run: SubagentRunRecord | undefined,
 ): StructuredSubagentResult {
-  return run ? { id, ...subagentRunResult(run) } : { id, status: "not_found" };
+  if (!run) return { id, status: "not_found" };
+  // A7: a verifier's result carries its own verdict (kept on its own record).
+  return {
+    id,
+    ...subagentRunResult(run),
+    ...(run.role === "verify" && run.verdict ? { verdict: run.verdict } : {}),
+  };
 }
 
 /**
@@ -200,6 +209,11 @@ export interface SubagentRunRecord {
   worktreeCleanup?: "physical_removed";
   /** Additive v4 validated project-relative read-first hints for the latest turn. */
   declaredReads?: string[];
+  /** A7: a verifier run and the run it verifies (same parent). */
+  role?: "verify";
+  targetRunId?: string;
+  /** A7: on a target, the latest verifier's verdict; on a verifier, its own. */
+  verdict?: SubagentVerdict;
 }
 
 const runSchema = z
@@ -244,6 +258,15 @@ const runSchema = z
     declaredReads: z
       .array(z.string().min(1).max(MAX_DECLARED_READ_LENGTH))
       .max(MAX_DECLARED_READS)
+      .optional(),
+    role: z.literal("verify").optional(),
+    targetRunId: z.string().uuid().optional(),
+    verdict: z
+      .object({
+        decision: z.enum(["APPROVE", "REJECT", "CONTINUE", "ASK_HUMAN", "missing"]),
+        reason: z.string().max(MAX_ERROR_BYTES),
+        verifierRunId: z.string().uuid(),
+      })
       .optional(),
   })
   .superRefine((run, context) => {
@@ -1103,6 +1126,8 @@ export class SubagentRunStore {
       ...(run.outputTokens !== undefined ? { outputTokens: run.outputTokens } : {}),
       ...(run.durationMs !== undefined ? { durationMs: run.durationMs } : {}),
       ...(run.artifactRootId ? { artifactRootId: run.artifactRootId } : {}),
+      ...(run.targetRunId ? { targetRunId: run.targetRunId } : {}),
+      ...(run.verdict ? { verdict: run.verdict } : {}),
     }));
   }
 

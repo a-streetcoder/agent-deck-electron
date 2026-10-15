@@ -37,7 +37,6 @@ import {
   type LoopRunLaunchOwnership,
   type LoopRunStatus,
   type LoopValidationResult,
-  type LoopVerdictParse,
   type LoopStopReason,
   type SubagentExpectedOutcome,
   type LoopWorktreeReview,
@@ -46,6 +45,9 @@ import {
 } from "@agent-deck/domain";
 import { z } from "zod";
 import { killProcessTree } from "./processTree.ts";
+import { parseVerdict, runVerifier, validationEvidence, VERIFIER_PROFILE } from "./verifier.ts";
+
+export { parseVerdict };
 
 export interface ValidationResult extends LoopValidationResult {
   evidence: string;
@@ -77,6 +79,8 @@ export async function runValidationCommand(
   signal?: AbortSignal,
   outputDirectory?: string,
   timeoutMs = 120_000,
+  /** The session's launch env (owner credentials, git identity); the server's otherwise. */
+  env?: Record<string, string | undefined>,
 ): Promise<ValidationResult> {
   const started = Date.now();
   let workingDirectory: string;
@@ -169,6 +173,7 @@ export async function runValidationCommand(
         windowsHide: true,
         detached: process.platform !== "win32",
         stdio: ["ignore", "pipe", "pipe"],
+        ...(env ? { env: { ...process.env, ...env } } : {}),
       });
       child.stdout?.on("data", (chunk: Buffer) => {
         stdout = appendBounded(stdout, chunk);
@@ -283,8 +288,7 @@ export function loopRoleLaunchDefaults(
   checkerShell?: true;
 } {
   if (phase === "evaluator") return { toolPolicy: "none", defaultExpectedOutcome: "reportOnly" };
-  if (phase === "checker")
-    return { toolPolicy: "readOnly", defaultExpectedOutcome: "reportOnly", checkerShell: true };
+  if (phase === "checker") return { ...VERIFIER_PROFILE };
   if (writeTarget === "artifactMarkdown")
     return { toolPolicy: "readOnly", defaultExpectedOutcome: "reportOnly" };
   if (phase === "triage")
@@ -308,6 +312,7 @@ export interface LoopEngineDeps {
     command: string,
     signal?: AbortSignal,
     outputDirectory?: string,
+    env?: Record<string, string | undefined>,
   ) => Promise<boolean | LegacyValidationResult | ValidationResult>;
   now?: () => string;
   /** App data directory. Omit only for hermetic in-memory tests. */
@@ -326,6 +331,8 @@ export interface LoopStartOptions {
   executeRole?: ExecuteLoopRole;
   /** Cancels the Loop-owned Pi session and all children. */
   cancel?: () => Promise<void>;
+  /** A7: the Loop session's launch env, for the validation command (as its Pi gets). */
+  validationEnv?: () => Record<string, string | undefined> | undefined;
 }
 
 export class UnsupportedLoopStructureError extends Error {
@@ -348,17 +355,19 @@ export class HumanApprovalConflictError extends Error {
 interface ActiveRun {
   controller: AbortController;
   cancel?: () => Promise<void>;
+  validationEnv?: LoopStartOptions["validationEnv"];
   cancelPromise?: Promise<void>;
 }
 
 const MAX_RETAINED_RUNS = 200;
-const CHECKER_DECISIONS = new Set<LoopCheckerDecision>([
+/** Prompt order of the loop checker's decisions. */
+const CHECKER_DECISIONS: readonly LoopCheckerDecision[] = [
   "APPROVE",
   "CONTINUE",
   "REJECT",
   "ASK_HUMAN",
   "FAIL",
-]);
+];
 const GOAL_DECISIONS = new Set<LoopGoalDecision>(["SUCCESS", "CONTINUE", "FAIL"]);
 const MAX_PIPELINE_HANDOFF_CHARS = 12_000;
 const MAX_PIPELINE_REPORT_CHARS = 3_000;
@@ -618,69 +627,6 @@ function unconfiguredValidation(cwd: string): ValidationResult {
   };
 }
 
-const MAX_VERDICT_PREAMBLE_LINES = 3;
-
-/** Read a role's decision line. The exact first non-empty line is `strict`.
- * Otherwise, on the first non-empty line or one of the next three (markdown
- * emphasis removed), `lenient` accepts in order: the token alone with trailing
- * punctuation; `Verdict:`/`Decision:` followed by the token; an upper-case token
- * that starts the line followed by a separator; and, on the first line only, an
- * upper-case token that ends it right after a sentence terminator (a judge that
- * glues the decision to its preamble, "…report the decision.SUCCESS"). A token
- * inside or at the end of a sentence is never a verdict: `missing`. */
-export function parseVerdict<T extends string>(
-  text: string,
-  allowed: ReadonlySet<T>,
-): { decision?: T; parse: LoopVerdictParse } {
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(0, MAX_VERDICT_PREAMBLE_LINES + 1);
-  const first = lines[0]?.toUpperCase();
-  if (first && allowed.has(first as T)) return { decision: first as T, parse: "strict" };
-  const tokens = [...allowed].sort((a, b) => b.length - a.length).join("|");
-  const label = new RegExp(`^(?:verdict|decision)\\s*[:=—-]\\s*(${tokens})\\b`, "i");
-  const leading = new RegExp(`^(${tokens})\\b[\\s:—-]`);
-  const glued = new RegExp(`[.!?]\\s*(${tokens})$`);
-  for (const [index, raw] of lines.entries()) {
-    const line = raw
-      .replace(/[*`]/g, "")
-      .replace(/^[\s>#_~]+/, "")
-      .trim();
-    const trimmed = line.replace(/[\s_~.,:;!?]+$/, "");
-    const alone = trimmed.toUpperCase();
-    const match = allowed.has(alone as T)
-      ? alone
-      : (line.match(label)?.[1]?.toUpperCase() ??
-        line.match(leading)?.[1] ??
-        (index === 0 ? trimmed.match(glued)?.[1] : undefined));
-    if (match) return { decision: match as T, parse: "lenient" };
-  }
-  return { parse: "missing" };
-}
-
-const TAIL_CHARS = 2_000;
-const tail = (value: string): string =>
-  value.length > TAIL_CHARS ? `...${value.slice(-TAIL_CHARS)}` : value;
-
-/** Validation evidence handed to the checker before it decides. */
-function checkerValidationEvidence(validation: ValidationResult, configured: boolean): string {
-  if (!configured) return "Validation: no validation command is configured.";
-  return [
-    `Validation (already run by Agent Deck, before your review): ${validation.passed ? "passed" : "failed"} (${validation.classification}, exit ${validation.exitCode ?? "unavailable"})`,
-    `Command: ${validation.command}`,
-    ...(["stdout", "stderr"] as const).map((stream) => {
-      const text = (
-        (stream === "stdout" ? validation.stdoutTail : validation.stderrTail) || validation[stream]
-      ).trim();
-      return text ? `${stream} tail:\n${tail(text)}` : "";
-    }),
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
 function changedFilesForGit(cwd: string, reportOnly: boolean): LoopChangedFile[] {
   if (reportOnly) return [];
   let raw: string;
@@ -767,7 +713,10 @@ export class LoopEngine {
     this.now = deps.now ?? (() => new Date().toISOString());
     this.defaultExecuteAgent = deps.executeAgent;
     this.defaultExecuteRole = deps.executeRole;
-    this.runValidation = deps.runValidation ?? runValidationCommand;
+    this.runValidation =
+      deps.runValidation ??
+      ((cwd, command, signal, outputDirectory, env) =>
+        runValidationCommand(cwd, command, signal, outputDirectory, undefined, env));
     this.warn = deps.warn ?? (() => {});
     this.storePath = deps.dataDir ? path.join(deps.dataDir, "loop-runs.json") : undefined;
     let artifactsRoot: string | undefined;
@@ -1520,7 +1469,11 @@ export class LoopEngine {
       cwd,
       reportOnly: loop.writeTarget === "artifactMarkdown",
     });
-    const active = { controller: new AbortController(), cancel: options.cancel };
+    const active: ActiveRun = {
+      controller: new AbortController(),
+      cancel: options.cancel,
+      validationEnv: options.validationEnv,
+    };
     this.runs.set(run.id, run);
     this.active.set(run.id, active);
     try {
@@ -1881,7 +1834,13 @@ export class LoopEngine {
           );
         }
       }
-      const result = await this.runValidation(cwd, command, signal, validationDirectory);
+      const result = await this.runValidation(
+        cwd,
+        command,
+        signal,
+        validationDirectory,
+        this.active.get(run.id)?.validationEnv?.(),
+      );
       const normalized: ValidationResult =
         typeof result === "boolean" || !("classification" in result)
           ? {
@@ -2464,35 +2423,37 @@ export class LoopEngine {
           return;
         }
 
-        const checkerPrompt = [
-          `Goal: ${loop.goal}`,
-          `Success condition: ${loop.successCondition || loop.goal}`,
-          `Iteration: ${index}`,
-          "Review only; do not edit project files.",
-          `Review criteria: ${loop.checkerRubric}`,
-          `Maker report:\n${iteration.output}`,
-          checkerValidationEvidence(validation, Boolean(loop.validationCommand)),
-          "The exact first non-empty line must be APPROVE, CONTINUE, REJECT, ASK_HUMAN, or FAIL. Then give concise rationale and concrete evidence.",
-        ].join("\n\n");
-        iteration.checkerOutput = await this.role(
-          run,
-          iteration,
-          loop,
-          "checker",
-          checkerPrompt,
-          loop.checkerName,
-          cwd,
-          run.projectId,
-          signal,
-          executeRole,
-          executeAgent,
-        );
+        // A7: the shared verifier role (verifier.ts), launched through the loop's role path.
+        const checker = await runVerifier({
+          context: [
+            `Goal: ${loop.goal}`,
+            `Success condition: ${loop.successCondition || loop.goal}`,
+            `Iteration: ${index}`,
+            "Review only; do not edit project files.",
+            `Review criteria: ${loop.checkerRubric}`,
+            `Maker report:\n${iteration.output}`,
+          ],
+          evidence: validationEvidence(validation, Boolean(loop.validationCommand)),
+          decisions: CHECKER_DECISIONS,
+          run: (checkerPrompt) =>
+            this.role(
+              run,
+              iteration,
+              loop,
+              "checker",
+              checkerPrompt,
+              loop.checkerName,
+              cwd,
+              run.projectId,
+              signal,
+              executeRole,
+              executeAgent,
+            ),
+        });
+        iteration.checkerOutput = checker.output;
         if (this.stopped(run, signal)) return;
         this.persistArtifact(run, iteration, "checker", iteration.checkerOutput);
-        const { decision: parsedChecker, parse: checkerParse } = parseVerdict(
-          iteration.checkerOutput,
-          CHECKER_DECISIONS,
-        );
+        const { decision: parsedChecker, parse: checkerParse } = checker;
         iteration.checkerVerdictParse = checkerParse;
         if (checkerParse !== "strict") {
           iteration.timeline.push({

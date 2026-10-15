@@ -18,22 +18,18 @@ import {
   readyFrontier,
   sameAgent,
   type EventEnvelope,
-  type LoopCheckerDecision,
   type ProjectedPlanDispatch,
   type SessionPlanItem,
   type SessionPlanUpdate,
+  type SubagentVerdict,
 } from "@agent-deck/domain";
-import { parseVerdict } from "./loopEngine.ts";
 import type { SubagentRunRecord } from "./subagentRunStore.ts";
+import type { VerifierOutcome } from "./verifier.ts";
 
 /** Fan-in: each dependency result handed to a dependant, and all of them together. */
 export const MAX_DEPENDENCY_SUMMARY_CHARS = 2_000;
 export const MAX_DEPENDENCY_CONTEXT_CHARS = 20_000;
-/** The producer's summary handed to the verifier. */
-export const MAX_VERIFIER_SUMMARY_CHARS = 4_000;
 const MAX_NOTE_CHARS = 500;
-const MAX_VERIFIER_FILES = 200;
-const VERDICTS = new Set<LoopCheckerDecision>(["APPROVE", "REJECT"]);
 
 export type PlanRun = Pick<SubagentRunRecord, "status" | "summary">;
 
@@ -51,16 +47,19 @@ export interface PlanDispatcherDeps {
   dispatches: (sessionId: string) => ReadonlyMap<string, ProjectedPlanDispatch> | undefined;
   /** The owning session's private run record (full summary). */
   run: (sessionId: string, runId: string) => PlanRun | undefined;
-  /** A3: files a run changed in its own worktree since its base; undefined without one. */
-  filesChanged: (sessionId: string, runId: string) => Promise<string[] | undefined>;
   /** Free detached-child slots (A4 cap); 0 while delegation is off. */
   slots: (sessionId: string) => number;
   /** A4 spawn: resolves once the run is accepted; "wait" when the child cap refused it. */
   spawn: (
     sessionId: string,
     task: string,
-    options: { agentName: string; verifier: boolean; worktree: boolean },
+    options: { agentName: string; worktree: boolean },
   ) => Promise<{ runId: string; done: Promise<{ text: string }> } | "wait">;
+  /** A7 launchVerifier on the producer's run; "wait" when the child cap refused it. */
+  verify: (
+    sessionId: string,
+    request: { targetRunId: string; task: string; agentName: string },
+  ) => Promise<{ runId: string; done: Promise<VerifierOutcome> } | "wait">;
   recordDispatch: (
     sessionId: string,
     dispatch: { itemId: string; runId: string; agentName: string; generation?: string },
@@ -70,9 +69,10 @@ export interface PlanDispatcherDeps {
     sessionId: string,
     verified: {
       itemId: string;
-      runId: string;
+      /** The verifier run; absent when the verifier could not start. */
+      runId?: string;
       producerRunId: string;
-      verdict: "APPROVE" | "REJECT" | "missing";
+      verdict: SubagentVerdict["decision"];
       reason: string;
     },
     causationId?: string,
@@ -94,31 +94,9 @@ const runActive = (run: { status: string } | undefined): boolean =>
 
 const itemTask = (item: SessionPlanItem): string => item.task ?? item.title;
 
-export function verifierTask(
-  item: SessionPlanItem,
-  summary: string,
-  files: readonly string[] | undefined,
-): string {
-  const head = summary.slice(0, MAX_VERIFIER_SUMMARY_CHARS);
-  return [
-    `verify: ${item.title}`,
-    `You review a plan item another agent (${item.assignee ?? "unknown"}) produced. Review it read-only; you did not produce it.`,
-    `Item task:\n${itemTask(item)}`,
-    `Producer summary${head.length < summary.length ? " (cut)" : ""}:\n${head || "(no summary)"}`,
-    ...(files
-      ? [
-          `Files changed in the producer's worktree since its base:\n${
-            files.length
-              ? files
-                  .slice(0, MAX_VERIFIER_FILES)
-                  .map((file) => `- ${file}`)
-                  .join("\n")
-              : "(none)"
-          }`,
-        ]
-      : []),
-    `Answer with APPROVE or REJECT alone on the first line, then your reasons.`,
-  ].join("\n\n");
+/** What the verifier is told the producer was asked to do. */
+export function verifierTask(item: SessionPlanItem): string {
+  return `${item.title}\n\nA plan item assigned to ${item.assignee ?? "unknown"}.\n\nItem task:\n${itemTask(item)}`;
 }
 
 export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
@@ -164,35 +142,37 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
       : "";
   };
 
+  /** The item is still the one being verified: in progress on the same run, same agents. */
+  const asVerified = (sessionId: string, item: SessionPlanItem, producerRunId: string): boolean => {
+    const current = deps.plan(sessionId)?.find((candidate) => candidate.id === item.id);
+    return (
+      current?.status === "in_progress" &&
+      current.runId === producerRunId &&
+      current.assignee === item.assignee &&
+      sameAgent(current.verifiedBy, item.verifiedBy)
+    );
+  };
+
   const verify = async (
     sessionId: string,
     item: SessionPlanItem,
     producerRunId: string,
-    summary: string,
     cause: string | undefined,
   ): Promise<"started" | "wait"> => {
-    const snapshot = { assignee: item.assignee, verifiedBy: item.verifiedBy! };
-    const files = await deps.filesChanged(sessionId, producerRunId).catch(() => undefined);
-    const spawned = await deps.spawn(sessionId, verifierTask(item, summary, files), {
-      agentName: snapshot.verifiedBy,
-      verifier: true,
-      worktree: false,
+    const spawned = await deps.verify(sessionId, {
+      targetRunId: producerRunId,
+      task: verifierTask(item),
+      agentName: item.verifiedBy!,
     });
     if (spawned === "wait") return "wait";
     verifying.add(producerRunId);
-    const settle = (verdict: "APPROVE" | "REJECT" | "missing", reason: string): void => {
+    const settle = (verdict: SubagentVerdict["decision"], reason: string): void => {
       verifying.delete(producerRunId);
       if (closed) return;
       if (deps.run(sessionId, spawned.runId)?.status === "stopped") owned.delete(sessionId);
-      const current = deps.plan(sessionId)?.find((candidate) => candidate.id === item.id);
       // Applies only to the item as it was verified: a rewrite, reassignment or new
       // verifier meanwhile discards the verdict, and the next pass recomputes.
-      const unchanged =
-        current?.status === "in_progress" &&
-        current.runId === producerRunId &&
-        current.assignee === snapshot.assignee &&
-        sameAgent(current.verifiedBy, snapshot.verifiedBy);
-      if (unchanged) {
+      if (asVerified(sessionId, item, producerRunId)) {
         deps.recordVerified(
           sessionId,
           { itemId: item.id, runId: spawned.runId, producerRunId, verdict, reason },
@@ -201,10 +181,7 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
         const note =
           verdict === "APPROVE"
             ? null
-            : (reason || "The verifier gave no APPROVE or REJECT verdict.").slice(
-                0,
-                MAX_NOTE_CHARS,
-              );
+            : (reason || "The verifier gave no verdict.").slice(0, MAX_NOTE_CHARS);
         deps.updatePlan(
           sessionId,
           [{ id: item.id, status: verdict === "APPROVE" ? "done" : "blocked", note }],
@@ -213,15 +190,9 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
       }
       void schedule(sessionId);
     };
-    spawned.done.then(
-      ({ text }) => {
-        const verdict = parseVerdict(text, VERDICTS).decision ?? "missing";
-        settle(verdict === "APPROVE" || verdict === "REJECT" ? verdict : "missing", text.trim());
-      },
-      (error: unknown) => {
-        deps.warn(`plan verifier for item ${item.id} failed`, error);
-        settle("missing", `The verifier did not finish: ${String(error)}`);
-      },
+    // launchVerifier's done never rejects: a verifier that did not finish is "missing".
+    void spawned.done.then((outcome) =>
+      settle(outcome.decision, outcome.text.trim() || outcome.reason),
     );
     return "started";
   };
@@ -235,7 +206,7 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
     const may = (): boolean => !closed && owned.has(sessionId) && deps.writable();
     let slots = deps.slots(sessionId);
     const updates: SessionPlanUpdate[] = [];
-    const toVerify: { item: SessionPlanItem; runId: string; summary: string }[] = [];
+    const toVerify: { item: SessionPlanItem; runId: string }[] = [];
 
     // 1. Settle dispatched items whose run ended.
     for (const item of items) {
@@ -258,11 +229,7 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
       } else if (!item.verifiedBy) {
         patch.status = "done";
       } else {
-        toVerify.push({
-          item: { ...item, runId: dispatch.runId },
-          runId: dispatch.runId,
-          summary: run.summary ?? "",
-        });
+        toVerify.push({ item: { ...item, runId: dispatch.runId }, runId: dispatch.runId });
       }
       if (Object.keys(patch).length > 1) updates.push(patch);
     }
@@ -276,9 +243,30 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
     if (updates.length) deps.updatePlan(sessionId, updates, cause);
 
     // 3. Verify and dispatch: only the plan owner's live intent, only when it can be logged.
-    for (const { item, runId, summary } of toVerify) {
+    for (const { item, runId } of toVerify) {
       if (!may() || slots <= 0) return;
-      if ((await verify(sessionId, item, runId, summary, cause)) === "wait") return;
+      let started: "started" | "wait";
+      try {
+        started = await verify(sessionId, item, runId, cause);
+      } catch (error) {
+        // Refused (the target vanished) or the launch failed: the item cannot be verified.
+        deps.warn(`plan verifier for item ${item.id} could not start`, error);
+        // As for a verdict: an item changed meanwhile is the next pass's to decide.
+        if (!asVerified(sessionId, item, runId)) continue;
+        const reason = `The verifier could not start: ${error instanceof Error ? error.message : String(error)}`;
+        deps.recordVerified(
+          sessionId,
+          { itemId: item.id, producerRunId: runId, verdict: "missing", reason },
+          cause,
+        );
+        deps.updatePlan(
+          sessionId,
+          [{ id: item.id, status: "blocked", note: reason.slice(0, MAX_NOTE_CHARS) }],
+          cause,
+        );
+        continue;
+      }
+      if (started === "wait") return;
       slots -= 1;
     }
     // One assigned item at a time in the parent's checkout; isolated items run in their
@@ -311,7 +299,6 @@ export function createPlanDispatcher(deps: PlanDispatcherDeps): PlanDispatcher {
       try {
         spawned = await deps.spawn(sessionId, task, {
           agentName: item.assignee,
-          verifier: false,
           worktree: item.isolated === true,
         });
       } catch (error) {

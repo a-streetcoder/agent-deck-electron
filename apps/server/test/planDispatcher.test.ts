@@ -10,7 +10,8 @@ import {
   MAX_DEPENDENCY_CONTEXT_CHARS,
   type PlanDispatcherDeps,
 } from "../src/planDispatcher.ts";
-import type { SubagentRunStatus } from "../src/subagentRunStore.ts";
+import type { SubagentRunRecord, SubagentRunStatus } from "../src/subagentRunStore.ts";
+import { launchVerifier } from "../src/verifier.ts";
 
 /** A stub world: one session's plan, a run store, a dispatch log and a stub spawn. */
 function world(initial: SessionPlanItem[]) {
@@ -34,6 +35,27 @@ function world(initial: SessionPlanItem[]) {
   let seq = 0;
   let spawnHook: (() => void) | undefined;
   let refuse = 0;
+  const WAIT = Symbol("wait");
+  const spawnStub = (
+    task: string,
+    options: { agentName: string; verifier: boolean; worktree: boolean },
+  ): { runId: string; done: Promise<{ text: string }> } | typeof WAIT => {
+    spawnHook?.();
+    if (refuse > 0) {
+      refuse -= 1;
+      return WAIT;
+    }
+    const runId = `run-${spawned.length + 1}`;
+    spawned.push({ task, ...options, runId });
+    runs.set(runId, { status: "running" });
+    const done = new Promise<{ text: string }>((resolve) =>
+      answers.set(runId, (text) => {
+        runs.set(runId, { status: "completed", summary: text });
+        resolve({ text });
+      }),
+    );
+    return { runId, done };
+  };
   const deps: PlanDispatcherDeps = {
     subscribe: (fn) => {
       subscribers.add(fn);
@@ -48,24 +70,52 @@ function world(initial: SessionPlanItem[]) {
     },
     dispatches: () => dispatches,
     run: (_s, runId) => runs.get(runId),
-    filesChanged: async () => ["src/a.ts"],
     slots: () => slots,
     spawn: async (_s, task, options) => {
-      spawnHook?.();
-      if (refuse > 0) {
-        refuse -= 1;
-        return "wait";
+      const spawn = spawnStub(task, { ...options, verifier: false });
+      return spawn === WAIT ? "wait" : spawn;
+    },
+    // The real verifier role over the stub world.
+    verify: async (_s, request) => {
+      try {
+        return await launchVerifier(
+          {
+            run: (_p, runId) => {
+              const run = runs.get(runId);
+              // Every producer in these tests runs as "coder".
+              return (
+                run &&
+                ({ id: runId, parentSessionId: "s1", agent: "coder", ...run } as SubagentRunRecord)
+              );
+            },
+            cwd: () => undefined,
+            mayRunShell: () => true,
+            assertCanSpawn: () => {},
+            head: async () => {
+              throw new Error("no worktrees in these tests");
+            },
+            filesChanged: async () => ["src/a.ts"],
+            runValidation: async () => {
+              throw new Error("no validation in these tests");
+            },
+            spawn: async (_p, task, options) => {
+              const spawn = spawnStub(task, {
+                agentName: options.agentName ?? "",
+                verifier: true,
+                worktree: false,
+              });
+              if (spawn === WAIT) throw WAIT;
+              return spawn;
+            },
+            recordVerdict: () => {},
+            warn: () => {},
+          },
+          { parentSessionId: "s1", ...request, detached: true },
+        );
+      } catch (error) {
+        if (error === WAIT) return "wait";
+        throw error;
       }
-      const runId = `run-${spawned.length + 1}`;
-      spawned.push({ task, ...options, runId });
-      runs.set(runId, { status: "running" });
-      const done = new Promise<{ text: string }>((resolve) =>
-        answers.set(runId, (text) => {
-          runs.set(runId, { status: "completed", summary: text });
-          resolve({ text });
-        }),
-      );
-      return { runId, done };
     },
     recordDispatch: (_s, dispatch, causationId) => {
       recorded.push({ ...dispatch, causationId });
@@ -305,7 +355,9 @@ describe("plan dispatcher", () => {
     expect(verifiers[0]?.task).toMatch(/^verify: Build a/);
     expect(verifiers[0]?.task).toContain("A_DONE");
     expect(verifiers[0]?.task).toContain("- src/a.ts");
-    expect(verifiers[0]?.task).toContain("APPROVE or REJECT alone on the first line");
+    expect(verifiers[0]?.task).toContain(
+      "The exact first non-empty line must be APPROVE, REJECT, CONTINUE, or ASK_HUMAN.",
+    );
     // A second pass while verifying spawns no second verifier.
     await dispatcher.evaluate("s1");
     expect(w.spawned.filter((s) => s.verifier)).toHaveLength(2);
@@ -323,6 +375,26 @@ describe("plan dispatcher", () => {
       }),
       expect.objectContaining({ itemId: "b", verdict: "REJECT", reason: "REJECT: tests missing" }),
     ]);
+    dispatcher.close();
+  });
+
+  it("a verifier that cannot start blocks the item and logs a verdict-less verification", async () => {
+    // The producer's own agent as verifier: launchVerifier refuses it.
+    const w = world([todo("a", { verifiedBy: "Coder" })]);
+    const dispatcher = createPlanDispatcher(w.deps);
+    w.agentPlan();
+    await w.settle();
+    w.finish("run-1");
+    await w.settle();
+    expect(w.status()).toEqual({ a: "blocked" });
+    expect(w.plan()[0]?.note).toMatch(
+      /^The verifier could not start: .*never verifies its own work/,
+    );
+    expect(w.verified).toEqual([
+      expect.objectContaining({ itemId: "a", producerRunId: "run-1", verdict: "missing" }),
+    ]);
+    expect(w.verified[0]).not.toHaveProperty("runId");
+    expect(w.spawned.filter((s) => s.verifier)).toHaveLength(0);
     dispatcher.close();
   });
 

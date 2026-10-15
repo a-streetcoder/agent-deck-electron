@@ -2,6 +2,7 @@ import { ControlButton } from "@/design-system/components/NativeControls";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { deckRunDetail, deckRuns, type DeckRun, type DeckRunDetail } from "@agent-deck/domain";
 import { RunMeta } from "./RunMeta.tsx";
+import { VerdictChip } from "./VerdictChip.tsx";
 import { useAppStore } from "../state/store.ts";
 
 /**
@@ -101,9 +102,10 @@ function RunRow({
 }) {
   return (
     <li
-      className="rounded-lg border"
+      className={`rounded-lg border ${run.parentRunId ? "ml-4" : ""}`}
       style={{ borderColor: "var(--color-border-strong)", background: "var(--color-surface)" }}
       data-testid="deck-run"
+      data-parent-run={run.parentRunId}
       data-status={run.status}
       data-needs-input={run.needsInput ? "true" : "false"}
       data-expanded={expanded ? "true" : "false"}
@@ -138,9 +140,19 @@ function RunRow({
             </span>
           ) : null}
         </div>
+        {run.parentRunId ? (
+          <div className="mt-1.5 text-micro text-text-muted" data-testid="deck-run-verifier">
+            Verifier
+          </div>
+        ) : null}
         <div className={`mt-1.5 text-detail text-text-secondary ${expanded ? "" : "line-clamp-3"}`}>
           {run.task}
         </div>
+        {run.verdict ? (
+          <div className="mt-1.5">
+            <VerdictChip verdict={run.verdict} showReason={expanded} />
+          </div>
+        ) : null}
         <RunMeta
           className="mt-1.5"
           model={run.model}

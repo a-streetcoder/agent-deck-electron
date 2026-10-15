@@ -168,6 +168,38 @@ describe("finished, removed and gaps", () => {
     ]);
   });
 
+  it("A7: a verdict on the target emits verified (projected like updated); a verifier hangs under its target", () => {
+    const verdict = { decision: "REJECT" as const, reason: "no tests", verifierRunId: "run-2" };
+    const verified = { ...done, verdict };
+    const drafts = throughWriter(diffSubagentRuns([done], [verified]));
+    expect(drafts.map((draft) => draft.kind)).toEqual(["subagent.run.verified"]);
+    expect(drafts[0]!.payload).toMatchObject({
+      runId: "run-1",
+      verifierRunId: "run-2",
+      verdict: "REJECT",
+      reason: "no tests",
+    });
+    expect(projectSubagentRuns(drafts, [done]).get("run-1")).toEqual(verified);
+    // The same verdict again is no event.
+    expect(diffSubagentRuns([verified], [{ ...verified }])).toEqual([]);
+    const verifier: PublicSubagentRun = {
+      ...run,
+      id: "run-2",
+      parentToolCallId: "call-1",
+      role: "verify",
+      targetRunId: "run-1",
+    };
+    expect(diffSubagentRuns([], [verifier])[0]!.parent).toEqual({
+      type: "subagentRun",
+      id: "run-1",
+    });
+    // The verifier's own copy of its verdict is a plain update, not a second verified.
+    const verifierDone = { ...verifier, status: "completed" as const };
+    expect(
+      diffSubagentRuns([verifierDone], [{ ...verifierDone, verdict }]).map((d) => d.kind),
+    ).toEqual(["subagent.run.updated"]);
+  });
+
   it("a created run without a tool call hangs under its session", () => {
     expect(diffSubagentRuns([], [run])[0]!.parent).toEqual({ type: "session", id: "session-1" });
   });

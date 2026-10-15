@@ -91,4 +91,31 @@ describe("deckRuns: aggregate subagent runs for the deck", () => {
       )[0]!.needsInput,
     ).toBe(false);
   });
+
+  it("A7: lists a verifier right after its producer, with the producer's verdict", () => {
+    const cell = (id: string, extra: Record<string, unknown> = {}) => ({
+      type: "cell_final" as const,
+      cell: {
+        kind: "subagent" as const,
+        id,
+        task: id,
+        status: "done" as const,
+        text: "",
+        progress: [],
+        ...extra,
+      },
+    });
+    const verdict = { decision: "REJECT" as const, reason: "no tests", verifierRunId: "v" };
+    const state = run([
+      cell("p"),
+      cell("other"),
+      cell("v", { targetRunId: "p" }),
+      { type: "subagent_verdict", cellId: "p", verdict },
+    ]);
+    expect(deckRuns(state).map((r) => [r.id, r.parentRunId, r.verdict?.decision])).toEqual([
+      ["p", undefined, "REJECT"],
+      ["v", "p", undefined],
+      ["other", undefined, undefined],
+    ]);
+  });
 });

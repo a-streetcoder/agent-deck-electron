@@ -375,6 +375,23 @@ describe("subagent durable status and content", () => {
     return render(<CellView cell={cell} />);
   };
 
+  it("A7: shows a verifier's REJECT with its reason, and a verifier card's target", () => {
+    renderSubagent({
+      status: "done",
+      error: undefined,
+      verdict: { decision: "REJECT", reason: "the join has no tests", verifierRunId: "v1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/i }));
+    expect(screen.getByTestId("verdict").getAttribute("data-decision")).toBe("REJECT");
+    expect(screen.getByTestId("verdict-chip").textContent).toBe("Rejected");
+    expect(screen.getByTestId("verdict-reason").textContent).toBe("the join has no tests");
+    cleanup();
+    renderSubagent({ status: "done", error: undefined, targetRunId: "producer-run" });
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/i }));
+    expect(screen.queryByTestId("verdict")).toBeNull();
+    expect(screen.getByTestId("subagent-verifies").textContent).toBe("Verifies run producer-run");
+  });
+
   it("announces stopped and interrupted as distinct statuses", () => {
     renderSubagent();
     expect(screen.getByText("interrupted")).toBeTruthy();

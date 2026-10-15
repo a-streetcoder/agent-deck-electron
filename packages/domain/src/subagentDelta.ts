@@ -296,6 +296,8 @@ export class SubagentDeltaIndex {
       this.runs.delete(runId);
       return;
     }
+    // A7: a verdict on the run is no turn of it: the latest finish stays the latest.
+    if (event.kind === "subagent.run.verified") return;
     const payload = event.payload as {
       run?: { status?: PublicSubagentRunStatus };
       result?: RunResult;

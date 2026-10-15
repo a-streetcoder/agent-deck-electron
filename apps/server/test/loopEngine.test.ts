@@ -295,6 +295,76 @@ describe("maker-checker validation ordering (D7)", () => {
     });
   });
 
+  it("runs validation with the Loop session's launch env (A7)", async () => {
+    const envs: unknown[] = [];
+    const engine = new LoopEngine({
+      executeRole: async ({ phase }) =>
+        phase === "checker" ? "APPROVE\nok" : phase === "evaluator" ? "SUCCESS\nok" : "made",
+      runValidation: async (_cwd, _command, _signal, _dir, env) => {
+        envs.push(env);
+        return true;
+      },
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "makerChecker",
+        makerName: "Maker",
+        checkerName: "Checker",
+        checkerRubric: "strict",
+      }),
+      cwd(),
+      { validationEnv: () => ({ GH_TOKEN: "owner-token", PI_CODING_AGENT_DIR: "/owner" }) },
+    );
+    await engine.settled(run.id);
+    expect(envs).toEqual([{ GH_TOKEN: "owner-token", PI_CODING_AGENT_DIR: "/owner" }]);
+    // The real runner hands it to the spawned command.
+    const probe = await runValidationCommand(
+      cwd(),
+      `node -e "process.stdout.write('dir=' + process.env.PI_CODING_AGENT_DIR)"`,
+      undefined,
+      undefined,
+      undefined,
+      { PI_CODING_AGENT_DIR: "/owner" },
+    );
+    expect(probe.stdout).toBe("dir=/owner");
+  });
+
+  it("pins the checker prompt text (A7: shared verifierPrompt must not change loops)", async () => {
+    let checkerPrompt = "";
+    const engine = new LoopEngine({
+      executeRole: async ({ phase, prompt }) => {
+        if (phase === "checker") checkerPrompt = prompt;
+        return phase === "checker" ? "APPROVE\nok" : phase === "evaluator" ? "SUCCESS\nok" : "MADE";
+      },
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "makerChecker",
+        makerName: "Maker",
+        checkerName: "Checker",
+        checkerRubric: "strict",
+        successCondition: "it is done",
+        validationCommand: undefined,
+      }),
+      cwd(),
+    );
+    await engine.settled(run.id);
+    expect(
+      checkerPrompt.endsWith(
+        [
+          "Goal: do the thing",
+          "Success condition: it is done",
+          "Iteration: 1",
+          "Review only; do not edit project files.",
+          "Review criteria: strict",
+          "Maker report:\nMADE",
+          "Validation: no validation command is configured.",
+          "The exact first non-empty line must be APPROVE, CONTINUE, REJECT, ASK_HUMAN, or FAIL. Then give concise rationale and concrete evidence.",
+        ].join("\n\n"),
+      ),
+    ).toBe(true);
+  });
+
   it("hands the checker the real tail of output beyond the capture limit", async () => {
     let checkerPrompt = "";
     const engine = new LoopEngine({

@@ -19,6 +19,7 @@ import {
   type EventDraft,
   type NodeRef,
   type PathPrefix,
+  type SubagentVerdict,
 } from "@agent-deck/domain";
 import type { EventLog } from "./eventLog.ts";
 import type { CheckpointRecord } from "./services/checkpoints.ts";
@@ -66,9 +67,10 @@ export interface EventProducers {
     sessionId: string,
     verified: {
       itemId: string;
-      runId: string;
+      /** The verifier run; absent when the verifier could not start. */
+      runId?: string;
       producerRunId: string;
-      verdict: "APPROVE" | "REJECT" | "missing";
+      verdict: SubagentVerdict["decision"];
       reason: string;
     },
     causationId?: string,
@@ -369,7 +371,7 @@ export function createEventProducers(
         ...(causationId ? { causationId } : {}),
         payload: {
           itemId: capText(verified.itemId, EVENT_LABEL_MAX_CHARS),
-          runId: verified.runId,
+          ...(verified.runId ? { runId: verified.runId } : {}),
           producerRunId: verified.producerRunId,
           verdict: verified.verdict,
           reason: clean(verified.reason, EVENT_TEXT_MAX_CHARS),

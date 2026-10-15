@@ -859,6 +859,8 @@ export function registerLoopRoutes(
         ...(loopReviewRunId ? { runId: loopReviewRunId } : {}),
         projectId: body.projectId,
         retryOf: body.retryOf,
+        // A7: validation runs with the Loop session's own launch env (owner credentials).
+        validationEnv: () => sessions.sessionLaunchEnv(loopParent.meta.id),
         launch: {
           sessionId: parent.meta.id,
           writeTarget: loop.writeTarget,

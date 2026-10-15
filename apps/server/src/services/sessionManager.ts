@@ -25,6 +25,7 @@ import {
   type SessionPlanUpdate,
   type SubagentCell,
   type SubagentExpectedOutcome,
+  type SubagentVerdict,
   type TranscriptState,
   type TurnRefs,
 } from "@agent-deck/domain";
@@ -454,6 +455,8 @@ export interface ManagedSessionRuntime {
   ) => Effect.Effect<void>;
   readonly restorePlan: (items: SessionPlanItem[]) => Effect.Effect<void>;
   readonly appendSubagentProgress: (cellId: string, message: string) => Effect.Effect<void>;
+  /** A7: a verifier's verdict on a subagent card of this transcript. */
+  readonly setSubagentVerdict: (cellId: string, verdict: SubagentVerdict) => Effect.Effect<void>;
   readonly openSupervisorQuestion: (req: {
     requestId: string;
     subagentCellId: string;
@@ -1782,6 +1785,8 @@ export const makeManagedSessionRuntime = (
         }),
       appendSubagentProgress: (cellId, message) =>
         Effect.sync(() => emit({ type: "subagent_progress", cellId, message })),
+      setSubagentVerdict: (cellId, verdict) =>
+        Effect.sync(() => emit({ type: "subagent_verdict", cellId, verdict })),
       openSupervisorQuestion: (req) =>
         Effect.sync(() => {
           pendingSupervisor.add(req.requestId);
@@ -2079,6 +2084,11 @@ export interface ChildLaunchOverrides {
   checkerShell?: boolean;
   /** A5 plan verifier: record this constrained child in the run store like a managed one. */
   durable?: boolean;
+  /** A7: this child verifies that run (record role "verify" + targetRunId). */
+  verifyTarget?: string;
+  /** A7: working directory of a readOnly child (the verifier in its target's worktree);
+   * ignored for any other policy. */
+  cwd?: string;
 }
 
 export interface ChildRunOptions {
@@ -2251,13 +2261,15 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
     let effectiveSystemPrompt = authoredSystemPrompt;
     let childMemoryContext: ChildMemoryLaunchContext | undefined;
     const cellId = runId;
+    const verifyCell = overrides?.verifyTarget ? { targetRunId: overrides.verifyTarget } : {};
     const childSessionId = randomUUID();
     // Loop/constrained executions retain their dedicated snapshot ownership.
     // Generic managed_subagent/managed_parallel runs use this first-class store.
     const durable = toolPolicy === undefined || overrides?.durable ? params.childRuns : undefined;
     const createdAt = new Date().toISOString();
     let artifactSessionsDirectory: string | undefined;
-    let childCwd = meta.cwd;
+    // A7: a read-only child (the verifier) may work in another existing checkout.
+    let childCwd = toolPolicy === "readOnly" && overrides?.cwd ? overrides.cwd : meta.cwd;
     let transcriptRegistered = false;
     let childTranscript = emptyTranscript();
     const childIngest = createIngestState();
@@ -2362,6 +2374,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
                 ...(durable ? { artifactRootId: runId } : {}),
                 progress: [],
                 ...(agentName ? { agentName } : {}),
+                ...verifyCell,
                 ...metadata(),
               },
             });
@@ -2411,6 +2424,9 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
                     }
                   : {}),
                 declaredReads: [...declaredReads],
+                ...(overrides?.verifyTarget
+                  ? { role: "verify" as const, targetRunId: overrides.verifyTarget }
+                  : {}),
               };
               const allocation = durable.prepareTurn
                 ? yield* persistChildRun(() =>
@@ -2452,6 +2468,8 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
                     inputTokens: undefined,
                     outputTokens: undefined,
                     durationMs: undefined,
+                    // A7: a new turn makes the previous verdict stale.
+                    verdict: undefined,
                     ...artifactPatch,
                   });
                 } else {
@@ -2666,6 +2684,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
             text: "",
             progress: [],
             ...(agentName ? { agentName } : {}),
+            ...verifyCell,
           },
         });
         cardOpened = true;
@@ -2796,6 +2815,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
               artifactRootId: runId,
               progress: [],
               ...(agentName ? { agentName } : {}),
+              ...verifyCell,
               ...finalMetadata,
             },
           });
@@ -2856,6 +2876,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
               artifactRootId: runId,
               progress: [],
               ...(agentName ? { agentName } : {}),
+              ...verifyCell,
               ...finalMetadata,
             },
           });
@@ -2875,6 +2896,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
             artifactRootId: runId,
             progress: [],
             ...(agentName ? { agentName } : {}),
+            ...verifyCell,
             ...finalMetadata,
           },
         });
