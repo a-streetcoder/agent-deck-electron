@@ -1,6 +1,6 @@
 ---
 id: ade-bfxw
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-15T07:25:22Z
@@ -30,3 +30,7 @@ Real-Pi tests: an ad-hoc verify call returns a typed verdict and records the eve
 **2026-10-15T08:02:03Z**
 
 2026-10-15 fix round ac5576a (amended trailer 342d2f4) covers the contrarian list; GPT review32 of the first commit: items 1,3,4,7 already covered; remaining 2 (validation runs with the session owner's env), 5 (verdict per verifier run), 6 (redactSecrets on validation command/output) sent as the final round.
+
+**2026-10-15T08:14:26Z**
+
+2026-10-15 merged as d3bf34e (488e4c8 + 342d2f4 shell gate/worktree verifier/stale+cancelled verdicts + 2000fdc session env for validation, per-verifier verdicts, redactSecrets). server.ts conflict with A6 resolved keeping both blocks; loopEngine.test 74, domain eventDiffs/nodeTree/subagentDelta/capabilityProfiles 61, server/domain/web tsc clean. Follow-up 71b4f95: verifier runs profiled as checker runs. Deployed to the VM 08:13 (health 200). Follow-ups not ticketed: CONTINUE/ASK_HUMAN on plan items only block (legibility); verifier node linked to its tool call in the tree; producer summary in the verifier prompt not redacted; plan-dispatch.pi timing flake predates A7; stale-verdict check compares completedAt only.

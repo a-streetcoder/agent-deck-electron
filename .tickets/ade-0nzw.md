@@ -1,6 +1,6 @@
 ---
 id: ade-0nzw
-status: open
+status: in_progress
 deps: [ade-m5ku, ade-bfxw]
 links: []
 created: 2026-10-15T07:25:23Z

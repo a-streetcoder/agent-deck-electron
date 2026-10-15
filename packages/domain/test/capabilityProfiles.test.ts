@@ -181,11 +181,7 @@ describe("aggregateCapabilityProfiles", () => {
       ["Helper", "maker"],
       ["Helper", "subagent"],
     ]);
-    expect(profiles[1]!.allTime).toMatchObject({
-      runs: 2,
-      medianTokens: 12,
-      medianDurationMs: 2_000,
-    });
+    expect(profiles[1]!.allTime).toMatchObject({ runs: 2, medianTokens: 12, medianDurationMs: 2_000 });
     // No usage reported: no token medians, the run still counts.
     expect(profiles[3]!.allTime).toMatchObject({ runs: 1, passRate: 1 });
     expect(profiles[3]!.allTime.medianTokens).toBeUndefined();
