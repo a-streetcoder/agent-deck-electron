@@ -1,7 +1,7 @@
 ---
 id: ade-aier
 status: open
-deps: [ade-gfs4]
+deps: [ade-gfs4, ade-wgkk, ade-t77e, ade-shxc, ade-iarr, ade-k7s3]
 links: []
 created: 2026-10-14T18:00:31Z
 type: epic
@@ -38,3 +38,7 @@ To be written per sub-ticket after the owner approves the split and answers the 
 **2026-10-15T07:20:12Z**
 
 2026-10-15 owner: the target is the LIVE MIRROR with the RETURN TRIP ('more logical'). Phasing recorded by the architect: v1 = snapshot move (option C, A as consented fallback) + frozen pointer; v2 = live mirror (the local copy follows the server copy through the event log; needs the local app to call the remote server, which SRV-12b builds anyway, and the log authoritative for the session's events); v3 = return trip (server pushes the snapshot, needs SRV-06 and merge-as-PR on the server). Sub-tickets to be written after the event-log discussion closes.
+
+**2026-10-15T07:37:11Z**
+
+2026-10-15 sub-tickets written per the owner's answers and the oracle memo: ade-wgkk (SRV-12a repo projects), ade-t77e (SRV-12b Make shared + remote client), ade-shxc (v1 snapshot move + frozen pointer), ade-iarr (v2 live mirror), ade-k7s3 (v3 return trip + merge as PR). The ticket tree awaits the word approved; SRV-12a starts after SRV-06 merges.

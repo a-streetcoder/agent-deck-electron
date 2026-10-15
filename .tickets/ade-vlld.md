@@ -1,6 +1,6 @@
 ---
 id: ade-vlld
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-10-15T07:25:28Z
@@ -20,3 +20,9 @@ GUARDRAILS as every ticket. Reuse the A1c projectLog slice and the A2 tree; no n
 ## Acceptance Criteria
 
 Web tests for the member grouping and the status; a real-Pi test where an agent lists sessions and reads a co-worker's session summary; fork of another member's session records the forker as createdBy and runs on their credentials; docs/remote-server-poc.md updated. Awaiting the word approved.
+
+## Notes
+
+**2026-10-15T07:35:10Z**
+
+Owner 2026-10-15: 'Approved on what you were waiting' (this ticket was the only item awaiting the word). Approved. Sequencing: starts after A6 (list_agents bridge tool, Agents screen) and SRV-06 merge to avoid conflicts in bridges.ts, ActivityList and the sessions list; design pass (contrarian) first on the agent tools' prompt size and the fork-of-another-member credential semantics.
