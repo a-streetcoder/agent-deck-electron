@@ -20,3 +20,9 @@ GUARDRAILS: worktree E:/agent-deck-wt/<ticket> on wt/<ticket>; never git checkou
 ## Acceptance Criteria
 
 Real-Pi tests: an ad-hoc verify call returns a typed verdict and records the event; a REJECT shows the reason on the card; the plan dispatcher uses the shared role (plan-dispatch.pi stays green); loops.pi green; unit tests for the verdict mapping; web tests for the chip; tsc, eslint, prettier clean.
+
+## Notes
+
+**2026-10-15T07:52:50Z**
+
+2026-10-15 contrarian on 488e4c8: loop parity confirmed (prompt and parsing identical); dispatcher change is an improvement. BLOCKER: validationCommand lets a parent agent without bash run arbitrary shell -> gate on the parent's tools including bash (or undefined) and check the child cap before validating. Fix before close: verifier cwd/revisions for worktree targets; no verdict on a run continued since launch; cancelled verifier must not overwrite a verdict with 'missing'; subagent.run.verified must not reset latestIsFinished in subagentDelta; dispatcher catch path unchanged() guard + event; unit test pinning the loop checker prompt. Follow-ups: CONTINUE/ASK_HUMAN on plan items only block (legibility); verifier node linked to its tool call; A6 profiles should map role verify to checker; plan-dispatch.pi flake predates A7 (timing). Fix round sent to the developer; GPT review32 pending.
