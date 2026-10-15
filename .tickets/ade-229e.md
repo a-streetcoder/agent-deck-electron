@@ -48,3 +48,7 @@ docker build succeeds in CI; the container answers /health 200 and GET /projects
 **2026-10-15T22:40:41Z**
 
 2026-10-15 round 2 landed as 272c66d (home at /data/home + server creates it, bindHost safety net with tests, ripgrep/fd-find/openssh-client, PI_SKIP_VERSION_CHECK, APP_VERSION build arg, smoke before publish + PR builds + latest=auto, .dockerignore, docs). VM validation green incl. volume survival and the refusal/typo cases. Verification pass review57 launched.
+
+**2026-10-15T22:44:10Z**
+
+2026-10-15 verification (review57): previous blockers resolved; one should-fix left (::1 accepted by resolveBindHost while the Pi bridge and HEALTHCHECK use 127.0.0.1). Round 3 sent (normalize ::1/localhost to 127.0.0.1). Merge after it without another GPT pass.
