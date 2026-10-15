@@ -1,6 +1,6 @@
 ---
 id: ade-aier
-status: open
+status: closed
 deps: [ade-gfs4, ade-wgkk, ade-t77e, ade-shxc, ade-iarr, ade-k7s3]
 links: []
 created: 2026-10-14T18:00:31Z
@@ -46,3 +46,7 @@ To be written per sub-ticket after the owner approves the split and answers the 
 **2026-10-15T12:24:45Z**
 
 2026-10-15 owner replied 'Approved' to the SRV-12 ticket tree (ade-wgkk, ade-t77e, ade-shxc, ade-iarr, ade-k7s3). SRV-12a (ade-wgkk) starts now in dependency order.
+
+**2026-10-15T16:52:51Z**
+
+2026-10-16 all five sub-tickets closed and deployed: 12a repo projects (6d844d7), 12b Make shared (96de813), 12c1 snapshot move + frozen pointer (90ea1f7), 12c2 live mirror (e852c41), 12c3 return trip + merge as PR (f0041d5). Owner live checks: GitHub acceptance of refs/agent-deck/* for push, fetch and delete from a real device; a real Make shared + move + bring back against deck.moretti.cc once AGENT_DECK_SHARED_SERVER_URL and AGENT_DECK_CLOUDFLARED are set in the local launcher; the GitHub OAuth App + AGENT_DECK_GITHUB_CLIENT_ID drop-in (SRV-06) is a prerequisite for private repositories and for merge-as-PR.
