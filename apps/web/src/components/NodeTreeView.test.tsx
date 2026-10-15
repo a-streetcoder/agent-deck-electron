@@ -190,3 +190,57 @@ it("says so when the log has nothing for the session", async () => {
   await waitFor(() => expect(fetchMock).toHaveBeenCalled());
   expect(screen.getByTestId("node-tree").textContent).toContain("No recorded activity");
 });
+
+it("A7: a verifier run sits under its producer, which shows the verdict chip with the reason", async () => {
+  const at = (seq: number, kind: string, id: string, run: object, parent?: object) =>
+    ({
+      v: 1,
+      id: `a7-${seq}`,
+      seq,
+      ts: "2026-10-15T00:00:00.000Z",
+      logId: "log",
+      kind,
+      projectId: null,
+      sessionId: SESSION,
+      subject: { type: "subagentRun", id },
+      ...(parent ? { parent } : {}),
+      actor: { type: "system" },
+      payload: {
+        run: {
+          id,
+          parentSessionId: SESSION,
+          createdAt: "2026-10-15T00:00:00.000Z",
+          updatedAt: "2026-10-15T00:00:00.000Z",
+          ...run,
+        },
+      },
+    }) as EventEnvelope;
+  const verdict = { decision: "REJECT", reason: "no tests", verifierRunId: "verifier" };
+  served = [
+    at(1, "subagent.run.created", "producer", { task: "Build it", status: "completed" }),
+    at(
+      2,
+      "subagent.run.created",
+      "verifier",
+      { task: "verify: Build it", status: "completed", role: "verify", targetRunId: "producer" },
+      { type: "subagentRun", id: "producer" },
+    ),
+    at(3, "subagent.run.verified", "producer", { task: "Build it", status: "completed", verdict }),
+  ];
+  render(<NodeTreeView />);
+  const producer = await waitFor(() => {
+    const node = screen
+      .getAllByTestId("tree-node")
+      .find((row) => row.getAttribute("data-type") === "subagentRun");
+    expect(node).toBeDefined();
+    return node!;
+  });
+  expect(within(producer).getAllByTestId("tree-node-label")[0]!.textContent).toBe("Build it");
+  expect(within(producer).getByTestId("verdict-chip").textContent).toBe("Rejected");
+  expect(within(producer).getByTestId("verdict-reason").textContent).toBe("no tests");
+  // The verifier is the producer's child row.
+  const nested = within(producer)
+    .getAllByTestId("tree-node")
+    .map((row) => within(row).getAllByTestId("tree-node-label")[0]!.textContent);
+  expect(nested).toEqual(["verify: Build it"]);
+});

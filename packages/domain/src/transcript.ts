@@ -4,6 +4,8 @@
  * (authoritative in-memory state) and the web UI (client mirror).
  */
 
+import type { SubagentVerdict } from "./eventDiffs.ts";
+
 export type BlockKind = "text" | "thinking";
 
 export interface AssistantBlock {
@@ -175,6 +177,10 @@ export interface SubagentCell {
   inputTokens?: number;
   outputTokens?: number;
   durationMs?: number;
+  /** A7: this run verifies that run (a verifier card). */
+  targetRunId?: string;
+  /** A7: the latest verifier's verdict on this run. */
+  verdict?: SubagentVerdict;
 }
 
 /**
@@ -435,31 +441,48 @@ export interface DeckRun {
   outputTokens?: number;
   durationMs?: number;
   error?: string;
+  /** A7: a verifier row, listed right after the run it verifies. */
+  parentRunId?: string;
+  verdict?: SubagentVerdict;
 }
 
 /**
- * Aggregate the session's subagent runs for the deck, in transcript order. Pure
- * so the web and any renderer agree and it stays unit-testable.
+ * Aggregate the session's subagent runs for the deck, in transcript order; a
+ * verifier follows the run it verifies. Pure so the web and any renderer agree
+ * and it stays unit-testable.
  */
 export function deckRuns(state: TranscriptState): DeckRun[] {
   const openQuestions = state.cells.filter(
     (c): c is SupervisorQuestionCell =>
       c.kind === "supervisor_question" && !c.answered && !c.closed,
   );
-  return state.cells
-    .filter((c): c is SubagentCell => c.kind === "subagent")
-    .map((cell) => ({
-      id: cell.id,
-      task: cell.task,
-      status: cell.status,
-      progressCount: cell.progress.length,
-      needsInput: openQuestions.some((q) => q.subagentCellId === cell.id),
-      model: cell.model,
-      inputTokens: cell.inputTokens,
-      outputTokens: cell.outputTokens,
-      durationMs: cell.durationMs,
-      error: cell.error,
-    }));
+  const cells = state.cells.filter((c): c is SubagentCell => c.kind === "subagent");
+  const ids = new Set(cells.map((cell) => cell.id));
+  const childOf = (cell: SubagentCell): string | undefined =>
+    cell.targetRunId && cell.targetRunId !== cell.id && ids.has(cell.targetRunId)
+      ? cell.targetRunId
+      : undefined;
+  const ordered: SubagentCell[] = [];
+  const visit = (cell: SubagentCell, depth: number): void => {
+    ordered.push(cell);
+    // ponytail: depth cap instead of cycle tracking; targets are earlier finished runs.
+    if (depth < 8) cells.filter((c) => childOf(c) === cell.id).forEach((c) => visit(c, depth + 1));
+  };
+  cells.filter((cell) => !childOf(cell)).forEach((cell) => visit(cell, 0));
+  return ordered.map((cell) => ({
+    id: cell.id,
+    task: cell.task,
+    status: cell.status,
+    progressCount: cell.progress.length,
+    needsInput: openQuestions.some((q) => q.subagentCellId === cell.id),
+    model: cell.model,
+    inputTokens: cell.inputTokens,
+    outputTokens: cell.outputTokens,
+    durationMs: cell.durationMs,
+    error: cell.error,
+    ...(childOf(cell) ? { parentRunId: cell.targetRunId } : {}),
+    ...(cell.verdict ? { verdict: cell.verdict } : {}),
+  }));
 }
 
 /** The full detail behind one deck run: its subagent cell + any supervisor
@@ -534,6 +557,8 @@ export type DomainEvent =
     }
   | { type: "subagent_delta"; cellId: string; delta: string }
   | { type: "subagent_progress"; cellId: string; message: string }
+  /** A7: a verifier's verdict on this subagent card. */
+  | { type: "subagent_verdict"; cellId: string; verdict: SubagentVerdict }
   | { type: "supervisor_answered"; cellId: string; answer: string }
   | { type: "supervisor_closed"; cellId: string; reason: string }
   | { type: "ask_user_answered"; cellId: string; answer: AskUserAnswer }
@@ -739,6 +764,14 @@ export function reduceTranscript(state: TranscriptState, event: DomainEvent): Tr
       if (!cell || cell.kind !== "subagent") return state;
       const next = state.cells.slice();
       next[index] = { ...cell, progress: [...cell.progress, event.message] };
+      return { ...state, cells: next };
+    }
+    case "subagent_verdict": {
+      const index = state.cells.findIndex((c) => c.id === event.cellId);
+      const cell = index === -1 ? undefined : state.cells[index];
+      if (!cell || cell.kind !== "subagent") return state;
+      const next = state.cells.slice();
+      next[index] = { ...cell, verdict: event.verdict };
       return { ...state, cells: next };
     }
     case "supervisor_answered": {

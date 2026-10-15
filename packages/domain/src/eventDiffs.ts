@@ -21,6 +21,7 @@ import {
 import { capText, EVENT_LABEL_MAX_CHARS } from "./turnRefs.ts";
 import {
   isLoopRunTerminal,
+  type LoopCheckerDecision,
   type LoopChildRecord,
   type LoopRun,
   type LoopRunArtifact,
@@ -111,6 +112,16 @@ export type PublicSubagentRunStatus =
   | "stopped"
   | "interrupted";
 
+/** A7: a verifier's decision; the loop checker's set without FAIL. */
+export type VerifierDecision = Exclude<LoopCheckerDecision, "FAIL">;
+
+/** A7: the verdict a verifier run gave on its target run ("missing": no decision line). */
+export interface SubagentVerdict {
+  decision: VerifierDecision | "missing";
+  reason: string;
+  verifierRunId: string;
+}
+
 /** What the log may hold about a subagent run: the record minus every capability field. */
 export interface PublicSubagentRun {
   id: string;
@@ -136,6 +147,11 @@ export interface PublicSubagentRun {
   outputTokens?: number;
   durationMs?: number;
   source?: "single" | "parallel";
+  /** A7: a verifier run, and the run it verifies (same parent session). */
+  role?: "verify";
+  targetRunId?: string;
+  /** A7: on the TARGET run, the latest verifier's verdict. */
+  verdict?: SubagentVerdict;
 }
 
 /** A4's structured result, the payload of *.finished. */
@@ -167,6 +183,9 @@ const SUBAGENT_KEYS = [
   "outputTokens",
   "durationMs",
   "source",
+  "role",
+  "targetRunId",
+  "verdict",
 ] as const satisfies readonly (keyof PublicSubagentRun)[];
 
 /** Whitelist projection of a stored record (the server's record is a structural superset). */
@@ -181,6 +200,7 @@ export function toPublicSubagentRun(
     run.summary = headText(run.summary, options);
   }
   if (run.error !== undefined) run.error = errorText(run.error, options);
+  if (run.verdict) run.verdict = { ...run.verdict, reason: headText(run.verdict.reason, options) };
   return run;
 }
 
@@ -211,9 +231,12 @@ export function diffSubagentRuns(
       actor: SYSTEM,
     };
     if (!old) {
-      const parent: NodeRef = run.parentToolCallId
-        ? { type: "toolCall", id: run.parentToolCallId }
-        : { type: "session", id: run.parentSessionId };
+      // A7: a verifier is a child of the run it verifies.
+      const parent: NodeRef = run.targetRunId
+        ? { type: "subagentRun", id: run.targetRunId }
+        : run.parentToolCallId
+          ? { type: "toolCall", id: run.parentToolCallId }
+          : { type: "session", id: run.parentSessionId };
       out.push({ ...base, kind: "subagent.run.created", parent, payload: { run } });
     }
     // Once per turn: a continuation goes finished -> updated (active) -> finished.
@@ -224,6 +247,19 @@ export function diffSubagentRuns(
         ...base,
         kind: "subagent.run.finished",
         payload: { run: rest, result: subagentRunResult(run) },
+      });
+    } else if (old && run.verdict && !sameJson(old.verdict, run.verdict)) {
+      // A7: a new verdict on the target run; carries the whole run like updated.
+      out.push({
+        ...base,
+        kind: "subagent.run.verified",
+        payload: {
+          run,
+          runId: run.id,
+          verifierRunId: run.verdict.verifierRunId,
+          verdict: run.verdict.decision,
+          reason: run.verdict.reason,
+        },
       });
     } else if (old && !sameJson(old, run)) {
       out.push({ ...base, kind: "subagent.run.updated", payload: { run } });
@@ -265,6 +301,7 @@ export function projectSubagentRuns(
         if (payload?.run) state.set(id, payload.run);
         break;
       case "subagent.run.updated":
+      case "subagent.run.verified":
         if (payload?.run && state.has(id)) state.set(id, payload.run);
         break;
       case "subagent.run.finished":

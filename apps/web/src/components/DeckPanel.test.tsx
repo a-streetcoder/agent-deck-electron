@@ -30,6 +30,36 @@ afterEach(() => {
 });
 
 describe("Deck durable subagent runs", () => {
+  it("A7: lists the verifier as a child row of its producer, with the verdict chip", () => {
+    useAppStore.setState({
+      transcript: {
+        ...emptyTranscript(),
+        cells: [
+          cell({
+            id: "producer",
+            status: "done",
+            error: undefined,
+            verdict: { decision: "APPROVE", reason: "Looks right.", verifierRunId: "verifier" },
+          }),
+          cell({ id: "other", status: "done", error: undefined }),
+          cell({ id: "verifier", status: "done", error: undefined, targetRunId: "producer" }),
+        ],
+      },
+    });
+    render(<DeckPanel />);
+    const rows = screen.getAllByTestId("deck-run");
+    expect(rows.map((row) => row.getAttribute("data-parent-run"))).toEqual([
+      null,
+      "producer",
+      null,
+    ]);
+    expect(screen.getAllByTestId("deck-run-verifier")).toHaveLength(1);
+    expect(screen.getByTestId("verdict-chip").textContent).toBe("Approved");
+    // Collapsed rows keep the reason in the tooltip only.
+    expect(screen.queryByTestId("verdict-reason")).toBeNull();
+    expect(screen.getByTestId("verdict").getAttribute("title")).toBe("Looks right.");
+  });
+
   it("labels interrupted and stopped independently from failed", () => {
     renderDeck(cell());
     expect(screen.getByText("Interrupted")).toBeTruthy();

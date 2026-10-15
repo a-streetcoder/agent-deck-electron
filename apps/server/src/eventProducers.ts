@@ -19,6 +19,7 @@ import {
   type EventDraft,
   type NodeRef,
   type PathPrefix,
+  type SubagentVerdict,
 } from "@agent-deck/domain";
 import type { EventLog } from "./eventLog.ts";
 import type { CheckpointRecord } from "./services/checkpoints.ts";
@@ -68,7 +69,7 @@ export interface EventProducers {
       itemId: string;
       runId: string;
       producerRunId: string;
-      verdict: "APPROVE" | "REJECT" | "missing";
+      verdict: SubagentVerdict["decision"];
       reason: string;
     },
     causationId?: string,

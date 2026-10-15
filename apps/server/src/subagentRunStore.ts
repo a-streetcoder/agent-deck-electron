@@ -23,6 +23,7 @@ import {
   type PublicViewOptions,
   type RunResult,
   type SubagentCell,
+  type SubagentVerdict,
   type TranscriptCell,
   type TranscriptState,
 } from "@agent-deck/domain";
@@ -70,6 +71,8 @@ export interface StructuredSubagentResult extends RunResult {
   id: string;
   /** Omitted while subagent runs record no public artifacts. */
   artifacts?: string[];
+  /** A7: a verifier run's verdict on its target. */
+  verdict?: SubagentVerdict;
 }
 
 export const DEFAULT_AWAIT_TIMEOUT_MS = 120_000;
@@ -90,8 +93,16 @@ const awaitedRunActive = (run: SubagentRunRecord | undefined): boolean =>
 function structuredResult(
   id: string,
   run: SubagentRunRecord | undefined,
+  deps: Pick<AwaitSubagentDeps, "read">,
 ): StructuredSubagentResult {
-  return run ? { id, ...subagentRunResult(run) } : { id, status: "not_found" };
+  if (!run) return { id, status: "not_found" };
+  // A7: a verifier's result carries the verdict it wrote on its target.
+  const verdict = run.targetRunId ? deps.read(run.targetRunId)?.verdict : undefined;
+  return {
+    id,
+    ...subagentRunResult(run),
+    ...(verdict?.verifierRunId === id ? { verdict } : {}),
+  };
 }
 
 /**
@@ -114,7 +125,7 @@ export function awaitSubagentRuns(
       unsubscribe();
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", onAbort);
-      resolve({ results: runIds.map((id) => structuredResult(id, deps.read(id))), timedOut });
+      resolve({ results: runIds.map((id) => structuredResult(id, deps.read(id), deps)), timedOut });
     }
     function onAbort(): void {
       finish(true);
@@ -200,6 +211,11 @@ export interface SubagentRunRecord {
   worktreeCleanup?: "physical_removed";
   /** Additive v4 validated project-relative read-first hints for the latest turn. */
   declaredReads?: string[];
+  /** A7: a verifier run and the run it verifies (same parent). */
+  role?: "verify";
+  targetRunId?: string;
+  /** A7: on the target, the latest verifier's verdict. */
+  verdict?: SubagentVerdict;
 }
 
 const runSchema = z
@@ -244,6 +260,15 @@ const runSchema = z
     declaredReads: z
       .array(z.string().min(1).max(MAX_DECLARED_READ_LENGTH))
       .max(MAX_DECLARED_READS)
+      .optional(),
+    role: z.literal("verify").optional(),
+    targetRunId: z.string().uuid().optional(),
+    verdict: z
+      .object({
+        decision: z.enum(["APPROVE", "REJECT", "CONTINUE", "ASK_HUMAN", "missing"]),
+        reason: z.string().max(MAX_ERROR_BYTES),
+        verifierRunId: z.string().uuid(),
+      })
       .optional(),
   })
   .superRefine((run, context) => {
@@ -1103,6 +1128,8 @@ export class SubagentRunStore {
       ...(run.outputTokens !== undefined ? { outputTokens: run.outputTokens } : {}),
       ...(run.durationMs !== undefined ? { durationMs: run.durationMs } : {}),
       ...(run.artifactRootId ? { artifactRootId: run.artifactRootId } : {}),
+      ...(run.targetRunId ? { targetRunId: run.targetRunId } : {}),
+      ...(run.verdict ? { verdict: run.verdict } : {}),
     }));
   }
 

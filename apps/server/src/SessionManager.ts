@@ -10,6 +10,7 @@ import type {
   SessionPlanItem,
   SessionPlanUpdate,
   SubagentCell,
+  SubagentVerdict,
   TranscriptState,
   ChildTranscriptSnapshot,
 } from "@agent-deck/domain";
@@ -426,6 +427,10 @@ export class ManagedSession {
 
   appendSubagentProgress(cellId: string, message: string): void {
     runSyncUnwrapped(this.rt.appendSubagentProgress(cellId, message));
+  }
+
+  setSubagentVerdict(cellId: string, verdict: SubagentVerdict): void {
+    runSyncUnwrapped(this.rt.setSubagentVerdict(cellId, verdict));
   }
 
   openSupervisorQuestion(req: {
@@ -1888,6 +1893,20 @@ export class SessionManager {
     return run?.parentSessionId === parentSessionId ? run : undefined;
   }
 
+  /**
+   * A7: write a verifier's verdict on the parent's own target run (the store emits
+   * subagent.run.verified) and onto its card in the live transcript.
+   */
+  recordSubagentVerdict(
+    parentSessionId: string,
+    targetRunId: string,
+    verdict: SubagentVerdict,
+  ): void {
+    if (!this.subagentRunRecord(parentSessionId, targetRunId)) return;
+    this.subagentRuns!.update(targetRunId, { verdict });
+    this.sessions.get(parentSessionId)?.setSubagentVerdict(targetRunId, verdict);
+  }
+
   /** A4: settles when a run launched by this process ends; undefined when none is in flight. */
   subagentRunSettled(parentSessionId: string, runId: string): Promise<unknown> | undefined {
     return this.sessions.get(parentSessionId)?.spawnedSubagents.get(runId)?.done;
@@ -1942,6 +1961,8 @@ export class SessionManager {
     if (run.source !== "single") {
       throw new Error("only single managed_subagent runs can be continued");
     }
+    // A7: a continuation would relaunch without the verifier's read-only profile.
+    if (run.role === "verify") throw new Error("a verifier run cannot be continued");
     if (run.worktreePath) {
       throw new Error("a Deck subagent that ran in its own worktree cannot be continued");
     }

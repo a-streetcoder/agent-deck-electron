@@ -56,6 +56,7 @@ import {
 import { bridgeAvailable } from "./claudeTransport.ts";
 import {
   registerDeckBridgeTools,
+  sessionVerifierDeps,
   registerSupervisorAnswerBridgeTool,
   registerSubagentDeltaBridgeTool,
   registerSupervisorListBridgeTool,
@@ -112,7 +113,7 @@ import {
   registerSubagentDeltaRoute,
   startProjectEventNudges,
 } from "./routes/events.ts";
-import { createSubagentDeltaReader, filesChanged } from "./subagentDelta.ts";
+import { createSubagentDeltaReader } from "./subagentDelta.ts";
 import { registerGitRoutes } from "./routes/git.ts";
 import { registerLoopRoutes } from "./routes/loops.ts";
 import { registerMcpRoutes } from "./routes/mcp.ts";
@@ -122,6 +123,7 @@ import { registerResourceRoutes } from "./routes/resources.ts";
 import { registerSessionRoutes } from "./routes/sessions.ts";
 import { registerSettingsRoutes } from "./routes/settings.ts";
 import { SessionManager, SubagentCapError } from "./SessionManager.ts";
+import { launchVerifier } from "./verifier.ts";
 import { SessionImageStore } from "./sessionImages.ts";
 import { forkSessionAttachmentStores } from "./sessionAttachmentLifecycle.ts";
 import { SessionPasteStore } from "./sessionPastes.ts";
@@ -1062,7 +1064,11 @@ async function initServer(
       events.subagentResultRead(parentSessionId, runId, uptoSeq),
     warn: (message, error) => console.warn(message, error),
   });
-  registerDeckBridgeTools(bridge, sessions, eventLog, subagentDeltas);
+  // A7: one verifier role for ad-hoc verify calls and plan items.
+  const verifierDeps = sessionVerifierDeps(sessions, (message, error) =>
+    serverLog.warn("verifier", message, error),
+  );
+  registerDeckBridgeTools(bridge, sessions, eventLog, subagentDeltas, verifierDeps);
   // A5: run assigned plan items through the A4 spawn path as they become ready.
   const planDispatcher = createPlanDispatcher({
     subscribe: (subscriber) => eventLog.subscribe(subscriber),
@@ -1073,34 +1079,31 @@ async function initServer(
       sessions.get(sessionId)?.updatePlan(updates, { causationId }),
     dispatches: (sessionId) => logReaders.projections().dispatches.get(sessionId),
     run: (sessionId, runId) => sessions.subagentRunRecord(sessionId, runId),
-    filesChanged: async (sessionId, runId) => {
-      const record = sessions.subagentRunRecord(sessionId, runId);
-      if (!record?.worktreePath) return undefined;
-      return (await filesChanged(record, (message, error) => console.warn(message, error)))
-        .filesChangedSinceBase;
-    },
     slots: (sessionId) => {
       const meta = sessions.get(sessionId)?.meta;
       return meta && sessions.delegationAllowed(meta) ? sessions.detachedSlots(sessionId) : 0;
     },
-    spawn: async (sessionId, task, { agentName, verifier, worktree }) => {
+    spawn: async (sessionId, task, { agentName, worktree }) => {
       try {
         return await sessions.spawnSubagent(sessionId, task, {
           agentName,
           detached: true,
           ...(worktree ? { worktree: true } : {}),
-          // The verifier gets the loop checker profile (read-only tools plus git-only
-          // checker_shell) and a durable run record like any managed child.
-          ...(verifier
-            ? {
-                toolPolicy: "readOnly" as const,
-                overrides: {
-                  checkerShell: true,
-                  defaultExpectedOutcome: "reportOnly" as const,
-                  durable: true,
-                },
-              }
-            : {}),
+        });
+      } catch (error) {
+        if (error instanceof SubagentCapError) return "wait";
+        throw error;
+      }
+    },
+    // A7: the shared verifier role (read-only profile, typed verdict on the producer run).
+    verify: async (sessionId, { targetRunId, task, agentName }) => {
+      try {
+        return await launchVerifier(verifierDeps, {
+          parentSessionId: sessionId,
+          targetRunId,
+          task,
+          agentName,
+          detached: true,
         });
       } catch (error) {
         if (error instanceof SubagentCapError) return "wait";

@@ -251,6 +251,39 @@ describe("projectNodeTree rules", () => {
     expect(tree.nodes.get("toolCall:s/call")?.parent).toBe("turn:t");
   });
 
+  it("A7: a verifier is a child of its producer; the verdict lands on the producer's run", () => {
+    const verdict = { decision: "REJECT", reason: "no tests", verifierRunId: "v" };
+    const verified = ev("subagent.run.verified", ["subagentRun", "p"], {
+      payload: {
+        run: {
+          id: "p",
+          parentSessionId: "s",
+          task: "x",
+          status: "completed",
+          createdAt: TS,
+          updatedAt: TS,
+          verdict,
+        },
+        verdict: "REJECT",
+      },
+    });
+    const tree = projectNodeTree(
+      [
+        runEvent("subagent.run.created", "p", "running"),
+        runEvent("subagent.run.finished", "p", "completed"),
+        runEvent("subagent.run.created", "v", "running", ["subagentRun", "p"]),
+        runEvent("subagent.run.finished", "v", "completed"),
+        verified,
+      ],
+      { sessionId: "s" },
+    );
+    expect(tree.nodes.get("subagentRun:v")?.parent).toBe("subagentRun:p");
+    expect(tree.nodes.get("subagentRun:p")).toMatchObject({
+      status: "done",
+      subagentRun: { verdict },
+    });
+  });
+
   it("two sessions reusing a tool call id do not merge", () => {
     const tool = (id: string) => [{ id, name: "bash", isError: id === "x" }];
     const log = [

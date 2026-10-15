@@ -18,6 +18,7 @@ import { useAppStore } from "../state/store.ts";
 import type { ProjectEventPage } from "../state/projectLog.ts";
 import { switchToSession } from "../state/wsBridge.ts";
 import { actorLabel, formatEventTime } from "./ActivityList.tsx";
+import { VerdictChip } from "./VerdictChip.tsx";
 
 /**
  * A2: the open session's execution-node tree, projected from the session's FULL event
@@ -161,6 +162,7 @@ const NodeRow = memo(function NodeRow({ node, joins }: { node: ExecutionNode; jo
       >
         {tool ? toolLabel(node, joins) : node.label}
       </span>
+      {node.subagentRun?.verdict ? <VerdictChip verdict={node.subagentRun.verdict} /> : null}
       {tool ? null : (
         <>
           <span className="shrink-0 text-text-muted">{actorLabel(node.actor)}</span>

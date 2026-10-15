@@ -1,0 +1,242 @@
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import {
+  MOCK_MODEL_ID,
+  MOCK_PROVIDER_ID,
+  startMockProvider,
+  writeMockProviderExtension,
+  type ChatCompletionRequest,
+} from "@agent-deck/testkit";
+import type { SubagentCell } from "@agent-deck/domain";
+import { expect, it, vi } from "vitest";
+import { startServer } from "../src/index.ts";
+import type { StructuredSubagentResult, SubagentRunRecord } from "../src/subagentRunStore.ts";
+
+/**
+ * A7 against real Pi: a parent spawns a producer, then verifies it ad hoc through
+ * spawn_subagent and managed_subagent with role "verify". The verifier runs read-only
+ * (its write attempt through checker_shell is refused), sees the validation result the
+ * server ran first, and its typed verdict lands on the producer's run record, in the
+ * log as subagent.run.verified, and on the producer's card (REJECT with its reason).
+ */
+
+process.env.AGENT_DECK_TEST = "1";
+
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
+const FOREIGN_RUN = "99999999-9999-4999-8999-999999999999";
+
+const systemText = (body: ChatCompletionRequest): string =>
+  JSON.stringify(body.messages.filter((m) => m.role === "system" || m.role === "developer"));
+const isChild = (body: ChatCompletionRequest): boolean =>
+  systemText(body).includes("focused subagent launched by Agent Deck");
+const toolTexts = (body: ChatCompletionRequest): string[] =>
+  body.messages
+    .filter((m) => m.role === "tool")
+    .map((m) =>
+      typeof m.content === "string"
+        ? m.content
+        : (m.content as { text?: string }[]).map((part) => part.text ?? "").join(""),
+    );
+const runIdIn = (text: string | undefined): string => text?.match(UUID)?.[0] ?? "missing";
+const toolNames = (body: ChatCompletionRequest): string[] =>
+  (Array.isArray(body.tools) ? body.tools : []).map(
+    (tool) => (tool as { function: { name: string } }).function.name,
+  );
+
+interface LoggedEvent {
+  kind: string;
+  subject: { id: string };
+  parent?: { type: string; id: string };
+  payload: Record<string, unknown>;
+}
+const loggedEvents = (dataDir: string): LoggedEvent[] => {
+  const dir = path.join(dataDir, "events");
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".jsonl"))
+    .flatMap((name) => readFileSync(path.join(dir, name), "utf8").split("\n"))
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as LoggedEvent);
+};
+
+it("verifies a finished run ad hoc: typed verdicts, the event, the card, read-only", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "pi-verify-"));
+  const validation = `node -e "process.stdout.write('a7-validated')"`;
+  const escape = `node -e "require('fs').writeFileSync('a7-escape.txt', 'x')"`;
+  const mock = await startMockProvider({
+    chunkDelayMs: 5,
+    toolCall: (_user, body) => {
+      const results = toolTexts(body);
+      if (isChild(body)) {
+        // The REJECT verifier first tries to write through its only shell.
+        if (systemText(body).includes("verify: check TASK_WORK") && results.length === 0)
+          return { name: "checker_shell", arguments: { command: escape } };
+        return null;
+      }
+      if (!JSON.stringify(body.tools ?? []).includes("spawn_subagent")) return null;
+      const producer = runIdIn(results[0]);
+      switch (results.length) {
+        case 0:
+          return { name: "spawn_subagent", arguments: { task: "TASK_WORK: build part A" } };
+        case 1:
+          return { name: "await_subagents", arguments: { runIds: [producer] } };
+        case 2:
+          return {
+            name: "spawn_subagent",
+            arguments: { task: "recheck TASK_WORK", role: "verify", targetRunId: producer },
+          };
+        case 3:
+          return { name: "await_subagents", arguments: { runIds: [runIdIn(results[2])] } };
+        case 4:
+          return {
+            name: "managed_subagent",
+            arguments: {
+              task: "check TASK_WORK",
+              role: "verify",
+              targetRunId: producer,
+              validationCommand: validation,
+            },
+          };
+        case 5:
+          return {
+            name: "managed_subagent",
+            arguments: { task: "check a stranger", role: "verify", targetRunId: FOREIGN_RUN },
+          };
+        default:
+          return null;
+      }
+    },
+    reply: (_user, body) => {
+      if (!isChild(body)) return "parent finished";
+      const system = systemText(body);
+      if (system.includes("verify: recheck TASK_WORK")) return "APPROVE\nLooks complete.";
+      if (system.includes("verify: check TASK_WORK")) return "REJECT: the change has no tests";
+      return "WORK_RESULT part A built";
+    },
+  });
+  const previous = process.env.AGENT_DECK_PROVIDER_EXTENSIONS;
+  process.env.AGENT_DECK_PROVIDER_EXTENSIONS = writeMockProviderExtension(mock.baseUrl);
+  const dataDir = path.join(root, "data");
+  const server = await startServer({ dataDir });
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        startImmediately: true,
+        cwd: root,
+        provider: MOCK_PROVIDER_ID,
+        model: MOCK_MODEL_ID,
+        extensions: [process.env.AGENT_DECK_PROVIDER_EXTENSIONS],
+        env: { HOME: root, USERPROFILE: root, PI_SKIP_VERSION_CHECK: "1" },
+      }),
+    });
+    expect(response.status).toBe(201);
+    const { session } = (await response.json()) as { session: { id: string } };
+    const managed = server.sessions.get(session.id)!;
+    await managed.prompt("Build, then verify");
+    const final = await vi.waitFor(
+      () => {
+        const request = mock.requests.find((r) => !isChild(r) && toolTexts(r).length === 6);
+        expect(request).toBeDefined();
+        return request!;
+      },
+      { timeout: 90_000, interval: 250 },
+    );
+    const [spawned, , spawnedVerify, awaitedVerify, rejected, refused] = toolTexts(final);
+    const producerId = runIdIn(spawned);
+
+    // spawn_subagent role verify: the awaited verifier result carries its typed verdict.
+    const approverId = runIdIn(spawnedVerify);
+    expect(JSON.parse(spawnedVerify!)).toEqual({ runId: approverId, targetRunId: producerId });
+    const [approver] = (JSON.parse(awaitedVerify!) as { results: StructuredSubagentResult[] })
+      .results;
+    expect(approver).toMatchObject({
+      id: approverId,
+      status: "completed",
+      verdict: { decision: "APPROVE", reason: "Looks complete.", verifierRunId: approverId },
+    });
+
+    // managed_subagent role verify returns the typed verdict directly.
+    const verdict = JSON.parse(rejected!) as {
+      runId: string;
+      targetRunId: string;
+      verdict: { decision: string; reason: string; verifierRunId: string };
+    };
+    expect(verdict).toEqual({
+      runId: verdict.runId,
+      targetRunId: producerId,
+      verdict: {
+        decision: "REJECT",
+        reason: "the change has no tests",
+        verifierRunId: verdict.runId,
+      },
+    });
+    // A run of no run of this session is refused.
+    expect(refused).toContain("Verifier failed.");
+    expect(refused).toContain(`No Deck subagent ${FOREIGN_RUN} in this session`);
+
+    // The verifier: read-only tools, validation evidence first, its write refused.
+    const verifierRequests = mock.requests.filter(
+      (r) => isChild(r) && systemText(r).includes("verify: check TASK_WORK"),
+    );
+    const tools = toolNames(verifierRequests[0]!);
+    expect(tools).toEqual(expect.arrayContaining(["read", "grep", "find", "ls", "checker_shell"]));
+    for (const writer of ["bash", "edit", "write"]) expect(tools).not.toContain(writer);
+    const prompt = systemText(verifierRequests[0]!);
+    expect(prompt).toContain("Validation (already run by Agent Deck, before your review): passed");
+    expect(prompt).toContain("a7-validated");
+    expect(prompt).toContain("WORK_RESULT part A built");
+    const refusal = toolTexts(verifierRequests.at(-1)!);
+    expect(refusal[0]).toContain("checker_shell refused");
+    expect(existsSync(path.join(root, "a7-escape.txt"))).toBe(false);
+
+    // Records: the verifier is role verify on its target; the target holds the last verdict.
+    const records = server.sessions;
+    const verifierRecord = records.subagentRunRecord(
+      session.id,
+      verdict.runId,
+    ) as SubagentRunRecord;
+    expect(verifierRecord).toMatchObject({
+      role: "verify",
+      targetRunId: producerId,
+      status: "completed",
+    });
+    expect(records.subagentRunRecord(session.id, producerId)?.verdict).toEqual(verdict.verdict);
+
+    // The log: one verified event per verdict; each verifier hangs under the producer.
+    const events = loggedEvents(dataDir);
+    expect(events.filter((e) => e.kind === "subagent.run.verified").map((e) => e.payload)).toEqual([
+      expect.objectContaining({
+        runId: producerId,
+        verifierRunId: approverId,
+        verdict: "APPROVE",
+        reason: "Looks complete.",
+      }),
+      expect.objectContaining({
+        runId: producerId,
+        verifierRunId: verdict.runId,
+        verdict: "REJECT",
+        reason: "the change has no tests",
+      }),
+    ]);
+    for (const id of [approverId, verdict.runId]) {
+      expect(
+        events.find((e) => e.kind === "subagent.run.created" && e.subject.id === id)?.parent,
+      ).toEqual({ type: "subagentRun", id: producerId });
+    }
+
+    // The producer's card shows the REJECT with its reason; the verifier cards point at it.
+    const cards = managed
+      .snapshot()
+      .state.cells.filter((c): c is SubagentCell => c.kind === "subagent");
+    expect(cards.find((c) => c.id === producerId)?.verdict).toEqual(verdict.verdict);
+    expect(cards.find((c) => c.id === verdict.runId)?.targetRunId).toBe(producerId);
+  } finally {
+    await server.close();
+    await mock.close();
+    if (previous === undefined) delete process.env.AGENT_DECK_PROVIDER_EXTENSIONS;
+    else process.env.AGENT_DECK_PROVIDER_EXTENSIONS = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 120_000);
