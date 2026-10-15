@@ -28,3 +28,7 @@ node --test for the resolution order and for the verifier (wrong checksum -> fil
 **2026-10-15T22:27:17Z**
 
 2026-10-15 implemented as a28357b: cloudflared-resolver.js (order: stored path if exists, AGENT_DECK_CLOUDFLARED as given, PATH, known folders), pinned download 2026.10.0 with live-verified sha256 table (macOS: checksum of the binary inside the .tgz, extracted by a small tar reader), IPC with sender guard + remote refusal, client rebuilt after a download, UI section; sign-in button gating left to 16b. Contrarian + GPT (review55) running.
+
+**2026-10-15T22:29:52Z**
+
+2026-10-15 GPT review (review55): five should-fix (short writes not checked, no download/decompression size bounds, automatic redirects allow an http hop, no overall deadline, quoted Windows PATH entries). Fix round sent; contrarian running.

@@ -36,3 +36,7 @@ docker build succeeds in CI; the container answers /health 200 and GET /projects
 **2026-10-15T22:24:42Z**
 
 2026-10-15 GPT review (review54): blocker = image must default to loopback (0.0.0.0 exposes an unauthenticated control plane on a shared Docker network; the sidecar shares the namespace anyway); should-fix = rustup bootstrap piped from sh.rustup.rs, pin rustup-init with a committed sha256. Fix round sent; contrarian still running.
+
+**2026-10-15T22:29:52Z**
+
+2026-10-15 fix round landed as ac7c61e: image listens on loopback (override only for smoke tests, documented), rustup-init 1.29.1 pinned with sha256; VM rebuild + smoke green (health 200 with the override; without it the published port is unreachable and HEALTHCHECK healthy). Waiting for the contrarian before merge.
