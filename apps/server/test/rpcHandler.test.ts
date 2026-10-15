@@ -957,6 +957,35 @@ describe("createRpcConnection terminal ops (Slice 8a)", () => {
     ]);
   });
 
+  it("terminal_open layers the REQUESTER's GitHub env, not the owner's (SRV-06)", async () => {
+    const { session } = makeSession("s1");
+    const { gateway } = makeTerminalGateway();
+    const envs: Array<Record<string, string | undefined> | undefined> = [];
+    const asked: Array<string | undefined> = [];
+    const conn = createRpcConnection({
+      sessions: makeManager({ s1: session }),
+      terminals: {
+        ...gateway,
+        open: async (options) => (envs.push(options.env), gateway.open(options)),
+      },
+      diffs: makeDiffGateway().gateway,
+      editors: makeEditorLauncher().launcher,
+      files: makeFileService().service,
+      scripts: makeScriptGateway().gateway,
+      checkpoints: makeCheckpointService().service,
+      rollback: makeRollbackGateway().gateway,
+      user: { id: "viewer@example.com", email: "viewer@example.com" },
+      terminalEnv: (user): Record<string, string> => (
+        asked.push(user?.id),
+        user?.id === "viewer@example.com" ? { GH_TOKEN: "gho_viewer" } : {}
+      ),
+      send: () => {},
+    });
+    await conn.handleMessage(frame(1, { type: "terminal_open", sessionId: "s1" }));
+    expect(asked).toEqual(["viewer@example.com"]);
+    expect(envs[0]?.GH_TOKEN).toBe("gho_viewer");
+  });
+
   it("terminal_open on an unknown session errors without spawning", async () => {
     const { gateway, openCalls } = makeTerminalGateway();
     const { conn, frames } = harness(makeManager({}), gateway);

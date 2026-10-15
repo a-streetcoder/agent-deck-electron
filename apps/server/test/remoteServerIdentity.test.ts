@@ -6,6 +6,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -70,6 +71,29 @@ const endpoint = (pathname: string) => `http://127.0.0.1:${server.port}${pathnam
 const ale = { "cf-access-jwt-assertion": assertionFor("ale@example.com", "Ale") };
 const AUTHORED_SESSION = randomUUID();
 const loginAuthPaths: string[] = [];
+// SRV-06: github.com stand-in for the device flow; token answers are queued per test.
+const tokenAnswers: Array<Record<string, unknown>> = [];
+const githubJson = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+const githubFetch = (async (url: string | URL) => {
+  const target = String(url);
+  if (target === "https://github.com/login/device/code") {
+    return githubJson({
+      device_code: "device-secret",
+      user_code: "ABCD-1234",
+      verification_uri: "https://github.com/login/device",
+      interval: 0,
+      expires_in: 900,
+    });
+  }
+  if (target === "https://github.com/login/oauth/access_token") {
+    return githubJson(tokenAnswers.shift() ?? { error: "authorization_pending" });
+  }
+  if (target === "https://api.github.com/user") {
+    return githubJson({ login: "ale-gh", avatar_url: "https://avatars.example/ale" });
+  }
+  return githubJson({}, 404);
+}) as typeof fetch;
 const authorRowIds = (): string[] =>
   new SessionAuthorIndex(dataDir).list().map((record) => record.id);
 
@@ -109,6 +133,7 @@ beforeAll(async () => {
     dataDir,
     providerLoginFn: async (authPath) => void loginAuthPaths.push(authPath),
     claudeCodeLoggedIn: async () => claudeCodeLoggedIn,
+    githubFetch,
   });
 });
 afterAll(async () => {
@@ -585,5 +610,140 @@ describe("SessionAuthorStore", () => {
     store.unstage("s4", "retry me", ale);
     expect(store.attachToUserCell("s4", cell, undefined).author).toEqual(andrea);
     expect(store.attachToUserCell("s4", cell, undefined).author).toBeUndefined();
+  });
+});
+
+describe("SRV-06 GitHub connection on a shared server", () => {
+  const andrea = { "cf-access-jwt-assertion": assertionFor("andrea@example.com") };
+  const status = async (headers: Record<string, string>) =>
+    (await fetch(endpoint("/runtime/github"), { headers })).json();
+  const connect = () =>
+    fetch(endpoint("/runtime/github/connect"), { method: "POST", headers: ale });
+  const poll = (id: string, headers: Record<string, string>) =>
+    fetch(endpoint(`/runtime/github/connect/${id}`), { headers });
+  const githubFile = () =>
+    path.join(path.dirname(userAgentDir(realpathSync(dataDir), "ale@example.com")), "github.json");
+  const TOKEN = "gho_aleToken0123456789abcdefXYZ";
+
+  it("answers 409 until the GitHub app's client id is set", async () => {
+    delete process.env.AGENT_DECK_GITHUB_CLIENT_ID;
+    expect(await status(ale)).toEqual({ available: true, configured: false, connection: null });
+    const refused = await connect();
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: "GitHub app not configured" });
+  });
+
+  it("connects through the device flow for the initiator only, then disconnects", async () => {
+    process.env.AGENT_DECK_GITHUB_CLIENT_ID = "client-1";
+    const started = await connect();
+    expect(started.status).toBe(201);
+    const flow = (await started.json()) as Record<string, unknown>;
+    expect(flow).toMatchObject({
+      userCode: "ABCD-1234",
+      verificationUri: "https://github.com/login/device",
+      interval: 0,
+    });
+    expect(JSON.stringify(flow)).not.toContain("device-secret");
+    const id = flow.id as string;
+    expect((await poll(id, andrea)).status).toBe(404);
+    tokenAnswers.push(
+      { error: "authorization_pending" },
+      { error: "slow_down", interval: 0 },
+      { access_token: TOKEN, token_type: "bearer", scope: "repo,workflow" },
+    );
+    expect(await (await poll(id, ale)).json()).toEqual({ status: "pending", interval: 0 });
+    expect(await (await poll(id, ale)).json()).toEqual({ status: "pending", interval: 0 });
+    expect(await (await poll(id, ale)).json()).toEqual({ status: "done", login: "ale-gh" });
+    expect((await poll(id, andrea)).status).toBe(404);
+
+    const connected = await status(ale);
+    expect(connected).toMatchObject({
+      configured: true,
+      connection: {
+        login: "ale-gh",
+        avatarUrl: "https://avatars.example/ale",
+        scopes: ["repo", "workflow"],
+      },
+    });
+    expect(JSON.stringify(connected)).not.toContain(TOKEN);
+    expect((await status(andrea)) as { connection: unknown }).toMatchObject({ connection: null });
+    expect(JSON.parse(readFileSync(githubFile(), "utf8")).token).toBe(TOKEN);
+    if (process.platform !== "win32") {
+      expect(statSync(githubFile()).mode & 0o777).toBe(0o600);
+    }
+
+    const removed = await fetch(endpoint("/runtime/github"), { method: "DELETE", headers: ale });
+    expect(removed.status).toBe(200);
+    expect(existsSync(githubFile())).toBe(false);
+    expect(await status(ale)).toMatchObject({ connection: null });
+  });
+
+  it("runs issue changes and the issues account as the requester's connection", async () => {
+    // gh stand-in that runs everywhere: node itself, with a --require hook that
+    // logs argv and GH_TOKEN and exits before node reads its "script" argv.
+    const stubDir = mkdtempSync(path.join(tmpdir(), "deck-gh-stub-"));
+    const log = path.join(stubDir, "calls.log");
+    const stub = path.join(stubDir, "gh-stub.cjs");
+    writeFileSync(
+      stub,
+      `require("fs").appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv: process.argv.slice(1), token: process.env.GH_TOKEN ?? null }) + "\\n"); process.exit(0);`,
+    );
+    const projectDir = mkdtempSync(path.join(tmpdir(), "deck-gh-project-"));
+    const created = await fetch(endpoint("/projects"), {
+      method: "POST",
+      headers: { ...ale, "content-type": "application/json" },
+      body: JSON.stringify({ path: projectDir }),
+    });
+    const { project } = (await created.json()) as { project: { id: string } };
+    mkdirSync(path.dirname(githubFile()), { recursive: true });
+    writeFileSync(githubFile(), JSON.stringify({ token: TOKEN, login: "ale-gh" }));
+    const saved = { bin: process.env.AGENT_DECK_GH_BIN, opts: process.env.NODE_OPTIONS };
+    process.env.AGENT_DECK_GH_BIN = process.execPath;
+    process.env.NODE_OPTIONS = `--require "${stub.replace(/\\/g, "/")}"`;
+    try {
+      for (const headers of [ale, andrea]) {
+        const reopened = await fetch(endpoint(`/projects/${project.id}/issues/9/reopen`), {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: "{}",
+        });
+        expect(reopened.status).toBe(200);
+      }
+      const calls = readFileSync(log, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { argv: string[]; token: string | null });
+      // Node absolutises its "script" argument: compare the basename.
+      expect(calls.map((call) => [path.basename(call.argv[0]!), ...call.argv.slice(1)])).toEqual([
+        ["issue", "reopen", "9"],
+        ["issue", "reopen", "9"],
+      ]);
+      expect(calls[0]!.token).toBe(TOKEN);
+      expect(calls[1]!.token).not.toBe(TOKEN);
+      expect(await (await fetch(endpoint("/issues/connection"), { headers: ale })).json()).toEqual({
+        connected: true,
+        login: "ale-gh",
+        profileUrl: "https://github.com/ale-gh",
+      });
+    } finally {
+      for (const [key, value] of [
+        ["AGENT_DECK_GH_BIN", saved.bin],
+        ["NODE_OPTIONS", saved.opts],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(githubFile(), { force: true });
+    }
+  });
+
+  it("reports an expired code", async () => {
+    process.env.AGENT_DECK_GITHUB_CLIENT_ID = "client-1";
+    const { id } = (await (await connect()).json()) as { id: string };
+    tokenAnswers.push({ error: "expired_token" });
+    expect(await (await poll(id, ale)).json()).toEqual({
+      status: "expired",
+      error: "The GitHub code expired.",
+    });
   });
 });

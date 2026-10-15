@@ -1667,14 +1667,39 @@ export async function gitDeleteRefs(cwd: string, refs: readonly string[]): Promi
 }
 
 /**
+ * The push URL `gitPush` targets: the branch's push remote, else origin (its
+ * `-u origin` fallback). `null` when there is none. Never sent to a client:
+ * an https URL may embed credentials.
+ */
+export async function gitPushUrl(cwd: string): Promise<string | null> {
+  let remote = "origin";
+  try {
+    const ref = (
+      await runGit(cwd, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{push}"])
+    ).trim();
+    remote = ref.split("/")[0] || remote;
+  } catch {
+    // No upstream yet: gitPush falls back to origin.
+  }
+  try {
+    return (await runGit(cwd, ["remote", "get-url", "--push", remote])).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Push the current branch (native pushCurrentBranch). Try a plain `git push`;
  * if the branch has no upstream (common for a fresh branch), retry with
  * `-u origin <branch>`. Any other failure (no remote, rejected, auth) throws
- * with the git stderr so the caller can surface it.
+ * with the git stderr so the caller can surface it. `env` (SRV-06: the
+ * requester's GitHub credential env) is layered over the server's.
  */
-export async function gitPush(cwd: string): Promise<void> {
+export async function gitPush(cwd: string, env?: Record<string, string>): Promise<void> {
+  const run = (args: string[]): Promise<string> =>
+    env ? runGitEnv(cwd, args, { ...process.env, ...env }) : runGit(cwd, args);
   try {
-    await runGit(cwd, ["push"]);
+    await run(["push"]);
     return;
   } catch (firstError) {
     const stderr = String((firstError as { stderr?: string }).stderr ?? "").toLowerCase();
@@ -1685,7 +1710,7 @@ export async function gitPush(cwd: string): Promise<void> {
     if (!missingUpstream) throw new Error(gitErrorText(firstError));
     const branch = (await runGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
     try {
-      await runGit(cwd, ["push", "-u", "origin", branch]);
+      await run(["push", "-u", "origin", branch]);
     } catch (secondError) {
       throw new Error(gitErrorText(secondError));
     }

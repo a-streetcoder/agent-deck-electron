@@ -1,3 +1,4 @@
+import type { IncomingMessage } from "node:http";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -21,6 +22,8 @@ import { projectAllowsAgent } from "../agentCuration.ts";
 import { AgentAvatarStoreError } from "../agentAvatars.ts";
 import { z } from "zod";
 import type { ServerContext } from "../context.ts";
+import { githubEnv } from "../githubConnections.ts";
+import { requestUser } from "../trustedProxy.ts";
 import {
   normalizeGitHubIssueDetail,
   normalizeIssueReference,
@@ -665,12 +668,25 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     }
   });
 
+  // SRV-06: issue changes (comment, close, reopen) run as the REQUESTER's
+  // GitHub connection when they have one, else gh's own login on the server.
+  const ghEnv = (request: { raw: IncomingMessage }): NodeJS.ProcessEnv => ({
+    ...process.env,
+    ...githubEnv(requestUser(request.raw), ctx.githubConnections),
+  });
+
   // Connection status for the gh transport (ISS-12, native
   // GitHubCLIAuthService.loadStatus): who the CLI is signed in as, or a guided
   // disconnected state. gh IS this app's GitHub transport — richer in-app OAuth
   // is out of scope by design; this surfaces the account the way native's CLI
   // path does.
-  fastify.get("/issues/connection", async () => {
+  fastify.get("/issues/connection", async (request) => {
+    // SRV-06: a requester with a GitHub connection acts as that account.
+    const user = requestUser(request.raw);
+    const own = user ? ctx.githubConnections?.status(user) : null;
+    if (own?.login) {
+      return { connected: true, login: own.login, profileUrl: `https://github.com/${own.login}` };
+    }
     const ghBin = process.env.AGENT_DECK_GH_BIN || "gh";
     try {
       // ONE spawn: a successful authenticated call IS the auth check — `gh auth
@@ -773,6 +789,7 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     try {
       await execFileAsync(ghBin, ["issue", "reopen", number], {
         cwd: project.path,
+        env: ghEnv(request),
         timeout: 15_000,
         maxBuffer: 8_000_000,
       });
@@ -805,6 +822,7 @@ export function registerProjectRoutes(ctx: ServerContext): void {
       writeFileSync(bodyFile, parsed.data.body, { encoding: "utf8", mode: 0o600, flag: "wx" });
       await execFileAsync(ghBin, ["issue", "comment", number, "--body-file", bodyFile], {
         cwd: project.path,
+        env: ghEnv(request),
         timeout: 15_000,
         maxBuffer: 8_000_000,
       });
@@ -836,6 +854,7 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     try {
       await execFileAsync(ghBin, ["issue", "close", number, "--reason", ghReason], {
         cwd: project.path,
+        env: ghEnv(request),
         timeout: 15_000,
         maxBuffer: 8_000_000,
       });

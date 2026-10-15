@@ -1,3 +1,4 @@
+import type { IncomingMessage } from "node:http";
 import { z } from "zod";
 import {
   gitCommitAll,
@@ -7,6 +8,7 @@ import {
   gitLatestVersionTag,
   gitLocalTagExists,
   gitPush,
+  gitPushUrl,
   gitReleaseSynchronization,
   gitRemoteTagExists,
   gitStatus,
@@ -15,6 +17,8 @@ import {
 } from "../git.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
 import { requestUser } from "../trustedProxy.ts";
+import { githubEnv, pushUsesGitHubToken } from "../githubConnections.ts";
+import { gitIdentityEnv } from "../gitIdentity.ts";
 import { runtimeEnvFiles } from "@agent-deck/resources";
 
 // Commit-message generator prompt (native PiAgentShipService.commitMessageSystemPrompt).
@@ -43,6 +47,21 @@ Do NOT write a top-level title (no "# " or "## " line). Output ONLY the markdown
  */
 export function registerGitRoutes(ctx: ServerContext): void {
   const { fastify, projects, sessions, broadcast, rootsFor } = ctx;
+  // SRV-06: the Git screen follows the CLICKER (sessions and agents follow the
+  // owner): their git identity commits, their GitHub connection pushes; none
+  // (or no shared server) leaves the server default.
+  const pushEnv = (request: { raw: IncomingMessage }) =>
+    githubEnv(requestUser(request.raw), ctx.githubConnections);
+  const commitEnv = (request: { raw: IncomingMessage }) =>
+    gitIdentityEnv(requestUser(request.raw), ctx.gitIdentities);
+
+  // Whether a push from here uses the clicker's GitHub connection (the URL itself stays here).
+  fastify.get("/projects/:id/git/push-remote", async (request, reply) => {
+    const project = projects.find((p) => p.id === (request.params as { id: string }).id);
+    if (!project) return reply.status(404).send({ error: "unknown project" });
+    const url = await gitPushUrl(project.path);
+    return { github: url === null ? null : pushUsesGitHubToken(url) };
+  });
 
   // Git automation (native GitRepositoryService): the working-tree status of a
   // project + commit-all. Push/remote is a follow-up. Project-scoped: git runs
@@ -64,7 +83,7 @@ export function registerGitRoutes(ctx: ServerContext): void {
       .safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     try {
-      await gitCommitAll(project.path, parsed.data.message);
+      await gitCommitAll(project.path, parsed.data.message, commitEnv(request));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message === "nothing_to_commit") {
@@ -79,7 +98,7 @@ export function registerGitRoutes(ctx: ServerContext): void {
     // user knows the commit is safe locally even if the push didn't go out.
     if (parsed.data.push) {
       try {
-        await gitPush(project.path);
+        await gitPush(project.path, pushEnv(request));
       } catch (error) {
         broadcast({ type: "resources_changed" });
         return reply.status(502).send({
@@ -99,7 +118,7 @@ export function registerGitRoutes(ctx: ServerContext): void {
     const project = projects.find((p) => p.id === (request.params as { id: string }).id);
     if (!project) return reply.status(404).send({ error: "unknown project" });
     try {
-      await gitPush(project.path);
+      await gitPush(project.path, pushEnv(request));
     } catch (error) {
       return reply
         .status(502)

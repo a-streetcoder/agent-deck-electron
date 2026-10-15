@@ -128,6 +128,8 @@ import { SessionPasteStore } from "./sessionPastes.ts";
 import { SessionAuthorStore } from "./sessionAuthors.ts";
 import { GitIdentityMap } from "./gitIdentity.ts";
 import { UserAgentDirs, userRoots } from "./userAgentDirs.ts";
+import { GitHubConnections, githubEnv } from "./githubConnections.ts";
+import { registerGitHubRoutes } from "./routes/github.ts";
 import { migrateAzureAuthFiles } from "./azureProviderRename.ts";
 import {
   authenticateProxiedRequest,
@@ -248,6 +250,8 @@ export interface StartServerOptions {
   providerLoginFn?: ProviderLoginFn;
   /** PRV-01 seam: the host's Claude Code login state (default: `claude auth status`). */
   claudeCodeLoggedIn?: () => Promise<boolean>;
+  /** SRV-06 seam: the fetch the GitHub device flow uses (tests mock github.com). */
+  githubFetch?: typeof fetch;
 }
 
 export async function startServer(options: StartServerOptions = {}): Promise<AgentDeckServer> {
@@ -350,6 +354,10 @@ async function initServer(
         () => piAgentHome(rootsFor()),
         process.env.AGENT_DECK_OPERATOR_EMAIL?.trim() || undefined,
       )
+    : undefined;
+  // SRV-06: each user's own GitHub connection, injected into their sessions' env.
+  const githubConnections = userAgentDirs
+    ? new GitHubConnections(dataDir, userAgentDirs, undefined, options.githubFetch)
     : undefined;
   // App-managed tool bridge (memory/mcp/subagents register here). The endpoint
   // is only known after listen(), so the factory reads it lazily and returns no
@@ -820,6 +828,7 @@ async function initServer(
     gitIdentities,
     userAgentDirs,
     (meta) => events.turnHooks(meta),
+    githubConnections,
   );
   // Loop run engine (native single-agent loop). Each run's agent executor is
   // built per-run, bound to a parent session in the project cwd.
@@ -1529,6 +1538,7 @@ async function initServer(
     sessionAuthors,
     events,
     sharedServer: trustedProxy !== null,
+    terminalEnv: (user) => githubEnv(user, githubConnections),
     publicOrigin: trustedProxy?.publicOrigin,
     accessVerifier,
   });
@@ -1604,6 +1614,7 @@ async function initServer(
     sessionAuthors,
     gitIdentities,
     userAgentDirs,
+    githubConnections,
     sharedServer: trustedProxy !== null,
     index,
     projects,
@@ -1677,6 +1688,7 @@ async function initServer(
   registerMcpRoutes(ctx);
   registerSettingsRoutes(ctx);
   registerGitRoutes(ctx);
+  registerGitHubRoutes(ctx);
   registerLoopRoutes(ctx);
   registerProjectRoutes(ctx);
   registerSessionRoutes(ctx);

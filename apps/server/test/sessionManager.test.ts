@@ -25,6 +25,7 @@ import type { ServerRuntime } from "../src/runtime.ts";
 import { SubagentRunStore } from "../src/subagentRunStore.ts";
 import { GIT_IDENTITIES_FILE, GitIdentityMap } from "../src/gitIdentity.ts";
 import type { UserAgentDirs } from "../src/userAgentDirs.ts";
+import { GITHUB_CREDENTIAL_HELPER, type GitHubConnections } from "../src/githubConnections.ts";
 import {
   PiHost,
   PiHostLive,
@@ -2860,6 +2861,49 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
     } finally {
       await runtime.dispose();
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("spawns Pi with the owner's GitHub token, and none for an unconnected owner (SRV-06)", async () => {
+    const { runtime, spawned } = makeFakeRuntime();
+    // githubConnections is the 27th positional constructor argument.
+    const args: unknown[] = [runtime, new ReceiptBus(false)];
+    // envFileLayer (19th) carries an inherited non-GitHub git setting.
+    args[18] = () => ({
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "http.proxy",
+      GIT_CONFIG_VALUE_0: "http://proxy.example:3128",
+    });
+    args[26] = {
+      read: (user: { id: string }) =>
+        user.id === "c@example.com" ? { token: "gho_connected" } : undefined,
+    } as unknown as GitHubConnections;
+    const manager = new SessionManager(...(args as ConstructorParameters<typeof SessionManager>));
+    const meta = (createdBy?: SessionMeta["createdBy"]): SessionMeta => ({
+      id: randomUUID(),
+      cwd: process.cwd(),
+      createdAt: new Date().toISOString(),
+      ...(createdBy ? { createdBy } : {}),
+    });
+    try {
+      await manager.resume(meta({ id: "c@example.com" }), { kind: "parent" }).catch(() => {});
+      await manager.resume(meta({ id: "u@example.com" }), { kind: "parent" }).catch(() => {});
+      await manager.resume(meta(), { kind: "parent" }).catch(() => {});
+      expect(spawned[0]!.spawn.env).toMatchObject({
+        GH_TOKEN: "gho_connected",
+        GIT_CONFIG_COUNT: "5",
+        GIT_CONFIG_KEY_0: "http.proxy",
+        GIT_CONFIG_VALUE_0: "http://proxy.example:3128",
+        GIT_CONFIG_KEY_2: "credential.https://github.com.helper",
+        GIT_CONFIG_VALUE_2: GITHUB_CREDENTIAL_HELPER,
+      });
+      for (const unconnected of [spawned[1]!, spawned[2]!]) {
+        const keys = Object.keys(unconnected.spawn.env ?? {});
+        expect(keys).not.toContain("GH_TOKEN");
+        expect(unconnected.spawn.env?.GIT_CONFIG_COUNT).toBe("1");
+      }
+    } finally {
+      await runtime.dispose();
     }
   });
 

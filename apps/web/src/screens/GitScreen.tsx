@@ -15,6 +15,7 @@ import { flushSync } from "react-dom";
 import { Sparkles, Tag } from "lucide-react";
 import { useAppStore } from "../state/store.ts";
 import { mergeWorktreeSession } from "../state/wsBridge.ts";
+import { useGitHubStatus } from "../components/GitHubConnectionCard.tsx";
 
 /**
  * Git screen (native GitRepositoryService): the current project's working-tree
@@ -122,6 +123,29 @@ function GitProjectScreen({
   // and the CheckpointsPanel Restore use.
   const agentRunning = useAppStore((state) => state.transcript.agentStatus === "running");
   const pushToast = useAppStore((state) => state.pushToast);
+  // SRV-06: pushes from this screen use the viewer's GitHub connection.
+  const sharedServer = useAppStore((state) => state.me !== null);
+  const { status: github } = useGitHubStatus(sharedServer);
+  // Whether this project's push remote uses the GitHub connection at all
+  // (SSH host aliases, explicit pushurls and other hosts do not); null: no remote.
+  const [pushRemoteGitHub, setPushRemoteGitHub] = useState<boolean | null | undefined>(undefined);
+  useEffect(() => {
+    if (!sharedServer || !currentProjectId) return;
+    let live = true;
+    void fetch(`/projects/${encodeURIComponent(currentProjectId)}/git/push-remote`)
+      .then(async (response) =>
+        response.ok ? ((await response.json()) as { github?: unknown }) : {},
+      )
+      .then((body) => {
+        if (live && (typeof body.github === "boolean" || body.github === null)) {
+          setPushRemoteGitHub(body.github);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [sharedServer, currentProjectId]);
   const resourcesVersion = useAppStore((state) => state.resourcesVersion);
   const gitActionRequest = useAppStore((state) => state.gitActionRequest);
   const clearGitActionRequest = useAppStore((state) => state.clearGitActionRequest);
@@ -1037,6 +1061,18 @@ function GitProjectScreen({
                   Commit &amp; Push
                 </Button>
               </div>
+              {github?.available ? (
+                <p
+                  className="text-right text-caption text-text-muted"
+                  data-testid="git-push-identity"
+                >
+                  {pushRemoteGitHub === false
+                    ? "This remote pushes with the server key, not your GitHub connection."
+                    : github.connection
+                      ? `GitHub HTTPS pushes use @${github.connection.login || "your connected account"}.`
+                      : "Pushing as the server default. Connect GitHub under Settings > Providers to push as you."}
+                </p>
+              ) : null}
             </div>
           )}
         </>
