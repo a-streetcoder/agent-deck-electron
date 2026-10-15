@@ -15,6 +15,7 @@ import {
   normalizeAgentOutput,
   reduceTranscript,
   turnRefsFromEntries,
+  type TurnOutcome,
   type AskUserAnswer,
   type AskUserCell,
   type DomainEvent,
@@ -917,6 +918,8 @@ export const makeManagedSessionRuntime = (
     // entry after it (a steer or follow-up inside a turn keeps its prompt).
     let lastReportedEntryId: string | undefined;
     let currentTurnFailedOrCancelled = false;
+    // A2: abort ends the turn without the pendingUserTurn idle; its completion is still reported.
+    let currentTurnCancelled = false;
     let turnAwaitingProviderRetry = false;
     const ingestionSettled = yield* Deferred.make<void>();
 
@@ -1333,6 +1336,13 @@ export const makeManagedSessionRuntime = (
           receipts.emit("idle", meta.id);
           // A user turn ends here; a startup/resume idle or a retry pause does not.
           const turnEnded = pendingUserTurn && !turnAwaitingProviderRetry;
+          const outcome: TurnOutcome = currentTurnCancelled
+            ? "cancelled"
+            : currentTurnFailedOrCancelled
+              ? "failed"
+              : "completed";
+          const turnReported = turnEnded || currentTurnCancelled;
+          currentTurnCancelled = false;
           if (turnEnded) {
             if (!currentTurnFailedOrCancelled && meta.status !== "failed") markNeedsAttention();
             pendingUserTurn = false;
@@ -1340,7 +1350,7 @@ export const makeManagedSessionRuntime = (
           }
           // The causation snapshot is taken now, not when the async work below
           // reports: a prompt sent meanwhile must not become this turn's cause.
-          const turnEvents = turnEnded ? params.turnEvents : undefined;
+          const turnEvents = turnReported ? params.turnEvents : undefined;
           const turnContext = turnEvents ? quietly(() => turnEvents.end()) : undefined;
           const reconcileImages = Effect.gen(function* () {
             if (!params.reconcileImages && !turnEvents) {
@@ -1353,7 +1363,7 @@ export const makeManagedSessionRuntime = (
               quietly(() => {
                 const turn = turnRefsFromEntries(chain, lastReportedEntryId);
                 lastReportedEntryId = entryData.leafId ?? lastReportedEntryId;
-                if (turn) turnEvents.completed(turn, turnContext);
+                if (turn) turnEvents.completed({ ...turn, outcome }, turnContext);
               });
             }
             if (!params.reconcileImages) {
@@ -1888,6 +1898,7 @@ export const makeManagedSessionRuntime = (
         Effect.orDie,
       ),
       abort: Effect.sync(() => {
+        if (pendingUserTurn) currentTurnCancelled = true;
         currentTurnFailedOrCancelled = true;
         turnAwaitingProviderRetry = false;
         pendingUserTurn = false;
@@ -2661,12 +2672,16 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
           const childTurnEvents = params.turnEvents;
           if (lifecycle.settled && childTurnEvents) {
             yield* reportChildTurn(child.getEntries, (turn) =>
-              childTurnEvents.completed(turn, parentTurn, {
-                subagentRunId: runId,
-                childSessionId,
-                task,
-                ...(agentName ? { agentName } : {}),
-              }),
+              childTurnEvents.completed(
+                { ...turn, outcome: lifecycle.error ? "failed" : "completed" },
+                parentTurn,
+                {
+                  subagentRunId: runId,
+                  childSessionId,
+                  task,
+                  ...(agentName ? { agentName } : {}),
+                },
+              ),
             );
           }
           if (!lifecycle.settled)

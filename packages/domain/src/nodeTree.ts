@@ -1,8 +1,10 @@
 // A2: the execution-node tree, a pure projection of the event log (VISION_ORCHESTRATION
 // principles 1, 2, 7). One structure for the timeline, the deck and the loop views.
 // The tree holds facts and references only: a turn carries its Pi entry ids and tool
-// call refs, and the web JOINS them with the transcript cells (user cells by entryId,
-// tool cells by toolCallId); message, reasoning and tool content never come from here.
+// call refs, and the web JOINS them with the transcript cells of the same session
+// (user cells by entryId, tool cells by toolCallId, assistant cells by position);
+// message, reasoning and tool content never come from here. Tool call ids are only
+// unique inside a session, so toolCall keys carry the session: `toolCall:<session>/<id>`.
 //
 // Completion: a node's status comes from the latest event about its own subject. Only
 // the root's events complete the run; a parent finishing never changes a child, and a
@@ -21,7 +23,7 @@ import type { TurnToolCallRef } from "./turnRefs.ts";
 export type NodeStatus = "pending" | "running" | "done" | "error" | "stopped" | "interrupted";
 
 export interface ExecutionNode {
-  /** `${type}:${id}`, unique in the tree. */
+  /** `${type}:${id}` (toolCall: `toolCall:${sessionId}/${id}`), unique in the tree. */
   key: string;
   ref: StoredNodeRef;
   /** The parent's key; absent on a root. */
@@ -32,6 +34,7 @@ export interface ExecutionNode {
   label: string;
   /** Who opened the node (its first event's actor). */
   actor: EventActor;
+  /** The session the node belongs to: the event's sessionId, else its agent actor's. */
   sessionId?: string;
   startedAt: string;
   updatedAt: string;
@@ -39,6 +42,12 @@ export interface ExecutionNode {
   endedAt?: string;
   /** The store pruned the record (subagent.run.removed, session.removed, ...); history stays. */
   removed?: true;
+  /** Only referenced (as a parent) by the events in view; its own events are not. */
+  placeholder?: true;
+  /** session: forked from this session (the fork is its own root, never a child). */
+  forkedFrom?: string;
+  /** session: the sessions forked from this one, for "forked to" link rows. */
+  forks?: { sessionId: string; label: string }[];
   /** turn: references into the transcript, joined by the web. */
   entryIds?: string[];
   toolCalls?: TurnToolCallRef[];
@@ -77,7 +86,11 @@ export interface NodeTreeEvent {
 /** Scope the result to one session's subtree, or one loop or subagent run's subtree. */
 export type NodeTreeScope = { sessionId?: string; runId?: string };
 
-export const nodeKey = (ref: StoredNodeRef): string => `${ref.type}:${ref.id}`;
+/** A node's key; tool call ids are qualified by their session. */
+export const nodeKey = (ref: StoredNodeRef, sessionId?: string): string =>
+  ref.type === "toolCall" && sessionId
+    ? `toolCall:${sessionId}/${ref.id}`
+    : `${ref.type}:${ref.id}`;
 
 const TERMINAL: ReadonlySet<NodeStatus> = new Set(["done", "error", "stopped", "interrupted"]);
 
@@ -108,10 +121,37 @@ const CHILD_STATUS: Record<string, NodeStatus> = {
   stopped: "stopped",
 };
 
+const TURN_OUTCOME: Record<string, NodeStatus> = {
+  completed: "done",
+  failed: "error",
+  cancelled: "stopped",
+};
+
+const PLACEHOLDER_LABEL: Record<string, string> = {
+  subagentRun: "run not in view",
+  toolCall: "tool call not in view",
+  turn: "turn not in view",
+  session: "session not in view",
+};
+
+/** A legacy child record has no status: infer it from its timestamps and error. */
+function childStatus(child: PublicLoopChild): NodeStatus {
+  if (child.status) return CHILD_STATUS[child.status] ?? "running";
+  if (child.error) return "error";
+  if (child.endedAt) return "done";
+  return child.startedAt ? "running" : "pending";
+}
+
+interface ParentRef {
+  key: string;
+  ref: StoredNodeRef;
+  sessionId?: string;
+}
+
 interface Draft extends ExecutionNode {
   order: number;
   /** Parent from an explicit `parent` ref (first wins), from causation, from the session. */
-  explicitParent?: string;
+  explicitParent?: ParentRef;
   causeParent?: string;
   sessionParent?: string;
 }
@@ -119,11 +159,18 @@ interface Draft extends ExecutionNode {
 const str = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined;
 
+const sessionOf = (event: NodeTreeEvent): string | undefined =>
+  event.sessionId ?? (event.actor.type === "agent" ? event.actor.sessionId : undefined);
+
 /**
  * Fold events (ascending by seq) into the execution-node tree. Kinds and node types
  * this build does not know still make nodes (status "running" until a known kind says
  * otherwise), so a newer writer's log stays readable. Deterministic: the same events
  * give the same tree, children ordered by their first event.
+ *
+ * Restart rule: server.started interrupts open supervisor requests, running turns and
+ * running placeholders (memory-only work never completes after a restart). A reader of
+ * a filtered log must include server.started (GET /events?sessionId= does).
  */
 export function projectNodeTree(
   events: Iterable<NodeTreeEvent>,
@@ -132,10 +179,12 @@ export function projectNodeTree(
   const drafts = new Map<string, Draft>();
   // Event id -> the subject it was about: a causationId points at an event.
   const subjectOfEvent = new Map<string, string>();
+  // The node order at each server.started: placeholders older than one are interrupted.
+  const restarts: { order: number; ts: string }[] = [];
   let order = 0;
 
-  const touch = (ref: StoredNodeRef, event: NodeTreeEvent): Draft => {
-    const key = nodeKey(ref);
+  const touch = (ref: StoredNodeRef, event: NodeTreeEvent, sessionId?: string): Draft => {
+    const key = nodeKey(ref, sessionId);
     let node = drafts.get(key);
     if (!node) {
       node = {
@@ -145,6 +194,7 @@ export function projectNodeTree(
         status: "running",
         label: ref.type,
         actor: event.actor,
+        ...(sessionId ? { sessionId } : {}),
         startedAt: event.ts,
         updatedAt: event.ts,
         order: order++,
@@ -159,24 +209,32 @@ export function projectNodeTree(
     if (TERMINAL.has(status)) node.endedAt = ts;
     else delete node.endedAt;
   };
-  const sessionNode = (sessionId: string, event: NodeTreeEvent): Draft => {
-    const key = nodeKey({ type: "session", id: sessionId });
-    return drafts.get(key) ?? touch({ type: "session", id: sessionId }, event);
-  };
+  const sessionNode = (sessionId: string, event: NodeTreeEvent): Draft =>
+    drafts.get(nodeKey({ type: "session", id: sessionId })) ??
+    touch({ type: "session", id: sessionId }, event, sessionId);
 
   for (const event of events) {
-    const node = touch(event.subject, event);
+    const session = sessionOf(event);
+    const node = touch(event.subject, event, session);
+    node.sessionId ??= session;
     subjectOfEvent.set(event.id, node.key);
-    if (event.parent && !node.explicitParent) node.explicitParent = nodeKey(event.parent);
+    const parent = event.parent;
+    if (event.kind === "session.created" && parent?.type === "session") {
+      // A fork is a session of its own: a link row on the source, never its child.
+      node.forkedFrom ??= parent.id;
+    } else if (parent && !node.explicitParent) {
+      node.explicitParent = {
+        key: nodeKey(parent, session),
+        ref: parent,
+        ...(session ? { sessionId: session } : {}),
+      };
+    }
     if (event.causationId && !node.causeParent) {
       const cause = subjectOfEvent.get(event.causationId);
       if (cause && cause !== node.key) node.causeParent = cause;
     }
-    if (event.sessionId) {
-      node.sessionId ??= event.sessionId;
-      if (node.ref.type !== "session") {
-        node.sessionParent ??= sessionNode(event.sessionId, event).key;
-      }
+    if (event.sessionId && node.ref.type !== "session") {
+      node.sessionParent ??= sessionNode(event.sessionId, event).key;
     }
     const payload = (event.payload ?? {}) as Record<string, unknown>;
     const ts = event.ts;
@@ -184,6 +242,7 @@ export function projectNodeTree(
     switch (event.kind) {
       case "server.started":
         node.label = "Server started";
+        restarts.push({ order: node.order, ts });
         // The restart rule: memory-only work open at a restart never completes.
         for (const other of drafts.values()) {
           if (other.ref.type === "supervisorRequest" && other.status === "pending") {
@@ -220,13 +279,12 @@ export function projectNodeTree(
             )
           : [];
         if (payload.partial === true) node.partial = true;
-        setStatus(node, "done", ts);
+        setStatus(node, TURN_OUTCOME[String(payload.outcome)] ?? "done", ts);
         for (const call of node.toolCalls) {
-          const tool = touch({ type: "toolCall", id: call.id }, event);
+          const tool = touch({ type: "toolCall", id: call.id }, event, node.sessionId);
           tool.label = call.name || "tool";
           tool.isError = call.isError === true;
-          tool.explicitParent ??= node.key;
-          if (node.sessionId) tool.sessionId ??= node.sessionId;
+          tool.explicitParent ??= { key: node.key, ref: node.ref };
           setStatus(tool, call.isError ? "error" : "done", ts);
         }
         break;
@@ -281,7 +339,9 @@ export function projectNodeTree(
         if (!run) break;
         node.loopRun = run;
         node.label = run.loopName;
-        setStatus(node, LOOP_STATUS[run.status] ?? "running", ts);
+        // A Human Approval pause is stopped/humanInputRequired: it waits on a person.
+        const paused = run.status === "stopped" && run.stopReason === "humanInputRequired";
+        setStatus(node, paused ? "pending" : (LOOP_STATUS[run.status] ?? "running"), ts);
         break;
       }
       case "loop.iteration.started":
@@ -297,8 +357,8 @@ export function projectNodeTree(
         const child = payload.child as PublicLoopChild | undefined;
         if (!child) break;
         node.loopChild = child;
-        node.label = `${child.phase}: ${child.agentName}`;
-        setStatus(node, CHILD_STATUS[child.status ?? "queued"] ?? "running", ts);
+        node.label = child.agentName ? `${child.phase}: ${child.agentName}` : child.phase;
+        setStatus(node, childStatus(child), ts);
         break;
       }
       case "subagent.run.removed":
@@ -311,51 +371,82 @@ export function projectNodeTree(
   }
 
   // Link: explicit parent, else the cause's subject, else the session. A parent that
-  // only exists as a reference (a toolCall no completed turn listed yet) becomes a
-  // node of its own under the session, so nothing is lost while the turn runs.
+  // only exists as a reference (a toolCall no completed turn listed yet, a run whose
+  // events are not in view) becomes a placeholder node under the session.
+  const placeholders: Draft[] = [];
   for (const node of [...drafts.values()]) {
-    const target = node.explicitParent ?? node.causeParent ?? node.sessionParent;
+    const explicit = node.explicitParent;
+    const target = explicit?.key ?? node.causeParent ?? node.sessionParent;
     if (!target || target === node.key) continue;
-    if (!drafts.has(target)) {
-      const [type, ...rest] = target.split(":");
+    if (!drafts.has(target) && explicit) {
       const placeholder: Draft = {
         key: target,
-        ref: { type: type!, id: rest.join(":") },
+        ref: { type: explicit.ref.type, id: explicit.ref.id },
         children: [],
         status: "running",
-        label: type!,
+        label: PLACEHOLDER_LABEL[explicit.ref.type] ?? `${explicit.ref.type} not in view`,
         actor: node.actor,
+        ...(explicit.sessionId ? { sessionId: explicit.sessionId } : {}),
         startedAt: node.startedAt,
         updatedAt: node.startedAt,
         order: node.order - 0.5,
-        ...(node.sessionParent && target !== node.sessionParent
-          ? { sessionParent: node.sessionParent, sessionId: node.sessionId }
-          : {}),
+        placeholder: true,
       };
+      if (node.sessionParent && node.sessionParent !== target) {
+        placeholder.parent = node.sessionParent;
+      }
       drafts.set(target, placeholder);
-      const up = placeholder.sessionParent;
-      if (up && up !== target) placeholder.parent = up;
+      placeholders.push(placeholder);
     }
-    node.parent = target;
+    if (drafts.has(target)) node.parent = target;
   }
-  // A cycle (a corrupt or hand-edited log) would hide nodes: its entry point becomes a root.
+  // A cycle (a corrupt or hand-edited log) would hide nodes: a node whose ancestors
+  // lead back to itself is detached; a node that only leads INTO a cycle keeps its parent.
   for (const node of drafts.values()) {
-    const seen = new Set([node.key]);
-    for (let up = node.parent; up; up = drafts.get(up)?.parent) {
-      if (seen.has(up)) {
+    const seen = new Set<string>();
+    for (let up = node.parent; up && !seen.has(up); up = drafts.get(up)?.parent) {
+      if (up === node.key) {
         delete node.parent;
         break;
       }
       seen.add(up);
     }
   }
+  // Forks: a link row on the source; the fork stays its own root.
+  for (const node of drafts.values()) {
+    if (!node.forkedFrom) continue;
+    const source = drafts.get(nodeKey({ type: "session", id: node.forkedFrom }));
+    if (source) (source.forks ??= []).push({ sessionId: node.ref.id, label: node.label });
+  }
 
   const sorted = [...drafts.values()].sort((a, b) => a.order - b.order);
-  const roots: ExecutionNode[] = [];
+  const roots: Draft[] = [];
   for (const node of sorted) {
     const parent = node.parent ? drafts.get(node.parent) : undefined;
     if (parent) parent.children.push(node);
     else roots.push(node);
+  }
+  // Placeholders have no events of their own: a finished root closes them, and so do
+  // children that all finished; otherwise a later restart interrupts them.
+  const rootOf = (node: Draft): Draft => {
+    let top = node;
+    for (let i = 0; top.parent && i < drafts.size; i += 1) top = drafts.get(top.parent) ?? top;
+    return top;
+  };
+  for (const placeholder of placeholders) {
+    const root = rootOf(placeholder);
+    const childrenDone =
+      placeholder.children.length > 0 &&
+      placeholder.children.every((child) => TERMINAL.has(child.status));
+    const restart = restarts.find((entry) => entry.order > placeholder.order);
+    if (root !== placeholder && TERMINAL.has(root.status)) {
+      setStatus(placeholder, "done", root.endedAt ?? root.updatedAt);
+    } else if (childrenDone) {
+      const cut = placeholder.children.some((child) => child.status === "interrupted");
+      setStatus(placeholder, cut ? "interrupted" : "done", placeholder.updatedAt);
+    } else if (restart) {
+      setStatus(placeholder, "interrupted", restart.ts);
+    }
   }
   for (const node of sorted) {
     delete (node as Partial<Draft>).order;
@@ -371,7 +462,7 @@ export function projectNodeTree(
       : undefined;
   const scoped = scope.runId !== undefined || scope.sessionId !== undefined;
   const root = rootKey ? drafts.get(rootKey) : undefined;
-  const shown = scoped ? (root ? [root] : []) : roots;
+  const shown: ExecutionNode[] = scoped ? (root ? [root] : []) : roots;
   const nodes = new Map<string, ExecutionNode>();
   const visit = (node: ExecutionNode): void => {
     nodes.set(node.key, node);
@@ -398,7 +489,8 @@ const DECK_STATUS: Record<string, DeckRun["status"]> = {
 /**
  * The deck rows from the tree: one per subagentRun node (pruned ones too, as the
  * transcript keeps their cards), with progress and open requests from its
- * supervisorRequest children. The expanded detail still reads the transcript cell.
+ * supervisorRequest children. Not wired to DeckPanel yet: that waits for a
+ * session-scoped full read (the web's project tail drops older runs).
  */
 export function deckRunsFromTree(tree: NodeTree): DeckRun[] {
   return nodesOfType(tree, "subagentRun").flatMap((node) => {

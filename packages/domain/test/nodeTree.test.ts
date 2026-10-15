@@ -9,7 +9,9 @@ import {
   projectNodeTree,
   type ExecutionNode,
   type NodeTree,
+  type NodeTreeEvent,
 } from "../src/nodeTree.ts";
+import { deckRuns, emptyTranscript, type TranscriptCell } from "../src/transcript.ts";
 
 // The A1b recorded logs (see eventDiffs.test.ts), replayed as reducer fixtures.
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/events");
@@ -57,6 +59,9 @@ describe("projectNodeTree over the recorded logs", () => {
       "checker",
       "evaluator",
     ]);
+    for (const child of nodesOfType(tree, "loopChild")) {
+      expect(child.label).not.toContain("undefined");
+    }
     // The session scope reaches the same run through loop.run.started's parent edge.
     const session = projectNodeTree(log, { sessionId: uuid(2) });
     expect(session.roots[0]!.children.map((node) => node.key)).toEqual([`loopRun:${uuid(1)}`]);
@@ -89,14 +94,15 @@ describe("projectNodeTree over the recorded logs", () => {
   it("one managed subagent run: finished, continued, finished again, pruned", () => {
     const tree = projectNodeTree(events("managed-subagent"), { sessionId: uuid(2) });
     // The parent tool call is only a reference here (no turn completed in this log):
-    // it becomes a placeholder node under the session, the run under it.
+    // a placeholder under the session, closed because its only child finished.
+    const tool = `toolCall:${uuid(2)}/call_mock_1`;
     expect(shapes(tree)).toEqual([
-      [
-        `session:${uuid(2)}`,
-        "running",
-        [[`toolCall:call_mock_1`, "running", [[`subagentRun:${uuid(1)}`, "done"]]]],
-      ],
+      [`session:${uuid(2)}`, "running", [[tool, "done", [[`subagentRun:${uuid(1)}`, "done"]]]]],
     ]);
+    expect(tree.nodes.get(tool)).toMatchObject({
+      placeholder: true,
+      label: "tool call not in view",
+    });
     const run = tree.nodes.get(`subagentRun:${uuid(1)}`)!;
     expect(run.removed).toBe(true);
     expect(run.subagentRun).toMatchObject({ status: "completed" });
@@ -116,9 +122,9 @@ describe("projectNodeTree over the recorded logs", () => {
             "done",
             [
               [`plan:${uuid(5)}`, "running"],
-              ["toolCall:call_mock_1", "done"],
+              [`toolCall:${uuid(5)}/call_mock_1`, "done"],
               [
-                "toolCall:call_mock_2",
+                `toolCall:${uuid(5)}/call_mock_2`,
                 "done",
                 [
                   [
@@ -126,7 +132,8 @@ describe("projectNodeTree over the recorded logs", () => {
                     "done",
                     [
                       [`supervisorRequest:${uuid(11)}`, "done"],
-                      [`turn:${uuid(14)}`, "done", [["toolCall:call_mock_3", "done"]]],
+                      // The child's tool call is keyed by the child session.
+                      [`turn:${uuid(14)}`, "done", [[`toolCall:${uuid(12)}/call_mock_3`, "done"]]],
                     ],
                   ],
                 ],
@@ -147,10 +154,13 @@ describe("projectNodeTree over the recorded logs", () => {
       "e0000010",
     ]);
     expect(turn.toolCalls?.map((call) => call.id)).toEqual(["call_mock_1", "call_mock_2"]);
-    expect(turn.label).toBe("Plan and delegate");
+    expect(turn).toMatchObject({ label: "Plan and delegate", sessionId: uuid(5) });
     expect(turn.actor).toEqual({ type: "user" });
-    // The child turn has no sessionId in the log; its edge to the run places it.
-    expect(tree.nodes.get(`turn:${uuid(14)}`)?.actor).toMatchObject({ type: "agent" });
+    // The child turn has no sessionId in the log: it belongs to its agent's session.
+    expect(tree.nodes.get(`turn:${uuid(14)}`)).toMatchObject({
+      actor: { type: "agent" },
+      sessionId: uuid(12),
+    });
     expect(tree.nodes.get(run)?.removed).toBe(true);
     expect(tree.roots[0]!.removed).toBe(true);
     // A run scope is the run's own subtree.
@@ -164,90 +174,107 @@ describe("projectNodeTree over the recorded logs", () => {
   });
 });
 
-describe("projectNodeTree rules", () => {
-  const base = {
-    ts: "2026-01-01T00:00:00.000Z",
-    actor: { type: "system" as const },
+// Synthetic logs for the rules the recordings do not reach.
+let counter = 0;
+const TS = "2026-01-01T00:00:00.000Z";
+function ev(
+  kind: string,
+  subject: [string, string],
+  extra: Partial<Omit<NodeTreeEvent, "subject" | "parent">> & { parent?: [string, string] } = {},
+): NodeTreeEvent {
+  const { parent, ...rest } = extra;
+  counter += 1;
+  return {
+    id: `e${counter}`,
+    ts: TS,
+    kind,
     sessionId: "s",
+    actor: { type: "system" },
     payload: {},
+    subject: { type: subject[0], id: subject[1] },
+    ...(parent ? { parent: { type: parent[0], id: parent[1] } } : {}),
+    ...rest,
   };
+}
+const prompted = (turn: string, mode = "prompt", sessionId = "s"): NodeTreeEvent =>
+  ev("turn.prompted", ["turn", turn], {
+    id: `prompt-${turn}-${mode}`,
+    sessionId,
+    ...(mode === "prompt" ? { parent: ["session", sessionId] as [string, string] } : {}),
+    payload: { mode, label: "Go" },
+  });
+const completed = (turn: string, payload: Record<string, unknown> = {}, sessionId = "s") =>
+  ev("session.turn.completed", ["turn", turn], {
+    sessionId,
+    payload: { entryIds: [], toolCalls: [], label: "Go", ...payload },
+  });
+const runEvent = (kind: string, id: string, status: string, parent?: [string, string]) =>
+  ev(kind, ["subagentRun", id], {
+    ...(parent ? { parent } : {}),
+    payload: {
+      run: { id, parentSessionId: "s", task: "x", status, createdAt: TS, updatedAt: TS },
+    },
+  });
+const serverStarted = (): NodeTreeEvent =>
+  ev("server.started", ["server", `boot-${counter}`], { sessionId: undefined });
+const loopRun = (status: string, stopReason?: string) =>
+  ev("loop.run.updated", ["loopRun", "L"], {
+    payload: {
+      run: {
+        id: "L",
+        loopName: "Loop",
+        status,
+        ...(stopReason ? { stopReason } : {}),
+        currentIteration: 1,
+        maxIterations: 3,
+        startedAt: TS,
+        updatedAt: TS,
+      },
+    },
+  });
 
+describe("projectNodeTree rules", () => {
   it("a parent finishing leaves a running child running", () => {
     const tree = projectNodeTree(
       [
-        {
-          ...base,
-          id: "p",
-          kind: "turn.prompted",
-          subject: { type: "turn", id: "t" },
-          parent: { type: "session", id: "s" },
-          payload: { mode: "prompt", label: "Go" },
-        },
-        {
-          ...base,
-          id: "c",
-          kind: "subagent.run.created",
-          subject: { type: "subagentRun", id: "r" },
-          parent: { type: "toolCall", id: "call" },
-          payload: {
-            run: {
-              id: "r",
-              parentSessionId: "s",
-              task: "x",
-              status: "running",
-              createdAt: base.ts,
-              updatedAt: base.ts,
-            },
-          },
-        },
-        {
-          ...base,
-          id: "d",
-          kind: "session.turn.completed",
-          subject: { type: "turn", id: "t" },
-          payload: {
-            entryIds: ["e1"],
-            toolCalls: [{ id: "call", name: "managed_subagent", isError: false }],
-            label: "Go",
-          },
-        },
+        prompted("t"),
+        runEvent("subagent.run.created", "r", "running", ["toolCall", "call"]),
+        completed("t", { toolCalls: [{ id: "call", name: "managed_subagent", isError: false }] }),
       ],
       { sessionId: "s" },
     );
     expect(tree.nodes.get("turn:t")?.status).toBe("done");
     expect(tree.nodes.get("subagentRun:r")).toMatchObject({
       status: "running",
-      parent: "toolCall:call",
+      parent: "toolCall:s/call",
     });
-    expect(tree.nodes.get("toolCall:call")?.parent).toBe("turn:t");
+    expect(tree.nodes.get("toolCall:s/call")?.parent).toBe("turn:t");
+  });
+
+  it("two sessions reusing a tool call id do not merge", () => {
+    const tool = (id: string) => [{ id, name: "bash", isError: id === "x" }];
+    const log = [
+      prompted("t1", "prompt", "a"),
+      completed("t1", { toolCalls: tool("call_1") }, "a"),
+      prompted("t2", "prompt", "b"),
+      completed("t2", { toolCalls: tool("call_1") }, "b"),
+    ];
+    const a = projectNodeTree(log, { sessionId: "a" });
+    const b = projectNodeTree(log, { sessionId: "b" });
+    expect(a.nodes.get("toolCall:a/call_1")).toMatchObject({ parent: "turn:t1", sessionId: "a" });
+    expect(b.nodes.get("toolCall:b/call_1")).toMatchObject({ parent: "turn:t2", sessionId: "b" });
+    expect(a.nodes.has("toolCall:b/call_1")).toBe(false);
   });
 
   it("causation places a parentless subject; a restart interrupts open requests and turns", () => {
     const tree = projectNodeTree(
       [
-        {
-          ...base,
-          id: "p",
-          kind: "turn.prompted",
-          subject: { type: "turn", id: "t" },
-          parent: { type: "session", id: "s" },
-          payload: { mode: "prompt" },
-        },
-        {
-          ...base,
-          id: "q",
-          kind: "supervisor.request.opened",
-          subject: { type: "supervisorRequest", id: "q" },
-          causationId: "p",
+        prompted("t"),
+        ev("supervisor.request.opened", ["supervisorRequest", "q"], {
+          causationId: "prompt-t-prompt",
           payload: { title: "Pick" },
-        },
-        {
-          ...base,
-          id: "x",
-          kind: "server.started",
-          sessionId: undefined,
-          subject: { type: "server", id: "boot" },
-        },
+        }),
+        serverStarted(),
       ],
       { sessionId: "s" },
     );
@@ -259,27 +286,161 @@ describe("projectNodeTree rules", () => {
     expect(tree.nodes.get("turn:t")?.status).toBe("interrupted");
   });
 
-  it("a cycle in a corrupt log keeps every node reachable", () => {
-    const tree = projectNodeTree([
-      {
-        ...base,
-        sessionId: undefined,
-        id: "1",
-        kind: "x.created",
-        subject: { type: "a", id: "1" },
-        parent: { type: "b", id: "2" },
-      },
-      {
-        ...base,
-        sessionId: undefined,
-        id: "2",
-        kind: "x.created",
-        subject: { type: "b", id: "2" },
-        parent: { type: "a", id: "1" },
-      },
+  it("a filtered log without server.started keeps a dead turn running; with it, interrupted", () => {
+    // What GET /events?projectId= returns without includeServerEvents, then with it.
+    const withoutMarkers = [prompted("t"), ev("plan.changed", ["plan", "s"])];
+    expect(projectNodeTree(withoutMarkers, { sessionId: "s" }).nodes.get("turn:t")?.status).toBe(
+      "running",
+    );
+    const withMarkers = [...withoutMarkers, serverStarted()];
+    expect(projectNodeTree(withMarkers, { sessionId: "s" }).nodes.get("turn:t")).toMatchObject({
+      status: "interrupted",
+      endedAt: TS,
+    });
+  });
+
+  it("a turn that never completes stays running; outcomes map to done, error, stopped", () => {
+    const tree = projectNodeTree(
+      [
+        prompted("open"),
+        prompted("ok"),
+        completed("ok", { outcome: "completed" }),
+        prompted("bad"),
+        completed("bad", { outcome: "failed" }),
+        prompted("stop"),
+        completed("stop", { outcome: "cancelled" }),
+        prompted("old"),
+        completed("old"),
+      ],
+      { sessionId: "s" },
+    );
+    const status = (id: string) => tree.nodes.get(`turn:${id}`)?.status;
+    expect([status("open"), status("ok"), status("bad"), status("stop"), status("old")]).toEqual([
+      "running",
+      "done",
+      "error",
+      "stopped",
+      "done",
     ]);
-    expect(tree.nodes.size).toBe(2);
-    expect(tree.roots).toHaveLength(1);
+  });
+
+  it("a steer joins its turn; a rejected steer leaves it running, a rejected prompt fails", () => {
+    const tree = projectNodeTree(
+      [
+        prompted("t"),
+        prompted("t", "steer"),
+        ev("turn.rejected", ["turn", "t"], { payload: { mode: "steer" } }),
+        prompted("r"),
+        ev("turn.rejected", ["turn", "r"], { payload: { mode: "prompt" } }),
+      ],
+      { sessionId: "s" },
+    );
+    expect(tree.roots[0]!.children.map((node) => [node.key, node.status])).toEqual([
+      ["turn:t", "running"],
+      ["turn:r", "error"],
+    ]);
+  });
+
+  it("a cancelled request stops; an answered one stays answered when cancelled late", () => {
+    const tree = projectNodeTree(
+      [
+        ev("supervisor.request.opened", ["supervisorRequest", "a"]),
+        ev("supervisor.request.cancelled", ["supervisorRequest", "a"]),
+        ev("supervisor.request.opened", ["supervisorRequest", "b"]),
+        ev("supervisor.request.answered", ["supervisorRequest", "b"]),
+        ev("supervisor.request.cancelled", ["supervisorRequest", "b"]),
+      ],
+      { sessionId: "s" },
+    );
+    expect(tree.nodes.get("supervisorRequest:a")?.status).toBe("stopped");
+    expect(tree.nodes.get("supervisorRequest:b")?.status).toBe("done");
+  });
+
+  it("loop statuses: humanInputRequired waits, notAchieved fails", () => {
+    const status = (event: NodeTreeEvent) =>
+      projectNodeTree([event], { runId: "L" }).roots[0]?.status;
+    expect(status(loopRun("stopped", "humanInputRequired"))).toBe("pending");
+    expect(status(loopRun("stopped", "userStopped"))).toBe("stopped");
+    expect(status(loopRun("notAchieved", "maxIterationsReached"))).toBe("error");
+  });
+
+  it("a legacy loop child without status is inferred from endedAt and error", () => {
+    const child = (id: string, fields: Record<string, unknown>) =>
+      ev("loop.child.upserted", ["loopChild", id], {
+        parent: ["loopIteration", "I"],
+        payload: { runId: "L", iterationId: "I", child: { id, phase: "maker", ...fields } },
+      });
+    const tree = projectNodeTree([
+      child("queued", {}),
+      child("started", { startedAt: TS }),
+      child("ended", { startedAt: TS, endedAt: TS, agentName: "Builder" }),
+      child("failed", { startedAt: TS, endedAt: TS, error: "boom" }),
+    ]);
+    const node = (id: string) => tree.nodes.get(`loopChild:${id}`)!;
+    expect(["queued", "started", "ended", "failed"].map((id) => node(id).status)).toEqual([
+      "pending",
+      "running",
+      "done",
+      "error",
+    ]);
+    expect(node("queued").label).toBe("maker");
+    expect(node("ended").label).toBe("maker: Builder");
+  });
+
+  it("a fork is its own root and a link row on its source, not a nested session", () => {
+    const log = [
+      ev("session.created", ["session", "s"], { payload: { title: "Source" } }),
+      runEvent("subagent.run.created", "r", "running"),
+      ev("session.created", ["session", "f"], {
+        sessionId: "f",
+        parent: ["session", "s"],
+        payload: { title: "Fork" },
+      }),
+      ev("subagent.run.created", ["subagentRun", "fr"], {
+        sessionId: "f",
+        payload: {
+          run: { id: "fr", parentSessionId: "f", task: "y", status: "running" },
+        },
+      }),
+    ];
+    const source = projectNodeTree(log, { sessionId: "s" });
+    expect(source.roots[0]!.forks).toEqual([{ sessionId: "f", label: "Fork" }]);
+    expect(nodesOfType(source, "session")).toHaveLength(1);
+    expect(deckRunsFromTree(source).map((run) => run.id)).toEqual(["r"]);
+    const fork = projectNodeTree(log, { sessionId: "f" });
+    expect(fork.roots[0]!.forkedFrom).toBe("s");
+    expect(fork.roots[0]!.parent).toBeUndefined();
+    expect(deckRunsFromTree(fork).map((run) => run.id)).toEqual(["fr"]);
+  });
+
+  it("placeholders close with a finished root or a later restart", () => {
+    // A run whose own events are out of view: its request references it.
+    const request = ev("supervisor.request.opened", ["supervisorRequest", "q"], {
+      parent: ["subagentRun", "gone"],
+    });
+    const restarted = projectNodeTree([request, serverStarted()], { sessionId: "s" });
+    expect(restarted.nodes.get("subagentRun:gone")).toMatchObject({
+      placeholder: true,
+      label: "run not in view",
+      status: "interrupted",
+    });
+    const closed = projectNodeTree([request, ev("session.removed", ["session", "s"])], {
+      sessionId: "s",
+    });
+    expect(closed.nodes.get("subagentRun:gone")?.status).toBe("done");
+    const open = projectNodeTree([request], { sessionId: "s" });
+    expect(open.nodes.get("subagentRun:gone")?.status).toBe("running");
+  });
+
+  it("a cycle detaches only the nodes inside it", () => {
+    const tree = projectNodeTree([
+      ev("x.created", ["a", "1"], { sessionId: undefined, parent: ["b", "2"] }),
+      ev("x.created", ["b", "2"], { sessionId: undefined, parent: ["a", "1"] }),
+      ev("x.created", ["c", "3"], { sessionId: undefined, parent: ["a", "1"] }),
+    ]);
+    expect(tree.nodes.size).toBe(3);
+    expect(tree.roots.map((node) => node.key)).toEqual(["a:1"]);
+    expect(tree.nodes.get("c:3")?.parent).toBe("a:1");
   });
 });
 
@@ -297,5 +458,31 @@ describe("deckRunsFromTree", () => {
         durationMs: 1000,
       }),
     ]);
+  });
+
+  it("side by side with deckRuns(transcript) for the same recorded run", () => {
+    // The transcript the plan run leaves in the parent session (hand-built from the
+    // same run: no recorded transcript exists yet): its subagent card and the progress.
+    const cells: TranscriptCell[] = [
+      {
+        kind: "subagent",
+        id: uuid(9),
+        task: "Summarize the notes.",
+        status: "done",
+        text: "Child summary: done.",
+        progress: ["halfway"],
+        model: "mock-model",
+        inputTokens: 1,
+        outputTokens: 3,
+        durationMs: 1000,
+      },
+    ];
+    const fromTranscript = deckRuns({ ...emptyTranscript(), cells });
+    const fromTree = deckRunsFromTree(projectNodeTree(events("plan"), { sessionId: uuid(5) }));
+    // The measured gap: none for a run that both sources hold in full.
+    expect(fromTree).toEqual(fromTranscript);
+    // A tree read that misses the run's own events (the web's moving tail) loses the row.
+    const tail = events("plan").filter((event) => !event.kind.startsWith("subagent.run."));
+    expect(deckRunsFromTree(projectNodeTree(tail, { sessionId: uuid(5) }))).toEqual([]);
   });
 });

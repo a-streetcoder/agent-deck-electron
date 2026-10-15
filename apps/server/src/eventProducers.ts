@@ -241,7 +241,10 @@ export function createEventProducers(
           return ended;
         },
         completed(turn, context, child) {
-          const partial = turn.partial ? { partial: true } : {};
+          const partial = {
+            ...(turn.partial ? { partial: true } : {}),
+            ...(turn.outcome ? { outcome: turn.outcome } : {}),
+          };
           const refs = { entryIds: turn.entryIds, toolCalls: turn.toolCalls };
           if (child) {
             append({

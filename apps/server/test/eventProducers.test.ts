@@ -230,12 +230,16 @@ describe("A1b1 producers", () => {
     const hooks = h.events.turnHooks(meta());
     h.events.turnPrompted("s1", userActor(), "prompt", "delegate");
     hooks.consumed();
-    hooks.completed({ entryIds: [], toolCalls: [], label: "", partial: true }, hooks.current(), {
-      subagentRunId: "run-1",
-      childSessionId: "child-1",
-      agentName: "Researcher",
-      task: "Summarize /home/bob/notes.md\nthe rest of the task",
-    });
+    hooks.completed(
+      { entryIds: [], toolCalls: [], label: "", partial: true, outcome: "failed" },
+      hooks.current(),
+      {
+        subagentRunId: "run-1",
+        childSessionId: "child-1",
+        agentName: "Researcher",
+        task: "Summarize /home/bob/notes.md\nthe rest of the task",
+      },
+    );
     const [unprompted, prompted, child] = h.all();
     expect(unprompted).toMatchObject({
       projectId: null,
@@ -244,13 +248,14 @@ describe("A1b1 producers", () => {
       payload: { label: "Loop step <path>" },
     });
     expect(unprompted!.causationId).toBeUndefined();
+    expect(unprompted!.payload).not.toHaveProperty("outcome");
     expect(child).toMatchObject({
       kind: "session.turn.completed",
       projectId: "project-1",
       parent: { type: "subagentRun", id: "run-1" },
       actor: { type: "agent", sessionId: "child-1", agentName: "Researcher" },
       causationId: prompted!.id,
-      payload: { entryIds: [], label: "Summarize <path>", partial: true },
+      payload: { entryIds: [], label: "Summarize <path>", partial: true, outcome: "failed" },
     });
     expect(child!.sessionId).toBeUndefined();
   });

@@ -24,7 +24,11 @@ export interface TurnRefs {
   label: string;
   /** The entries could not be read in time: the refs are empty, the turn still happened. */
   partial?: boolean;
+  /** How the turn ended, when the session knows (absent: completed or unknown). */
+  outcome?: TurnOutcome;
 }
+
+export type TurnOutcome = "completed" | "failed" | "cancelled";
 
 /** Cap a string field to `max` characters, marking the cut with an ellipsis. */
 export function capText(text: string, max: number): string {

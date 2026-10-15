@@ -9,7 +9,7 @@ import {
 import { AppEmptyState } from "@/design-system/components/AppEmptyState";
 import { PageShell } from "@/design-system/components/PageShell";
 import { SectionHero, SectionHeroButton } from "@/design-system/components/SectionHero";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Copy, Play, Plus, ShieldCheck, Square, Trash2, X } from "lucide-react";
 import {
   canRetryLoopRun,
@@ -18,7 +18,6 @@ import {
   loopAgentRoleLabel,
   loopRequiredAgentRoles,
   loopDefinitionValidationError,
-  projectNodeTree,
   isLoopAvailableInProject,
   normalizeLoopCheckpointPrompt,
   normalizeLoopClassificationPrompt,
@@ -1027,19 +1026,6 @@ export function LoopsScreen() {
       ))}
     </>
   );
-  // A2: status and iteration come from the run's node in the event-log tree when the
-  // log holds a newer view than the last poll; the detail panes read the store run.
-  const projectLog = useAppStore((state) => state.projectLog);
-  const activeRunId = activeRun?.id;
-  const treeRun = useMemo(
-    () =>
-      activeRunId && projectLog
-        ? projectNodeTree(projectLog.events, { runId: activeRunId }).roots[0]?.loopRun
-        : undefined,
-    [projectLog, activeRunId],
-  );
-  const liveRun =
-    activeRun && treeRun && treeRun.updatedAt >= activeRun.updatedAt ? treeRun : activeRun;
   const anyRunActive =
     runs.some((run) => run.status === "running" || run.status === "stopping") ||
     activeRun?.status === "running" ||
@@ -1119,10 +1105,10 @@ export function LoopsScreen() {
             <div className="flex max-w-full flex-wrap items-center gap-2">
               <span
                 data-testid="loop-run-status"
-                data-status={liveRun!.status}
+                data-status={activeRun.status}
                 className="rounded-capsule border border-border-strong px-2 py-0.5 text-detail text-text-secondary"
               >
-                {RUN_STATUS_LABEL[liveRun!.status]}
+                {RUN_STATUS_LABEL[activeRun.status]}
               </span>
               {isLoopRunTerminal(activeRun.status) ? (
                 <>
@@ -1191,8 +1177,8 @@ export function LoopsScreen() {
             aria-live="polite"
             aria-atomic="true"
           >
-            {RUN_STATUS_LABEL[liveRun!.status]} · Iteration {liveRun!.currentIteration}
-            {liveRun!.maxIterations === 0 ? " · No limit" : ` / ${liveRun!.maxIterations}`}
+            {RUN_STATUS_LABEL[activeRun.status]} · Iteration {activeRun.currentIteration}
+            {activeRun.maxIterations === 0 ? " · No limit" : ` / ${activeRun.maxIterations}`}
           </div>
           {parallelAnnouncement ? (
             <div
