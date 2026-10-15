@@ -15,6 +15,8 @@ function send(value) {
 
 let streamTimer = null;
 let streamed = 0;
+// `fork` rebinds this process to a branch file, as Pi's fork RPC does.
+let sessionFile = __filename;
 
 rl.on("line", (line) => {
   let cmd;
@@ -32,7 +34,7 @@ rl.on("line", (line) => {
         success: true,
         data: {
           sessionId: "fake-session",
-          sessionFile: __filename,
+          sessionFile,
           isStreaming: false,
           thinkingLevel: "off",
         },
@@ -132,6 +134,29 @@ rl.on("line", (line) => {
         },
       });
       break;
+    case "get_fork_messages":
+      send({
+        id: cmd.id,
+        type: "response",
+        command: "get_fork_messages",
+        success: true,
+        data: { messages: [{ entryId: "entry-user-1", text: "hello world" }] },
+      });
+      break;
+    case "fork": {
+      const os = require("node:os");
+      const path = require("node:path");
+      sessionFile = path.join(os.tmpdir(), `fake-pi-branch-${process.pid}.jsonl`);
+      require("node:fs").writeFileSync(sessionFile, "");
+      send({
+        id: cmd.id,
+        type: "response",
+        command: "fork",
+        success: true,
+        data: { text: "hello world", cancelled: false },
+      });
+      break;
+    }
     case "get_messages":
       send({
         id: cmd.id,

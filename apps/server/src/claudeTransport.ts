@@ -315,8 +315,20 @@ export async function claudeLaunchModel(
   const { provider, model } = launchChoice(ctx, owner, chosen, where, refused);
   if (provider && model && !refused.has(provider)) return undefined;
   await ensureBridgeCatalog(ctx);
-  const pinned = pinLaunchModel(provider, model, refused, await ownerCatalog(ctx, owner));
-  return pinned && { provider: pinned.provider, model: pinned.id };
+  // The twin is looked up by id; the thinking choice stays on the pinned model.
+  const parts = model === undefined ? undefined : modelParts(provider, model);
+  const pinned = pinLaunchModel(provider, parts?.id, refused, await ownerCatalog(ctx, owner));
+  const thinking = parts?.thinking ? `:${parts.thinking}` : "";
+  return pinned && { provider: pinned.provider, model: `${pinned.id}${thinking}` };
+}
+
+/** A `--model` pattern split from its `:<thinking>` suffix, and without a
+ * redundant `<provider>/` prefix when the provider is given separately. */
+function modelParts(provider: string | undefined, model: string) {
+  const thinking = /:(off|minimal|low|medium|high|xhigh|max)$/.exec(model)?.[1];
+  const id = thinking ? model.slice(0, -thinking.length - 1) : model;
+  const bare = provider && id.startsWith(`${provider}/`) ? id.slice(provider.length + 1) : id;
+  return { id: bare, literal: id, thinking };
 }
 
 /**
@@ -335,20 +347,22 @@ export async function unofferedLaunchModel(
 ): Promise<string | undefined> {
   const choice = launchChoice(ctx, owner, chosen, where, new Set());
   if (!choice.model) return undefined;
-  const pattern = choice.model.replace(/:(off|minimal|low|medium|high|xhigh|max)$/, "");
-  const slash = pattern.indexOf("/");
-  const provider = choice.provider ?? (slash > 0 ? pattern.slice(0, slash) : undefined);
+  const { id: bare, literal } = modelParts(choice.provider, choice.model);
+  const slash = literal.indexOf("/");
+  const provider = choice.provider ?? (slash > 0 ? literal.slice(0, slash) : undefined);
   if (!provider) return undefined;
-  const id = choice.provider ? pattern : pattern.slice(slash + 1);
-  // A bare `a/b` may also be a whole id (an OpenRouter model, say).
+  // Exact provider/id, read either way: `openrouter` + `openrouter/meta/llama`
+  // may be the id `meta/llama`, or a literal id; a bare `a/b` may be a whole id.
+  const ids = choice.provider ? [...new Set([literal, bare])] : [literal.slice(slash + 1)];
   const offered = available.some(
     (entry) =>
-      (entry.provider === provider && entry.id === id) ||
-      (!choice.provider && entry.id === pattern),
+      (entry.provider === provider && ids.includes(entry.id)) ||
+      (!choice.provider && entry.id === literal),
   );
   if (offered) return undefined;
   const runtime = await ownerRuntime(ctx, owner);
-  return runtime.getModel(provider, id) ? `${provider}/${id}` : undefined;
+  const known = ids.find((id) => runtime.getModel(provider, id));
+  return known && `${provider}/${known}`;
 }
 
 /**

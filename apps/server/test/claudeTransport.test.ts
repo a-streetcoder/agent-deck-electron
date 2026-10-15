@@ -4,7 +4,12 @@ import path from "node:path";
 import type * as PiHost from "@agent-deck/pi-host";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import { claudeChoice, discoveredUsable, unofferedLaunchModel } from "../src/claudeTransport.ts";
+import {
+  claudeChoice,
+  claudeLaunchModel,
+  discoveredUsable,
+  unofferedLaunchModel,
+} from "../src/claudeTransport.ts";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
 // The extension-discovered catalog (claude-bridge), without spawning Pi.
@@ -283,6 +288,45 @@ describe("SRV-15a the model a fork inherits", () => {
     expect(await unoffered({ provider: "anthropic", model: "claude-x:max" })).toBeUndefined();
     expect(await unoffered({ model: "anthropic/claude-x" })).toBeUndefined();
     expect(await unoffered({ model: "meta/llama" })).toBeUndefined();
+  });
+
+  it("reads a provider-prefixed model with its provider either way, still exactly", async () => {
+    expect(
+      await unoffered({ provider: "openrouter", model: "openrouter/meta/llama:high" }),
+    ).toBeUndefined();
+    expect(await unoffered({ provider: "anthropic", model: "anthropic/claude-x" })).toBeUndefined();
+    expect(await unoffered({ provider: "openai-codex", model: "openai-codex/gpt-5.5" })).toBe(
+      "openai-codex/gpt-5.5",
+    );
+    // The catalog's anthropic model is not offered under another provider.
+    expect(await unoffered({ provider: "openai-codex", model: "claude-x" })).toBeUndefined();
+  });
+
+  it("pins a refused anthropic model with a thinking suffix on its bridge twin, keeping the suffix", async () => {
+    writeAuth(OAUTH);
+    const bridgeModel = {
+      provider: "claude-bridge",
+      id: "claude-haiku-4-5",
+      contextWindow: 1000,
+      maxTokens: 100,
+      reasoning: false,
+      input: ["text"],
+    };
+    const bridgeCtx = {
+      rootsFor: () => ({ home: fakeHome }),
+      settings: { get: () => ({ disabledModels: [] }) },
+      discoveredModels: [bridgeModel],
+      discoverModels: async () => {},
+      claudeCodeLoggedIn: async () => true,
+    } as never;
+    expect(
+      await claudeLaunchModel(
+        bridgeCtx,
+        undefined,
+        { provider: "anthropic", model: "claude-haiku-4-5:high" },
+        { cwd: dataDir },
+      ),
+    ).toEqual({ provider: "claude-bridge", model: "claude-haiku-4-5:high" });
   });
 
   it("leaves patterns and extension providers to Pi (agent models, claude-bridge)", async () => {
