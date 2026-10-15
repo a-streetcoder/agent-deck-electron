@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAppStore } from "../state/store.ts";
 import { runCommand } from "../state/commands.ts";
 import { Sidebar } from "./Sidebar.tsx";
+import { ControlInput } from "@/design-system/components/NativeControls";
 
 afterEach(cleanup);
 
@@ -134,7 +135,7 @@ describe("Sidebar (UI-01 inverted layering)", () => {
   it("does not steal focus from outside the sidebar when the pull-up toggles", () => {
     render(
       <>
-        <input data-testid="outside" />
+        <ControlInput data-testid="outside" />
         <Sidebar />
       </>,
     );

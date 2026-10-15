@@ -4,7 +4,11 @@ import { AppTextField } from "@/design-system/components/AppTextField";
 import { Button } from "@/design-system/components/Button";
 import { IconButton } from "@/design-system/components/IconButton";
 
-import { ControlInput, ControlSelect } from "@/design-system/components/NativeControls";
+import {
+  ControlButton,
+  ControlInput,
+  ControlSelect,
+} from "@/design-system/components/NativeControls";
 import { PageShell } from "@/design-system/components/PageShell";
 import { PageToolbar } from "@/design-system/components/PageToolbar";
 import { SectionHero } from "@/design-system/components/SectionHero";
@@ -208,7 +212,7 @@ export function AgentRunProfile({ name }: { name: string }) {
               ["allTime", "All time"],
             ] as const
           ).map(([value, label]) => (
-            <button
+            <ControlButton
               key={value}
               type="button"
               aria-pressed={range === value}
@@ -221,7 +225,7 @@ export function AgentRunProfile({ name }: { name: string }) {
               )}
             >
               {label}
-            </button>
+            </ControlButton>
           ))}
         </div>
       </div>
