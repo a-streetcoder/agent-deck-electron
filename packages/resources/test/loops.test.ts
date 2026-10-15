@@ -18,6 +18,7 @@ import {
   deleteLoopFile as deleteLoopById,
   duplicateLoop as duplicateLoopById,
   loopsDir,
+  parseLoopFile,
   scanLoops,
   writeLoopFile as persistLoopFile,
 } from "../src/loops.ts";
@@ -890,6 +891,108 @@ describe("loop definition store", () => {
       expect(readFileSync(sentinel, "utf8")).toBe("safe");
     },
   );
+
+  it("reads a hand-written graph from nodes/edges frontmatter and keeps it on edit (A9)", () => {
+    const home = makeHome();
+    const roots = { home };
+    const dir = loopsDir(roots);
+    mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, "graph.loop.md");
+    const content = [
+      "---",
+      "name: graph",
+      "structure: agentPipeline",
+      "checkerRubric: Evidence.",
+      "nodes:",
+      "  - { id: plan, kind: stage, agentName: Planner }",
+      "  - { id: build, kind: stage, agentName: Builder }",
+      "  - { id: review, kind: checker, agentName: Reviewer }",
+      "  - { id: judge, kind: evaluator }",
+      "edges:",
+      "  - { from: plan, to: build }",
+      "  - { from: build, to: review }",
+      "  - { from: review, to: judge }",
+      "  - { from: judge, to: plan, when: CONTINUE, budgeted: true }",
+      "---",
+      "",
+      "Ship it.",
+      "",
+    ].join("\n");
+    writeFileSync(filePath, content);
+    const [loop] = scanLoops(roots);
+    expect(loop!.graph).toEqual({
+      nodes: [
+        { id: "plan", kind: "stage", agentName: "Planner" },
+        { id: "build", kind: "stage", agentName: "Builder" },
+        { id: "review", kind: "checker", agentName: "Reviewer" },
+        { id: "judge", kind: "evaluator" },
+      ],
+      edges: [
+        { from: "plan", to: "build" },
+        { from: "build", to: "review" },
+        { from: "review", to: "judge" },
+        { from: "judge", to: "plan", when: "CONTINUE", budgeted: true },
+      ],
+    });
+    expect(readFileSync(filePath, "utf8")).toBe(content);
+    saveLoopFile(roots, { name: "graph", description: "edited" });
+    expect(scanLoops(roots)[0]!.graph).toEqual(loop!.graph);
+
+    // A flat definition has no graph: the engine normalises its structure instead.
+    saveLoopFile(roots, { name: "flat", goal: "g" });
+    expect(scanLoops(roots).find((candidate) => candidate.name === "flat")).not.toHaveProperty(
+      "graph",
+    );
+    // A malformed graph is refused, never replaced by the flat template.
+    writeFileSync(filePath, content.replace("kind: evaluator", "kind: judge"));
+    expect(() => saveLoopFile(roots, { name: "graph", description: "again" })).toThrow(
+      'Graph node "judge" has an unknown kind "judge".',
+    );
+  });
+
+  it("refuses a malformed graph on load instead of reading it as edgeless (A9)", () => {
+    const file = (graph: string[]) =>
+      ["---", "name: bad-graph", "structure: agentPipeline", ...graph, "---", "", "Goal.", ""].join(
+        "\n",
+      );
+    const nodes = [
+      "nodes:",
+      "  - { id: plan, kind: stage, agentName: A }",
+      "  - { id: e, kind: evaluator }",
+    ];
+    for (const [graph, message] of [
+      [[...nodes, "edges: plan -> e"], "Malformed loop graph: edges must be a list."],
+      [nodes, "Malformed loop graph: edges must be a list."],
+      [["nodes: {}", "edges: []"], "Malformed loop graph: nodes must be a list."],
+      [[...nodes, "edges:", "  - plan"], "Malformed loop graph: edges[0] must be a mapping."],
+      [
+        ["nodes:", "  - { id: 1, kind: stage }", "edges: []"],
+        "Malformed loop graph: nodes[0].id must be text.",
+      ],
+      [
+        [...nodes, "edges:", "  - { from: plan, to: e, budgeted: yes please }"],
+        "Malformed loop graph: edges[0].budgeted must be true or false.",
+      ],
+    ] as const) {
+      expect(() => parseLoopFile("bad.loop.md", file([...graph]))).toThrow(message);
+    }
+    // A scan hides the malformed file like any other malformed definition.
+    const home = makeHome();
+    const dir = loopsDir({ home });
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, "bad.loop.md"), file([...nodes, "edges: plan -> e"]));
+    expect(scanLoops({ home })).toEqual([]);
+
+    // Well-typed but wrong: an edge to an unknown node is refused by graph validation on save.
+    writeFileSync(
+      path.join(dir, "bad.loop.md"),
+      file([...nodes, "edges:", "  - { from: plan, to: nowhere }"]),
+    );
+    expect(scanLoops({ home })[0]!.graph?.edges).toEqual([{ from: "plan", to: "nowhere" }]);
+    expect(() => saveLoopFile({ home }, { name: "bad-graph", description: "x" })).toThrow(
+      "Graph edge plan -> nowhere names an unknown node.",
+    );
+  });
 
   it("rejects a different name that collides on the same slug", () => {
     const home = makeHome();

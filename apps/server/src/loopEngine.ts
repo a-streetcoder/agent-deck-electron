@@ -18,10 +18,11 @@ import {
   isLoopRunTerminal,
   isRunnableLoopStructure,
   loopDefinitionValidationError,
+  loopGraph,
+  loopGraphColumns,
   normalizeLoopCheckpointPrompt,
   normalizeLoopClassificationPrompt,
   normalizeLoopLaunchContext,
-  normalizeParallelBranches,
   toPublicLoopRun,
   LOOP_STRUCTURE_UNSUPPORTED_CODE,
   type EventDraft,
@@ -31,6 +32,7 @@ import {
   type LoopDefinition,
   type LoopExecutionSnapshot,
   type LoopGoalDecision,
+  type LoopGraphNode,
   type LoopRun,
   type LoopRunArtifact,
   type LoopRunIteration,
@@ -1355,7 +1357,8 @@ export class LoopEngine {
     const now = this.now();
     const definitionSnapshot = snapshotDefinition(loop);
     const launchContext = normalizeLoopLaunchContext(loop.launchContext);
-    if (loop.structure === "humanApproval") {
+    // A human checkpoint node is the whole graph (the Human approval template).
+    if (loopGraph(loop).nodes[0]?.kind === "human") {
       const prompt = normalizeLoopCheckpointPrompt(loop.checkpointPrompt);
       const run: LoopRun = {
         id: runId,
@@ -1902,6 +1905,12 @@ export class LoopEngine {
     }
   }
 
+  /**
+   * A9: one interpreter over the loop graph (`loopGraph`, the structure's builtin template
+   * unless the definition is hand-written). Each iteration runs the depth columns in
+   * order; validation runs before the first judge (checker or evaluator); a budgeted
+   * edge starts the next iteration while the cycle budget (maxIterations) lasts.
+   */
   private async execute(
     run: LoopRun,
     loop: LoopDefinition,
@@ -1910,8 +1919,22 @@ export class LoopEngine {
     executeAgent: ExecuteAgent | undefined,
     signal: AbortSignal,
   ): Promise<void> {
+    const graph = loopGraph(loop);
+    const checked = loopGraphColumns(graph);
+    if ("error" in checked) throw new Error(checked.error);
+    const has = (kind: LoopGraphNode["kind"]) => graph.nodes.some((node) => node.kind === kind);
+    // Stage numbers follow execution order (the depth columns), not the order nodes are listed.
+    const stageNodes = checked.columns.flat().filter((node) => node.kind === "stage");
+    const backEdge = (node: LoopGraphNode, when: "CONTINUE" | "FAIL") =>
+      graph.edges.some(
+        (edge) => edge.budgeted && edge.from === node.id && (edge.when ?? "CONTINUE") === when,
+      );
     let feedback = "";
-    for (let index = 1; run.maxIterations === 0 || index <= run.maxIterations; index += 1) {
+    iterations: for (
+      let index = 1;
+      run.maxIterations === 0 || index <= run.maxIterations;
+      index += 1
+    ) {
       // Unlimited runs must yield to timers/I/O so Stop can always abort even
       // when a test/dummy executor resolves synchronously.
       if (run.maxIterations === 0 && index > 1) await new Promise<void>(setImmediate);
@@ -1929,618 +1952,276 @@ export class LoopEngine {
       };
       run.iterations.push(iteration);
       this.changed(run);
+      let validation: ValidationResult | undefined;
+      let checkerDecision: LoopCheckerDecision | undefined;
+      let branchFailed = false;
       try {
-        if (loop.structure === "parallelAgents") {
-          const branches = normalizeParallelBranches(loop.parallelBranches);
-          const branchChildren = branches.map<LoopChildRecord>((agentName, branchIndex) => ({
-            id: randomUUID(),
-            phase: "branch",
-            branchIndex,
-            agentName,
-            status: "queued",
-            queuedAt: this.now(),
-          }));
-          iteration.children.push(...branchChildren);
-          this.changed(run);
-          const results: Array<{
-            id: string;
-            branchIndex: number;
-            agentName: string;
-            output?: string;
-            error?: string;
-          }> = new Array(branches.length);
-          let nextBranchIndex = 0;
-          const worker = async (): Promise<void> => {
-            while (!signal.aborted) {
-              const branchIndex = nextBranchIndex;
-              if (branchIndex >= branches.length) return;
-              nextBranchIndex += 1;
-              const agentName = branches[branchIndex]!;
+        for (const column of checked.columns) {
+          if (column[0]!.kind === "branch") {
+            if (this.stopped(run, signal)) return;
+            branchFailed = await this.parallelColumn(
+              run,
+              iteration,
+              loop,
+              column,
+              feedback,
+              cwd,
+              signal,
+              executeRole,
+              executeAgent,
+            );
+            if (this.stopped(run, signal)) return;
+            continue;
+          }
+          for (const node of column) {
+            if (this.stopped(run, signal)) return;
+            if ((node.kind === "checker" || node.kind === "evaluator") && !validation) {
+              validation = unconfiguredValidation(cwd);
+              if (loop.validationCommand) {
+                validation = await this.validation(
+                  run,
+                  iteration,
+                  cwd,
+                  loop.validationCommand,
+                  signal,
+                );
+              }
+              if (this.stopped(run, signal)) return;
+              iteration.validationPassed = loop.validationCommand ? validation.passed : null;
+              iteration.validationEvidence = validation.evidence;
+              // A broken validation tool ends the run before a checker is spent on it.
+              if (
+                node.kind === "checker" &&
+                (validation.classification === "spawnError" ||
+                  validation.classification === "timeout")
+              ) {
+                iteration.endedAt = this.now();
+                this.changed(run);
+                this.finalize(run, "failed", "toolFailed");
+                return;
+              }
+            }
+            const role = (
+              phase: "maker" | "stage" | "triage" | "checker" | "evaluator",
+              prompt: string,
+              stageIndex?: number,
+            ) =>
+              this.role(
+                run,
+                iteration,
+                loop,
+                phase,
+                prompt,
+                node.agentName,
+                cwd,
+                run.projectId,
+                signal,
+                executeRole,
+                executeAgent,
+                stageIndex,
+              );
+
+            if (node.kind === "maker") {
+              const makerPrompt = [
+                `Goal: ${loop.goal}`,
+                `Success condition: ${loop.successCondition || loop.goal}`,
+                `Iteration: ${index}`,
+                has("checker")
+                  ? "You are the maker. Perform one implementation pass."
+                  : "Perform one implementation pass.",
+                feedback ? `Evidence from the previous iteration to address:\n${feedback}` : "",
+              ]
+                .filter(Boolean)
+                .join("\n\n");
+              iteration.output = await role("maker", makerPrompt);
+              if (this.stopped(run, signal)) return;
+              this.persistArtifact(run, iteration, "maker", iteration.output);
+            } else if (node.kind === "stage") {
+              const stageOutputs = (iteration.pipelineStageOutputs ??= []);
+              const stageIndex = stageNodes.indexOf(node);
+              const agentName = node.agentName!;
+              const handoff = stageOutputs
+                .map(
+                  (stage) =>
+                    `Stage ${stage.stageIndex + 1} (${stage.agentName}) report:\n${boundedPipelineEvidence(stage.output, MAX_PIPELINE_REPORT_CHARS)}`,
+                )
+                .join("\n\n");
               const prompt = [
-                "Agent Deck controls this loop iteration. Complete only this assigned step.",
                 `Goal: ${loop.goal}`,
                 `Iteration: ${index}`,
-                "You are working as one explicitly selected agent in a report-only parallel investigation.",
-                `Parallel branch: ${branchIndex + 1} of ${branches.length}`,
-                `Assigned agent: ${agentName}`,
-                "Work independently. Do not edit project files or coordinate with sibling agents. End with a concise Markdown summary of findings, evidence, risks, and recommended next action.",
+                `Pipeline stage: ${stageIndex + 1} of ${stageNodes.length}`,
+                `You are the configured pipeline agent "${agentName}". Complete only this stage and provide a concise handoff report for later stages.`,
                 feedback
                   ? `Prior-iteration evaluator and validation evidence:\n${boundedPipelineEvidence(feedback)}`
+                  : "",
+                handoff
+                  ? `Bounded reports from completed stages in this iteration:\n${boundedPipelineEvidence(handoff)}`
                   : "",
               ]
                 .filter(Boolean)
                 .join("\n\n");
-              try {
-                const child = branchChildren[branchIndex]!;
-                const output = await this.parallelBranchRole(
-                  run,
-                  iteration,
-                  loop,
-                  child,
-                  prompt,
-                  cwd,
-                  run.projectId,
-                  signal,
-                  executeRole,
-                  executeAgent,
-                );
-                if (!signal.aborted) {
-                  results[branchIndex] = {
-                    id: child.id,
-                    branchIndex,
-                    agentName,
-                    output,
-                  };
+              const output = await role("stage", prompt, stageIndex);
+              if (this.stopped(run, signal)) return;
+              stageOutputs.push({ id: randomUUID(), stageIndex, agentName, output });
+              iteration.output = output;
+              this.changed(run);
+              this.persistArtifact(run, iteration, "stage", output, stageIndex, agentName);
+            } else if (node.kind === "triage") {
+              const triageAgent = node.agentName!;
+              const classificationPrompt = normalizeLoopClassificationPrompt(
+                loop.classificationPrompt,
+              );
+              const artifactPath = run.artifactDirectory
+                ? path.join(run.artifactDirectory, `iteration-${index}-triage.md`)
+                : "Agent Deck's durable in-memory run artifact";
+              const targetInstructions =
+                loop.writeTarget === "artifactMarkdown"
+                  ? "This is report-only discovery. Do not edit project files. Return the complete Markdown classification report; Agent Deck will persist it as the artifact."
+                  : loop.writeTarget === "newWorktree"
+                    ? "Work only in the selected isolated worktree. You may edit files only when the loop goal explicitly requests implementation; discovery alone must not change files."
+                    : "Work only in the selected current checkout. You may edit files only when the loop goal explicitly requests implementation; discovery alone must not change files.";
+              const prompt = [
+                "Agent Deck is running this loop. Agent Deck controls iteration count, retries, stopping, artifacts, and validation. Do not run your own open-ended loop; complete only this assigned step.",
+                `Loop goal: ${loop.goal}`,
+                `Iteration: ${index}${run.maxIterations === 0 ? " (no limit)" : ` of ${run.maxIterations}`}`,
+                `Write target: ${loop.writeTarget}`,
+                `Artifact path: ${artifactPath}`,
+                "You are performing discovery and triage for this loop step.",
+                `Classification prompt: ${classificationPrompt}`,
+                targetInstructions,
+                "Inspect the requested signals and repository context. Group findings by severity/category, cite evidence, and recommend the safest next action. Do not implement fixes unless the loop goal explicitly asks you to. Produce a concise Markdown triage artifact.",
+                feedback
+                  ? `Bounded prior iteration classification, evaluation, and validation evidence:\n${boundedPipelineEvidence(feedback)}`
+                  : "",
+              ]
+                .filter(Boolean)
+                .join("\n\n");
+              const classificationOutput = await role("triage", prompt);
+              if (this.stopped(run, signal)) return;
+              iteration.classificationOutput = classificationOutput;
+              iteration.output = classificationOutput;
+              this.persistArtifact(
+                run,
+                iteration,
+                "triage",
+                iteration.classificationOutput,
+                undefined,
+                triageAgent,
+              );
+            } else if (node.kind === "checker") {
+              const checkerValidation = validation!;
+              // A7: the shared verifier role (verifier.ts), launched through the loop's role path.
+              const checker = await runVerifier({
+                context: [
+                  `Goal: ${loop.goal}`,
+                  `Success condition: ${loop.successCondition || loop.goal}`,
+                  `Iteration: ${index}`,
+                  "Review only; do not edit project files.",
+                  `Review criteria: ${loop.checkerRubric}`,
+                  `Maker report:\n${iteration.output}`,
+                ],
+                evidence: validationEvidence(checkerValidation, Boolean(loop.validationCommand)),
+                decisions: CHECKER_DECISIONS,
+                run: (checkerPrompt) => role("checker", checkerPrompt),
+              });
+              iteration.checkerOutput = checker.output;
+              if (this.stopped(run, signal)) return;
+              this.persistArtifact(run, iteration, "checker", iteration.checkerOutput);
+              const { decision: parsedChecker, parse: checkerParse } = checker;
+              iteration.checkerVerdictParse = checkerParse;
+              if (checkerParse !== "strict") {
+                iteration.timeline.push({
+                  id: randomUUID(),
+                  phase: "checker",
+                  roleName: node.agentName ?? "Checker",
+                  note:
+                    checkerParse === "missing"
+                      ? "checker verdict missing; treated as CONTINUE"
+                      : `checker verdict ${parsedChecker} read after a preamble or emphasis`,
+                  timestamp: this.now(),
+                });
+              }
+              checkerDecision = parsedChecker ?? "CONTINUE";
+              iteration.checkerDecision = checkerDecision;
+              if (checkerDecision === "FAIL") {
+                // Diverges from native: against a passed validation one judge's FAIL
+                // costs an iteration, not the run (the checker's budgeted FAIL edge).
+                // The evaluator is skipped (the checker keeps its veto on success) and
+                // the FAIL becomes feedback; the last iteration ends notAchieved.
+                if (loop.validationCommand && checkerValidation.passed && backEdge(node, "FAIL")) {
+                  iteration.timeline.push({
+                    id: randomUUID(),
+                    phase: "checker",
+                    roleName: node.agentName ?? "Checker",
+                    note: "checker FAIL although validation passed; evaluator skipped, next iteration",
+                    timestamp: this.now(),
+                  });
+                  iteration.endedAt = this.now();
+                  this.changed(run);
+                  feedback = [iteration.checkerOutput, checkerValidation.evidence].join("\n\n");
+                  continue iterations;
                 }
-              } catch (error) {
-                if (!signal.aborted) {
-                  results[branchIndex] = {
-                    id: branchChildren[branchIndex]!.id,
-                    branchIndex,
-                    agentName,
-                    error: error instanceof Error ? error.message : String(error),
-                  };
-                }
+                iteration.endedAt = this.now();
+                this.changed(run);
+                this.finalize(run, "failed", "agentFailed");
+                return;
+              }
+            } else if (node.kind === "evaluator") {
+              const judged = validation!;
+              iteration.evaluatorOutput = await role(
+                "evaluator",
+                this.evaluatorPrompt(run, iteration, loop, judged, has),
+              );
+              if (this.stopped(run, signal)) return;
+              this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
+              const goalDecision = this.goalVerdict(iteration, iteration.evaluatorOutput);
+              iteration.goalDecision = goalDecision;
+              iteration.endedAt = this.now();
+              this.changed(run);
+              // Parallel: a partial failure still records validation and evaluation first.
+              if (branchFailed || goalDecision === "FAIL") {
+                this.finalize(run, "failed", "agentFailed");
+                return;
+              }
+              if (judged.classification === "spawnError" || judged.classification === "timeout") {
+                this.finalize(run, "failed", "toolFailed");
+                return;
+              }
+              if (goalDecision === "SUCCESS" && judged.passed) {
+                this.finalize(run, "completed", "success");
+                return;
+              }
+              // Native PiAgentSessionStore.swift applies goal evaluation before
+              // handling the checker decision: SUCCESS completes even after
+              // ASK_HUMAN; only a continuing evaluator turns ASK_HUMAN into a stop.
+              // See the paired ASK_HUMAN policy tests in loopEngine.test.ts.
+              if (checkerDecision === "ASK_HUMAN") {
+                this.finalize(run, "stopped", "humanInputRequired");
+                return;
+              }
+              if (has("triage")) {
+                feedback = [
+                  `Prior classification:\n${boundedPipelineEvidence(iteration.classificationOutput ?? "", 5_500)}`,
+                  `Prior evaluation:\n${boundedPipelineEvidence(iteration.evaluatorOutput, 2_800)}`,
+                  `Prior validation:\n${boundedPipelineEvidence(judged.evidence, 2_800)}`,
+                ].join("\n\n");
+              } else {
+                const evidence = [
+                  ...(has("checker") ? [iteration.checkerOutput] : []),
+                  iteration.evaluatorOutput,
+                  judged.evidence,
+                ].join("\n\n");
+                feedback =
+                  has("stage") || has("branch") ? boundedPipelineEvidence(evidence) : evidence;
+              }
+              // A single-pass graph: the evaluator continued but nothing repeats.
+              if (!backEdge(node, "CONTINUE")) {
+                this.finalize(run, "notAchieved", "graphHasNoRepeatEdge");
+                return;
               }
             }
-          };
-          await Promise.all(
-            Array.from({ length: Math.min(2, branches.length) }, async () => await worker()),
-          );
-          if (signal.aborted || run.status === "stopping") {
-            const stoppedAt = this.now();
-            for (const child of branchChildren) {
-              if (child.status === "queued") {
-                child.status = "stopped";
-                child.endedAt = stoppedAt;
-              }
-            }
           }
-          if (this.stopped(run, signal)) return;
-
-          // Native waits for every configured branch and renders its graph
-          // summary in configured order, regardless of completion order. A
-          // partial failure still proceeds through validation/evaluation, then
-          // fails the run after that evidence is recorded.
-          iteration.parallelBranchOutputs = results;
-          const aggregate = results
-            .map((branch) => `- ${branch.agentName}: ${branch.output ?? branch.error ?? "failed"}`)
-            .join("\n");
-          iteration.output = aggregate;
-          this.changed(run);
-          for (const branch of results) {
-            this.persistArtifact(
-              run,
-              iteration,
-              "branch",
-              branch.output ?? `# ${branch.agentName}\n\nError: ${branch.error ?? "failed"}`,
-              undefined,
-              branch.agentName,
-              branch.branchIndex,
-            );
-          }
-
-          let validation: ValidationResult = unconfiguredValidation(cwd);
-          if (loop.validationCommand) {
-            validation = await this.validation(run, iteration, cwd, loop.validationCommand, signal);
-          }
-          if (this.stopped(run, signal)) return;
-          iteration.validationPassed = loop.validationCommand ? validation.passed : null;
-          iteration.validationEvidence = validation.evidence;
-
-          const evaluatorPrompt = [
-            `Goal: ${loop.goal}`,
-            `Success condition: ${loop.successCondition || loop.goal}`,
-            `Iteration: ${index}`,
-            "Evaluate the completed report-only parallel investigation; do not edit project files.",
-            `Parallel branch reports in configured order:\n${boundedPipelineEvidence(aggregate)}`,
-            `Validation evidence:\n${boundedPipelineEvidence(validation.evidence)}`,
-            "The exact first non-empty line must be SUCCESS, CONTINUE, or FAIL. Then give rationale and concrete evidence.",
-          ].join("\n\n");
-          iteration.evaluatorOutput = await this.role(
-            run,
-            iteration,
-            loop,
-            "evaluator",
-            evaluatorPrompt,
-            undefined,
-            cwd,
-            run.projectId,
-            signal,
-            executeRole,
-            executeAgent,
-          );
-          if (this.stopped(run, signal)) return;
-          this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
-          const goalDecision = this.goalVerdict(iteration, iteration.evaluatorOutput);
-          iteration.goalDecision = goalDecision;
-          iteration.endedAt = this.now();
-          this.changed(run);
-          if (results.some((branch) => branch.error)) {
-            this.finalize(run, "failed", "agentFailed");
-            return;
-          }
-          if (goalDecision === "FAIL") {
-            this.finalize(run, "failed", "agentFailed");
-            return;
-          }
-          if (
-            validation.classification === "spawnError" ||
-            validation.classification === "timeout"
-          ) {
-            this.finalize(run, "failed", "toolFailed");
-            return;
-          }
-          if (goalDecision === "SUCCESS" && validation.passed) {
-            this.finalize(run, "completed", "success");
-            return;
-          }
-          feedback = boundedPipelineEvidence(
-            [iteration.evaluatorOutput, validation.evidence].join("\n\n"),
-          );
-          continue;
         }
-
-        if (loop.structure === "discoveryTriage") {
-          const triageAgent = loop.triageAgent!;
-          const classificationPrompt = normalizeLoopClassificationPrompt(loop.classificationPrompt);
-          const artifactPath = run.artifactDirectory
-            ? path.join(run.artifactDirectory, `iteration-${index}-triage.md`)
-            : "Agent Deck's durable in-memory run artifact";
-          const targetInstructions =
-            loop.writeTarget === "artifactMarkdown"
-              ? "This is report-only discovery. Do not edit project files. Return the complete Markdown classification report; Agent Deck will persist it as the artifact."
-              : loop.writeTarget === "newWorktree"
-                ? "Work only in the selected isolated worktree. You may edit files only when the loop goal explicitly requests implementation; discovery alone must not change files."
-                : "Work only in the selected current checkout. You may edit files only when the loop goal explicitly requests implementation; discovery alone must not change files.";
-          const prompt = [
-            "Agent Deck is running this loop. Agent Deck controls iteration count, retries, stopping, artifacts, and validation. Do not run your own open-ended loop; complete only this assigned step.",
-            `Loop goal: ${loop.goal}`,
-            `Iteration: ${index}${run.maxIterations === 0 ? " (no limit)" : ` of ${run.maxIterations}`}`,
-            `Write target: ${loop.writeTarget}`,
-            `Artifact path: ${artifactPath}`,
-            "You are performing discovery and triage for this loop step.",
-            `Classification prompt: ${classificationPrompt}`,
-            targetInstructions,
-            "Inspect the requested signals and repository context. Group findings by severity/category, cite evidence, and recommend the safest next action. Do not implement fixes unless the loop goal explicitly asks you to. Produce a concise Markdown triage artifact.",
-            feedback
-              ? `Bounded prior iteration classification, evaluation, and validation evidence:\n${boundedPipelineEvidence(feedback)}`
-              : "",
-          ]
-            .filter(Boolean)
-            .join("\n\n");
-          const classificationOutput = await this.role(
-            run,
-            iteration,
-            loop,
-            "triage",
-            prompt,
-            triageAgent,
-            cwd,
-            run.projectId,
-            signal,
-            executeRole,
-            executeAgent,
-          );
-          if (this.stopped(run, signal)) return;
-          iteration.classificationOutput = classificationOutput;
-          iteration.output = classificationOutput;
-          this.persistArtifact(
-            run,
-            iteration,
-            "triage",
-            iteration.classificationOutput,
-            undefined,
-            triageAgent,
-          );
-
-          let validation: ValidationResult = unconfiguredValidation(cwd);
-          if (loop.validationCommand) {
-            validation = await this.validation(run, iteration, cwd, loop.validationCommand, signal);
-          }
-          if (this.stopped(run, signal)) return;
-          iteration.validationPassed = loop.validationCommand ? validation.passed : null;
-          iteration.validationEvidence = validation.evidence;
-
-          const evaluatorPrompt = [
-            `Goal: ${loop.goal}`,
-            `Success condition: ${loop.successCondition || loop.goal}`,
-            `Iteration: ${index}`,
-            "Evaluate the discovery and classification report only; do not edit project files.",
-            `Classification prompt: ${classificationPrompt}`,
-            `Triage report:\n${boundedPipelineEvidence(iteration.classificationOutput)}`,
-            `Validation evidence:\n${boundedPipelineEvidence(validation.evidence)}`,
-            "The exact first non-empty line must be SUCCESS, CONTINUE, or FAIL. Then give rationale and concrete evidence.",
-          ].join("\n\n");
-          const evaluatorOutput = await this.role(
-            run,
-            iteration,
-            loop,
-            "evaluator",
-            evaluatorPrompt,
-            undefined,
-            cwd,
-            run.projectId,
-            signal,
-            executeRole,
-            executeAgent,
-          );
-          if (this.stopped(run, signal)) return;
-          iteration.evaluatorOutput = evaluatorOutput;
-          this.persistArtifact(run, iteration, "evaluator", evaluatorOutput);
-          const goalDecision = this.goalVerdict(iteration, evaluatorOutput);
-          iteration.goalDecision = goalDecision;
-          iteration.endedAt = this.now();
-          this.changed(run);
-          if (goalDecision === "FAIL") {
-            this.finalize(run, "failed", "agentFailed");
-            return;
-          }
-          if (
-            validation.classification === "spawnError" ||
-            validation.classification === "timeout"
-          ) {
-            this.finalize(run, "failed", "toolFailed");
-            return;
-          }
-          if (goalDecision === "SUCCESS" && validation.passed) {
-            this.finalize(run, "completed", "success");
-            return;
-          }
-          feedback = [
-            `Prior classification:\n${boundedPipelineEvidence(iteration.classificationOutput, 5_500)}`,
-            `Prior evaluation:\n${boundedPipelineEvidence(iteration.evaluatorOutput, 2_800)}`,
-            `Prior validation:\n${boundedPipelineEvidence(validation.evidence, 2_800)}`,
-          ].join("\n\n");
-          continue;
-        }
-
-        if (loop.structure === "agentPipeline") {
-          const stageOutputs = (iteration.pipelineStageOutputs ??= []);
-          const stages = loop.pipelineStages!;
-          for (const [stageIndex, agentName] of stages.entries()) {
-            if (this.stopped(run, signal)) return;
-            const handoff = stageOutputs
-              .map(
-                (stage) =>
-                  `Stage ${stage.stageIndex + 1} (${stage.agentName}) report:\n${boundedPipelineEvidence(stage.output, MAX_PIPELINE_REPORT_CHARS)}`,
-              )
-              .join("\n\n");
-            const prompt = [
-              `Goal: ${loop.goal}`,
-              `Iteration: ${index}`,
-              `Pipeline stage: ${stageIndex + 1} of ${stages.length}`,
-              `You are the configured pipeline agent "${agentName}". Complete only this stage and provide a concise handoff report for later stages.`,
-              feedback
-                ? `Prior-iteration evaluator and validation evidence:\n${boundedPipelineEvidence(feedback)}`
-                : "",
-              handoff
-                ? `Bounded reports from completed stages in this iteration:\n${boundedPipelineEvidence(handoff)}`
-                : "",
-            ]
-              .filter(Boolean)
-              .join("\n\n");
-            const output = await this.role(
-              run,
-              iteration,
-              loop,
-              "stage",
-              prompt,
-              agentName,
-              cwd,
-              run.projectId,
-              signal,
-              executeRole,
-              executeAgent,
-              stageIndex,
-            );
-            if (this.stopped(run, signal)) return;
-            stageOutputs.push({ id: randomUUID(), stageIndex, agentName, output });
-            iteration.output = output;
-            this.changed(run);
-            this.persistArtifact(run, iteration, "stage", output, stageIndex, agentName);
-          }
-
-          let validation: ValidationResult = unconfiguredValidation(cwd);
-          if (loop.validationCommand) {
-            validation = await this.validation(run, iteration, cwd, loop.validationCommand, signal);
-          }
-          if (this.stopped(run, signal)) return;
-          iteration.validationPassed = loop.validationCommand ? validation.passed : null;
-          iteration.validationEvidence = validation.evidence;
-
-          const reports = stageOutputs
-            .map(
-              (stage) =>
-                `Stage ${stage.stageIndex + 1} (${stage.agentName}) report:\n${boundedPipelineEvidence(stage.output, MAX_PIPELINE_REPORT_CHARS)}`,
-            )
-            .join("\n\n");
-          const evaluatorPrompt = [
-            `Goal: ${loop.goal}`,
-            `Success condition: ${loop.successCondition || loop.goal}`,
-            `Iteration: ${index}`,
-            "Evaluate the completed pipeline only; do not edit project files.",
-            `Ordered pipeline reports:\n${boundedPipelineEvidence(reports)}`,
-            `Validation evidence:\n${boundedPipelineEvidence(validation.evidence)}`,
-            "The exact first non-empty line must be SUCCESS, CONTINUE, or FAIL. Then give rationale and concrete evidence.",
-          ].join("\n\n");
-          iteration.evaluatorOutput = await this.role(
-            run,
-            iteration,
-            loop,
-            "evaluator",
-            evaluatorPrompt,
-            undefined,
-            cwd,
-            run.projectId,
-            signal,
-            executeRole,
-            executeAgent,
-          );
-          if (this.stopped(run, signal)) return;
-          this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
-          const goalDecision = this.goalVerdict(iteration, iteration.evaluatorOutput);
-          iteration.goalDecision = goalDecision;
-          iteration.endedAt = this.now();
-          this.changed(run);
-          if (goalDecision === "FAIL") {
-            this.finalize(run, "failed", "agentFailed");
-            return;
-          }
-          if (
-            validation.classification === "spawnError" ||
-            validation.classification === "timeout"
-          ) {
-            this.finalize(run, "failed", "toolFailed");
-            return;
-          }
-          if (goalDecision === "SUCCESS" && validation.passed) {
-            this.finalize(run, "completed", "success");
-            return;
-          }
-          feedback = boundedPipelineEvidence(
-            [iteration.evaluatorOutput, validation.evidence].join("\n\n"),
-          );
-          continue;
-        }
-
-        const makerName = loop.makerName || loop.agentName;
-        const makerPrompt = [
-          `Goal: ${loop.goal}`,
-          `Success condition: ${loop.successCondition || loop.goal}`,
-          `Iteration: ${index}`,
-          loop.structure === "makerChecker"
-            ? "You are the maker. Perform one implementation pass."
-            : "Perform one implementation pass.",
-          feedback ? `Evidence from the previous iteration to address:\n${feedback}` : "",
-        ]
-          .filter(Boolean)
-          .join("\n\n");
-        iteration.output = await this.role(
-          run,
-          iteration,
-          loop,
-          "maker",
-          makerPrompt,
-          makerName,
-          cwd,
-          run.projectId,
-          signal,
-          executeRole,
-          executeAgent,
-        );
-        if (this.stopped(run, signal)) return;
-        this.persistArtifact(run, iteration, "maker", iteration.output);
-
-        if (loop.structure === "singleAgent") {
-          let validation = unconfiguredValidation(cwd);
-          if (loop.validationCommand) {
-            validation = await this.validation(run, iteration, cwd, loop.validationCommand, signal);
-          }
-          if (this.stopped(run, signal)) return;
-          iteration.validationPassed = loop.validationCommand ? validation.passed : null;
-          iteration.validationEvidence = validation.evidence;
-          const evaluatorPrompt = [
-            "You are Agent Deck's report-only natural-language goal evaluator. Review only; do not edit project files.",
-            `Loop goal: ${loop.goal}`,
-            `Success condition: ${loop.successCondition || loop.goal}`,
-            `Iteration: ${index}${run.maxIterations === 0 ? " (no limit)" : ` of ${run.maxIterations}`}`,
-            `Iteration summary:\n${boundedPipelineEvidence(iteration.output)}`,
-            `Validation evidence:\n${boundedPipelineEvidence(validation.evidence)}`,
-            "Decide whether the success condition is met from the available evidence. Start your final response with exactly one decision line: SUCCESS, CONTINUE, or FAIL. Use SUCCESS only when the success condition is satisfied, CONTINUE when more iterations should try again, and FAIL when the loop should stop as agent failed. Then provide concise Markdown rationale.",
-          ].join("\n\n");
-          iteration.evaluatorOutput = await this.role(
-            run,
-            iteration,
-            loop,
-            "evaluator",
-            evaluatorPrompt,
-            undefined,
-            cwd,
-            run.projectId,
-            signal,
-            executeRole,
-            executeAgent,
-          );
-          if (this.stopped(run, signal)) return;
-          this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
-          const goalDecision = this.goalVerdict(iteration, iteration.evaluatorOutput);
-          iteration.goalDecision = goalDecision;
-          iteration.endedAt = this.now();
-          this.changed(run);
-          if (goalDecision === "FAIL") {
-            this.finalize(run, "failed", "agentFailed");
-            return;
-          }
-          if (
-            validation.classification === "spawnError" ||
-            validation.classification === "timeout"
-          ) {
-            this.finalize(run, "failed", "toolFailed");
-            return;
-          }
-          if (goalDecision === "SUCCESS" && validation.passed) {
-            this.finalize(run, "completed", "success");
-            return;
-          }
-          feedback = [iteration.evaluatorOutput, validation.evidence].join("\n\n");
-          continue;
-        }
-
-        // Validation runs before the checker decides, so a checker FAIL is
-        // never the only evidence against a diff the deterministic check passed.
-        let validation: ValidationResult = unconfiguredValidation(cwd);
-        if (loop.validationCommand)
-          validation = await this.validation(run, iteration, cwd, loop.validationCommand, signal);
-        if (this.stopped(run, signal)) return;
-        iteration.validationPassed = loop.validationCommand ? validation.passed : null;
-        iteration.validationEvidence = validation.evidence;
-        // A broken validation tool ends the run before any judge is spent on it.
-        if (validation.classification === "spawnError" || validation.classification === "timeout") {
-          iteration.endedAt = this.now();
-          this.changed(run);
-          this.finalize(run, "failed", "toolFailed");
-          return;
-        }
-
-        // A7: the shared verifier role (verifier.ts), launched through the loop's role path.
-        const checker = await runVerifier({
-          context: [
-            `Goal: ${loop.goal}`,
-            `Success condition: ${loop.successCondition || loop.goal}`,
-            `Iteration: ${index}`,
-            "Review only; do not edit project files.",
-            `Review criteria: ${loop.checkerRubric}`,
-            `Maker report:\n${iteration.output}`,
-          ],
-          evidence: validationEvidence(validation, Boolean(loop.validationCommand)),
-          decisions: CHECKER_DECISIONS,
-          run: (checkerPrompt) =>
-            this.role(
-              run,
-              iteration,
-              loop,
-              "checker",
-              checkerPrompt,
-              loop.checkerName,
-              cwd,
-              run.projectId,
-              signal,
-              executeRole,
-              executeAgent,
-            ),
-        });
-        iteration.checkerOutput = checker.output;
-        if (this.stopped(run, signal)) return;
-        this.persistArtifact(run, iteration, "checker", iteration.checkerOutput);
-        const { decision: parsedChecker, parse: checkerParse } = checker;
-        iteration.checkerVerdictParse = checkerParse;
-        if (checkerParse !== "strict") {
-          iteration.timeline.push({
-            id: randomUUID(),
-            phase: "checker",
-            roleName: loop.checkerName ?? "Checker",
-            note:
-              checkerParse === "missing"
-                ? "checker verdict missing; treated as CONTINUE"
-                : `checker verdict ${parsedChecker} read after a preamble or emphasis`,
-            timestamp: this.now(),
-          });
-        }
-        const checkerDecision = parsedChecker ?? "CONTINUE";
-        iteration.checkerDecision = checkerDecision;
-        if (checkerDecision === "FAIL") {
-          // Diverges from native: against a passed validation one judge's FAIL
-          // costs an iteration, not the run. The evaluator is skipped (the
-          // checker keeps its veto on success) and the FAIL becomes feedback;
-          // the last iteration ends notAchieved through the loop exit below.
-          if (loop.validationCommand && validation.passed) {
-            iteration.timeline.push({
-              id: randomUUID(),
-              phase: "checker",
-              roleName: loop.checkerName ?? "Checker",
-              note: "checker FAIL although validation passed; evaluator skipped, next iteration",
-              timestamp: this.now(),
-            });
-            iteration.endedAt = this.now();
-            this.changed(run);
-            feedback = [iteration.checkerOutput, validation.evidence].join("\n\n");
-            continue;
-          }
-          iteration.endedAt = this.now();
-          this.changed(run);
-          this.finalize(run, "failed", "agentFailed");
-          return;
-        }
-
-        const evaluatorPrompt = [
-          `Goal: ${loop.goal}`,
-          `Success condition: ${loop.successCondition || loop.goal}`,
-          `Iteration: ${index}`,
-          "Evaluate only; do not edit project files.",
-          `Maker report:\n${iteration.output}`,
-          `Checker report:\n${iteration.checkerOutput}`,
-          `Validation evidence:\n${validation.evidence}`,
-          "The exact first non-empty line must be SUCCESS, CONTINUE, or FAIL. Then give rationale and concrete evidence.",
-        ].join("\n\n");
-        iteration.evaluatorOutput = await this.role(
-          run,
-          iteration,
-          loop,
-          "evaluator",
-          evaluatorPrompt,
-          undefined,
-          cwd,
-          run.projectId,
-          signal,
-          executeRole,
-          executeAgent,
-        );
-        if (this.stopped(run, signal)) return;
-        this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
-        const goalDecision = this.goalVerdict(iteration, iteration.evaluatorOutput);
-        iteration.goalDecision = goalDecision;
-        iteration.endedAt = this.now();
-        this.changed(run);
-        if (goalDecision === "FAIL") {
-          this.finalize(run, "failed", "agentFailed");
-          return;
-        }
-        if (goalDecision === "SUCCESS" && validation.passed) {
-          this.finalize(run, "completed", "success");
-          return;
-        }
-        // Native PiAgentSessionStore.swift applies goal evaluation before
-        // handling the checker decision: SUCCESS completes even after
-        // ASK_HUMAN; only a continuing evaluator turns ASK_HUMAN into a stop.
-        // See the paired ASK_HUMAN policy tests in loopEngine.test.ts.
-        if (checkerDecision === "ASK_HUMAN") {
-          this.finalize(run, "stopped", "humanInputRequired");
-          return;
-        }
-        feedback = [iteration.checkerOutput, iteration.evaluatorOutput, validation.evidence].join(
-          "\n\n",
-        );
       } catch (error) {
         if (this.stopped(run, signal)) return;
         if (!iteration.output)
@@ -2562,5 +2243,208 @@ export class LoopEngine {
         ? "validationFailedAfterFinalIteration"
         : "maxIterationsReached",
     );
+  }
+
+  /** The evaluator's prompt for what the iteration ran (one wording per builtin template). */
+  private evaluatorPrompt(
+    run: LoopRun,
+    iteration: LoopRunIteration,
+    loop: LoopDefinition,
+    validation: ValidationResult,
+    has: (kind: LoopGraphNode["kind"]) => boolean,
+  ): string {
+    const index = iteration.index;
+    const decisionLine =
+      "The exact first non-empty line must be SUCCESS, CONTINUE, or FAIL. Then give rationale and concrete evidence.";
+    if (has("triage")) {
+      return [
+        `Goal: ${loop.goal}`,
+        `Success condition: ${loop.successCondition || loop.goal}`,
+        `Iteration: ${index}`,
+        "Evaluate the discovery and classification report only; do not edit project files.",
+        `Classification prompt: ${normalizeLoopClassificationPrompt(loop.classificationPrompt)}`,
+        `Triage report:\n${boundedPipelineEvidence(iteration.classificationOutput ?? "")}`,
+        `Validation evidence:\n${boundedPipelineEvidence(validation.evidence)}`,
+        decisionLine,
+      ].join("\n\n");
+    }
+    if (has("branch")) {
+      return [
+        `Goal: ${loop.goal}`,
+        `Success condition: ${loop.successCondition || loop.goal}`,
+        `Iteration: ${index}`,
+        "Evaluate the completed report-only parallel investigation; do not edit project files.",
+        `Parallel branch reports in configured order:\n${boundedPipelineEvidence(iteration.output)}`,
+        `Validation evidence:\n${boundedPipelineEvidence(validation.evidence)}`,
+        decisionLine,
+      ].join("\n\n");
+    }
+    if (has("stage")) {
+      const reports = (iteration.pipelineStageOutputs ?? [])
+        .map(
+          (stage) =>
+            `Stage ${stage.stageIndex + 1} (${stage.agentName}) report:\n${boundedPipelineEvidence(stage.output, MAX_PIPELINE_REPORT_CHARS)}`,
+        )
+        .join("\n\n");
+      return [
+        `Goal: ${loop.goal}`,
+        `Success condition: ${loop.successCondition || loop.goal}`,
+        `Iteration: ${index}`,
+        "Evaluate the completed pipeline only; do not edit project files.",
+        `Ordered pipeline reports:\n${boundedPipelineEvidence(reports)}`,
+        has("checker")
+          ? `Checker report:\n${boundedPipelineEvidence(iteration.checkerOutput ?? "")}`
+          : "",
+        `Validation evidence:\n${boundedPipelineEvidence(validation.evidence)}`,
+        decisionLine,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+    }
+    if (has("checker")) {
+      return [
+        `Goal: ${loop.goal}`,
+        `Success condition: ${loop.successCondition || loop.goal}`,
+        `Iteration: ${index}`,
+        "Evaluate only; do not edit project files.",
+        `Maker report:\n${iteration.output}`,
+        `Checker report:\n${iteration.checkerOutput}`,
+        `Validation evidence:\n${validation.evidence}`,
+        decisionLine,
+      ].join("\n\n");
+    }
+    return [
+      "You are Agent Deck's report-only natural-language goal evaluator. Review only; do not edit project files.",
+      `Loop goal: ${loop.goal}`,
+      `Success condition: ${loop.successCondition || loop.goal}`,
+      `Iteration: ${index}${run.maxIterations === 0 ? " (no limit)" : ` of ${run.maxIterations}`}`,
+      `Iteration summary:\n${boundedPipelineEvidence(iteration.output)}`,
+      `Validation evidence:\n${boundedPipelineEvidence(validation.evidence)}`,
+      "Decide whether the success condition is met from the available evidence. Start your final response with exactly one decision line: SUCCESS, CONTINUE, or FAIL. Use SUCCESS only when the success condition is satisfied, CONTINUE when more iterations should try again, and FAIL when the loop should stop as agent failed. Then provide concise Markdown rationale.",
+    ].join("\n\n");
+  }
+
+  /** A column of parallel branches: two workers, results in configured order. Returns whether a branch failed. */
+  private async parallelColumn(
+    run: LoopRun,
+    iteration: LoopRunIteration,
+    loop: LoopDefinition,
+    column: LoopGraphNode[],
+    feedback: string,
+    cwd: string,
+    signal: AbortSignal,
+    executeRole: ExecuteLoopRole | undefined,
+    executeAgent: ExecuteAgent | undefined,
+  ): Promise<boolean> {
+    const index = iteration.index;
+    const branches = column.map((node) => node.agentName!);
+    const branchChildren = branches.map<LoopChildRecord>((agentName, branchIndex) => ({
+      id: randomUUID(),
+      phase: "branch",
+      branchIndex,
+      agentName,
+      status: "queued",
+      queuedAt: this.now(),
+    }));
+    iteration.children.push(...branchChildren);
+    this.changed(run);
+    const results: Array<{
+      id: string;
+      branchIndex: number;
+      agentName: string;
+      output?: string;
+      error?: string;
+    }> = new Array(branches.length);
+    let nextBranchIndex = 0;
+    const worker = async (): Promise<void> => {
+      while (!signal.aborted) {
+        const branchIndex = nextBranchIndex;
+        if (branchIndex >= branches.length) return;
+        nextBranchIndex += 1;
+        const agentName = branches[branchIndex]!;
+        const prompt = [
+          "Agent Deck controls this loop iteration. Complete only this assigned step.",
+          `Goal: ${loop.goal}`,
+          `Iteration: ${index}`,
+          "You are working as one explicitly selected agent in a report-only parallel investigation.",
+          `Parallel branch: ${branchIndex + 1} of ${branches.length}`,
+          `Assigned agent: ${agentName}`,
+          "Work independently. Do not edit project files or coordinate with sibling agents. End with a concise Markdown summary of findings, evidence, risks, and recommended next action.",
+          feedback
+            ? `Prior-iteration evaluator and validation evidence:\n${boundedPipelineEvidence(feedback)}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+        try {
+          const child = branchChildren[branchIndex]!;
+          const output = await this.parallelBranchRole(
+            run,
+            iteration,
+            loop,
+            child,
+            prompt,
+            cwd,
+            run.projectId,
+            signal,
+            executeRole,
+            executeAgent,
+          );
+          if (!signal.aborted) {
+            results[branchIndex] = {
+              id: child.id,
+              branchIndex,
+              agentName,
+              output,
+            };
+          }
+        } catch (error) {
+          if (!signal.aborted) {
+            results[branchIndex] = {
+              id: branchChildren[branchIndex]!.id,
+              branchIndex,
+              agentName,
+              error: error instanceof Error ? error.message : String(error),
+            };
+          }
+        }
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(2, branches.length) }, async () => await worker()),
+    );
+    if (signal.aborted || run.status === "stopping") {
+      const stoppedAt = this.now();
+      for (const child of branchChildren) {
+        if (child.status === "queued") {
+          child.status = "stopped";
+          child.endedAt = stoppedAt;
+        }
+      }
+    }
+    if (this.stopped(run, signal)) return false;
+
+    // Native waits for every configured branch and renders its graph
+    // summary in configured order, regardless of completion order. A
+    // partial failure still proceeds through validation/evaluation, then
+    // fails the run after that evidence is recorded.
+    iteration.parallelBranchOutputs = results;
+    const aggregate = results
+      .map((branch) => `- ${branch.agentName}: ${branch.output ?? branch.error ?? "failed"}`)
+      .join("\n");
+    iteration.output = aggregate;
+    this.changed(run);
+    for (const branch of results) {
+      this.persistArtifact(
+        run,
+        iteration,
+        "branch",
+        branch.output ?? `# ${branch.agentName}\n\nError: ${branch.error ?? "failed"}`,
+        undefined,
+        branch.agentName,
+        branch.branchIndex,
+      );
+    }
+    return results.some((branch) => branch.error);
   }
 }

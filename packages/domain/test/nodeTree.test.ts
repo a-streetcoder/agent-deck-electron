@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parseEventLine, splitJsonl, type EventEnvelope } from "../src/events.ts";
 import {
+  loopChildStatus,
   deckRunsFromTree,
   nodesOfType,
   projectNodeTree,
@@ -517,5 +518,17 @@ describe("deckRunsFromTree", () => {
     // A tree read that misses the run's own events (the web's moving tail) loses the row.
     const tail = events("plan").filter((event) => !event.kind.startsWith("subagent.run."));
     expect(deckRunsFromTree(projectNodeTree(tail, { sessionId: uuid(5) }))).toEqual([]);
+  });
+});
+
+describe("loopChildStatus (shared with the Loops graph view)", () => {
+  it("maps known statuses, falls back to running, and infers legacy records", () => {
+    expect(loopChildStatus({ status: "queued" })).toBe("pending");
+    expect(loopChildStatus({ status: "completed" })).toBe("done");
+    expect(loopChildStatus({ status: "paused" as never })).toBe("running");
+    expect(loopChildStatus({ error: "boom" })).toBe("error");
+    expect(loopChildStatus({ endedAt: "t" })).toBe("done");
+    expect(loopChildStatus({ startedAt: "t" })).toBe("running");
+    expect(loopChildStatus({})).toBe("pending");
   });
 });

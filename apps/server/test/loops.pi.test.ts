@@ -660,6 +660,68 @@ describe("loop run engine (real pi)", () => {
     ).toBe(true);
   });
 
+  it("runs a hand-written graph: a two-stage pipeline with a checker after stage two (A9)", async () => {
+    const loopsDirectory = path.join(tmpHome, ".pi", "agent", "loops");
+    mkdirSync(loopsDirectory, { recursive: true });
+    writeFileSync(
+      path.join(loopsDirectory, "graph-loop.loop.md"),
+      [
+        "---",
+        "name: graph-loop",
+        "structure: agentPipeline",
+        "writeTarget: artifactMarkdown",
+        "maxIterations: 2",
+        "validationCommand: exit 0",
+        "checkerRubric: Require concrete evidence.",
+        "nodes:",
+        "  - { id: plan, kind: stage, agentName: Agent A }",
+        "  - { id: build, kind: stage, agentName: Agent B }",
+        "  - { id: review, kind: checker, agentName: Checker }",
+        "  - { id: judge, kind: evaluator }",
+        "edges:",
+        "  - { from: plan, to: build }",
+        "  - { from: build, to: review }",
+        "  - { from: review, to: judge }",
+        "  - { from: review, to: plan, when: FAIL, budgeted: true }",
+        "  - { from: judge, to: plan, when: CONTINUE, budgeted: true }",
+        "---",
+        "",
+        "Deliver planned, built and reviewed work.",
+        "",
+      ].join("\n"),
+    );
+    const requestStart = mock.requests.length;
+    const run = await waitTerminal(await startRun("graph-loop"));
+    expect(run.status).toBe("completed");
+    expect(run.iterations).toHaveLength(1);
+    const iteration = run.iterations[0]!;
+    expect(iteration.children.map((child) => [child.phase, child.agentName])).toEqual([
+      ["stage", "Agent A"],
+      ["stage", "Agent B"],
+      ["checker", "Checker"],
+      ["evaluator", undefined],
+    ]);
+    expect(iteration.children.every((child) => child.status === "completed")).toBe(true);
+    expect(iteration.checkerDecision).toBe("APPROVE");
+    expect(iteration.goalDecision).toBe("SUCCESS");
+    expect(iteration.validationPassed).toBe(true);
+    // Validation runs before the first judge, which here is the checker.
+    expect(iteration.timeline.map((event) => event.phase).indexOf("validation")).toBeLessThan(
+      iteration.timeline.map((event) => event.phase).indexOf("checker"),
+    );
+    const prompts = mock.requests
+      .slice(requestStart)
+      .map((request) => JSON.stringify(request.messages.at(-1)?.content));
+    const evaluatorPrompt = prompts.find((prompt) => prompt.includes("Ordered pipeline reports"));
+    expect(evaluatorPrompt).toContain("Checker report");
+    expect(run.definitionSnapshot?.graph?.nodes.map((node) => node.id)).toEqual([
+      "plan",
+      "build",
+      "review",
+      "judge",
+    ]);
+  });
+
   it("streams overlapping real Pi Parallel branches with max two and ordered aggregation", async () => {
     const put = await fetch(`${base}/loops`, {
       method: "PUT",

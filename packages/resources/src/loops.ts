@@ -14,6 +14,9 @@ import {
   LOOP_WRITE_TARGETS,
   type LoopDefinition,
   type LoopDefinitionAvailability,
+  type LoopGraph,
+  type LoopGraphEdge,
+  type LoopGraphNode,
   type LoopLaunchContextScope,
   type LoopSuccessConditionSource,
   type LoopStructure,
@@ -81,6 +84,50 @@ function decodeJSONStringArrayLine(content: string, key: string): string[] | und
   } catch {
     return undefined;
   }
+}
+/** A9: hand-written `nodes`/`edges` frontmatter. Wrong container or field types are refused
+ * here (LoopDefinitionInvalidError; a scan hides the file like any malformed definition);
+ * well-typed graphs go to graph validation. Never a fallback to the flat template. */
+function asLoopGraph(frontmatter: Record<string, unknown>): LoopGraph | undefined {
+  if (frontmatter.nodes === undefined && frontmatter.edges === undefined) return undefined;
+  const refuse = (detail: string): never => {
+    throw new LoopDefinitionInvalidError(`Malformed loop graph: ${detail}.`);
+  };
+  const records = (key: "nodes" | "edges"): Record<string, unknown>[] => {
+    const value = frontmatter[key];
+    if (!Array.isArray(value)) return refuse(`${key} must be a list`);
+    return value.map((item, index) =>
+      item && typeof item === "object" && !Array.isArray(item)
+        ? (item as Record<string, unknown>)
+        : refuse(`${key}[${index}] must be a mapping`),
+    );
+  };
+  const text = (record: Record<string, unknown>, key: string, where: string): string =>
+    typeof record[key] === "string" ? record[key] : refuse(`${where}.${key} must be text`);
+  return {
+    nodes: records("nodes").map((node, index) => {
+      if (node.agentName !== undefined) text(node, "agentName", `nodes[${index}]`);
+      return {
+        id: text(node, "id", `nodes[${index}]`),
+        kind: text(node, "kind", `nodes[${index}]`) as LoopGraphNode["kind"],
+        ...(node.agentName ? { agentName: node.agentName as string } : {}),
+      };
+    }),
+    edges: records("edges").map((edge, index) => {
+      const where = `edges[${index}]`;
+      if (edge.budgeted !== undefined && typeof edge.budgeted !== "boolean") {
+        refuse(`${where}.budgeted must be true or false`);
+      }
+      return {
+        from: text(edge, "from", where),
+        to: text(edge, "to", where),
+        ...(edge.when !== undefined
+          ? { when: text(edge, "when", where) as LoopGraphEdge["when"] }
+          : {}),
+        ...(edge.budgeted === true ? { budgeted: true } : {}),
+      };
+    }),
+  };
 }
 function asLaunchContextScope(value: unknown): LoopLaunchContextScope {
   return value === "everyIteration" ? "everyIteration" : "firstIterationOnly";
@@ -171,6 +218,7 @@ export function parseLoopFile(filePath: string, content: string): LoopDefinition
     body,
   );
   const evaluatorModel = asString(frontmatter.evaluatorModel)?.trim() || undefined;
+  const graph = asLoopGraph(frontmatter);
   const projectPaths =
     decodeJSONStringArrayLine(content, "projectPathsJSON") ??
     asProjectPaths(frontmatter.projectPaths) ??
@@ -198,6 +246,7 @@ export function parseLoopFile(filePath: string, content: string): LoopDefinition
       asStructure(frontmatter.structure) === "humanApproval"
         ? normalizeLoopCheckpointPrompt(nativeLineFrontmatterValue(content, "checkpointPrompt"))
         : asString(frontmatter.checkpointPrompt) || undefined,
+    ...(graph ? { graph } : {}),
     launchContext: normalizeLoopLaunchContext(launchContext),
     launchContextScope: asLaunchContextScope(frontmatter.launchContextScope),
     maxIterations: clampMaxIterations(
@@ -401,6 +450,7 @@ export function writeLoopFile(roots: ResourceRoots, edit: LoopEdit): string {
       edit.checkpointPrompt ?? persistedCheckpointPrompt ?? asString(frontmatter.checkpointPrompt),
     ),
     writeTarget: edit.writeTarget ?? asWriteTarget(frontmatter.writeTarget),
+    graph: asLoopGraph(frontmatter),
   });
   if (validationError) throw new LoopDefinitionInvalidError(validationError);
 

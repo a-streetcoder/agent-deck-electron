@@ -80,10 +80,35 @@ export function loopDefinitionValidationError(
     | "classificationPrompt"
     | "checkpointPrompt"
     | "writeTarget"
+    | "graph"
   >,
 ): string | undefined {
   if (!isRunnableLoopStructure(loop.structure)) return "This Loop structure is unavailable.";
   if (!loop.name.trim()) return "A name is required.";
+  if (loop.graph) {
+    if (!loop.goal.trim()) return "A goal is required.";
+    // A checkpoint is parked and resolved through the Human approval structure only.
+    if (
+      loop.structure === "humanApproval" ||
+      loop.graph.nodes.some((node) => node.kind === "human")
+    ) {
+      return "Hand-written graphs cannot hold a human checkpoint; use the Human approval structure.";
+    }
+    const checked = loopGraphColumns(loop.graph);
+    if ("error" in checked) return checked.error;
+    for (const node of loop.graph.nodes) {
+      if (node.kind !== "evaluator" && !node.agentName?.trim()) {
+        return `Graph node "${node.id}" needs an agent.`;
+      }
+      if (node.kind === "checker" && !(loop.checkerRubric ?? "").trim()) {
+        return "A checker rubric is required.";
+      }
+      if (node.kind === "branch" && loop.writeTarget !== "artifactMarkdown") {
+        return "Parallel agents are report-only and require the Artifact (markdown) write target.";
+      }
+    }
+    return undefined;
+  }
   if (loop.structure === "singleAgent") {
     if (!loop.agentName?.trim()) return "An agent is required.";
   }
@@ -158,8 +183,27 @@ export function loopRequiredAgentRoles(
     | "pipelineStages"
     | "parallelBranches"
     | "triageAgent"
+    | "graph"
   >,
 ): LoopRequiredAgentRole[] {
+  if (loop.graph) {
+    const positions = new Map<string, number>();
+    // Positions follow execution order (depth columns) when the graph is valid.
+    const checked = loopGraphColumns(loop.graph);
+    const ordered = "columns" in checked ? checked.columns.flat() : loop.graph.nodes;
+    return ordered.flatMap((node): LoopRequiredAgentRole[] => {
+      if (node.kind === "evaluator" || node.kind === "human") return [];
+      const position = (positions.get(node.kind) ?? 0) + 1;
+      positions.set(node.kind, position);
+      return [
+        {
+          role: node.kind,
+          ...(node.kind === "stage" || node.kind === "branch" ? { position } : {}),
+          agentName: node.agentName?.trim() ?? "",
+        },
+      ];
+    });
+  }
   switch (loop.structure) {
     case "singleAgent":
       return [{ role: "agent", agentName: loop.agentName?.trim() ?? "" }];
@@ -290,6 +334,9 @@ export interface LoopDefinition {
   classificationPrompt?: string;
   /** Native flat Human Approval frontmatter. */
   checkpointPrompt?: string;
+  /** A9: a hand-written graph (`nodes`/`edges` frontmatter). Absent: the structure's
+   * builtin template (`loopGraph`); the flat fields above stay the native format. */
+  graph?: LoopGraph;
   launchContext?: string;
   launchContextScope: LoopLaunchContextScope;
   /** 0 means unlimited; positive values are clamped to 1..LOOP_MAX_ITERATIONS_LIMIT. */
@@ -339,6 +386,8 @@ export type LoopRunStatus =
 export type LoopStopReason =
   | "success"
   | "maxIterationsReached"
+  /** A9: the evaluator continued but the graph has no budgeted edge to repeat on. */
+  | "graphHasNoRepeatEdge"
   | "validationFailedAfterFinalIteration"
   | "validationUnavailable"
   | "unsafeWriteTarget"
@@ -589,4 +638,253 @@ export function isLoopRunTerminal(status: LoopRunStatus): boolean {
     status === "notAchieved" ||
     status === "interrupted"
   );
+}
+
+/**
+ * A9: a loop as a graph. Node kinds are the loop's roles (plus the human checkpoint);
+ * the six structures are builtin templates of it (`loopGraph`), and the engine runs one
+ * interpreter over the depth columns `loopGraphColumns` returns. Forward edges are
+ * unconditional; a budgeted edge leads back to the entry on a decision and starts the
+ * next iteration, so `maxIterations` is the cycle budget.
+ */
+export type LoopNodeKind =
+  | "maker"
+  | "checker"
+  | "evaluator"
+  | "stage"
+  | "branch"
+  | "triage"
+  | "human";
+
+export const LOOP_NODE_KINDS: readonly LoopNodeKind[] = [
+  "maker",
+  "checker",
+  "evaluator",
+  "stage",
+  "branch",
+  "triage",
+  "human",
+];
+
+export interface LoopGraphNode {
+  id: string;
+  kind: LoopNodeKind;
+  agentName?: string;
+}
+
+export interface LoopGraphEdge {
+  from: string;
+  to: string;
+  /** The decision a budgeted edge is taken on: the evaluator's CONTINUE or the checker's FAIL. */
+  when?: LoopCheckerDecision;
+  /** Back to the entry: the next iteration, spending one unit of the cycle budget. */
+  budgeted?: boolean;
+}
+
+export interface LoopGraph {
+  nodes: LoopGraphNode[];
+  edges: LoopGraphEdge[];
+}
+
+const LOOP_GRAPH_DECISIONS: readonly LoopCheckerDecision[] = [
+  "APPROVE",
+  "CONTINUE",
+  "REJECT",
+  "ASK_HUMAN",
+  "FAIL",
+];
+
+/** The definition's hand-written graph, else its structure normalised to the builtin template. */
+export function loopGraph(
+  loop: Pick<
+    LoopDefinition,
+    | "graph"
+    | "structure"
+    | "agentName"
+    | "makerName"
+    | "checkerName"
+    | "pipelineStages"
+    | "parallelBranches"
+    | "triageAgent"
+  >,
+): LoopGraph {
+  if (loop.graph) return loop.graph;
+  const evaluator: LoopGraphNode = { id: "evaluator", kind: "evaluator" };
+  const back = (from: string, to: string, when: LoopCheckerDecision = "CONTINUE") => ({
+    from,
+    to,
+    when,
+    budgeted: true,
+  });
+  // Agent names stay as authored (untrimmed): they reach the executor unchanged.
+  switch (loop.structure) {
+    case "singleAgent":
+      return {
+        nodes: [
+          { id: "maker", kind: "maker", agentName: loop.makerName || loop.agentName },
+          evaluator,
+        ],
+        edges: [{ from: "maker", to: "evaluator" }, back("evaluator", "maker")],
+      };
+    case "makerChecker":
+      return {
+        nodes: [
+          { id: "maker", kind: "maker", agentName: loop.makerName || loop.agentName },
+          { id: "checker", kind: "checker", agentName: loop.checkerName },
+          evaluator,
+        ],
+        edges: [
+          { from: "maker", to: "checker" },
+          { from: "checker", to: "evaluator" },
+          back("checker", "maker", "FAIL"),
+          back("evaluator", "maker"),
+        ],
+      };
+    case "agentPipeline": {
+      const stages = (loop.pipelineStages ?? []).map<LoopGraphNode>((agentName, index) => ({
+        id: `stage-${index + 1}`,
+        kind: "stage",
+        agentName,
+      }));
+      const chain = [...stages, evaluator];
+      return {
+        nodes: chain,
+        edges: [
+          ...chain.slice(1).map((node, index) => ({ from: chain[index]!.id, to: node.id })),
+          back("evaluator", chain[0]!.id),
+        ],
+      };
+    }
+    case "parallelAgents": {
+      const branches = normalizeParallelBranches(loop.parallelBranches).map<LoopGraphNode>(
+        (agentName, index) => ({ id: `branch-${index + 1}`, kind: "branch", agentName }),
+      );
+      return {
+        nodes: [...branches, evaluator],
+        edges: [
+          ...branches.map((branch) => ({ from: branch.id, to: "evaluator" })),
+          ...branches.map((branch) => back("evaluator", branch.id)),
+        ],
+      };
+    }
+    case "discoveryTriage":
+      return {
+        nodes: [{ id: "triage", kind: "triage", agentName: loop.triageAgent }, evaluator],
+        edges: [{ from: "triage", to: "evaluator" }, back("evaluator", "triage")],
+      };
+    case "humanApproval":
+      return { nodes: [{ id: "human", kind: "human" }], edges: [] };
+  }
+}
+
+/**
+ * Validate a graph and return its depth columns (longest path from the entry over the
+ * forward edges): the order the engine runs and the Loops screen draws. Rules: unique
+ * ids and known kinds; cycles only through budgeted edges, which lead back to the entry;
+ * exactly one entry node (or one set of parallel branches, which start together), so
+ * every node is reachable from it; one evaluator, ending the iteration; at most one
+ * maker, checker and triage; a human checkpoint only on its own (Human approval).
+ */
+export function loopGraphColumns(
+  graph: LoopGraph,
+): { columns: LoopGraphNode[][] } | { error: string } {
+  const { nodes, edges } = graph;
+  if (!nodes.length) return { error: "A loop graph needs at least one node." };
+  const byId = new Map<string, LoopGraphNode>();
+  for (const node of nodes) {
+    if (typeof node.id !== "string" || !node.id.trim() || byId.has(node.id)) {
+      return { error: `Graph node ids must be unique and non-empty ("${String(node.id)}").` };
+    }
+    if (!LOOP_NODE_KINDS.includes(node.kind)) {
+      return { error: `Graph node "${node.id}" has an unknown kind "${String(node.kind)}".` };
+    }
+    byId.set(node.id, node);
+  }
+  const count = (kind: LoopNodeKind) => nodes.filter((node) => node.kind === kind).length;
+  if (count("human")) {
+    return nodes.length === 1 && !edges.length
+      ? { columns: [nodes] }
+      : { error: "A human checkpoint runs only on its own (the Human approval structure)." };
+  }
+  if (count("evaluator") !== 1) return { error: "A loop graph needs exactly one evaluator." };
+  for (const kind of ["maker", "checker", "triage"] as const) {
+    if (count(kind) > 1) return { error: `A loop graph has at most one ${kind}.` };
+  }
+  const forward = new Map(nodes.map((node) => [node.id, [] as string[]]));
+  const indegree = new Map(nodes.map((node) => [node.id, 0]));
+  for (const edge of edges) {
+    const from = byId.get(edge.from);
+    if (!from || !byId.has(edge.to)) {
+      return { error: `Graph edge ${edge.from} -> ${edge.to} names an unknown node.` };
+    }
+    if (edge.when !== undefined && !LOOP_GRAPH_DECISIONS.includes(edge.when)) {
+      return { error: `Graph edge ${edge.from} -> ${edge.to} has an unknown condition.` };
+    }
+    if (!edge.budgeted) {
+      if (edge.when !== undefined) {
+        return { error: "Only budgeted edges carry a condition; forward edges always run." };
+      }
+      forward.get(edge.from)!.push(edge.to);
+      indegree.set(edge.to, indegree.get(edge.to)! + 1);
+    } else if (
+      !(from.kind === "evaluator" && (edge.when ?? "CONTINUE") === "CONTINUE") &&
+      !(from.kind === "checker" && edge.when === "FAIL")
+    ) {
+      return { error: "A budgeted edge leaves the evaluator on CONTINUE or the checker on FAIL." };
+    }
+  }
+  const entries = nodes.filter((node) => indegree.get(node.id) === 0);
+  if (!entries.length || (entries.length > 1 && entries.some((node) => node.kind !== "branch"))) {
+    return {
+      error: "A loop graph needs exactly one entry node; every node must be reachable from it.",
+    };
+  }
+  if (nodes.some((node) => node.kind === "branch" && !entries.includes(node))) {
+    return { error: "Parallel branches start the iteration: no edge may lead into a branch." };
+  }
+  if (edges.some((edge) => edge.budgeted && !entries.some((node) => node.id === edge.to))) {
+    return { error: "A budgeted edge must lead back to the entry." };
+  }
+  const columns: LoopGraphNode[][] = [];
+  let frontier = entries;
+  let placed = 0;
+  while (frontier.length) {
+    columns.push(frontier);
+    placed += frontier.length;
+    const next: LoopGraphNode[] = [];
+    for (const node of frontier) {
+      for (const to of forward.get(node.id)!) {
+        const remaining = indegree.get(to)! - 1;
+        indegree.set(to, remaining);
+        if (remaining === 0) next.push(byId.get(to)!);
+      }
+    }
+    frontier = next;
+  }
+  if (placed < nodes.length)
+    return { error: "A loop graph may cycle only through budgeted edges." };
+  const last = columns.at(-1)!;
+  if (last.length !== 1 || last[0]!.kind !== "evaluator") {
+    return { error: "The evaluator must end the iteration, after every other node." };
+  }
+  // The interpreter runs the six template shapes plus stages followed by one checker.
+  // Validation runs once, before the first judge, so nothing but the evaluator may
+  // follow a checker; triage and branches keep their templates' shape.
+  const body = columns.slice(0, -1).map((column) => column.map((node) => node.kind));
+  const checker = body.at(-1)?.join() === "checker";
+  const work = checker ? body.slice(0, -1) : body;
+  const single = (kind: LoopNodeKind) => work.length === 1 && work[0]!.join() === kind;
+  const shape = checker
+    ? single("maker") || (work.length > 0 && work.every((column) => column.join() === "stage"))
+    : single("maker") ||
+      single("triage") ||
+      (work.length === 1 && work[0]!.every((kind) => kind === "branch")) ||
+      (work.length > 0 && work.every((column) => column.join() === "stage"));
+  if (!shape) {
+    return {
+      error:
+        "Unsupported graph shape: use a maker, a triage, parallel branches, or a chain of stages (a maker or the stages may be followed by one checker), then the evaluator.",
+    };
+  }
+  return { columns };
 }

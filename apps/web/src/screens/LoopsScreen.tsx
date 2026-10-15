@@ -36,9 +36,11 @@ import {
   type AgentInfo,
   type LoopChangedFile,
   type LoopDefinition,
+  type LoopGraph,
   type LoopRequiredAgentRole,
   type LoopRun,
 } from "@agent-deck/domain";
+import { LoopGraphView } from "../components/LoopGraphView.tsx";
 import { SkeletonRows } from "../components/Skeleton.tsx";
 import { useAppStore } from "../state/store.ts";
 import { useAgentsCatalog } from "../state/useAgents.ts";
@@ -63,6 +65,7 @@ const RUN_STATUS_LABEL: Record<LoopRun["status"], string> = {
 const STOP_REASON_LABEL: Partial<Record<NonNullable<LoopRun["stopReason"]>, string>> = {
   success: "Success",
   maxIterationsReached: "Maximum iterations reached",
+  graphHasNoRepeatEdge: "Graph has no repeat edge",
   validationFailedAfterFinalIteration: "Validation failed after final iteration",
   validationUnavailable: "Validation unavailable",
   unsafeWriteTarget: "Unsafe write target",
@@ -113,6 +116,8 @@ const inputClass =
 
 interface LoopDraft {
   id?: string;
+  /** A9: a hand-written graph, shown but not edited here; the file keeps its nodes/edges. */
+  graph?: LoopGraph;
   original: string | null; // the name at open time (null = new); edit keeps the name fixed
   name: string;
   description: string;
@@ -176,6 +181,7 @@ async function responseError(response: Response): Promise<string> {
 function draftFrom(loop: LoopDefinition | null): LoopDraft {
   return {
     id: loop?.id,
+    ...(loop?.graph ? { graph: loop.graph } : {}),
     original: loop?.name ?? null,
     name: loop?.name ?? "",
     description: loop?.description ?? "",
@@ -494,6 +500,7 @@ export function LoopsScreen() {
     setSaveError(null);
     setError(null);
     try {
+      const flat = !draft.graph;
       const response = await fetch("/loops", {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -503,26 +510,29 @@ export function LoopsScreen() {
           description: draft.description,
           goal: draft.goal,
           structure: draft.structure,
-          agentName: draft.structure === "singleAgent" ? draft.agentName.trim() : undefined,
-          makerName: draft.structure === "makerChecker" ? draft.makerName.trim() : undefined,
-          checkerName: draft.structure === "makerChecker" ? draft.checkerName.trim() : undefined,
+          agentName: flat && draft.structure === "singleAgent" ? draft.agentName.trim() : undefined,
+          makerName:
+            flat && draft.structure === "makerChecker" ? draft.makerName.trim() : undefined,
+          checkerName:
+            flat && draft.structure === "makerChecker" ? draft.checkerName.trim() : undefined,
           checkerRubric:
-            draft.structure === "makerChecker" ? draft.checkerRubric.trim() : undefined,
+            flat && draft.structure === "makerChecker" ? draft.checkerRubric.trim() : undefined,
           pipelineStages:
-            draft.structure === "agentPipeline"
+            flat && draft.structure === "agentPipeline"
               ? draft.pipelineStages.map((stage) => stage.trim())
               : undefined,
           parallelBranches:
-            draft.structure === "parallelAgents"
+            flat && draft.structure === "parallelAgents"
               ? normalizeParallelBranches(draft.parallelBranches)
               : undefined,
-          triageAgent: draft.structure === "discoveryTriage" ? draft.triageAgent.trim() : undefined,
+          triageAgent:
+            flat && draft.structure === "discoveryTriage" ? draft.triageAgent.trim() : undefined,
           classificationPrompt:
-            draft.structure === "discoveryTriage"
+            flat && draft.structure === "discoveryTriage"
               ? normalizeLoopClassificationPrompt(draft.classificationPrompt)
               : undefined,
           checkpointPrompt:
-            draft.structure === "humanApproval"
+            flat && draft.structure === "humanApproval"
               ? normalizeLoopCheckpointPrompt(draft.checkpointPrompt)
               : undefined,
           launchContext: normalizeLoopLaunchContext(draft.launchContext) ?? "",
@@ -1397,6 +1407,13 @@ export function LoopsScreen() {
               ) : null}
             </div>
           ) : null}
+          {activeRun.definitionSnapshot ? (
+            <LoopGraphView
+              loop={activeRun.definitionSnapshot}
+              runChildren={activeRun.iterations.at(-1)?.children ?? []}
+              finished={isLoopRunTerminal(activeRun.status)}
+            />
+          ) : null}
           {activeRun.iterations.length > 0 ? (
             <ol
               className="mt-2 space-y-2"
@@ -1997,67 +2014,78 @@ export function LoopsScreen() {
               ) : null}
             </fieldset>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <label className="text-caption font-medium text-text-muted">
-                Structure
-                <ControlSelect
-                  data-testid="loop-structure"
-                  className={inputClass}
-                  value={draft.structure}
-                  onChange={(e) => {
-                    const structure = e.target.value as LoopDraft["structure"];
-                    setDraft({
-                      ...draft,
-                      structure,
-                      ...(structure === "parallelAgents"
-                        ? { writeTarget: "artifactMarkdown" as const }
-                        : {}),
-                      ...(structure === "discoveryTriage"
-                        ? {
-                            classificationPrompt: normalizeLoopClassificationPrompt(
-                              draft.classificationPrompt,
-                            ),
-                          }
-                        : {}),
-                      ...(structure === "humanApproval"
-                        ? {
-                            checkpointPrompt: normalizeLoopCheckpointPrompt(draft.checkpointPrompt),
-                          }
-                        : {}),
-                    });
-                    if (structure === "discoveryTriage") {
-                      requestAnimationFrame(() => triageAgentRef.current?.focus());
-                    } else if (structure === "humanApproval") {
-                      requestAnimationFrame(() => checkpointPromptRef.current?.focus());
+              {draft.graph ? (
+                <div className="sm:col-span-2">
+                  <p className="text-detail text-text-secondary" data-testid="loop-custom-graph">
+                    Custom graph: edit nodes/edges in the file.
+                  </p>
+                  <LoopGraphView loop={draft} />
+                </div>
+              ) : (
+                <label className="text-caption font-medium text-text-muted">
+                  Structure
+                  <ControlSelect
+                    data-testid="loop-structure"
+                    className={inputClass}
+                    value={draft.structure}
+                    onChange={(e) => {
+                      const structure = e.target.value as LoopDraft["structure"];
+                      setDraft({
+                        ...draft,
+                        structure,
+                        ...(structure === "parallelAgents"
+                          ? { writeTarget: "artifactMarkdown" as const }
+                          : {}),
+                        ...(structure === "discoveryTriage"
+                          ? {
+                              classificationPrompt: normalizeLoopClassificationPrompt(
+                                draft.classificationPrompt,
+                              ),
+                            }
+                          : {}),
+                        ...(structure === "humanApproval"
+                          ? {
+                              checkpointPrompt: normalizeLoopCheckpointPrompt(
+                                draft.checkpointPrompt,
+                              ),
+                            }
+                          : {}),
+                      });
+                      if (structure === "discoveryTriage") {
+                        requestAnimationFrame(() => triageAgentRef.current?.focus());
+                      } else if (structure === "humanApproval") {
+                        requestAnimationFrame(() => checkpointPromptRef.current?.focus());
+                      }
+                    }}
+                    aria-describedby={
+                      isRunnableLoopStructure(draft.structure)
+                        ? undefined
+                        : "loop-editor-structure-unavailable"
                     }
-                  }}
-                  aria-describedby={
-                    isRunnableLoopStructure(draft.structure)
-                      ? undefined
-                      : "loop-editor-structure-unavailable"
-                  }
-                >
-                  {!isRunnableLoopStructure(draft.structure) ? (
-                    <option value={draft.structure} disabled>
-                      {LOOP_STRUCTURE_LABEL[draft.structure]} (unavailable)
-                    </option>
-                  ) : null}
-                  {RUNNABLE_LOOP_STRUCTURES.map((s) => (
-                    <option key={s} value={s}>
-                      {LOOP_STRUCTURE_LABEL[s]}
-                    </option>
-                  ))}
-                </ControlSelect>
-                {!isRunnableLoopStructure(draft.structure) ? (
-                  <span
-                    id="loop-editor-structure-unavailable"
-                    data-testid="loop-editor-structure-unavailable"
-                    className="mt-1 block text-detail text-text-secondary"
                   >
-                    This structure cannot run here. Choose Single agent to explicitly convert it.
-                  </span>
-                ) : null}
-              </label>
-              {draft.structure === "singleAgent" ? (
+                    {!isRunnableLoopStructure(draft.structure) ? (
+                      <option value={draft.structure} disabled>
+                        {LOOP_STRUCTURE_LABEL[draft.structure]} (unavailable)
+                      </option>
+                    ) : null}
+                    {RUNNABLE_LOOP_STRUCTURES.map((s) => (
+                      <option key={s} value={s}>
+                        {LOOP_STRUCTURE_LABEL[s]}
+                      </option>
+                    ))}
+                  </ControlSelect>
+                  {!isRunnableLoopStructure(draft.structure) ? (
+                    <span
+                      id="loop-editor-structure-unavailable"
+                      data-testid="loop-editor-structure-unavailable"
+                      className="mt-1 block text-detail text-text-secondary"
+                    >
+                      This structure cannot run here. Choose Single agent to explicitly convert it.
+                    </span>
+                  ) : null}
+                </label>
+              )}
+              {!draft.graph && draft.structure === "singleAgent" ? (
                 <label className="text-caption font-medium text-text-muted">
                   Agent
                   <ControlSelect
@@ -2072,7 +2100,7 @@ export function LoopsScreen() {
                 </label>
               ) : null}
             </div>
-            {draft.structure === "makerChecker" ? (
+            {!draft.graph && draft.structure === "makerChecker" ? (
               <div className="space-y-3" data-testid="loop-maker-checker-config">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <label className="text-caption font-medium text-text-muted">
@@ -2111,7 +2139,7 @@ export function LoopsScreen() {
                 </label>
               </div>
             ) : null}
-            {draft.structure === "agentPipeline" ? (
+            {!draft.graph && draft.structure === "agentPipeline" ? (
               <fieldset
                 className="space-y-2 rounded-lg border border-border-subtle p-2"
                 data-testid="loop-pipeline-config"
@@ -2211,7 +2239,7 @@ export function LoopsScreen() {
                 </Button>
               </fieldset>
             ) : null}
-            {draft.structure === "parallelAgents" ? (
+            {!draft.graph && draft.structure === "parallelAgents" ? (
               <fieldset
                 className="space-y-2 rounded-lg border border-border-subtle p-2"
                 data-testid="loop-parallel-config"
@@ -2318,7 +2346,7 @@ export function LoopsScreen() {
                 </Button>
               </fieldset>
             ) : null}
-            {draft.structure === "discoveryTriage" ? (
+            {!draft.graph && draft.structure === "discoveryTriage" ? (
               <fieldset
                 className="space-y-3 rounded-lg border border-border-subtle p-2"
                 data-testid="loop-triage-config"
@@ -2366,7 +2394,7 @@ export function LoopsScreen() {
                 </label>
               </fieldset>
             ) : null}
-            {draft.structure === "humanApproval" ? (
+            {!draft.graph && draft.structure === "humanApproval" ? (
               <fieldset
                 className="space-y-3 rounded-lg border border-border-subtle p-2"
                 data-testid="loop-human-approval-config"
@@ -2645,6 +2673,7 @@ export function LoopsScreen() {
                 ? "No iteration limit"
                 : `Up to ${launchDraft.loop.maxIterations} iterations`}
             </p>
+            <LoopGraphView loop={launchDraft.loop} />
             <label className="block text-caption font-medium text-text-muted">
               Run goal
               <ControlTextArea

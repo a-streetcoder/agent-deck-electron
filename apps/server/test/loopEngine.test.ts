@@ -2073,3 +2073,40 @@ describe("loop engine (single-agent)", () => {
     expect(calls).toBe(1); // never started a second iteration
   });
 });
+
+describe("loop engine (hand-written graph, A9)", () => {
+  it("numbers stages by execution order and ends a single-pass graph on CONTINUE", async () => {
+    const calls: string[] = [];
+    const engine = new LoopEngine({
+      executeRole: async ({ phase, agentName, stageIndex, prompt }) => {
+        calls.push(`${phase}:${agentName ?? ""}:${stageIndex ?? ""}`);
+        if (phase === "stage") expect(prompt).toContain(`Pipeline stage: ${stageIndex! + 1} of 2`);
+        return phase === "evaluator" ? "CONTINUE\nNot yet." : `${agentName} report`;
+      },
+      runValidation: async () => ({ passed: true, evidence: "green" }),
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "agentPipeline",
+        maxIterations: 3,
+        graph: {
+          // Listed out of order: "second" runs after "first".
+          nodes: [
+            { id: "second", kind: "stage", agentName: "Agent B" },
+            { id: "first", kind: "stage", agentName: "Agent A" },
+            { id: "judge", kind: "evaluator" },
+          ],
+          edges: [
+            { from: "first", to: "second" },
+            { from: "second", to: "judge" },
+          ],
+        },
+      }),
+      cwd(),
+    );
+    await engine.settled(run.id);
+    expect(calls).toEqual(["stage:Agent A:0", "stage:Agent B:1", "evaluator::"]);
+    expect(run.iterations).toHaveLength(1);
+    expect(run).toMatchObject({ status: "notAchieved", stopReason: "graphHasNoRepeatEdge" });
+  });
+});
