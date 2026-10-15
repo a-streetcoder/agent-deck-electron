@@ -38,6 +38,7 @@ import {
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { buildMemoryPreamble, injectableIndex, type Embedder } from "@agent-deck/memory";
+import { serverLog } from "./serverLog.ts";
 import { writeOpenAIFastConfig, writeOpenAIFastExtension } from "./openaiFastMode.ts";
 import { projectAllowsAgent } from "./agentCuration.ts";
 import { resolveExplicitSkills } from "./agentSkillResolution.ts";
@@ -301,9 +302,9 @@ async function initServer(
   let eventLog: EventLog;
   try {
     eventLog = createEventLog(dataDir, { projectOf: (sessionId) => projectOfSession(sessionId) });
-    console.info(`[events] log ${eventLog.logId} writable=${eventLog.writable}`);
+    serverLog.info("events", `log ${eventLog.logId} writable=${eventLog.writable}`);
   } catch (error) {
-    console.warn("[events] event log disabled: could not open it", error);
+    serverLog.warn("events", "event log disabled: could not open it", error);
     eventLog = disabledEventLog();
   }
   startupCleanups.push(() => eventLog.close());
@@ -483,13 +484,12 @@ async function initServer(
       events.planChanged(event.sessionId, op, event, undefined, causationId),
     readLog: (sessionId) => logReaders.plans(sessionId),
   });
-  // D8: fastify is declared later (and logs nothing: logger false), so stores built
-  // before it warn to the console like their siblings.
+  // D9: stores warn through serverLog (fastify runs with logger: false).
   const loopSnapshots = new LoopSessionSnapshotStore(dataDir, (message, error) =>
-    console.warn(`[loop-snapshots] ${message}`, error ?? ""),
+    serverLog.warn("loop-snapshots", message, error),
   );
   const subagentRuns = new SubagentRunStore(dataDir, (message, error) =>
-    console.warn(`[subagent-runs] ${message}`, error),
+    serverLog.warn("subagent-runs", message, error),
   );
 
   const sessions: SessionManager = new SessionManager(
@@ -825,7 +825,7 @@ async function initServer(
   // built per-run, bound to a parent session in the project cwd.
   const loopEngine = new LoopEngine({
     dataDir,
-    warn: (message, error) => console.warn(`[loop-runs] ${message}`, error ?? ""),
+    warn: (message, error) => serverLog.warn("loop-runs", message, error),
   });
   // Interactive provider OAuth login relay (native PiProviderLoginService).
   const providerLogin = new ProviderLoginManager(options.providerLoginFn);
@@ -860,7 +860,7 @@ async function initServer(
     } catch (error) {
       if (strictEvents) throw error;
       reconcileFailures += 1;
-      console.warn("[events] plan history reconcile failed", error);
+      serverLog.warn("events", "plan history reconcile failed", error);
     }
   }
   // Logged once per boot, always (A1d): zero mismatches on a clean boot.
@@ -1112,7 +1112,7 @@ async function initServer(
     recordVerified: (sessionId, verified, causationId) =>
       events.planItemVerified(sessionId, verified, causationId),
     liveSessions: () => sessions.liveSessionIds(),
-    warn: (message, error) => console.warn(`[plan-dispatch] ${message}`, error),
+    warn: (message, error) => serverLog.warn("plan-dispatch", message, error),
   });
   // A freed child slot or a restored plan: settle (and maybe dispatch) after the caller returns.
   sessions.onPlanWake = (sessionId) => setImmediate(() => void planDispatcher.evaluate(sessionId));
@@ -1132,7 +1132,7 @@ async function initServer(
   });
   // PI-04: Pi 1.0.3 renamed the azure provider; rewrite the shared and per-user auth.json once.
   migrateAzureAuthFiles(piAgentHome(rootsFor()), dataDir, (message, error) =>
-    console.warn(`[azure-provider-rename] ${message}`, error ?? ""),
+    serverLog.warn("azure-provider-rename", message, error),
   );
   // SKL-09: Codex plugin skill REFERENCES resolve against the plugin cache's active version
   // on every scan (version-follow, never copied) and join as read-only collection roots.
@@ -1354,6 +1354,7 @@ async function initServer(
   // Who the server believes the caller is. `null` on a single-user loopback server.
   // SRV-13: `providersConnected` says whether the caller's own agent dir has any
   // signed-in or configured provider, so the web can warn before a start fails.
+  const providersCheckWarned = new Set<string>();
   fastify.get("/me", async (request) => {
     const user = requestUser(request.raw);
     if (!user) return { user: null };
@@ -1371,7 +1372,13 @@ async function initServer(
             !(API_KEY_ONLY_PROVIDERS.has(provider.id) && provider.credentialType === "oauth"),
         );
     } catch (error) {
-      request.log.warn({ err: error }, "providersConnected check failed");
+      // A malformed auth.json error quotes text around the bad token, and /me runs on
+      // every bridge connect: log the error name only, once per user per process.
+      if (!providersCheckWarned.has(user.id)) {
+        providersCheckWarned.add(user.id);
+        const name = error instanceof Error ? error.name : typeof error;
+        serverLog.warn("providers", `providersConnected check failed (${name})`);
+      }
     }
     return {
       user: {

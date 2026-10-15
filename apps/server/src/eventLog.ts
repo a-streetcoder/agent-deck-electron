@@ -25,6 +25,7 @@ import {
   writeSync,
 } from "node:fs";
 import path from "node:path";
+import { serverLog } from "./serverLog.ts";
 import {
   EVENT_ENVELOPE_VERSION,
   MAX_EVENT_BYTES,
@@ -334,8 +335,7 @@ export function createEventLog(dataDir: string, options: EventLogOptions = {}): 
   const clock = options.clock ?? (() => new Date());
   const randomId = options.randomId ?? randomUUID;
   const strict = options.strict ?? process.env.AGENT_DECK_TEST === "1";
-  const warn =
-    options.warn ?? ((message, error) => console.warn(`[events] ${message}`, error ?? ""));
+  const warn = options.warn ?? ((message, error) => serverLog.warn("events", message, error));
   const dir = path.join(dataDir, "events");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const metaPath = path.join(dir, "log.json");

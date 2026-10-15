@@ -11,6 +11,7 @@ import {
   type McpToolApproval,
 } from "@agent-deck/resources";
 import { z } from "zod";
+import { serverLog } from "../serverLog.ts";
 import { claudePluginMcpSources, McpImportDiscovery, mcpImportSources } from "../mcpImport.ts";
 import type { ServerContext } from "../context.ts";
 import { requestUser } from "../trustedProxy.ts";
@@ -493,7 +494,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     // ends, i.e. after the user pasted the redirect URL, far past the RPC
     // timeout. A timeout is not recorded as a session failure.
     session.prompt(`/mcp login ${name}`).catch((error: unknown) => {
-      request.log.warn({ err: error, serverId: id }, "MCP sign-in prompt did not complete");
+      serverLog.warn("mcp", `sign-in prompt did not complete (server ${id})`, error);
     });
     return reply.code(202).send({ ok: true });
   });
