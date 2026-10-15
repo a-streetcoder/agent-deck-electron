@@ -395,8 +395,10 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
 - **Forks (SRV-15a).** A fork, plain (`POST /sessions/:id/fork`) or from a message
   (`/history/fork`), belongs to whoever asked for it: `createdBy` is the forker, so it runs on
   the forker's agent dir, git identity and GitHub connection. Inherited messages keep their
-  original author label (`session-authors.json` is copied). The inherited model must be in the
-  forker's catalog, otherwise 409 asking to pick a model. Loop sessions (a Loop parent or a
+  original author label (`session-authors.json` is copied). The inherited model (from the plan,
+  else the one in force at the forked message) must be in the forker's catalog, otherwise 409
+  asking to pick a model; like a new session, a `--model` pattern or an extension provider
+  (claude-bridge included) is left to Pi. Both fork paths get the PRV-01 claude-bridge swap. Loop sessions (a Loop parent or a
   Loop review session) cannot be forked (409). A fork of a session with a worktree shares that
   checkout and blocks its merge while the fork exists; the fork button says whose checkout it
   shares. MCP sign-ins do not carry over: they live in each user's own `mcp-auth.json`, so the

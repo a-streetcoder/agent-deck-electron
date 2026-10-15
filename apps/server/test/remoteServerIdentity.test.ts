@@ -132,7 +132,7 @@ beforeAll(async () => {
         id: CODEX_SESSION,
         ...ended,
         createdBy: { id: "andrea@example.com" },
-        launchPlan: { kind: "parent", provider: "openai-codex", model: "gpt-5:high" },
+        launchPlan: { kind: "parent", provider: "openai-codex", model: "gpt-5.5:high" },
       },
     ]),
   );
@@ -438,7 +438,7 @@ describe.skipIf(!canSymlink)("SRV-15a a fork runs on the forker's catalog", () =
       });
       expect(response.status).toBe(409);
       expect(((await response.json()) as { error: string }).error).toContain(
-        "This session runs on openai-codex/gpt-5, which your providers do not offer. Pick a model",
+        "This session runs on openai-codex/gpt-5.5, which your providers do not offer. Pick a model",
       );
     }
   });

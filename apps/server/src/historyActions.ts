@@ -142,8 +142,9 @@ export class HistoryActionCoordinator {
     action: "fork" | "rerun",
     /** A1 event log: the requesting route announces a materialized fork. */
     announce?: SessionAnnounce,
-    /** SRV-15a: the requester on a shared server owns the materialized fork. */
-    forker?: UserIdentity,
+    /** SRV-15a: the materialized fork's owner (the requester on a shared
+     * server) and, PRV-01, its pinned launch plan. */
+    fork?: { owner?: UserIdentity; launchPlan?: unknown },
   ): Promise<HistoryActionResult> {
     const releaseClaim = this.claims.tryClaim(sessionId, "history");
     if (!releaseClaim) {
@@ -327,12 +328,12 @@ export class HistoryActionCoordinator {
       if (action === "fork") {
         try {
           const targetSession = await this.sessions.materializeHistoryFork(
-            originalMeta,
+            fork?.launchPlan ? { ...originalMeta, launchPlan: fork.launchPlan } : originalMeta,
             branchFile,
             this.env(),
             forkProvenance,
             // Only when given: callers and tests see the original four-argument call.
-            ...((announce || forker ? [announce, forker] : []) as [
+            ...((announce || fork?.owner ? [announce, fork?.owner] : []) as [
               SessionAnnounce?,
               UserIdentity?,
             ]),

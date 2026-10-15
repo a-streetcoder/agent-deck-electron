@@ -322,16 +322,23 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   }
 
   // SRV-15a: on a shared server a fork belongs to the forker, so the model it
-  // inherits must be in their catalog; refused otherwise.
-  async function forkModelRefusal(meta: SessionMeta, forker: UserIdentity | undefined) {
+  // inherits must be in their catalog; refused otherwise. `entryId`: a fork from
+  // that message inherits the model in force there.
+  async function forkModelRefusal(
+    meta: SessionMeta,
+    forker: UserIdentity | undefined,
+    entryId?: string,
+  ) {
     const plan = (meta.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
     if (!forker || plan.kind === "helper") return undefined;
     try {
-      const missing = unofferedLaunchModel(
+      // ctx.discoveredModels is in memory: list claude-bridge again after a restart.
+      await ensureBridgeCatalog(ctx);
+      const missing = await unofferedLaunchModel(
         ctx,
         forker,
         plan,
-        { cwd: meta.cwd, sessionFile: meta.piSessionFile },
+        { cwd: meta.cwd, sessionFile: meta.piSessionFile, entryId },
         await ownerModels(forker),
       );
       return (
@@ -341,6 +348,24 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     } catch (error) {
       return (error as Error).message;
     }
+  }
+
+  // PRV-01: a fork is a new session, so a refused anthropic/* model (from its
+  // plan or its history) moves to the claude-bridge twin, or the fork is refused
+  // (throws the 409). Returns the source with the pinned plan.
+  async function pinForkModel(
+    meta: SessionMeta,
+    owner: UserIdentity | undefined,
+    entryId?: string,
+  ): Promise<SessionMeta> {
+    const plan = (meta.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
+    if (plan.kind === "helper") return meta;
+    const pinned = await claudeLaunchModel(ctx, owner, plan, {
+      cwd: meta.cwd,
+      sessionFile: meta.piSessionFile,
+      entryId,
+    });
+    return pinned ? { ...meta, launchPlan: { ...plan, ...pinned } } : meta;
   }
 
   fastify.get("/sessions/:id/models", async (request, reply) => {
@@ -677,7 +702,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         return reply.status(409).send({
           code: "session_worktree_in_use",
           error:
-            "A history-fork session still depends on this isolated worktree. Delete dependent sessions before deleting its owner.",
+            "A fork of this session still depends on its isolated worktree. Delete its forks before deleting it.",
         });
       }
       // Retained Loop review evidence is explicitly outside this boundary. Before
@@ -1012,7 +1037,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
           code: "merge_worktree_in_use",
           outcome: "stale_ownership",
           error:
-            "A history-fork session still depends on this isolated worktree. Delete dependent sessions before merging its owner.",
+            "A fork of this session still depends on its isolated worktree. Delete its forks before merging it.",
           worktreeCommitted: false,
         });
       }
@@ -1576,13 +1601,24 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       }
       const { id } = request.params as { id: string };
       const forker = sessionCreator(request.raw);
-      if (action === "fork") {
-        const source = sessions.get(id)?.meta ?? index.find((s) => s.id === id);
-        const refusal =
-          source &&
-          (loopSession(source) ? LOOP_FORK_REFUSED : await forkModelRefusal(source, forker));
-        if (refusal)
-          return reply.status(409).send({ code: "history_fork_refused", error: refusal });
+      let fork: { owner?: UserIdentity; launchPlan?: unknown } | undefined;
+      const source = sessions.get(id)?.meta ?? index.find((s) => s.id === id);
+      if (action === "fork" && source) {
+        const refuse = (error: string) =>
+          reply.status(409).send({ code: "history_fork_refused", error });
+        if (loopSession(source)) return refuse(LOOP_FORK_REFUSED);
+        let pinned: SessionMeta;
+        try {
+          pinned = await pinForkModel(source, forker ?? source.createdBy, parsed.data.entryId);
+        } catch (error) {
+          return refuse((error as Error).message);
+        }
+        const refusal = await forkModelRefusal(pinned, forker, parsed.data.entryId);
+        if (refusal) return refuse(refusal);
+        fork = {
+          ...(forker ? { owner: forker } : {}),
+          ...(pinned !== source ? { launchPlan: pinned.launchPlan } : {}),
+        };
       }
       try {
         const result = await historyActions.run(
@@ -1590,7 +1626,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
           parsed.data.entryId,
           action,
           action === "fork" ? forkAnnounce(request.raw, id) : undefined,
-          action === "fork" ? forker : undefined,
+          fork,
         );
         return reply.status(result.outcome === "forked" ? 201 : 200).send(result);
       } catch (error) {
@@ -1642,20 +1678,11 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     // SRV-15a: on a shared server the fork belongs to the forker (their
     // credentials); without an identity it keeps the source owner.
     const forker = sessionCreator(request.raw);
-    // PRV-01: a fork is a new session, so a refused anthropic/* model (from its
-    // plan or its history) moves to the claude-bridge twin, or the fork is refused.
-    let source = meta;
-    const sourcePlan = (meta.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
-    if (sourcePlan.kind !== "helper") {
-      try {
-        const pinned = await claudeLaunchModel(ctx, forker ?? meta.createdBy, sourcePlan, {
-          cwd: meta.cwd,
-          sessionFile: meta.piSessionFile,
-        });
-        if (pinned) source = { ...meta, launchPlan: { ...sourcePlan, ...pinned } };
-      } catch (error) {
-        return reply.status(409).send({ error: (error as Error).message });
-      }
+    let source: SessionMeta;
+    try {
+      source = await pinForkModel(meta, forker ?? meta.createdBy);
+    } catch (error) {
+      return reply.status(409).send({ error: (error as Error).message });
     }
     const refusal = await forkModelRefusal(source, forker);
     if (refusal) return reply.status(409).send({ error: refusal });

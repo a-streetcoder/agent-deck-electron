@@ -241,3 +241,27 @@ describe("SessionRow fork action (SRV-15a)", () => {
     }
   });
 });
+
+describe("SessionRow fork action on Loop sessions (SRV-15a)", () => {
+  it("disables the fork with the server's refusal reason", () => {
+    const at = "2026-01-01T00:00:00.000Z";
+    const sessions = [
+      { id: "review", cwd: "/r", createdAt: at, piSessionFile: "/r.jsonl", loopReviewRunId: "run" },
+      { id: "parent", cwd: "/p", createdAt: at, piSessionFile: "/p.jsonl", agentName: "Loop · x" },
+    ];
+    for (const session of sessions) {
+      render(
+        <SessionRow
+          session={session}
+          displayTitle={session.id}
+          active={false}
+          running={false}
+          onSelect={vi.fn()}
+        />,
+      );
+      const button = screen.getByTestId(`chat-fork-${session.id}`);
+      expect(button.hasAttribute("disabled")).toBe(true);
+      expect(button.getAttribute("title")).toContain("A Loop session cannot be forked");
+    }
+  });
+});

@@ -267,39 +267,65 @@ describe("SRV-15a the model a fork inherits", () => {
     { provider: "anthropic", id: "claude-x" },
     { provider: "openrouter", id: "meta/llama" },
   ];
-  // Every case resolves a model before Pi settings, so no context is read.
-  const unoffered = (chosen: { provider?: string; model?: string }, sessionFile?: string) =>
-    unofferedLaunchModel({} as never, undefined, chosen, { cwd: dataDir, sessionFile }, catalog);
+  // No owner: the operator's registry (no models.json) decides which providers Pi knows.
+  const ctx = { rootsFor: () => ({ home: fakeHome }) } as never;
+  const unoffered = (
+    chosen: { provider?: string; model?: string },
+    where: { sessionFile?: string; entryId?: string } = {},
+    available: Array<{ provider: string; id: string }> = catalog,
+  ) => unofferedLaunchModel(ctx, undefined, chosen, { cwd: dataDir, ...where }, available);
 
-  it("names the plan's model when the catalog lacks it, ignoring the thinking suffix", () => {
-    expect(unoffered({ provider: "openai-codex", model: "gpt-5:high" })).toBe("openai-codex/gpt-5");
-    expect(unoffered({ provider: "anthropic", model: "claude-x:high" })).toBeUndefined();
-    expect(unoffered({ model: "claude-x" })).toBeUndefined();
-    expect(unoffered({ model: "openrouter/meta/llama" })).toBeUndefined();
-    expect(unoffered({ model: "meta/llama" })).toBeUndefined();
-    expect(unoffered({ model: "gpt-5" })).toBe("gpt-5");
+  it("names a concrete model the catalog lacks, ignoring the thinking suffix", async () => {
+    expect(await unoffered({ provider: "openai-codex", model: "gpt-5.5:high" })).toBe(
+      "openai-codex/gpt-5.5",
+    );
+    expect(await unoffered({ model: "openai-codex/gpt-5.5:max" })).toBe("openai-codex/gpt-5.5");
+    expect(await unoffered({ provider: "anthropic", model: "claude-x:max" })).toBeUndefined();
+    expect(await unoffered({ model: "anthropic/claude-x" })).toBeUndefined();
+    expect(await unoffered({ model: "meta/llama" })).toBeUndefined();
   });
 
-  it("falls back to the model the session file was last on", () => {
+  it("leaves patterns and extension providers to Pi (agent models, claude-bridge)", async () => {
+    expect(await unoffered({ model: "sonnet" })).toBeUndefined();
+    expect(await unoffered({ provider: "anthropic", model: "sonnet" })).toBeUndefined();
+    // No Models refresh since a restart: the bridge is not listed yet, the fork still runs.
+    expect(
+      await unoffered({ provider: "claude-bridge", model: "claude-opus-4-5" }, {}, []),
+    ).toBeUndefined();
+  });
+
+  it("reads the model in force at the forked message, else the last one", async () => {
     const file = path.join(dataDir, "srv15a-history.jsonl");
-    const at = new Date().toISOString();
+    const timestamp = new Date().toISOString();
+    const user = (id: string, parentId: string) => ({
+      type: "message",
+      id,
+      parentId,
+      timestamp,
+      message: { role: "user", content: "hi", timestamp: 0 },
+    });
+    const change = (id: string, parentId: string | null, provider: string, modelId: string) => ({
+      type: "model_change",
+      id,
+      parentId,
+      timestamp,
+      provider,
+      modelId,
+    });
     writeFileSync(
       file,
       [
-        { type: "session", version: 3, id: "s", timestamp: at, cwd: dataDir },
-        {
-          type: "model_change",
-          id: "m1",
-          parentId: null,
-          timestamp: at,
-          provider: "openai-codex",
-          modelId: "gpt-5",
-        },
+        { type: "session", version: 3, id: "s", timestamp, cwd: dataDir },
+        change("m1", null, "openai-codex", "gpt-5.5"),
+        user("u1", "m1"),
+        change("m2", "u1", "anthropic", "claude-x"),
+        user("u2", "m2"),
       ]
         .map((entry) => JSON.stringify(entry))
         .join("\n"),
     );
-    expect(unoffered({}, file)).toBe("openai-codex/gpt-5");
+    expect(await unoffered({}, { sessionFile: file })).toBeUndefined();
+    expect(await unoffered({}, { sessionFile: file, entryId: "u1" })).toBe("openai-codex/gpt-5.5");
   });
 });
 

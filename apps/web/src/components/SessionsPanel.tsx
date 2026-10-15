@@ -94,11 +94,15 @@ export function SessionRow({
     const owner = state.sessions.find((item) => item.id === ownerId)?.createdBy;
     return owner && state.me && owner.id !== state.me.id ? userDisplayName(owner) : null;
   });
-  const forkTitle = !session.piSessionFile
-    ? "Nothing to duplicate yet"
-    : checkoutOwner
-      ? `Duplicate (shares ${checkoutOwner}'s checkout and blocks its merge while it exists)`
-      : "Duplicate";
+  // The server refuses these forks (SRV-15a); say why instead of offering it.
+  const loopSession = Boolean(session.loopReviewRunId || session.agentName?.startsWith("Loop ·"));
+  const forkTitle = loopSession
+    ? "A Loop session cannot be forked. Open its run from Loops instead."
+    : !session.piSessionFile
+      ? "Nothing to duplicate yet"
+      : checkoutOwner
+        ? `Duplicate (shares ${checkoutOwner}'s checkout and blocks its merge while it exists)`
+        : "Duplicate";
 
   const commitRename = (): void => {
     const title = draft.trim();
@@ -274,7 +278,7 @@ export function SessionRow({
           data-testid={`chat-fork-${session.id}`}
           className="rounded p-0.5 text-text-muted enabled:hover:text-text-primary disabled:opacity-30"
           title={forkTitle}
-          disabled={!session.piSessionFile}
+          disabled={loopSession || !session.piSessionFile}
           onClick={(event) => {
             event.stopPropagation();
             void forkSession(session.id);
