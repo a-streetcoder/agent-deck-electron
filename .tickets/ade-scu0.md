@@ -1,6 +1,6 @@
 ---
 id: ade-scu0
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-15T01:04:56Z
@@ -20,3 +20,9 @@ GUARDRAILS as every ticket. Smallest fix in server.ts startup order; one test fi
 ## Acceptance Criteria
 
 Test above green; existing eventReconcile tests green; tsc, eslint, prettier clean.
+
+## Notes
+
+**2026-10-15T02:57:38Z**
+
+2026-10-15 merged (wt/ade-scu0: e3fdce5 + simplification ae74c2c). Contrarian + GPT review26 converged on the marker file being the risk; decision: no marker, a missing store file sets storeQuarantined (removals suppressed while missing or quarantined this boot; the first clean write recreates the file and the next boot reconciles normally). Crash fix: warn callbacks use console.warn (fastify created later with logger: false). Tests: eventReconcile 5 (three-boot scenario through startServer + valid-store-never-quarantined), loopEngine + subagentRunStore 103 (+1 skip). Known: the unrecorded-artifact warning is silent while subagent-runs.json is missing; outside deletion of a store defers removals by one write+boot. Follow-up D9 (ade-p5ik): silenced route warnings.
