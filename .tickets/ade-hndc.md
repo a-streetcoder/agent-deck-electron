@@ -40,3 +40,7 @@ node --test on the state machine (startup paths: cached token ok, expired -> nee
 **2026-10-15T22:40:41Z**
 
 2026-10-15 GPT review (review56): seven should-fix (new-origin consent for a pinned team, renderer-origin check in the window-origin handler, sign-out must invalidate a pending token lookup, Save/transfer mutual exclusion, client-generation tagging of status updates, request IPC must not reject, Sign in enabled before discovery resolved). Fix round sent with 'merge poc/shared-server (16c) first'.
+
+**2026-10-15T22:49:42Z**
+
+2026-10-15 fix round + merge of 16c landed as 9763047 (all seven GPT items). Contrarian on b715697: blockers already covered by that round (first-contact hold, lifted cloudflared state); round 3 sent: warning names the relaying origin + aud pinning, recovery from unreachable (mount, 2xx, focus throttle, 10 s /me timeout), 'Remove cached token' action, transfer guard from freeze to dialog close with a ceiling, strict /me shape, teamServer.cancelSignIn, docs fixes; then merge poc/shared-server again.
