@@ -109,7 +109,8 @@ function subagentSample(run: PublicSubagentRun): Sample | undefined {
   const tokens = tokenTotal(run.inputTokens, run.outputTokens);
   return {
     agent: run.agent,
-    role: "subagent",
+    // A7: a verifier run grades another run, like a loop checker; profile it as one.
+    role: run.role === "verify" ? "checker" : "subagent",
     outcome,
     at: run.completedAt ?? run.updatedAt,
     ...(tokens !== undefined ? { tokens } : {}),

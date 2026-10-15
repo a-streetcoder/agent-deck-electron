@@ -161,7 +161,11 @@ describe("aggregateCapabilityProfiles", () => {
       model: "m",
     });
     const profiles = aggregateCapabilityProfiles(
-      [subagent("Helper", "completed", 1)],
+      [
+        subagent("Helper", "completed", 1),
+        // A7: a verifier run counts as a checker run, not a plain subagent.
+        subagent("Helper", "completed", 1, { role: "verify", targetRunId: "t" }),
+      ],
       [
         loop([
           child("a", "maker", "Helper"),
@@ -177,7 +181,7 @@ describe("aggregateCapabilityProfiles", () => {
       ["Helper", "maker"],
       ["Helper", "subagent"],
     ]);
-    expect(profiles[1]!.allTime).toMatchObject({ medianTokens: 12, medianDurationMs: 2_000 });
+    expect(profiles[1]!.allTime).toMatchObject({ runs: 2, medianTokens: 12, medianDurationMs: 2_000 });
     // No usage reported: no token medians, the run still counts.
     expect(profiles[3]!.allTime).toMatchObject({ runs: 1, passRate: 1 });
     expect(profiles[3]!.allTime.medianTokens).toBeUndefined();
