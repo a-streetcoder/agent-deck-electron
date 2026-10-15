@@ -32,3 +32,7 @@ node --test for the resolution order and for the verifier (wrong checksum -> fil
 **2026-10-15T22:29:52Z**
 
 2026-10-15 GPT review (review55): five should-fix (short writes not checked, no download/decompression size bounds, automatic redirects allow an http hop, no overall deadline, quoted Windows PATH entries). Fix round sent; contrarian running.
+
+**2026-10-15T22:31:40Z**
+
+2026-10-15 contrarian: no security blocker (tar reader fails safe on 11 crafted inputs; hash compare full-length); should-fix = runner resolved once at client creation (installing cloudflared mid-run needs a restart), env override loses to the stored path, remote-attach silently switches to the cloudflared flow, docs on version bumps; the sign-in gating criterion handed to 16b. Additions sent to the developer.

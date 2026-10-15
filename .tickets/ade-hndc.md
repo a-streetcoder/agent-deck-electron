@@ -28,3 +28,7 @@ node --test on the state machine (startup paths: cached token ok, expired -> nee
 **2026-10-15T22:17:25Z**
 
 2026-10-15 started; worktree E:\agent-deck-wt\ade-hndc (wt/ade-hndc). Runs in parallel with 16c: 16b owns the sign-in flow, status state machine, seamless origin and team pinning; 16c owns cloudflared resolution/download in its own module and UI block.
+
+**2026-10-15T22:31:40Z**
+
+2026-10-15 hand-over from 16c (binding): the Sign in button is disabled with an explanation until agentDeck.teamServer.cloudflared() is non-null (re-checked on mount and after the download completes). 16c makes the client resolve cloudflared on each call, so a download does not reset the 16b status.
