@@ -7,7 +7,7 @@ import type { SharedServerResponse } from "@/lib/native";
 import { useAppStore } from "../state/store.ts";
 import { forkSession, switchToSession } from "../state/wsBridge.ts";
 import { SessionRow } from "./SessionsPanel.tsx";
-import { SharedSessionPanel, ShareSessionButton } from "./SessionShare.tsx";
+import { ReturnPendingBanner, SharedSessionPanel, ShareSessionButton } from "./SessionShare.tsx";
 
 vi.mock("../state/wsBridge.ts", () => ({
   deleteSession: vi.fn(),
@@ -348,5 +348,225 @@ describe("Share to server", () => {
     await waitFor(() =>
       expect(bodiesOf("/sessions/s1/share/abort")).toEqual([{ ref: REF, handoff: HANDOFF }]),
     );
+  });
+});
+
+describe("Bring back (SRV-12c3)", () => {
+  const plan = { branch: "agent-deck/session-1", files: { tracked: 1, untracked: ["server.md"] } };
+  const envelope = {
+    direction: "return",
+    transfer: { mode: "snapshot", ref: `refs/agent-deck/transfer/${SERVER_SESSION}` },
+  };
+  const server = (overrides: Record<string, SharedServerResponse> = {}) =>
+    request.mockImplementation(async (...args: unknown[]) => {
+      const [method, path, body] = args as [string, string, Record<string, unknown> | undefined];
+      const key = `${method} ${path}${body && "confirmedUntracked" in body ? " confirmed" : ""}`;
+      if (overrides[key]) return overrides[key]!;
+      if (key === `POST /sessions/${SERVER_SESSION}/return`) return { status: 200, body: { plan } };
+      if (key === `POST /sessions/${SERVER_SESSION}/return confirmed`)
+        return { status: 200, body: { envelope, handoff: "h-1" } };
+      if (key === `PATCH /sessions/${SERVER_SESSION}/returned`)
+        return { status: 200, body: { session: {} } };
+      if (key === `POST /sessions/${SERVER_SESSION}/return/abort`)
+        return { status: 200, body: { ok: true } };
+      // The live mirror's reads: unreachable is enough here.
+      return { status: 0, error: "The shared server could not be reached." };
+    });
+  const pending = {
+    token: "h-1",
+    serverOrigin: SERVER,
+    serverSessionId: SERVER_SESSION,
+    ref: `refs/agent-deck/transfer/${SERVER_SESSION}`,
+    until: new Date(Date.now() + 15 * 60_000).toISOString(),
+  };
+  const serverCalls = () =>
+    request.mock.calls
+      .map(([method, path, body]) => ({ method, path, body }))
+      .filter((call) => call.method !== "GET");
+
+  it("lists the untracked files, brings the session back and closes the server copy", async () => {
+    server();
+    const done = {
+      ...session,
+      returnedFrom: { serverOrigin: SERVER, serverSessionId: SERVER_SESSION, returnedAt: "now" },
+    };
+    const back = { ...done, returnPending: pending };
+    routes = {
+      "POST /sessions/s1/import-return": () =>
+        Response.json({
+          session: back,
+          restored: "worktree",
+          notice: "The session came back in a new worktree: C:\\wt\\x.",
+          transferRefDeleted: true,
+        }),
+      "PATCH /sessions/s1/return-pending": () => Response.json({ session: done }),
+    };
+    useAppStore.setState({ session: pointer, sessions: [pointer] });
+    render(<SharedSessionPanel session={pointer} />);
+    fireEvent.click(screen.getByTestId("bring-back"));
+    await waitFor(() =>
+      expect(screen.getByTestId("bring-back-untracked").textContent).toContain("server.md"),
+    );
+    fireEvent.click(screen.getAllByRole("button", { name: "Bring back" }).at(-1)!);
+    // The server copy closed, so returnPending is cleared before the session opens.
+    await waitFor(() => expect(switchToSession).toHaveBeenCalledWith(done));
+    expect(serverCalls()).toEqual([
+      { method: "POST", path: `/sessions/${SERVER_SESSION}/return`, body: {} },
+      {
+        method: "POST",
+        path: `/sessions/${SERVER_SESSION}/return`,
+        body: { confirmedUntracked: ["server.md"] },
+      },
+      {
+        method: "PATCH",
+        path: `/sessions/${SERVER_SESSION}/returned`,
+        body: { deviceSessionId: "s1", handoff: "h-1" },
+      },
+    ]);
+    expect(calls.find((call) => call.url === "/sessions/s1/import-return")?.body).toEqual({
+      envelope,
+      handoff: "h-1",
+    });
+    expect(calls.find((call) => call.url === "/sessions/s1/return-pending")?.body).toEqual({
+      returnPending: null,
+    });
+    expect(useAppStore.getState().toasts.at(-1)?.message).toContain("new worktree");
+    expect(screen.queryByTestId("bring-back-dialog")).toBeNull();
+  });
+
+  it("aborts on the server and keeps the link when this device cannot take it", async () => {
+    server();
+    routes = {
+      "POST /sessions/s1/import-return": () =>
+        Response.json(
+          { error: "The server's snapshot could not be fetched: denied" },
+          { status: 409 },
+        ),
+    };
+    render(<SharedSessionPanel session={pointer} />);
+    fireEvent.click(screen.getByTestId("bring-back"));
+    await waitFor(() => screen.getByTestId("bring-back-untracked"));
+    fireEvent.click(screen.getAllByRole("button", { name: "Bring back" }).at(-1)!);
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain("could not be fetched"),
+    );
+    expect(serverCalls().at(-1)).toEqual({
+      method: "POST",
+      path: `/sessions/${SERVER_SESSION}/return/abort`,
+      body: { handoff: "h-1" },
+    });
+    expect(serverCalls().some((call) => call.method === "PATCH")).toBe(false);
+    expect(switchToSession).not.toHaveBeenCalled();
+  });
+
+  it("asks again when the server's untracked files changed, and shows a refusal", async () => {
+    server({
+      [`POST /sessions/${SERVER_SESSION}/return confirmed`]: {
+        status: 409,
+        body: { code: "share_plan_changed", untracked: ["server.md", "late.md"] },
+      },
+    });
+    render(<SharedSessionPanel session={pointer} />);
+    fireEvent.click(screen.getByTestId("bring-back"));
+    await waitFor(() => screen.getByTestId("bring-back-untracked"));
+    fireEvent.click(screen.getAllByRole("button", { name: "Bring back" }).at(-1)!);
+    await waitFor(() =>
+      expect(screen.getByTestId("bring-back-untracked").textContent).toContain("late.md"),
+    );
+    expect(screen.getByRole("alert").textContent).toContain("changed since you looked");
+    cleanup();
+    server({
+      [`POST /sessions/${SERVER_SESSION}/return`]: {
+        status: 409,
+        body: {
+          code: "github_not_connected",
+          error: "Connect GitHub first: the owner's connection.",
+        },
+      },
+    });
+    render(<SharedSessionPanel session={pointer} />);
+    fireEvent.click(screen.getByTestId("bring-back"));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain("Connect GitHub first"),
+    );
+  });
+
+  it("keeps the return pending when the server copy is not closed, and finishes it later", async () => {
+    server({
+      [`PATCH /sessions/${SERVER_SESSION}/returned`]: { status: 0, error: "unreachable" },
+    });
+    const back = { ...session, returnPending: pending };
+    routes = {
+      "POST /sessions/s1/import-return": () =>
+        Response.json({ session: back, restored: "worktree", transferRefDeleted: false }),
+    };
+    render(<SharedSessionPanel session={pointer} />);
+    fireEvent.click(screen.getByTestId("bring-back"));
+    await waitFor(() => screen.getByTestId("bring-back-untracked"));
+    fireEvent.click(screen.getAllByRole("button", { name: "Bring back" }).at(-1)!);
+    await waitFor(() => expect(switchToSession).toHaveBeenCalledWith(back));
+    expect(useAppStore.getState().error).toContain("Finish the return");
+    expect(calls.some((call) => call.url === "/sessions/s1/return-pending")).toBe(false);
+    cleanup();
+
+    // The banner finishes it while the hand-off is valid.
+    server();
+    const done = { ...session };
+    routes = { "PATCH /sessions/s1/return-pending": () => Response.json({ session: done }) };
+    render(<ReturnPendingBanner session={back} />);
+    fireEvent.click(screen.getByRole("button", { name: "Finish the return on deck.example.test" }));
+    await waitFor(() =>
+      expect(calls.find((call) => call.url === "/sessions/s1/return-pending")).toBeTruthy(),
+    );
+    expect(serverCalls().at(-1)).toEqual({
+      method: "PATCH",
+      path: `/sessions/${SERVER_SESSION}/returned`,
+      body: { deviceSessionId: "s1", handoff: "h-1" },
+    });
+  });
+
+  it("explains a hand-off that expired: close the server copy, remove the ref", async () => {
+    server({
+      [`PATCH /sessions/${SERVER_SESSION}/returned`]: {
+        status: 409,
+        body: { code: "return_stale", error: "This return is no longer prepared." },
+      },
+    });
+    const back = { ...session, returnPending: pending };
+    routes = { "PATCH /sessions/s1/return-pending": () => Response.json({ session }) };
+    render(<ReturnPendingBanner session={back} />);
+    fireEvent.click(screen.getByRole("button", { name: "Finish the return on deck.example.test" }));
+    const close = await screen.findByRole("button", { name: "Close server copy" });
+    expect(screen.getByTestId("return-pending").textContent).toContain(
+      `git push origin --delete refs/agent-deck/transfer/${SERVER_SESSION}`,
+    );
+    fireEvent.click(close);
+    expect(openExternal).toHaveBeenCalledWith(`${SERVER}/?session=${SERVER_SESSION}`);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    await waitFor(() =>
+      expect(calls.find((call) => call.url === "/sessions/s1/return-pending")?.body).toEqual({
+        returnPending: null,
+      }),
+    );
+  });
+
+  it("on the shared server a returned copy is read-only and says where it continues", () => {
+    const returned: SessionMeta = {
+      ...session,
+      sharedTo: {
+        serverOrigin: null,
+        device: "laptop",
+        deviceSessionId: "s0",
+        sharedAt: "2026-10-15T02:00:00.000Z",
+        mode: "snapshot",
+      },
+    };
+    render(<SharedSessionPanel session={returned} />);
+    expect(screen.getByText("This session continues on laptop.")).toBeTruthy();
+    expect(screen.queryByTestId("bring-back")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Continue here" }));
+    expect(forkSession).toHaveBeenCalledWith("s1");
   });
 });

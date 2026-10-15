@@ -328,3 +328,44 @@ test("the live mirror reads one session and forwards text-only prompts", async (
   assert.equal(calls.at(-1).init.body, JSON.stringify({ text: "x".repeat(32_000) }));
   assert.equal(calls.length, 6);
 });
+
+test("bringing a session back: return, abort and returned with exact bodies", async () => {
+  const { run } = fakeRun();
+  const { fetchImpl, calls } = fakeFetch();
+  const client = createSharedServerClient({ origin: ORIGIN, run, fetchImpl });
+  const id = "9f1d2c3b-4a5e-4f60-8a71-b2c3d4e5f600";
+  const other = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+  for (const [method, path, body] of [
+    ["GET", `/sessions/${id}/return`],
+    ["POST", "/sessions/not-a-uuid/return", {}],
+    ["POST", `/sessions/${id}/return`, { confirmedUntracked: "a.md" }],
+    ["POST", `/sessions/${id}/return`, { confirmedUntracked: [1] }],
+    ["POST", `/sessions/${id}/return`, { confirmedUntracked: ["x".repeat(4097)] }],
+    ["POST", `/sessions/${id}/return`, { confirmedUntracked: [], extra: true }],
+    ["POST", `/sessions/${id}/return`, ["a.md"]],
+    ["POST", `/sessions/${id}/return/abort`, { handoff: "x" }],
+    ["POST", `/sessions/${id}/return/abort`, { handoff: other, ref: "refs/heads/main" }],
+    ["PATCH", `/sessions/${id}/return`, {}],
+    ["POST", `/sessions/${id}/returned`, { deviceSessionId: other, handoff: other }],
+    ["PATCH", `/sessions/${id}/returned`, { deviceSessionId: other }],
+    ["PATCH", `/sessions/${id}/returned`, { deviceSessionId: "x", handoff: other }],
+    ["PATCH", `/sessions/${id}/returned`, { deviceSessionId: other, handoff: other, cwd: "/" }],
+    ["PATCH", `/sessions/${id}`, { title: "x" }],
+  ]) {
+    await assert.rejects(client.request(method, path, body), `${method} ${path}`);
+  }
+  assert.equal(calls.length, 0);
+  await client.request("POST", `/sessions/${id}/return`, {});
+  assert.equal(calls.at(-1).init.body, "{}");
+  await client.request("POST", `/sessions/${id}/return`, { confirmedUntracked: ["a.md"] });
+  assert.equal(calls.at(-1).init.body, JSON.stringify({ confirmedUntracked: ["a.md"] }));
+  await client.request("POST", `/sessions/${id}/return/abort`, { handoff: other });
+  assert.equal(calls.at(-1).url, `${ORIGIN}/sessions/${id}/return/abort`);
+  await client.request("PATCH", `/sessions/${id}/returned`, {
+    deviceSessionId: other,
+    handoff: other,
+  });
+  assert.equal(calls.at(-1).init.method, "PATCH");
+  assert.equal(calls.at(-1).init.body, JSON.stringify({ deviceSessionId: other, handoff: other }));
+  assert.equal(calls.length, 4);
+});

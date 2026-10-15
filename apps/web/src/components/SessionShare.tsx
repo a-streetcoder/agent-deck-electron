@@ -3,7 +3,13 @@ import { CloudUpload } from "lucide-react";
 import type { SessionMeta } from "@agent-deck/contracts";
 import { Button } from "@/design-system/components/Button";
 import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
-import { openExternal, sharedServer, type SharedServerResponse } from "@/lib/native";
+import {
+  openExternal,
+  sharedServer,
+  type SharedServerBridge,
+  type SharedServerResponse,
+} from "@/lib/native";
+
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { useAppStore } from "../state/store.ts";
 import { useSharedSessionMirror } from "../state/useSharedSessionMirror.ts";
@@ -34,9 +40,36 @@ const MAX_PROMPT_CHARS = 32_000;
  * prompt there; everything else stays refused on this copy.
  */
 export function SharedSessionPanel({ session }: { session: SessionMeta }) {
+  // SRV-12c3: on the shared server, a copy that went back to its device.
+  if (!session.sharedTo?.serverOrigin) return <ReturnedPanel session={session} />;
   // One composer per pointer: text typed in one never shows in another, and an
   // earlier pointer's submission never clears this one's.
   return <PointerPanel key={session.id} session={session} />;
+}
+
+/** SRV-12c3, shared server: read-only; the device is not reachable from here. */
+function ReturnedPanel({ session }: { session: SessionMeta }) {
+  const link = session.sharedTo!;
+  const at = new Date(link.sharedAt);
+  const when = Number.isNaN(at.getTime()) ? link.sharedAt : at.toLocaleString();
+  return (
+    <div
+      className="flex flex-wrap items-center gap-3 border-t border-border-subtle px-6 py-4"
+      data-testid="returned-session-panel"
+    >
+      <div className="min-w-0 flex-1">
+        <p className="text-label text-text-secondary">
+          This session continues on {link.device ?? "its device"}.
+        </p>
+        <p className="text-detail text-text-muted">
+          It went back there on {when}; this copy is read-only and does not follow it.
+        </p>
+      </div>
+      <Button size="sm" variant="ghost" onClick={() => void forkSession(session.id)}>
+        Continue here
+      </Button>
+    </div>
+  );
 }
 
 /** "Returns to this device's copy from <date>": the copy Unlink and Continue locally keep. */
@@ -47,7 +80,11 @@ const copyNote = (sharedAt: string): string => {
 };
 
 function PointerPanel({ session }: { session: SessionMeta }) {
-  const link = session.sharedTo!;
+  // A device pointer (SharedSessionPanel routes the server's own pointers away).
+  const link = session.sharedTo as NonNullable<SessionMeta["sharedTo"]> & {
+    serverOrigin: string;
+    serverSessionId: string;
+  };
   const host = hostOf(link.serverOrigin);
   const { mirror, refresh, signIn, send } = useSharedSessionMirror(session);
   const [text, setText] = useState("");
@@ -200,9 +237,374 @@ function PointerPanel({ session }: { session: SessionMeta }) {
         >
           Open on server
         </Button>
+        <BringBack session={session} host={host} />
         <Button size="sm" variant="ghost" onClick={() => void forkSession(session.id)}>
           Continue locally
         </Button>
+      </div>
+    </div>
+  );
+}
+
+type FinishResult =
+  | { ok: true; session: SessionMeta; serverRefDeleted: boolean }
+  | { ok: false; code?: string; error: string };
+
+/**
+ * SRV-12c3: close the server copy of a session that came back (PATCH returned
+ * with the hand-off token), then clear returnPending here. Repeating it is safe:
+ * the server answers the same pointer again for this device session.
+ */
+export async function finishReturn(
+  session: SessionMeta,
+  server: SharedServerBridge,
+): Promise<FinishResult> {
+  const pending = session.returnPending;
+  if (!pending) return { ok: true, session, serverRefDeleted: true };
+  const answer = await server
+    .request("PATCH", `/sessions/${pending.serverSessionId}/returned`, {
+      deviceSessionId: session.id,
+      handoff: pending.token,
+    })
+    .catch((error: unknown): SharedServerResponse => ({ status: 0, error: String(error) }));
+  const body = (answer.body ?? {}) as {
+    code?: unknown;
+    error?: unknown;
+    transferRefDeleted?: unknown;
+  };
+  if (answer.status !== 200)
+    return {
+      ok: false,
+      ...(typeof body.code === "string" ? { code: body.code } : {}),
+      error:
+        typeof body.error === "string"
+          ? body.error
+          : (answer.error ?? `The shared server answered ${answer.status || "nothing"}.`),
+    };
+  const cleared = await post(
+    `/sessions/${encodeURIComponent(session.id)}/return-pending`,
+    { returnPending: null },
+    "PATCH",
+  );
+  const next = ((await json(cleared)).session as SessionMeta | undefined) ?? session;
+  useAppStore.getState().upsertSessionMeta(next);
+  return { ok: true, session: next, serverRefDeleted: body.transferRefDeleted === true };
+}
+
+/** SRV-12c3: a session that came back while its server copy is still open. */
+export function ReturnPendingBanner({ session }: { session: SessionMeta }) {
+  const pending = session.returnPending!;
+  const host = hostOf(pending.serverOrigin);
+  const server = sharedServer();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
+  const expired = stale || Date.now() > Date.parse(pending.until);
+  const reachable = Boolean(server && server.origin === pending.serverOrigin);
+  const retry = async (): Promise<void> => {
+    if (!server) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await finishReturn(session, server);
+      if (!result.ok) {
+        if (result.code === "return_stale") setStale(true);
+        else setError(result.error);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+  const dismiss = async (): Promise<void> => {
+    const cleared = await post(
+      `/sessions/${encodeURIComponent(session.id)}/return-pending`,
+      { returnPending: null },
+      "PATCH",
+    );
+    const next = (await json(cleared)).session as SessionMeta | undefined;
+    if (next) useAppStore.getState().upsertSessionMeta(next);
+  };
+  return (
+    <div
+      className="flex flex-wrap items-center gap-3 border-t border-border-subtle px-6 py-3 text-label text-text-secondary"
+      role="status"
+      data-testid="return-pending"
+    >
+      {expired || !reachable ? (
+        <>
+          <span className="min-w-0 flex-1">
+            The session is back here, but its copy on {host} could not be closed and stays open
+            there. Close server copy: open it on {host} and delete it, then dismiss this note.
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() =>
+              void openExternal(
+                `${pending.serverOrigin}/?session=${encodeURIComponent(pending.serverSessionId)}`,
+              )
+            }
+          >
+            Close server copy
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => void dismiss()}>
+            Dismiss
+          </Button>
+        </>
+      ) : (
+        <>
+          <span className="min-w-0 flex-1">
+            The session is back here; its copy on {host} is not closed yet.
+          </span>
+          <Button size="sm" disabled={busy} onClick={() => void retry()}>
+            Finish the return on {host}
+          </Button>
+        </>
+      )}
+      {pending.ref && expired ? (
+        <span className="w-full text-detail text-text-muted">
+          If the transfer ref is still there, remove it with git push origin --delete {pending.ref}
+        </span>
+      ) : null}
+      {error ? (
+        <span className="w-full text-danger" role="alert">
+          {error}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+type BackPlan = SharePlan & { device?: string };
+type BackStep =
+  | { kind: "loading" }
+  | { kind: "confirm"; plan: BackPlan; changed?: boolean }
+  | { kind: "signIn"; retry: () => Promise<void> }
+  | { kind: "working" }
+  | { kind: "error"; text: string };
+
+/**
+ * SRV-12c3 Bring back: the server pushes the session's working tree with the
+ * owner's GitHub connection, this device fetches it with its own git login and
+ * continues the same session here; the server copy becomes a pointer to it.
+ */
+function BringBack({ session, host }: { session: SessionMeta; host: string }) {
+  const [step, setStep] = useState<BackStep | null>(null);
+  const server = sharedServer();
+  const link = session.sharedTo;
+  if (!server || !link?.serverOrigin || !link.serverSessionId) return null;
+  if (server.origin !== link.serverOrigin) return null;
+  const id = session.id;
+  const remote: `/sessions/${string}` = `/sessions/${link.serverSessionId}`;
+  const call = (method: "POST" | "PATCH", path: `/sessions/${string}`, body: object) =>
+    server
+      .request(method, path, body)
+      .catch((error: unknown): SharedServerResponse => ({ status: 0, error: String(error) }));
+  const failure = (answer: SharedServerResponse): string => {
+    const error = (answer.body as { error?: unknown } | null | undefined)?.error;
+    return typeof error === "string"
+      ? error
+      : (answer.error ?? `${host} answered ${answer.status || "nothing"}.`);
+  };
+  const guarded = (run: () => Promise<void>) => async (): Promise<void> => {
+    try {
+      await run();
+    } catch (error) {
+      setStep({ kind: "error", text: error instanceof Error ? error.message : String(error) });
+    }
+  };
+  const signInThen = (next: () => Promise<void>) =>
+    setStep({
+      kind: "signIn",
+      retry: guarded(async () => {
+        const result = await server.signIn();
+        if (!result.ok) return setStep({ kind: "error", text: result.error ?? "Sign-in failed." });
+        await next();
+      }),
+    });
+
+  const open: () => Promise<void> = guarded(async () => {
+    setStep({ kind: "loading" });
+    const answer = await call("POST", `${remote}/return`, {});
+    if (answer.signInRequired) return signInThen(open);
+    if (answer.status !== 200) return setStep({ kind: "error", text: failure(answer) });
+    setStep({ kind: "confirm", plan: (answer.body as { plan: BackPlan }).plan });
+  });
+
+  const bring = (plan: BackPlan): Promise<void> =>
+    guarded(async () => {
+      setStep({ kind: "working" });
+      const answer = await call("POST", `${remote}/return`, {
+        confirmedUntracked: plan.files.untracked,
+      });
+      if (answer.signInRequired) return signInThen(() => bring(plan));
+      const body = (answer.body ?? {}) as Record<string, unknown>;
+      if (
+        answer.status === 409 &&
+        body.code === "share_plan_changed" &&
+        Array.isArray(body.untracked)
+      )
+        return setStep({
+          kind: "confirm",
+          changed: true,
+          plan: { ...plan, files: { ...plan.files, untracked: body.untracked.map(String) } },
+        });
+      // No answer: the server may hold the return; it expires on its own.
+      if (answer.status !== 200) return setStep({ kind: "error", text: failure(answer) });
+      const handoff = String(body.handoff);
+      const ref = (body.envelope as { transfer?: { ref?: unknown } } | undefined)?.transfer?.ref;
+      const local = await post(`/sessions/${encodeURIComponent(id)}/import-return`, {
+        envelope: body.envelope,
+        handoff,
+      });
+      const localBody = await json(local);
+      if (!local.ok) {
+        // The server copy stays live and this one stays a link.
+        void call("POST", `${remote}/return/abort`, { handoff });
+        return setStep({
+          kind: "error",
+          text: String(localBody.error ?? `The session could not come back (${local.status}).`),
+        });
+      }
+      const back = localBody.session as SessionMeta;
+      const store = useAppStore.getState();
+      setStep(null);
+      store.upsertSessionMeta(back);
+      store.pushToast({
+        kind: "success",
+        message: `The session is back on this device.${typeof localBody.notice === "string" ? ` ${localBody.notice}` : ""}`,
+      });
+      // Close the server copy; until that answers, the session keeps
+      // returnPending and offers "Finish the return" (ReturnPendingBanner).
+      const finished = await finishReturn(back, server);
+      if (!finished.ok)
+        store.setError(
+          `The session is back on this device, but ${host} did not close its copy (${finished.error}). Finish the return from the session within 15 minutes.`,
+        );
+      else if (localBody.transferRefDeleted !== true && !finished.serverRefDeleted)
+        store.setError(
+          `The session is back on this device. The transfer ref could not be removed: run git push origin --delete ${String(ref)}.`,
+        );
+      void switchToSession(finished.ok ? finished.session : back);
+    })();
+
+  const busy = step?.kind === "loading" || step?.kind === "working";
+  return (
+    <>
+      <Button size="sm" variant="ghost" data-testid="bring-back" onClick={() => void open()}>
+        Bring back
+      </Button>
+      {step ? (
+        <BringBackDialog
+          host={host}
+          step={step}
+          busy={busy}
+          onBring={() => {
+            if (step.kind === "confirm") void bring(step.plan);
+          }}
+          onClose={() => setStep(null)}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function BringBackDialog({
+  host,
+  step,
+  busy,
+  onBring,
+  onClose,
+}: {
+  host: string;
+  step: BackStep;
+  busy: boolean;
+  onBring: () => void;
+  onClose: () => void;
+}) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useFocusTrap<HTMLDivElement>(true, closeRef);
+  const plan = step.kind === "confirm" ? step.plan : null;
+  const submodules = plan?.dirtySubmodules ?? [];
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-4 [-webkit-app-region:no-drag]">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="bring-back-title"
+        data-testid="bring-back-dialog"
+        className="flex max-h-[85vh] w-full max-w-lg flex-col gap-3 overflow-hidden rounded-xl border border-border-strong bg-surface-elevated p-4 shadow-elevated"
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && !busy) onClose();
+        }}
+      >
+        <h2 id="bring-back-title" className="font-medium text-text-primary">
+          Bring back from {host}
+        </h2>
+        {busy ? <p className="text-label text-text-secondary">Working…</p> : null}
+        {plan ? (
+          <>
+            {step.kind === "confirm" && step.changed ? (
+              <p className="text-label text-text-primary" role="alert">
+                The untracked files changed since you looked. Check the list again.
+              </p>
+            ) : null}
+            <p className="text-label text-text-secondary">
+              The session comes back here with its conversation and the uncommitted work on the
+              server ({plan.files.tracked} changed tracked files), pushed with the owner&apos;s
+              GitHub connection. It continues on this device; the copy on {host} becomes a read-only
+              link. Ignored files do not travel. Your checkout is used only when it has no changes
+              of its own; otherwise the session comes back in a new worktree.
+            </p>
+            {plan.files.untracked.length > 0 ? (
+              <div data-testid="bring-back-untracked" className="flex min-h-0 flex-col">
+                <p className="text-label text-text-primary">These untracked files come back too:</p>
+                <ul className="mt-1 max-h-60 list-disc overflow-y-auto pl-5 text-detail text-text-secondary">
+                  {plan.files.untracked.map((name) => (
+                    <li key={name}>{name}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {submodules.length > 0 ? (
+              <p className="text-label text-text-secondary">
+                Submodules with their own changes cannot travel ({submodules.join(", ")}): commit
+                inside them on the server first.
+              </p>
+            ) : null}
+            <div className="flex justify-end gap-2">
+              <Button size="sm" variant="ghost" ref={closeRef} onClick={onClose}>
+                Cancel
+              </Button>
+              <Button size="sm" disabled={submodules.length > 0} onClick={onBring}>
+                Bring back
+              </Button>
+            </div>
+          </>
+        ) : null}
+        {step.kind === "signIn" ? (
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" ref={closeRef} onClick={onClose}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={() => void step.retry()}>
+              Sign in to {host}
+            </Button>
+          </div>
+        ) : null}
+        {step.kind === "error" ? (
+          <>
+            <p className="text-label text-text-secondary" role="alert">
+              {step.text}
+            </p>
+            <div className="flex justify-end">
+              <Button size="sm" ref={closeRef} onClick={onClose}>
+                Close
+              </Button>
+            </div>
+          </>
+        ) : null}
       </div>
     </div>
   );

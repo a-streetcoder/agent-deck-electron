@@ -56,7 +56,7 @@ export type SharedServerResponse = {
 export interface SharedServerBridge {
   origin: string;
   request(
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "PATCH",
     path:
       | "/projects"
       | "/me"

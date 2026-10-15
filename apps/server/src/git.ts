@@ -1,6 +1,8 @@
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, copyFile, realpath, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+
 import path from "node:path";
 import { promisify } from "node:util";
 import { withTrailers } from "./gitIdentity.ts";
@@ -1855,7 +1857,26 @@ export function validTransferRef(ref: string): boolean {
 }
 
 function transferRun(cwd: string, args: string[], env?: Record<string, string>) {
-  return runGitEnv(cwd, args, { ...process.env, ...env, GIT_TERMINAL_PROMPT: "0" }, 120_000);
+  // SRV-12c3: no hook in the shared .git/hooks (or a core.hooksPath) ever sees the
+  // pusher's GH_TOKEN: every transfer runs with an empty hooks directory.
+  return withoutHooks((hooks) =>
+    runGitEnv(
+      cwd,
+      ["-c", `core.hooksPath=${hooks}`, ...args],
+      { ...process.env, ...env, GIT_TERMINAL_PROMPT: "0" },
+      120_000,
+    ),
+  );
+}
+
+/** Run `run` with a fresh, empty directory for core.hooksPath, removed afterwards. */
+async function withoutHooks<T>(run: (hooks: string) => Promise<T>): Promise<T> {
+  const hooks = await mkdtemp(path.join(tmpdir(), "agent-deck-no-hooks-"));
+  try {
+    return await run(hooks);
+  } finally {
+    await rm(hooks, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 /** What a move would carry: the repository root, branch, HEAD, changed files
@@ -1923,20 +1944,26 @@ export function refNamespaceRefused(stderr: string): boolean {
 }
 
 /** Push `commit` to refs/agent-deck/transfer/<id>, or the branch form when the
- * remote refuses the custom namespace. Answers the ref that was written. */
-export async function gitPushTransfer(cwd: string, commit: string, id: string): Promise<string> {
+ * remote refuses the custom namespace. Answers the ref that was written. `env`
+ * (SRV-12c3: the session owner's GitHub connection on the server) is layered on top. */
+export async function gitPushTransfer(
+  cwd: string,
+  commit: string,
+  id: string,
+  env?: Record<string, string>,
+): Promise<string> {
   validateGitObjectId(commit);
   const custom = `refs/agent-deck/transfer/${id}`;
   if (!validTransferRef(custom)) throw new Error("invalid transfer id");
   try {
-    await transferRun(cwd, ["push", "origin", `+${commit}:${custom}`]);
+    await transferRun(cwd, ["push", "origin", `+${commit}:${custom}`], env);
     return custom;
   } catch (first) {
     const killed = (first as { killed?: boolean }).killed === true;
     if (killed || !refNamespaceRefused(gitErrorText(first))) throw new Error(gitErrorText(first));
     const branch = `refs/heads/agent-deck/transfer/${id}`;
     try {
-      await transferRun(cwd, ["push", "origin", `+${commit}:${branch}`]);
+      await transferRun(cwd, ["push", "origin", `+${commit}:${branch}`], env);
       return branch;
     } catch {
       throw new Error(gitErrorText(first));
@@ -1989,4 +2016,98 @@ export async function gitCommitParents(cwd: string, commit: string): Promise<str
 export async function gitResetMixedTo(cwd: string, commit: string): Promise<void> {
   validateGitObjectId(commit);
   await runGit(cwd, ["reset", "--mixed", "-q", commit]);
+}
+
+/** The snapshot merged in place but its commit could not be undone: HEAD is on it. */
+export class SnapshotResetError extends Error {
+  constructor(
+    readonly snapshot: string,
+    readonly base: string,
+    readonly cwd: string,
+  ) {
+    super(
+      `The work is in ${cwd}, but HEAD is still at the transfer commit ${snapshot.slice(0, 12)}. Run git reset --mixed ${base} there to make the work uncommitted again.`,
+    );
+    this.name = "SnapshotResetError";
+  }
+}
+
+/**
+ * SRV-12c3: bring a returned snapshot into an existing checkout, only when that
+ * can lose nothing: no change and no untracked file, no git operation in
+ * progress, HEAD exactly at the snapshot's base (an older HEAD would move the
+ * checked-out branch), and no ignored entry at, inside or around a path the
+ * snapshot writes (a merge overwrites or removes ignored files without asking).
+ * Then fast-forward to the snapshot and undo its commit (--mixed): HEAD is the
+ * base again and the work is uncommitted. No hook runs (core.hooksPath is an
+ * empty directory: the snapshot is someone else's code). Answers false with the
+ * checkout untouched when any check, or the merge itself, refuses; throws
+ * SnapshotResetError when the merge happened but the reset failed twice.
+ */
+export async function gitRestoreSnapshotInPlace(
+  cwd: string,
+  snapshot: string,
+  base: string,
+  testHooks?: { afterMerge?: () => Promise<void> },
+): Promise<boolean> {
+  validateGitObjectId(snapshot);
+  validateGitObjectId(base);
+  return withoutHooks(async (hooks) => {
+    const git = (args: string[]) =>
+      runGitEnv(cwd, ["-c", `core.hooksPath=${hooks}`, ...args], process.env, 120_000);
+    try {
+      if (!(await gitWorkingTreeClean(cwd)) || (await gitOperationInProgress(cwd))) return false;
+      if ((await gitCommitOid(cwd, "HEAD")) !== base) return false;
+      const changed = (await git(["diff", "--name-only", "--no-renames", "-z", base, snapshot]))
+        .split("\0")
+        .filter(Boolean);
+      const paths = new Set(changed);
+      const parents = new Set<string>();
+      for (const name of changed) {
+        const parts = name.split("/");
+        for (let i = 1; i < parts.length; i += 1) parents.add(parts.slice(0, i).join("/"));
+      }
+      const ignored = (
+        await git(["ls-files", "-o", "-i", "--exclude-standard", "--directory", "-z"])
+      )
+        .split("\0")
+        .filter(Boolean)
+        .map((entry) => entry.replace(/\/$/, ""));
+      for (const entry of ignored) {
+        const parts = entry.split("/");
+        const around = parts.some((_, i) => paths.has(parts.slice(0, i + 1).join("/")));
+        if (around || parents.has(entry)) return false;
+      }
+      // git itself refuses to overwrite an untracked file that appeared since the check.
+      await git(["merge", "--ff-only", "-q", snapshot]);
+    } catch {
+      return false;
+    }
+    await testHooks?.afterMerge?.();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await git(["reset", "--mixed", "-q", base]);
+        return true;
+      } catch {
+        // Retried once (a transient index lock), then reported.
+      }
+    }
+    throw new SnapshotResetError(snapshot, base, cwd);
+  });
+}
+
+/** SRV-12c3: push a local branch to the same name on origin (no force), with
+ * `env` (the session owner's GitHub connection) layered over the server's. */
+export async function gitPushBranch(
+  cwd: string,
+  branch: string,
+  env: Record<string, string>,
+): Promise<void> {
+  const ref = await gitFullyQualifiedBranchRef(cwd, branch);
+  await transferRun(cwd, ["push", "origin", `${ref}:${ref}`], env);
+}
+
+/** The top-level directory of the repository `cwd` is in. */
+export async function gitTopLevel(cwd: string): Promise<string> {
+  return (await runGit(cwd, ["rev-parse", "--show-toplevel"])).trim();
 }

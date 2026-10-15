@@ -62,19 +62,18 @@ export function Transcript() {
       : null,
   );
   const link = session?.sharedTo;
-  const readOnly = useMemo<MirrorReadOnly | null>(
-    () =>
-      mirror && link
-        ? {
-            host: hostOf(link.serverOrigin),
-            openOnServer: () =>
-              void openExternal(
-                `${link.serverOrigin}/?session=${encodeURIComponent(link.serverSessionId)}`,
-              ),
-          }
-        : null,
-    [mirror, link],
-  );
+  const readOnly = useMemo<MirrorReadOnly | null>(() => {
+    const origin = link?.serverOrigin;
+    const serverId = link?.serverSessionId;
+    return mirror && origin && serverId
+      ? {
+          host: hostOf(origin),
+          openOnServer: () =>
+            void openExternal(`${origin}/?session=${encodeURIComponent(serverId)}`),
+        }
+      : null;
+  }, [mirror, link]);
+
   // Only a genuinely new session shows the startup card. An existing session
   // already has a piSessionFile (set on switch, before its history streams in),
   // so it never flashes the card during the brief empty-transcript load gap.

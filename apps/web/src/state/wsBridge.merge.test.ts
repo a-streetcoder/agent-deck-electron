@@ -281,4 +281,44 @@ describe("mergeWorktreeSession HTTP validation", () => {
     expect(error.message).toContain("hook rejected");
     expect(error.message).toContain("complete the merge commit, or abort");
   });
+
+  it("SRV-12c3: answers a shared server's pull request and its typed refusals", async () => {
+    const pr = {
+      ok: true,
+      code: "merge_pr_opened",
+      outcome: "pr",
+      pr: { url: "https://github.com/acme/app/pull/7", number: 7 },
+      branch: "agent-deck/session-1",
+      base: "main",
+      commits: 1,
+      worktreeCommitted: true,
+    };
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(pr));
+    expect(await mergeWorktreeSession("pr-session")).toEqual(pr);
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse(
+        {
+          code: "merge_pr_open",
+          outcome: "pr_open",
+          error:
+            "A pull request is already open for this session: https://github.com/acme/app/pull/7",
+          worktreeCommitted: false,
+        },
+        409,
+      ),
+    );
+    await expect(mergeWorktreeSession("pr-session")).rejects.toThrow(/pull\/7/);
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse(
+        {
+          code: "merge_github_missing",
+          outcome: "failed",
+          error: "Connect GitHub first.",
+          worktreeCommitted: false,
+        },
+        409,
+      ),
+    );
+    await expect(mergeWorktreeSession("pr-session")).rejects.toThrow(/Connect GitHub first/);
+  });
 });

@@ -18,6 +18,13 @@ import {
   type PendingReviewComment,
 } from "@/lib/reviewComments";
 import { fetchBranchDiffFiles, fetchFileDiff, mergeWorktreeSession } from "../../state/wsBridge.ts";
+import {
+  mergeButtonLabel,
+  PullRequestLink,
+  ReturnedPrWarning,
+  useMergeAsPullRequest,
+} from "../MergePullRequest.tsx";
+
 import { useAppStore } from "../../state/store.ts";
 import { ChangedFilesTree } from "./ChangedFilesTree.tsx";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel.tsx";
@@ -324,12 +331,21 @@ function WorktreeMergeToolbar(props: {
   // half-written tree. Disabled while a turn runs.
   const running = useAppStore((state) => state.transcript.agentStatus === "running");
   const [merging, setMerging] = useState(false);
+  const { shared, pr, returnedPr } = useMergeAsPullRequest();
 
   const merge = async (): Promise<void> => {
     setMerging(true);
     setError(null);
     try {
-      const { sourceBranch, commits, cleanup } = await mergeWorktreeSession(props.sessionId);
+      const result = await mergeWorktreeSession(props.sessionId);
+      if (result.outcome === "pr") {
+        pushToast({
+          kind: "success",
+          message: `Pushed ${result.branch} and ${result.code === "merge_pr_updated" ? "updated" : "opened"} pull request #${result.pr.number}`,
+        });
+        return;
+      }
+      const { sourceBranch, commits, cleanup } = result;
       // mergeWorktreeSession clears the diff after the merge. Cleanup is a
       // secondary typed outcome and never rewrites a successful merge as failed.
       if (cleanup.status === "failed") {
@@ -367,6 +383,8 @@ function WorktreeMergeToolbar(props: {
         <ArrowRight className="h-3 w-3 shrink-0 text-text-muted" aria-hidden />
         <span className="shrink-0 text-text-primary">{props.worktreeSourceBranch}</span>
       </div>
+      {pr ? <PullRequestLink pr={pr} /> : null}
+      {!shared && returnedPr ? <ReturnedPrWarning pr={returnedPr} /> : null}
       <Button
         size="sm"
         variant="primary"
@@ -377,7 +395,7 @@ function WorktreeMergeToolbar(props: {
         title={running ? "Wait for the current turn to finish" : undefined}
         onClick={() => void merge()}
       >
-        {merging ? "Merging…" : `Merge to ${props.worktreeSourceBranch}`}
+        {mergeButtonLabel(shared, pr, merging, props.worktreeSourceBranch)}
       </Button>
     </div>
   );

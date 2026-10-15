@@ -97,12 +97,12 @@ export class SessionCreationError extends Error {
 /** A4: spawned children per parent; the managed_parallel concurrency maximum. */
 export const MAX_DETACHED_SUBAGENTS = 8;
 
-/** SRV-12c1: what every refused action on a session moved to a shared server says. */
+/** SRV-12c1: what every refused action on a pointer says (SRV-12c3: on either side). */
 export const SESSION_SHARED_ERROR =
-  "session_shared: This session continues on the shared server. Open it there, or continue locally.";
-/** SRV-12c1: what a prompt or delegation during the hand-off to the server says. */
+  "session_shared: This session continues on another copy (on the shared server, or back on its device). Open it there, or continue from this copy.";
+/** SRV-12c1: what a prompt or delegation during a hand-off says (SRV-12c3: either direction). */
 export const SESSION_MOVING_ERROR =
-  "session_moving: This session is moving to the shared server. Wait until the move finishes or is cancelled.";
+  "session_moving: This session is moving between a device and the shared server. Wait until the move finishes or is cancelled.";
 
 /** A4: spawn refused because the parent already runs MAX_DETACHED_SUBAGENTS children. */
 export class SubagentCapError extends Error {

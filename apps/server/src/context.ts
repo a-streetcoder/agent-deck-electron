@@ -163,7 +163,13 @@ export interface ServerContext {
   /** SRV-12c1: the fork's model check (SRV-15a), reused by the session import. */
   sessionModelGate?: {
     pin(meta: SessionMeta, owner: UserIdentity | undefined): Promise<SessionMeta>;
-    refusal(meta: SessionMeta, owner: UserIdentity | undefined): Promise<string | undefined>;
+    /** `localCatalog` (SRV-12c3, a returned session): check this machine's own
+     * catalog even without an owner. */
+    refusal(
+      meta: SessionMeta,
+      owner: UserIdentity | undefined,
+      localCatalog?: boolean,
+    ): Promise<string | undefined>;
   };
   /** SRV-12c1: where an imported session's Pi transcript is written. */
   importedSessionsDir?: string;

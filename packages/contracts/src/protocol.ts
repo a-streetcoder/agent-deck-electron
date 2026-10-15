@@ -624,16 +624,52 @@ export const SessionMeta = Schema.mutable(
         }),
       ),
     ),
-    /** SRV-12c1, desktop only: this session moved to a shared server and is now a
-     * frozen read-only pointer to the server copy. */
+    /** SRV-12c1: this session moved and is now a read-only pointer to the copy
+     * that continues. On a device: to the server copy (`serverOrigin`,
+     * `serverSessionId`). SRV-12c3, on the shared server: brought back to a
+     * device (`serverOrigin: null`, `device`, `deviceSessionId`). */
     sharedTo: Schema.optional(
+      Schema.mutable(
+        Schema.Struct({
+          serverOrigin: Schema.NullOr(Schema.String),
+          serverSessionId: Schema.optional(Schema.String),
+          device: Schema.optional(Schema.String),
+          deviceSessionId: Schema.optional(Schema.String),
+          sharedAt: Schema.String,
+          mode: Schema.Literal("snapshot", "conversation"),
+        }),
+      ),
+    ),
+    /** SRV-12c3, device: this session came back from the shared server copy. */
+    returnedFrom: Schema.optional(
       Schema.mutable(
         Schema.Struct({
           serverOrigin: Schema.String,
           serverSessionId: Schema.String,
-          sharedAt: Schema.String,
-          mode: Schema.Literal("snapshot", "conversation"),
+          returnedAt: Schema.String,
+          /** The pull request the server copy's merge opened, if any. */
+          mergePr: Schema.optional(Schema.Struct({ url: Schema.String, number: Schema.Number })),
         }),
+      ),
+    ),
+    /** SRV-12c3, device: back here, but the server copy is not closed yet. The
+     * hand-off `token` finishes it (PATCH returned) while the server holds it. */
+    returnPending: Schema.optional(
+      Schema.mutable(
+        Schema.Struct({
+          token: Schema.String,
+          serverOrigin: Schema.String,
+          serverSessionId: Schema.String,
+          ref: Schema.optional(Schema.String),
+          until: Schema.String,
+        }),
+      ),
+    ),
+
+    /** SRV-12c3, shared server: the pull request the session's merge opened. */
+    mergePr: Schema.optional(
+      Schema.mutable(
+        Schema.Struct({ url: Schema.String, number: Schema.Number, openedAt: Schema.String }),
       ),
     ),
     /** SRV-12c1, shared server: this session was imported from a device's session. */

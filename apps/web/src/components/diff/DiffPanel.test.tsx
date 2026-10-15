@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { fetchBranchDiffFiles } from "../../state/wsBridge.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fetchBranchDiffFiles, mergeWorktreeSession } from "../../state/wsBridge.ts";
 import { useAppStore } from "../../state/store.ts";
 import { DiffPanel } from "./DiffPanel.tsx";
 
@@ -86,4 +86,100 @@ it("an ordinary session has no base toggle", () => {
   });
   render(<DiffPanel />);
   expect(screen.queryByLabelText("Compare with")).toBeNull();
+});
+
+describe("SRV-12c3: merge on a shared server", () => {
+  const withSession = (extra: Record<string, unknown>, shared: boolean) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ settings: { gitAutomation: true } })),
+    );
+    useAppStore.setState({
+      me: shared ? { id: "andrea@example.com", email: "andrea@example.com" } : null,
+      toasts: [],
+      session: {
+        id: "s1",
+        worktreeBranch: "agent-deck/session-s1",
+        worktreeSourceBranch: "main",
+        ...extra,
+      } as NonNullable<ReturnType<typeof useAppStore.getState>["session"]>,
+    });
+  };
+  afterEach(() => useAppStore.setState({ me: null }));
+
+  it("reads Push and open PR, and says which PR it opened", async () => {
+    withSession({}, true);
+    vi.mocked(mergeWorktreeSession).mockResolvedValueOnce({
+      ok: true,
+      code: "merge_pr_opened",
+      outcome: "pr",
+      pr: { url: "https://github.com/acme/app/pull/7", number: 7 },
+      branch: "agent-deck/session-s1",
+      base: "main",
+      commits: 1,
+      worktreeCommitted: true,
+    });
+    render(<DiffPanel />);
+    const button = await screen.findByTestId("diff-merge");
+    expect(button.textContent).toBe("Push and open PR");
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(useAppStore.getState().toasts.at(-1)?.message).toBe(
+        "Pushed agent-deck/session-s1 and opened pull request #7",
+      ),
+    );
+  });
+
+  it("shows the open PR and pushes to it again", async () => {
+    withSession(
+      { mergePr: { url: "https://github.com/acme/app/pull/7", number: 7, openedAt: "now" } },
+      true,
+    );
+    vi.mocked(mergeWorktreeSession).mockResolvedValueOnce({
+      ok: true,
+      code: "merge_pr_updated",
+      outcome: "pr",
+      pr: { url: "https://github.com/acme/app/pull/7", number: 7 },
+      branch: "agent-deck/session-s1",
+      base: "main",
+      commits: 2,
+      worktreeCommitted: true,
+    });
+    render(<DiffPanel />);
+    const button = await screen.findByTestId("diff-merge");
+    expect(button.textContent).toBe("Push to PR");
+    expect(screen.getByTestId("merge-pr-link").getAttribute("href")).toBe(
+      "https://github.com/acme/app/pull/7",
+    );
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(useAppStore.getState().toasts.at(-1)?.message).toBe(
+        "Pushed agent-deck/session-s1 and updated pull request #7",
+      ),
+    );
+  });
+
+  it("warns before a local merge of work that already has a PR on the server", async () => {
+    withSession(
+      {
+        returnedFrom: {
+          serverOrigin: "https://deck.example.test",
+          serverSessionId: "srv",
+          returnedAt: "now",
+          mergePr: { url: "https://github.com/acme/app/pull/9", number: 9 },
+        },
+      },
+      false,
+    );
+    render(<DiffPanel />);
+    expect((await screen.findByTestId("diff-merge")).textContent).toBe("Merge to main");
+    expect(screen.getByTestId("merge-returned-pr").textContent).toContain("PR #9");
+  });
+
+  it("keeps the local merge on the desktop", async () => {
+    withSession({}, false);
+    render(<DiffPanel />);
+    expect((await screen.findByTestId("diff-merge")).textContent).toBe("Merge to main");
+    expect(screen.queryByTestId("merge-pr-link")).toBeNull();
+  });
 });

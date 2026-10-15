@@ -129,7 +129,10 @@ export class SessionIndex extends JsonArrayStore<SessionMeta> {
         };
       }
       // SRV-12c1: the move links, kept only with their exact shape.
-      const shareLink = (raw: unknown, idKey: "serverSessionId" | "localSessionId") => {
+      const shareLink = (
+        raw: unknown,
+        idKey: "serverSessionId" | "localSessionId" | "deviceSessionId",
+      ) => {
         const link = raw as Record<string, unknown> | null | undefined;
         if (
           !link ||
@@ -143,6 +146,8 @@ export class SessionIndex extends JsonArrayStore<SessionMeta> {
         return link;
       };
       const sharedTo = shareLink(normalized.sharedTo, "serverSessionId");
+      // SRV-12c3: a server copy brought back to a device points at that device.
+      const returned = shareLink(normalized.sharedTo, "deviceSessionId");
       if (sharedTo && typeof sharedTo.serverOrigin === "string") {
         normalized.sharedTo = {
           serverOrigin: sharedTo.serverOrigin,
@@ -150,7 +155,73 @@ export class SessionIndex extends JsonArrayStore<SessionMeta> {
           sharedAt: sharedTo.sharedAt as string,
           mode: sharedTo.mode as "snapshot" | "conversation",
         };
+      } else if (
+        returned &&
+        returned.serverOrigin === null &&
+        typeof returned.device === "string"
+      ) {
+        normalized.sharedTo = {
+          serverOrigin: null,
+          device: returned.device.slice(0, 200),
+          deviceSessionId: returned.deviceSessionId as string,
+          sharedAt: returned.sharedAt as string,
+          mode: returned.mode as "snapshot" | "conversation",
+        };
       } else delete normalized.sharedTo;
+      const back = normalized.returnedFrom as Record<string, unknown> | undefined;
+      if (
+        back &&
+        typeof back === "object" &&
+        typeof back.serverOrigin === "string" &&
+        typeof back.serverSessionId === "string" &&
+        typeof back.returnedAt === "string"
+      ) {
+        const pr = back.mergePr as { url?: unknown; number?: unknown } | undefined;
+        normalized.returnedFrom = {
+          serverOrigin: back.serverOrigin,
+          serverSessionId: back.serverSessionId,
+          returnedAt: back.returnedAt,
+          ...(pr &&
+          typeof pr.url === "string" &&
+          /^https:\/\//.test(pr.url) &&
+          Number.isSafeInteger(pr.number)
+            ? { mergePr: { url: pr.url, number: pr.number as number } }
+            : {}),
+        };
+      } else delete normalized.returnedFrom;
+      const pending = normalized.returnPending as Record<string, unknown> | undefined;
+      if (
+        pending &&
+        typeof pending === "object" &&
+        ["token", "serverOrigin", "serverSessionId", "until"].every(
+          (key) => typeof pending[key] === "string",
+        ) &&
+        ["undefined", "string"].includes(typeof pending.ref)
+      ) {
+        normalized.returnPending = {
+          token: pending.token as string,
+          serverOrigin: pending.serverOrigin as string,
+          serverSessionId: pending.serverSessionId as string,
+          until: pending.until as string,
+          ...(typeof pending.ref === "string" ? { ref: pending.ref } : {}),
+        };
+      } else delete normalized.returnPending;
+
+      const pr = normalized.mergePr as Record<string, unknown> | undefined;
+      if (
+        pr &&
+        typeof pr === "object" &&
+        typeof pr.url === "string" &&
+        /^https:\/\//.test(pr.url) &&
+        Number.isSafeInteger(pr.number) &&
+        typeof pr.openedAt === "string"
+      ) {
+        normalized.mergePr = {
+          url: pr.url,
+          number: pr.number as number,
+          openedAt: pr.openedAt,
+        };
+      } else delete normalized.mergePr;
       const sharedFrom = shareLink(normalized.sharedFrom, "localSessionId");
       if (sharedFrom && typeof sharedFrom.device === "string") {
         normalized.sharedFrom = {

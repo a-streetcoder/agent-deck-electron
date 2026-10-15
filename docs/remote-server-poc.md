@@ -777,10 +777,103 @@ the user: the local row stays, with the same title, and becomes a read-only poin
   no paths, no content).
 - **Owner check on the live server**: verify that GitHub accepts `refs/agent-deck/*` for push,
   fetch and delete; the branch fallback covers a refusal.
-- **Not covered**: nothing comes back to the device (SRV-12c3). If the app closes between the push and the
+- **Not covered**: if the app closes between the push and the
   import, the ref stays on the remote until the hand-off expires on the device (15 minutes, if the
   app is still running) or is deleted by hand (`git push origin --delete
 refs/agent-deck/transfer/<id>`).
+
+### Bringing a session back
+
+A pointer has **Bring back** next to Continue locally (SRV-12c3). The session's work comes back
+to the device it left and continues there as the same local session; the server copy becomes the
+pointer. Only the session's **owner** can do it (the envelope and its completion are theirs; the
+operator can only cancel a return), and only for a server session that came from a device
+(`sharedFrom`). The renderer drives it through Electron main, which allows exactly
+`POST /sessions/<id>/return` (`{}` or `{ confirmedUntracked: [file names] }`),
+`POST /sessions/<id>/return/abort` (`{ handoff? }`) and `PATCH /sessions/<id>/returned`
+(`{ deviceSessionId, handoff }`).
+
+- **Preflight** (`POST /sessions/:id/return {}` on the shared server) refuses a session that is
+  already a pointer, did not come from a device, is a draft or a Loop session, or is responding
+  or running subagents; `403` for anyone but the owner; `409 github_not_connected` ("Connect
+  GitHub first") when the owner has no GitHub connection (never the server's own credentials).
+  Otherwise it answers the plan as Share to server does (branch, changed tracked files, every
+  untracked file by name, dirty submodules, the device).
+- **The snapshot** (`{ confirmedUntracked }`) is the share code run on the server: the same
+  throwaway index, exactly the consented untracked files (`409 share_plan_changed` with the new
+  list otherwise), pushed with the owner's connection to `refs/agent-deck/transfer/<server
+session id>` (the branch form only when the namespace is refused). Every server push (transfer
+  refs, the PR branch) runs with `core.hooksPath` set to an empty directory, so no hook in the
+  shared `.git/hooks` sees a member's `GH_TOKEN`. The envelope is the same v1 shape with
+  `direction: "return"`, `sharedFrom { device, localSessionId }` and the open PR
+  (`meta.mergePr`). From here the server copy is frozen for 15 minutes at most (prompts,
+  including the live mirror's forwarded ones, answer `session_moving` or
+  `session_mutation_busy`); expiry or `POST /sessions/:id/return/abort` deletes the ref and
+  unfreezes it. **One return at a time**: a second `return` answers `409 return_in_progress`
+  until the first is finished or cancelled.
+- **On the device** the renderer posts `{ envelope, handoff }` to
+  `POST /sessions/:id/import-return` on the local backend. Everything that can refuse runs before
+  git: the envelope as strictly as the server checks a share (closed shapes, the transcript checks,
+  `direction: "return"`, a snapshot, the server session this pointer links to, this device
+  session in `sharedFrom`), every paste, and the launch configuration: the agent, provider and
+  model the server copy ran with and the thinking level its transcript last set, resolved as a
+  server import does and checked against **this device's** providers (`409 model_unavailable`,
+  nothing touched). Then it fetches the ref with the device's own git login into a private ref and
+  checks the commit and its one parent. **Where it lands**: the original checkout only when that
+  loses nothing: no change and no untracked file, no merge or rebase in progress, HEAD exactly at
+  the snapshot's base (an older HEAD would move the checked-out branch), and no ignored entry
+  (`git ls-files -o -i --directory`) at, inside or around a path the snapshot writes. Then
+  `git merge --ff-only <snapshot>` and `git reset --mixed <base>` with `core.hooksPath` pointed
+  at an empty directory (no post-merge or husky hook runs the server's code). Any refusal, of the
+  checks or of the merge, goes to a fresh worktree of the project instead, and the answer says so.
+  A reset that fails twice after the merge answers an error saying HEAD is at the transfer commit
+  and the `git reset --mixed <base>` that fixes it; the pointer stays. After a snapshot share the
+  device checkout still holds the edits it sent, so the fresh worktree is the usual case. The
+  transcript (header cwd rewritten, the device's own `parentSession` kept) replaces the pointer's
+  Pi file under the same local session id; the old file stays as `<file>.pre-return` (one
+  generation). Pastes and the composer draft come with it, the server's message authors stay as
+  attribution labels, `sharedTo` is removed, `returnedFrom { serverOrigin, serverSessionId,
+returnedAt, mergePr? }` and `returnPending { token, serverOrigin, serverSessionId, ref, until }`
+  are recorded, and the device deletes the ref. Any failure before the transcript write leaves the
+  pointer as it was; the renderer then aborts the return on the server, whose copy stays live.
+- **The server copy** then becomes the pointer (`PATCH /sessions/:id/returned`, owner only, the
+  hand-off token and the device session it came from; a stale token answers `409 return_stale`, a
+  running turn is refused): its Pi ends and it records
+  `sharedTo { serverOrigin: null, device, deviceSessionId, sharedAt, mode }`. Repeating the call
+  for the same device session answers the pointer again (a lost answer is retried); any other
+  device session is refused. The device then clears `returnPending`. While it is set the session
+  shows "Finish the return on <host>" (Retry, valid for the 15-minute hand-off); after that, or
+  without a connection to the server, it explains that the server copy stays open, with **Close
+  server copy** (open it on the server and delete it) and Dismiss. On the shared server a pointer
+  renders read-only, "This session continues on <device>.", with Continue here (a plain fork);
+  prompts, merge and the rest answer `409 session_shared`. There is no live mirror of the device:
+  the server cannot reach it.
+- **Transfer refs**: abort and finalisation delete the ref and report `transferRefDeleted`; a
+  deletion that fails is kept and retried by the next return call on that session. When neither
+  side could delete it, the device shows the `git push origin --delete <ref>` command.
+- **Events**: `session.shared { direction: "return" }` on both logs.
+- **Moving it out again** makes a new server copy: a pointer copy is never the earlier import.
+
+### Merge on the shared server: push and pull request
+
+On the shared server, for a session **with an owner** in a project whose origin is a **GitHub**
+repository, `POST /sessions/:id/merge` does not merge into the server's checkout. It commits the
+session worktree as the local merge does (owner identity, co-author trailers), pushes the session
+branch to `origin` under the same name with the **session owner's** GitHub connection (hooks off,
+as above), and opens a pull request as the owner with `gh pr create --repo=<owner/name>
+--head=<branch> --base=<project default branch> --title=<session title> --body=<commit subjects +
+"Opened from Agent Deck session <id>">` (argv, never a shell string). The PR is recorded as
+`mergePr { url, number, openedAt }` and returned as `{ pr: { url, number } }`; the worktree stays.
+A **re-click** commits and pushes again (the open PR gets the new commits) and answers
+`merge_pr_updated` with the same URL; when `gh pr view <number> --json state` says MERGED or
+CLOSED, it opens a new PR instead. Refusals: `403` for anyone but the owner or the operator,
+`409 merge_github_missing` without the owner's connection. An open PR for the branch that gh
+reports is returned as the PR. A gh failure after the push answers `502 merge_pr_failed` naming
+the pushed branch. The web Merge control reads "Push and open PR" there, then "Push to PR" with
+the PR link. Folder projects, other hosts and sessions without an owner keep the local merge
+exactly as before, as does the desktop. A session brought back to a device carries the PR in
+`returnedFrom.mergePr`: its local merge shows the link and warns that merging there lands the
+work twice.
 
 ## Security model
 
