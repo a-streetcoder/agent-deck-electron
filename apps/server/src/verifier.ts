@@ -6,6 +6,7 @@
 // verdict read with parseVerdict.
 import { existsSync } from "node:fs";
 import {
+  redactSecrets,
   sameAgent,
   type LoopVerdictParse,
   type SubagentVerdict,
@@ -85,18 +86,22 @@ export function validationEvidence(
   configured: boolean,
 ): string {
   if (!configured || !validation) return "Validation: no validation command is configured.";
-  return [
-    `Validation (already run by Agent Deck, before your review): ${validation.passed ? "passed" : "failed"} (${validation.classification}, exit ${validation.exitCode ?? "unavailable"})`,
-    `Command: ${validation.command}`,
-    ...(["stdout", "stderr"] as const).map((stream) => {
-      const text = (
-        (stream === "stdout" ? validation.stdoutTail : validation.stderrTail) || validation[stream]
-      ).trim();
-      return text ? `${stream} tail:\n${tail(text)}` : "";
-    }),
-  ]
-    .filter(Boolean)
-    .join("\n");
+  // The command and its output reach a prompt, the run store and the log: no secrets.
+  return redactSecrets(
+    [
+      `Validation (already run by Agent Deck, before your review): ${validation.passed ? "passed" : "failed"} (${validation.classification}, exit ${validation.exitCode ?? "unavailable"})`,
+      `Command: ${validation.command}`,
+      ...(["stdout", "stderr"] as const).map((stream) => {
+        const text = (
+          (stream === "stdout" ? validation.stdoutTail : validation.stderrTail) ||
+          validation[stream]
+        ).trim();
+        return text ? `${stream} tail:\n${tail(text)}` : "";
+      }),
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
 }
 
 const list = (items: readonly string[]): string =>
@@ -196,7 +201,13 @@ export interface VerifierDeps {
   head: (worktreePath: string) => Promise<string>;
   /** A3: files the target changed in its own worktree since its base; undefined without one. */
   filesChanged: (target: SubagentRunRecord) => Promise<string[] | undefined>;
-  runValidation: (cwd: string, command: string, signal?: AbortSignal) => Promise<ValidationResult>;
+  /** Runs with the parent session's launch env (its owner's credentials, git identity). */
+  runValidation: (
+    parentSessionId: string,
+    cwd: string,
+    command: string,
+    signal?: AbortSignal,
+  ) => Promise<ValidationResult>;
   /** A durable read-only child with VERIFIER_PROFILE, recorded as role "verify". */
   spawn: (
     parentSessionId: string,
@@ -211,8 +222,8 @@ export interface VerifierDeps {
       cwd?: string;
     },
   ) => Promise<{ runId: string; done: Promise<{ text: string }> }>;
-  /** Writes the verdict on the target run (subagent.run.verified) and its card. */
-  recordVerdict: (parentSessionId: string, targetRunId: string, verdict: SubagentVerdict) => void;
+  /** Writes a verdict on a run of the parent (the target: subagent.run.verified) and its card. */
+  recordVerdict: (parentSessionId: string, runId: string, verdict: SubagentVerdict) => void;
   warn: (message: string, error?: unknown) => void;
 }
 
@@ -274,7 +285,12 @@ export async function launchVerifier(
   if (request.validationCommand) {
     const cwd = worktree ?? deps.cwd(parentSessionId);
     if (!cwd) throw new VerifierRefusedError("the parent session has no checkout to validate in");
-    validation = await deps.runValidation(cwd, request.validationCommand, request.signal);
+    validation = await deps.runValidation(
+      parentSessionId,
+      cwd,
+      request.validationCommand,
+      request.signal,
+    );
   }
   const base = target.worktreeBaseCommit;
   const summary = target.summary ?? "";
@@ -319,15 +335,21 @@ export async function launchVerifier(
   const verifiedTurn = target.completedAt;
   const record = (outcome: VerifierOutcome): VerifierOutcome => {
     const { decision, reason, verifierRunId } = outcome;
-    // A continuation of the target since launch made this verdict stale: drop it.
+    const verdict = { decision, reason, verifierRunId };
+    const write = (runId: string): void => {
+      try {
+        deps.recordVerdict(parentSessionId, runId, verdict);
+      } catch (error) {
+        deps.warn(`verdict on run ${runId} could not be recorded`, error);
+      }
+    };
+    // The verifier's own record always keeps its verdict (await_subagents reads it).
+    write(verifierRunId);
+    // The target only while it is the turn that was verified: a continuation since
+    // launch made the verdict stale for it.
     const now = deps.run(parentSessionId, targetRunId);
-    if (!now || verifyTargetError(now, targetRunId) || now.completedAt !== verifiedTurn) {
-      return outcome;
-    }
-    try {
-      deps.recordVerdict(parentSessionId, targetRunId, { decision, reason, verifierRunId });
-    } catch (error) {
-      deps.warn(`verdict on run ${targetRunId} could not be recorded`, error);
+    if (now && !verifyTargetError(now, targetRunId) && now.completedAt === verifiedTurn) {
+      write(targetRunId);
     }
     return outcome;
   };

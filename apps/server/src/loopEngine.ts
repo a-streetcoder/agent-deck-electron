@@ -79,6 +79,8 @@ export async function runValidationCommand(
   signal?: AbortSignal,
   outputDirectory?: string,
   timeoutMs = 120_000,
+  /** The session's launch env (owner credentials, git identity); the server's otherwise. */
+  env?: Record<string, string | undefined>,
 ): Promise<ValidationResult> {
   const started = Date.now();
   let workingDirectory: string;
@@ -171,6 +173,7 @@ export async function runValidationCommand(
         windowsHide: true,
         detached: process.platform !== "win32",
         stdio: ["ignore", "pipe", "pipe"],
+        ...(env ? { env: { ...process.env, ...env } } : {}),
       });
       child.stdout?.on("data", (chunk: Buffer) => {
         stdout = appendBounded(stdout, chunk);
@@ -263,6 +266,7 @@ export interface LoopEngineDeps {
     command: string,
     signal?: AbortSignal,
     outputDirectory?: string,
+    env?: Record<string, string | undefined>,
   ) => Promise<boolean | LegacyValidationResult | ValidationResult>;
   now?: () => string;
   /** App data directory. Omit only for hermetic in-memory tests. */
@@ -281,6 +285,8 @@ export interface LoopStartOptions {
   executeRole?: ExecuteLoopRole;
   /** Cancels the Loop-owned Pi session and all children. */
   cancel?: () => Promise<void>;
+  /** A7: the Loop session's launch env, for the validation command (as its Pi gets). */
+  validationEnv?: () => Record<string, string | undefined> | undefined;
 }
 
 export class UnsupportedLoopStructureError extends Error {
@@ -303,6 +309,7 @@ export class HumanApprovalConflictError extends Error {
 interface ActiveRun {
   controller: AbortController;
   cancel?: () => Promise<void>;
+  validationEnv?: LoopStartOptions["validationEnv"];
   cancelPromise?: Promise<void>;
 }
 
@@ -660,7 +667,10 @@ export class LoopEngine {
     this.now = deps.now ?? (() => new Date().toISOString());
     this.defaultExecuteAgent = deps.executeAgent;
     this.defaultExecuteRole = deps.executeRole;
-    this.runValidation = deps.runValidation ?? runValidationCommand;
+    this.runValidation =
+      deps.runValidation ??
+      ((cwd, command, signal, outputDirectory, env) =>
+        runValidationCommand(cwd, command, signal, outputDirectory, undefined, env));
     this.warn = deps.warn ?? (() => {});
     this.storePath = deps.dataDir ? path.join(deps.dataDir, "loop-runs.json") : undefined;
     let artifactsRoot: string | undefined;
@@ -1413,7 +1423,11 @@ export class LoopEngine {
       cwd,
       reportOnly: loop.writeTarget === "artifactMarkdown",
     });
-    const active = { controller: new AbortController(), cancel: options.cancel };
+    const active: ActiveRun = {
+      controller: new AbortController(),
+      cancel: options.cancel,
+      validationEnv: options.validationEnv,
+    };
     this.runs.set(run.id, run);
     this.active.set(run.id, active);
     try {
@@ -1770,7 +1784,13 @@ export class LoopEngine {
           );
         }
       }
-      const result = await this.runValidation(cwd, command, signal, validationDirectory);
+      const result = await this.runValidation(
+        cwd,
+        command,
+        signal,
+        validationDirectory,
+        this.active.get(run.id)?.validationEnv?.(),
+      );
       const normalized: ValidationResult =
         typeof result === "boolean" || !("classification" in result)
           ? {

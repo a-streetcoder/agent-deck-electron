@@ -150,7 +150,7 @@ export interface PublicSubagentRun {
   /** A7: a verifier run, and the run it verifies (same parent session). */
   role?: "verify";
   targetRunId?: string;
-  /** A7: on the TARGET run, the latest verifier's verdict. */
+  /** A7: on the TARGET run, the latest verifier's verdict; on a verifier run, its own. */
   verdict?: SubagentVerdict;
 }
 
@@ -248,8 +248,9 @@ export function diffSubagentRuns(
         kind: "subagent.run.finished",
         payload: { run: rest, result: subagentRunResult(run) },
       });
-    } else if (old && run.verdict && !sameJson(old.verdict, run.verdict)) {
-      // A7: a new verdict on the target run; carries the whole run like updated.
+    } else if (old && run.verdict && run.role !== "verify" && !sameJson(old.verdict, run.verdict)) {
+      // A7: a new verdict on the target run; carries the whole run like updated. A
+      // verifier's own copy of its verdict is a plain update.
       out.push({
         ...base,
         kind: "subagent.run.verified",

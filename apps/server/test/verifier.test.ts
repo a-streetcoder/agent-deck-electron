@@ -11,8 +11,11 @@ import {
   VerifierRefusedError,
   verifierVerdict,
   verifyTargetError,
+  validationEvidence,
   type VerifierDeps,
 } from "../src/verifier.ts";
+import { sessionVerifierDeps } from "../src/bridgeTools.ts";
+import type { SessionManager } from "../src/SessionManager.ts";
 
 const target = (extra: Partial<SubagentRunRecord> = {}): SubagentRunRecord => ({
   id: "11111111-1111-4111-8111-111111111111",
@@ -111,7 +114,7 @@ describe("launchVerifier", () => {
       },
       head: async () => "h".repeat(40),
       filesChanged: async () => ["src/a.ts"],
-      runValidation: async (cwd, command) => {
+      runValidation: async (_parent, cwd, command) => {
         calls.push(`validate ${cwd} ${command}`);
         return validation;
       },
@@ -121,7 +124,7 @@ describe("launchVerifier", () => {
         return { runId: VERIFIER, done: answer };
       },
       recordVerdict: (parent, runId, verdict) => {
-        calls.push("record");
+        calls.push(runId === VERIFIER ? "record verifier" : "record target");
         verdicts.push({ parent, runId, verdict });
       },
       warn: () => {},
@@ -141,7 +144,13 @@ describe("launchVerifier", () => {
     });
     const outcome = await done;
     // Gates, then validation in the session checkout, then the verifier.
-    expect(d.calls).toEqual(["gate", "validate /repo npm test", "spawn", "record"]);
+    expect(d.calls).toEqual([
+      "gate",
+      "validate /repo npm test",
+      "spawn",
+      "record verifier",
+      "record target",
+    ]);
     const prompt = d.spawned[0]!.task;
     expect(prompt).toMatch(/^verify: check the build/);
     expect(prompt).toContain("PRODUCER_SUMMARY");
@@ -158,12 +167,11 @@ describe("launchVerifier", () => {
     });
     expect(d.spawned[0]!.options).not.toHaveProperty("cwd");
     expect(outcome).toMatchObject({ decision: "REJECT", reason: "1 failing test" });
+    // On the verifier's own record, then on the target.
+    const verdict = { decision: "REJECT", reason: "1 failing test", verifierRunId: runId };
     expect(d.verdicts).toEqual([
-      {
-        parent: "s1",
-        runId: record.id,
-        verdict: { decision: "REJECT", reason: "1 failing test", verifierRunId: runId },
-      },
+      { parent: "s1", runId, verdict },
+      { parent: "s1", runId: record.id, verdict },
     ]);
   });
 
@@ -181,7 +189,13 @@ describe("launchVerifier", () => {
           validationCommand: "npm test",
         })
       ).done;
-      expect(d.calls).toEqual(["gate", `validate ${worktree} npm test`, "spawn", "record"]);
+      expect(d.calls).toEqual([
+        "gate",
+        `validate ${worktree} npm test`,
+        "spawn",
+        "record verifier",
+        "record target",
+      ]);
       expect(d.spawned[0]!.options).toMatchObject({ cwd: worktree });
       const prompt = d.spawned[0]!.task;
       expect(prompt).toContain(`Base commit: ${base}; HEAD: ${"h".repeat(40)}`);
@@ -209,7 +223,7 @@ describe("launchVerifier", () => {
       task: "t",
     });
     await plain.done;
-    expect(d.calls).toEqual(["gate", "spawn", "record"]);
+    expect(d.calls).toEqual(["gate", "spawn", "record verifier", "record target"]);
   });
 
   it("checks the child cap before spending a validation run", async () => {
@@ -247,7 +261,7 @@ describe("launchVerifier", () => {
     expect([...running.calls, ...foreign.calls]).toEqual([]);
   });
 
-  it("drops a verdict when the target was continued while the verifier ran", async () => {
+  it("drops the target's verdict when it was continued while the verifier ran; the verifier keeps its own", async () => {
     let answer!: (value: { text: string }) => void;
     const d = deps(target(), new Promise((resolve) => (answer = resolve)));
     const { done } = await launchVerifier(d.value, {
@@ -259,7 +273,7 @@ describe("launchVerifier", () => {
     d.state.record = target({ completedAt: "2026-10-15T00:05:00.000Z", summary: "NEWER" });
     answer({ text: "APPROVE" });
     await expect(done).resolves.toMatchObject({ decision: "APPROVE" });
-    expect(d.verdicts).toEqual([]);
+    expect(d.calls.filter((call) => call.startsWith("record"))).toEqual(["record verifier"]);
     // Still running its continuation: dropped as well.
     let answerLate!: (value: { text: string }) => void;
     const running = deps(target(), new Promise((resolve) => (answerLate = resolve)));
@@ -271,7 +285,7 @@ describe("launchVerifier", () => {
     running.state.record = { ...target(), status: "running", completedAt: undefined };
     answerLate({ text: "APPROVE" });
     await late.done;
-    expect(running.verdicts).toEqual([]);
+    expect(running.calls.filter((call) => call.startsWith("record"))).toEqual(["record verifier"]);
   });
 
   it("a cancelled or failed verifier records nothing (an earlier verdict stays); done resolves", async () => {
@@ -288,5 +302,43 @@ describe("launchVerifier", () => {
     expect(d.calls).toEqual(["gate", "spawn"]);
     expect(d.verdicts).toEqual([]);
     expect(d.spawned[0]!.task).toContain("Validation: no validation command is configured.");
+  });
+});
+
+describe("validation: the session's launch env, secrets redacted", () => {
+  const FAKE_TOKEN = `ghp_${"A1b2C3d4".repeat(4)}`;
+
+  it("runs the command with the parent session's launch env (owner credentials)", async () => {
+    const sessions = {
+      sessionLaunchEnv: (id: string) => (id === "s1" ? { A7_ENV_PROBE: "owner-env" } : undefined),
+    } as unknown as SessionManager;
+    const deps = sessionVerifierDeps(sessions, () => {});
+    const result = await deps.runValidation(
+      "s1",
+      tmpdir(),
+      `node -e "process.stdout.write('probe=' + process.env.A7_ENV_PROBE)"`,
+    );
+    expect(result.stdout).toContain("probe=owner-env");
+  });
+
+  it("redacts a token in the command and its output before the prompt", () => {
+    const evidence = validationEvidence(
+      {
+        command: `echo ${FAKE_TOKEN}`,
+        workingDirectory: "/repo",
+        exitCode: 0,
+        durationMs: 1,
+        stdout: FAKE_TOKEN,
+        stderr: `token=${"z".repeat(12)}`,
+        classification: "completed",
+        passed: true,
+        evidence: "",
+      },
+      true,
+    );
+    expect(evidence).not.toContain(FAKE_TOKEN);
+    expect(evidence).not.toContain("z".repeat(12));
+    expect(evidence).toContain("Command: echo <secret>");
+    expect(evidence).toContain("stdout tail:\n<secret>");
   });
 });

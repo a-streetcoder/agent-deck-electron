@@ -216,6 +216,40 @@ describe("maker-checker validation ordering (D7)", () => {
     });
   });
 
+  it("runs validation with the Loop session's launch env (A7)", async () => {
+    const envs: unknown[] = [];
+    const engine = new LoopEngine({
+      executeRole: async ({ phase }) =>
+        phase === "checker" ? "APPROVE\nok" : phase === "evaluator" ? "SUCCESS\nok" : "made",
+      runValidation: async (_cwd, _command, _signal, _dir, env) => {
+        envs.push(env);
+        return true;
+      },
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "makerChecker",
+        makerName: "Maker",
+        checkerName: "Checker",
+        checkerRubric: "strict",
+      }),
+      cwd(),
+      { validationEnv: () => ({ GH_TOKEN: "owner-token", PI_CODING_AGENT_DIR: "/owner" }) },
+    );
+    await engine.settled(run.id);
+    expect(envs).toEqual([{ GH_TOKEN: "owner-token", PI_CODING_AGENT_DIR: "/owner" }]);
+    // The real runner hands it to the spawned command.
+    const probe = await runValidationCommand(
+      cwd(),
+      `node -e "process.stdout.write('dir=' + process.env.PI_CODING_AGENT_DIR)"`,
+      undefined,
+      undefined,
+      undefined,
+      { PI_CODING_AGENT_DIR: "/owner" },
+    );
+    expect(probe.stdout).toBe("dir=/owner");
+  });
+
   it("pins the checker prompt text (A7: shared verifierPrompt must not change loops)", async () => {
     let checkerPrompt = "";
     const engine = new LoopEngine({

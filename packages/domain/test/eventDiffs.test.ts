@@ -193,6 +193,11 @@ describe("finished, removed and gaps", () => {
       type: "subagentRun",
       id: "run-1",
     });
+    // The verifier's own copy of its verdict is a plain update, not a second verified.
+    const verifierDone = { ...verifier, status: "completed" as const };
+    expect(
+      diffSubagentRuns([verifierDone], [{ ...verifierDone, verdict }]).map((d) => d.kind),
+    ).toEqual(["subagent.run.updated"]);
   });
 
   it("a created run without a tool call hangs under its session", () => {

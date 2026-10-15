@@ -34,6 +34,7 @@ process.env.AGENT_DECK_TEST = "1";
 
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
 const FOREIGN_RUN = "99999999-9999-4999-8999-999999999999";
+const FAKE_TOKEN = `ghp_${"A1b2C3d4".repeat(4)}`;
 
 const systemText = (body: ChatCompletionRequest): string =>
   JSON.stringify(body.messages.filter((m) => m.role === "system" || m.role === "developer"));
@@ -70,7 +71,9 @@ const loggedEvents = (dataDir: string): LoggedEvent[] => {
 
 it("verifies a finished run ad hoc: typed verdicts, the event, the card, read-only", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "pi-verify-"));
-  const validation = `node -e "process.stdout.write('a7-validated')"`;
+  // Prints the session's own HOME (its launch env) and a fake token, which also sits in
+  // the command itself: both must reach the verifier redacted.
+  const validation = `node -e "process.stdout.write('a7-validated home=' + process.env.HOME + ' ${FAKE_TOKEN}')"`;
   const escape = `node -e "require('fs').writeFileSync('a7-escape.txt', 'x')"`;
   const mock = await startMockProvider({
     chunkDelayMs: 5,
@@ -106,6 +109,8 @@ it("verifies a finished run ad hoc: typed verdicts, the event, the card, read-on
               validationCommand: validation,
             },
           };
+        case 6:
+          return { name: "await_subagents", arguments: { runIds: [runIdIn(results[2])] } };
         case 5:
           return {
             name: "managed_subagent",
@@ -146,13 +151,14 @@ it("verifies a finished run ad hoc: typed verdicts, the event, the card, read-on
     await managed.prompt("Build, then verify");
     const final = await vi.waitFor(
       () => {
-        const request = mock.requests.find((r) => !isChild(r) && toolTexts(r).length === 6);
+        const request = mock.requests.find((r) => !isChild(r) && toolTexts(r).length === 7);
         expect(request).toBeDefined();
         return request!;
       },
       { timeout: 90_000, interval: 250 },
     );
-    const [spawned, , spawnedVerify, awaitedVerify, rejected, refused] = toolTexts(final);
+    const [spawned, , spawnedVerify, awaitedVerify, rejected, refused, awaitedAgain] =
+      toolTexts(final);
     const producerId = runIdIn(spawned);
 
     // spawn_subagent role verify: the awaited verifier result carries its typed verdict.
@@ -184,6 +190,11 @@ it("verifies a finished run ad hoc: typed verdicts, the event, the card, read-on
     // A run of no run of this session is refused.
     expect(refused).toContain("Verifier failed.");
     expect(refused).toContain(`No Deck subagent ${FOREIGN_RUN} in this session`);
+    // Two verifiers on one producer: the first still returns its own APPROVE after the
+    // second one's REJECT replaced the producer's latest verdict.
+    expect(
+      (JSON.parse(awaitedAgain!) as { results: StructuredSubagentResult[] }).results[0]?.verdict,
+    ).toEqual({ decision: "APPROVE", reason: "Looks complete.", verifierRunId: approverId });
 
     // The verifier: read-only tools, validation evidence first, its write refused.
     const verifierRequests = mock.requests.filter(
@@ -194,7 +205,10 @@ it("verifies a finished run ad hoc: typed verdicts, the event, the card, read-on
     for (const writer of ["bash", "edit", "write"]) expect(tools).not.toContain(writer);
     const prompt = systemText(verifierRequests[0]!);
     expect(prompt).toContain("Validation (already run by Agent Deck, before your review): passed");
-    expect(prompt).toContain("a7-validated");
+    // The session's launch env (HOME from its own env), as JSON text.
+    expect(prompt).toContain(JSON.stringify(`a7-validated home=${root}`).slice(1, -1));
+    expect(prompt).not.toContain(FAKE_TOKEN);
+    expect(prompt).toContain("<secret>");
     expect(prompt).toContain("WORK_RESULT part A built");
     const refusal = toolTexts(verifierRequests.at(-1)!);
     expect(refusal[0]).toContain("checker_shell refused");
@@ -212,9 +226,16 @@ it("verifies a finished run ad hoc: typed verdicts, the event, the card, read-on
       status: "completed",
     });
     expect(records.subagentRunRecord(session.id, producerId)?.verdict).toEqual(verdict.verdict);
+    expect(verifierRecord.verdict).toEqual(verdict.verdict);
+    // The stored task (the verifier prompt) and the logged one carry no secret.
+    expect(verifierRecord.task).not.toContain(FAKE_TOKEN);
+    expect(verifierRecord.task).toContain("<secret>");
 
     // The log: one verified event per verdict; each verifier hangs under the producer.
     const events = loggedEvents(dataDir);
+    expect(JSON.stringify(events.filter((e) => e.kind.startsWith("subagent.run.")))).not.toContain(
+      FAKE_TOKEN,
+    );
     expect(events.filter((e) => e.kind === "subagent.run.verified").map((e) => e.payload)).toEqual([
       expect.objectContaining({
         runId: producerId,

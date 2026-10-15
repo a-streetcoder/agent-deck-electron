@@ -50,7 +50,15 @@ export function sessionVerifierDeps(
     head: (worktreePath) => gitHead(worktreePath),
     filesChanged: async (target) =>
       target.worktreePath ? (await filesChanged(target, warn)).filesChangedSinceBase : undefined,
-    runValidation: (cwd, command, signal) => runValidationCommand(cwd, command, signal),
+    runValidation: (parentSessionId, cwd, command, signal) =>
+      runValidationCommand(
+        cwd,
+        command,
+        signal,
+        undefined,
+        undefined,
+        sessions.sessionLaunchEnv(parentSessionId),
+      ),
     spawn: (
       parentSessionId,
       task,
@@ -111,7 +119,7 @@ const VERIFY_SCHEMA_PROPERTIES = {
   validationCommand: {
     type: "string",
     description:
-      "Optional, with role \"verify\": a shell command Agent Deck runs before the verifier starts (in the target's worktree, else the session checkout); its result is handed to the verifier. It runs with the server's plain environment, without the owner's git identity, and only when this session's agent may use bash itself.",
+      "Optional, with role \"verify\": a shell command Agent Deck runs before the verifier starts (in the target's worktree, else the session checkout); its result is handed to the verifier. It runs with this session's launch environment (its owner's credentials and git identity, as its Pi gets), and only when this session's agent may use bash itself.",
   },
 } as const;
 

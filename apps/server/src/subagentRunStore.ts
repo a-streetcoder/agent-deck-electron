@@ -93,15 +93,13 @@ const awaitedRunActive = (run: SubagentRunRecord | undefined): boolean =>
 function structuredResult(
   id: string,
   run: SubagentRunRecord | undefined,
-  deps: Pick<AwaitSubagentDeps, "read">,
 ): StructuredSubagentResult {
   if (!run) return { id, status: "not_found" };
-  // A7: a verifier's result carries the verdict it wrote on its target.
-  const verdict = run.targetRunId ? deps.read(run.targetRunId)?.verdict : undefined;
+  // A7: a verifier's result carries its own verdict (kept on its own record).
   return {
     id,
     ...subagentRunResult(run),
-    ...(verdict?.verifierRunId === id ? { verdict } : {}),
+    ...(run.role === "verify" && run.verdict ? { verdict: run.verdict } : {}),
   };
 }
 
@@ -125,7 +123,7 @@ export function awaitSubagentRuns(
       unsubscribe();
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", onAbort);
-      resolve({ results: runIds.map((id) => structuredResult(id, deps.read(id), deps)), timedOut });
+      resolve({ results: runIds.map((id) => structuredResult(id, deps.read(id))), timedOut });
     }
     function onAbort(): void {
       finish(true);
@@ -214,7 +212,7 @@ export interface SubagentRunRecord {
   /** A7: a verifier run and the run it verifies (same parent). */
   role?: "verify";
   targetRunId?: string;
-  /** A7: on the target, the latest verifier's verdict. */
+  /** A7: on a target, the latest verifier's verdict; on a verifier, its own. */
   verdict?: SubagentVerdict;
 }
 

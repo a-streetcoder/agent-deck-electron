@@ -191,6 +191,8 @@ export class ManagedSession {
   readonly launchingSubagents = new Set<AbortController>();
   /** A4: spawn_subagent children in flight (launching or running), bounded per parent. */
   detachedSubagents = 0;
+  /** A7: the env layering this runtime's Pi got (owner credentials, git identity, env file). */
+  launchEnv: Record<string, string | undefined> | undefined;
   private ingestionStarted = false;
   private lifecycle: "live" | "parking" | "parked" = "live";
   private parkingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -273,6 +275,7 @@ export class ManagedSession {
     candidate.runtimeExitUnsubscribe = undefined;
     this.rt = candidate.rt;
     this.scope = candidate.scope;
+    this.launchEnv = candidate.launchEnv;
     this.ingestionStarted = candidate.ingestionStarted;
     this.lastAcceptedPromptAuditSequence = candidate.lastAcceptedPromptAuditSequence;
     this.terminalExit = null;
@@ -1361,6 +1364,7 @@ export class SessionManager {
             activityPublicationEnabled = true;
           },
         );
+        session.launchEnv = params.helperContext.env;
         this.sessions.set(meta.id, session);
         if (!deferAnnouncement) {
           // Preserve the established non-deferred ordering used by Loop/direct
@@ -1698,6 +1702,11 @@ export class SessionManager {
     const override: unknown = meta.subagentsEnabled;
     if (override === undefined) return this.subagentsEnabled();
     return override === true;
+  }
+
+  /** A7: the live session's launch env (what its Pi and children run with). */
+  sessionLaunchEnv(sessionId: string): Record<string, string | undefined> | undefined {
+    return this.sessions.get(sessionId)?.launchEnv;
   }
 
   /**
