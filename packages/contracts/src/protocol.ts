@@ -351,6 +351,11 @@ export const SessionPlanEvent = Schema.mutable(
     items: Schema.mutable(Schema.Array(SessionPlanItem)),
     /** ISO-8601, like every other durable timestamp on the wire. */
     at: Schema.String,
+    /**
+     * "log": read from the A1 event log because the store no longer holds it (older than
+     * its last 100); titles are capped at 200 characters and paths redacted.
+     */
+    source: Schema.optional(Schema.Literal("log")),
   }),
 );
 export type SessionPlanEvent = typeof SessionPlanEvent.Type;

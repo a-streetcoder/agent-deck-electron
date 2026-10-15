@@ -366,9 +366,11 @@ describe("event log", () => {
       expect(log.writable).toBe(true);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("now the writer"));
       expect(JSON.parse(readFileSync(lockFile(dataDir), "utf8")).pid).toBe(process.pid);
-      // lastSeq reloaded from disk (2), then the takeover gap.
-      expect(seqOf(log)).toBe(2 + 1_000 + 1);
-      expect(seqs(log.read({ afterSeq: 0, limit: 10 }).events)).toEqual([1, 2, 1_003]);
+      // lastSeq reloaded from disk (2), then the takeover gap and the takeover boundary.
+      expect(seqOf(log)).toBe(2 + 1_000 + 2);
+      const events = log.read({ afterSeq: 0, limit: 10 }).events;
+      expect(seqs(events)).toEqual([1, 2, 1_003, 1_004]);
+      expect(events[2]?.kind).toBe("writer.acquired");
     } finally {
       vi.useRealTimers();
     }

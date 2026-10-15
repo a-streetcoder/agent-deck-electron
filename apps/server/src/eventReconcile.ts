@@ -8,18 +8,19 @@
 // continues incrementally. Uses its own comparison over projections, never the
 // writer's id dedupe (ids are checked over two segments only).
 import { homedir } from "node:os";
+import type { SessionPlanEvent } from "@agent-deck/contracts";
 import {
   diffLoopRuns,
   diffSubagentRuns,
-  projectLoopRuns,
-  projectSubagentRuns,
+  comparePlanHistory,
   type EventDraft,
   type PathPrefix,
   type PublicLoopRun,
   type PublicSubagentRun,
   type PublicViewOptions,
 } from "@agent-deck/domain";
-import { MAX_EVENT_READ_LIMIT, type AppendResult, type EventLog } from "./eventLog.ts";
+import type { AppendResult, EventLog } from "./eventLog.ts";
+import { createLogReaders, type LogReaders } from "./eventReaders.ts";
 
 export interface DiffProducerStore<T> {
   /** Public view as loaded, before boot recovery. */
@@ -51,20 +52,9 @@ interface Projections {
   loop: PublicLoopRun[];
 }
 
-/** Fold the whole log into both projections one page at a time. */
-// ponytail: replays all history at every boot and every resync; projection snapshots
-// when this exceeds ~1 s (~50 MB), see A1d.
-export function projectLog(log: EventLog): Projections {
-  let subagent = projectSubagentRuns([]);
-  let loop = projectLoopRuns([]);
-  let afterSeq = 0;
-  for (;;) {
-    const page = log.read({ afterSeq, limit: MAX_EVENT_READ_LIMIT });
-    subagent = projectSubagentRuns(page.events, subagent.values());
-    loop = projectLoopRuns(page.events, loop.values());
-    if (!page.more || page.nextAfterSeq === undefined || page.nextAfterSeq <= afterSeq) break;
-    afterSeq = page.nextAfterSeq;
-  }
+/** Both run projections from the shared fold (incremental after the first call). */
+function projectLog(readers: LogReaders): Projections {
+  const { subagent, loop } = readers.projections();
   return { subagent: [...subagent.values()], loop: [...loop.values()] };
 }
 
@@ -82,6 +72,7 @@ interface Producer {
 
 function producer<T>(
   log: EventLog,
+  readers: LogReaders,
   name: string,
   store: DiffProducerStore<T>,
   logged: (projections: Projections) => T[],
@@ -107,7 +98,7 @@ function producer<T>(
       .map((draft) => ({ ...draft, origin: "reconcile" as const }));
   const resync = (): void => {
     synced = true;
-    const count = append(asReconcile(diff(logged(projectLog(log)), store.publicRuns())));
+    const count = append(asReconcile(diff(logged(projectLog(readers)), store.publicRuns())));
     if (count > 0) console.info(`[events] ${name} reconciled ${count} events after a gap`);
   };
 
@@ -154,12 +145,16 @@ export function startEventProducers(
     warn: (message: string, error?: unknown) => void;
     /** Rethrow a failed boot reconcile (tests). */
     strict?: boolean;
+    /** The server's shared fold (plan history and supervisor read it too). */
+    readers?: LogReaders;
   },
 ): ReconcileCounts | undefined {
   const { view, warn } = options;
+  const readers = options.readers ?? createLogReaders(log);
   // Sinks first, always: a read-only or failed boot reconciles at the next commit.
   const subagent = producer(
     log,
+    readers,
     "subagent runs",
     stores.subagentRuns,
     (projections) => projections.subagent,
@@ -169,6 +164,7 @@ export function startEventProducers(
   );
   const loop = producer(
     log,
+    readers,
     "loop runs",
     stores.loopRuns,
     (projections) => projections.loop,
@@ -181,7 +177,7 @@ export function startEventProducers(
       warn("[events] log is read-only at boot; the writer process reconciles it");
       return undefined;
     }
-    const projections = projectLog(log);
+    const projections = projectLog(readers);
     // Two phases across the stores: every reconcile event precedes every recovery event.
     const subagentReconciled = subagent.reconcileBoot(projections);
     const loopReconciled = loop.reconcileBoot(projections);
@@ -198,4 +194,30 @@ export function startEventProducers(
   } finally {
     stores.loopRuns.releaseBootRuns?.();
   }
+}
+
+/**
+ * A1d plan history: compare each session's stored history with the log (ids still in
+ * the store only: it keeps the last 100). Store entries the log lacks are written back
+ * with origin reconcile and their store predecessor (imports from before the log, or
+ * lost appends); content differences are counted, not rewritten (the store stays the
+ * source of exact items).
+ */
+export function reconcilePlanHistory(
+  stored: Record<string, SessionPlanEvent[]>,
+  readers: LogReaders,
+  write: (event: SessionPlanEvent, afterId?: string) => void,
+): { imported: number; reconciled: number; contentMismatches: number } {
+  const counts = { imported: 0, reconciled: 0, contentMismatches: 0 };
+  const startedAt = readers.projections().startedAt;
+  for (const [sessionId, history] of Object.entries(stored)) {
+    const result = comparePlanHistory(history, readers.plans(sessionId) ?? [], startedAt);
+    counts.contentMismatches += result.contentMismatches;
+    for (const { event, afterId, imported } of result.missing) {
+      write(event, afterId);
+      if (imported) counts.imported += 1;
+      else counts.reconciled += 1;
+    }
+  }
+  return counts;
 }

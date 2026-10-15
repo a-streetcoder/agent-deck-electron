@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { mergePlanHistory, type ProjectedPlanChange } from "@agent-deck/domain";
 import type {
   SessionPlanEvent,
   SessionPlanEventKind,
@@ -28,6 +29,8 @@ export interface PlanEventServiceOptions {
   readonly maxPerSession?: number;
   /** A1 event log: called once per recorded event, after the store write. */
   readonly onRecorded?: (event: SessionPlanEvent, op: PlanChangeOperation) => void;
+  /** A1d: the log's plan projection for a session; undefined = read the store alone. */
+  readonly readLog?: (sessionId: string) => readonly ProjectedPlanChange[] | undefined;
 }
 
 /**
@@ -40,6 +43,8 @@ export type PlanChangeOperation = "set" | "update" | "restore";
 export interface PlanEventServiceShape {
   /** This session's history, oldest first. */
   readonly list: (sessionId: string) => SessionPlanEvent[];
+  /** Every session's stored history (the startup equivalence check). */
+  readonly all: () => Record<string, SessionPlanEvent[]>;
   /**
    * Record a transition, classifying it the way native does. An update that
    * changed nothing records nothing, mirroring `updateSessionPlan`'s
@@ -97,7 +102,23 @@ export const makePlanEventService = (options: PlanEventServiceOptions): PlanEven
   );
 
   return {
-    list: (sessionId) => Effect.runSync(store.get(sessionId)),
+    list: (sessionId) => {
+      const stored = Effect.runSync(store.get(sessionId));
+      const logged = options.readLog?.(sessionId);
+      if (!logged) return stored;
+      // The log decides membership and order (uncapped); the store, which keeps the
+      // last `cap`, supplies exact items by id.
+      return mergePlanHistory(logged, stored, (change) => ({
+        id: change.id,
+        sessionId,
+        kind: change.kind as SessionPlanEventKind,
+        items: change.items as SessionPlanItem[],
+        at: change.at ?? "",
+        source: "log",
+      }));
+    },
+
+    all: () => Effect.runSync(store.all),
 
     record: (sessionId, op, before, after) => {
       const existing = Effect.runSync(store.get(sessionId));
