@@ -27,6 +27,7 @@ import type {
 import { responseErrorMessage } from "../lib/responseError.ts";
 import { RpcClientTransport, type ClientTransport, type TransportHost } from "./clientTransport.ts";
 import { useAppStore, type CurrentUser } from "./store.ts";
+import { ingestProjectEvents, type ProjectEventPage } from "./projectLog.ts";
 
 /**
  * The ONLY module that touches the WebSocket. Server messages mutate the
@@ -86,6 +87,8 @@ const transportHost: TransportHost = {
       sessionRuns.clear();
     }
     useAppStore.getState().setConnection(status);
+    // Nudges sent while the socket was down are lost: catch up from the cursor.
+    if (status === "open") void refreshProjectLog();
   },
   getLastSeq: () => useAppStore.getState().lastSeq,
   getStreamGeneration: () => useAppStore.getState().streamGeneration,
@@ -786,6 +789,13 @@ function handleMessage(message: ServerMessage): void {
       // SRV-13: a provider sign-in or sign-out changes /me's providersConnected.
       if (store.me) void refreshMe();
       break;
+    case "project_events": {
+      const log = store.projectLog;
+      if (message.projectId !== store.currentProjectId) return;
+      if (log?.projectId === message.projectId && message.seq <= log.lastSeq) return;
+      void refreshProjectLog();
+      break;
+    }
     case "session_meta":
       attentionMetaGeneration.set(
         message.session.id,
@@ -1505,6 +1515,42 @@ export async function addProject(path: string): Promise<ProjectMeta | undefined>
   } catch (error) {
     store.setError(String(error));
     return undefined;
+  }
+}
+
+const PROJECT_LOG_TAIL = 200;
+const PROJECT_LOG_PAGE = 1_000;
+const PROJECT_LOG_MAX_PAGES = 5;
+
+/**
+ * A1c: bring the open project's event log tail up to date (null = no project:
+ * project-less events). The first read for a project is the tail; later reads go
+ * forward from the cursor. Best-effort: a failure waits for the next nudge.
+ */
+export async function refreshProjectLog(): Promise<void> {
+  const projectId = useAppStore.getState().currentProjectId;
+  const scope = `projectId=${encodeURIComponent(projectId ?? "null")}`;
+  try {
+    for (let page = 0; page < PROJECT_LOG_MAX_PAGES; page += 1) {
+      const previous = useAppStore.getState().projectLog;
+      const forward = previous?.projectId === projectId ? previous : null;
+      const result = await fetchJson<ProjectEventPage>(
+        forward
+          ? `/events?${scope}&afterSeq=${forward.lastSeq}&limit=${PROJECT_LOG_PAGE}`
+          : `/events?${scope}&limit=${PROJECT_LOG_TAIL}`,
+      );
+      const store = useAppStore.getState();
+      if (store.currentProjectId !== projectId) return;
+      if (forward && result.logId !== forward.logId) {
+        // The server's log was replaced: its cursor means nothing here, start from the tail.
+        store.setProjectLog(null);
+        continue;
+      }
+      store.setProjectLog(ingestProjectEvents(store.projectLog, projectId, result));
+      if (!forward || !result.more) return;
+    }
+  } catch {
+    // Keep what is shown; the next nudge or project change retries.
   }
 }
 

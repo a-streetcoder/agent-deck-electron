@@ -105,6 +105,7 @@ import { InjectedCommandStore } from "./injectedCommands.ts";
 import { ReceiptBus } from "./receipts.ts";
 import { makeServerRuntime, type ServerRuntime } from "./runtime.ts";
 import { registerBridgeRoutes } from "./routes/bridge.ts";
+import { registerEventRoutes, startProjectEventNudges } from "./routes/events.ts";
 import { registerGitRoutes } from "./routes/git.ts";
 import { registerLoopRoutes } from "./routes/loops.ts";
 import { registerMcpRoutes } from "./routes/mcp.ts";
@@ -1380,14 +1381,17 @@ async function initServer(
 
   // Browser-CSRF guard: a hostile page (or in-app browser content) can fire
   // requests at this server, but browsers stamp them with its Origin. Every
-  // state-changing route and the server folder listing apply the WebSocket
+  // state-changing route, the server folder listing and the event log read apply the WebSocket
   // upgrade's own origin rule; non-browser clients send no Origin and pass.
   // That includes the desktop main process: Electron 43's
   // session.defaultSession.fetch (controlPlaneFetch) sends no Origin on POST,
   // while the renderer's fetches and WebSocket carry the page's own origin.
   const mutatingMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
   fastify.addHook("onRequest", async (request, reply) => {
-    const guarded = mutatingMethods.has(request.method) || request.routeOptions.url === "/fs/dirs";
+    const guarded =
+      mutatingMethods.has(request.method) ||
+      request.routeOptions.url === "/fs/dirs" ||
+      request.routeOptions.url === "/events";
     if (guarded && !isTrustedOrigin(request.headers.origin, request.headers.host)) {
       return reply.status(403).send({
         code: "untrusted_origin",
@@ -1516,6 +1520,9 @@ async function initServer(
   registerProjectRoutes(ctx);
   registerSessionRoutes(ctx);
   registerComposerDraftRoutes(ctx, composerDrafts);
+  registerEventRoutes(fastify, eventLog);
+  // A1c: coalesced project_events nudges to every client (same reach as resources_changed).
+  const stopEventNudges = startProjectEventNudges(eventLog, broadcast);
   const bridgeRouteHandles = registerBridgeRoutes(ctx);
   ({ cancelChildSupervisorRequests } = bridgeRouteHandles);
   // This parent-only tool delegates to the route coordinator's exactly-once
@@ -1576,6 +1583,7 @@ async function initServer(
         // app-data owner is allowed to remove it (notably on Windows).
         await step(() => subagentRuns.close());
         await step(() => sessionWorktreeStore.close());
+        await step(() => stopEventNudges());
         await step(() => eventLog.close());
       } finally {
         // Dispose LAST, after the HTTP/WS surface is gone (see startServer).

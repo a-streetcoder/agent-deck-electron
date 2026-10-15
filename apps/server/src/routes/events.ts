@@ -1,0 +1,70 @@
+import type { EventEnvelope } from "@agent-deck/domain";
+import type { ServerMessage } from "@agent-deck/contracts";
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { MAX_EVENT_READ_LIMIT, type EventLog } from "../eventLog.ts";
+
+/**
+ * A1c event log transport: a REST cursor read and a coalesced `project_events`
+ * nudge on the existing socket. The nudge carries no events and no second
+ * ordering domain; clients refetch afterSeq, and seq gaps are normal.
+ */
+
+const DEFAULT_LIMIT = 200;
+export const NUDGE_COALESCE_MS = 100;
+
+const seqParam = z.coerce.number().int().nonnegative().optional();
+const eventsQuery = z.object({
+  // "null" selects project-less events; omitted = every project.
+  projectId: z
+    .string()
+    .min(1)
+    .transform((value) => (value === "null" ? null : value))
+    .optional(),
+  afterSeq: seqParam,
+  beforeSeq: seqParam,
+  limit: z.coerce.number().int().min(1).max(MAX_EVENT_READ_LIMIT).default(DEFAULT_LIMIT),
+});
+
+export function registerEventRoutes(fastify: FastifyInstance, log: EventLog): void {
+  // Shared server: the identity hook already refused unauthenticated callers, and
+  // every authenticated user sees every project (ADR 0003 attribution, no membership).
+  fastify.get("/events", async (request, reply) => {
+    const parsed = eventsQuery.safeParse(request.query);
+    if (!parsed.success) return reply.status(400).send({ error: "Invalid event query." });
+    const { projectId, afterSeq, beforeSeq, limit } = parsed.data;
+    const page = log.read({ afterSeq, beforeSeq, projectId, limit });
+    return { logId: log.logId, lastSeq: log.lastSeq(), ...page };
+  });
+}
+
+/**
+ * Broadcasts at most one nudge per projectId per window, carrying the newest seq.
+ * Returns the stop function; it drops pending nudges.
+ */
+export function startProjectEventNudges(
+  log: Pick<EventLog, "subscribe">,
+  broadcast: (message: ServerMessage) => void,
+  windowMs = NUDGE_COALESCE_MS,
+): () => void {
+  const pending = new Map<string | null, number>();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const flush = (): void => {
+    timer = undefined;
+    const due = [...pending];
+    pending.clear();
+    for (const [projectId, seq] of due) broadcast({ type: "project_events", projectId, seq });
+  };
+  const unsubscribe = log.subscribe((event: EventEnvelope) => {
+    pending.set(event.projectId, event.seq);
+    if (timer) return;
+    timer = setTimeout(flush, windowMs);
+    timer.unref?.();
+  });
+  return () => {
+    unsubscribe();
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+    pending.clear();
+  };
+}
