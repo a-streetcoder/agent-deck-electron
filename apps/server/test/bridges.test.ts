@@ -55,6 +55,7 @@ describe("GET /runtime/bridges", () => {
     expect(deckAgents?.active).toBe(true);
     expect(deckAgents?.toolNames).toEqual(
       expect.arrayContaining([
+        "list_agents",
         "managed_subagent",
         "managed_parallel",
         "spawn_subagent",
@@ -68,6 +69,21 @@ describe("GET /runtime/bridges", () => {
 
     // MCP runs through Pi native, not a bridge tool.
     expect(list.find((b) => b.id === "mcp")).toBeUndefined();
+  });
+
+  it("wires A6: list_agents over the session's project and GET /agents/profiles", async () => {
+    server = await startServer({ dataDir: mkdtempSync(path.join(tmpdir(), "agent-deck-data-")) });
+    const call = (params: Record<string, unknown>) =>
+      server!.bridge.dispatch(
+        { tool: "list_agents", params, sessionId: "no-session", toolCallId: "t", token: "token" },
+        { token: "token" },
+      );
+    const listed = await call({});
+    expect(listed.isError).toBeUndefined();
+    expect(listed.content).toMatch(/^(- |No agents)/);
+    expect(await call({ project: "no-such-project" })).toMatchObject({ isError: true });
+    const response = await fetch(`http://127.0.0.1:${server.port}/agents/profiles`);
+    expect(await response.json()).toEqual({ windowDays: 30, profiles: [] });
   });
 
   it("reflects a live pause and resume in the memory bridge inventory", async () => {

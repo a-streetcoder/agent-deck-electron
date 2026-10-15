@@ -217,7 +217,28 @@ export type ExecuteLoopRole = (request: {
   cwd: string;
   projectId?: string;
   signal: AbortSignal;
-}) => Promise<string>;
+}) => Promise<string | LoopRoleResult>;
+
+/** A role's text plus, when the executor reports them, its model and Pi token usage. */
+export interface LoopRoleResult {
+  text: string;
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
+/** A6: record the child's model and tokens at settle; returns the role text. */
+function settleRoleResult(child: LoopChildRecord, result: string | LoopRoleResult): string {
+  if (typeof result === "string") return result;
+  if (result.model) child.model = result.model;
+  if (result.inputTokens !== undefined || result.outputTokens !== undefined) {
+    child.tokens = {
+      ...(result.inputTokens !== undefined ? { input: result.inputTokens } : {}),
+      ...(result.outputTokens !== undefined ? { output: result.outputTokens } : {}),
+    };
+  }
+  return result.text;
+}
 
 /** Launch defaults per loop role. An agent's own `tools:` and
  * `defaultExpectedOutcome` frontmatter win; these apply when it authors none.
@@ -1597,7 +1618,7 @@ export class LoopEngine {
       ]
         .filter(Boolean)
         .join("\n\n");
-      const output = executeRole
+      const result = executeRole
         ? await executeRole({
             loop,
             prompt: effectivePrompt,
@@ -1613,6 +1634,7 @@ export class LoopEngine {
             signal,
           })
         : await executeAgent!({ ...loop, goal: effectivePrompt, agentName }, cwd, projectId);
+      const output = settleRoleResult(child, result);
       if (signal.aborted || run.status === "stopping") {
         child.status = "stopped";
         child.endedAt = this.now();
@@ -1679,7 +1701,7 @@ export class LoopEngine {
       ]
         .filter(Boolean)
         .join("\n\n");
-      const output = executeRole
+      const result = executeRole
         ? await executeRole({
             loop,
             prompt: effectivePrompt,
@@ -1695,6 +1717,7 @@ export class LoopEngine {
             cwd,
             projectId,
           );
+      const output = settleRoleResult(child, result);
       child.endedAt = this.now();
       if (signal.aborted || isLoopRunTerminal(run.status)) {
         child.status = "stopped";

@@ -26,6 +26,7 @@ export default defineConfig({
       "/projects": { target: serverTarget },
       "/issues": { target: serverTarget },
       "/resources": { target: serverTarget },
+      "/agents": { target: serverTarget },
       "/runtime": { target: serverTarget },
       "/settings": { target: serverTarget },
       "/bridge": { target: serverTarget },

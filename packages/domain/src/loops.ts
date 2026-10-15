@@ -407,6 +407,9 @@ export interface LoopChildRecord {
   endedAt?: string;
   output?: string;
   error?: string;
+  /** A6: the child's model and summed Pi usage, recorded at settle when Pi reported them. */
+  model?: string;
+  tokens?: { input?: number; output?: number };
 }
 
 export interface LoopPipelineStageOutput {

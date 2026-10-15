@@ -295,6 +295,18 @@ describe("diff producers (real pi)", () => {
       expect([...projectLoopRuns(events.slice(0, state.events)).values()]).toEqual(state.runs);
     }
     expect(JSON.stringify(events)).not.toContain("MAKER_RAW_OUTPUT");
+    // A6: every settled child carries the model and Pi's summed usage, in the log too.
+    const settled = (await getRun()).iterations[0]!.children;
+    expect(settled.map((child) => child.phase)).toEqual(["maker", "checker", "evaluator"]);
+    for (const child of settled) {
+      expect(child).toMatchObject({ status: "completed", model: MOCK_MODEL_ID });
+      expect(child.tokens?.input).toBeGreaterThan(0);
+      expect(child.tokens?.output).toBeGreaterThan(0);
+    }
+    const loggedChildren = [...projectLoopRuns(events).values()][0]!.iterations[0]!.children;
+    expect(loggedChildren.map((child) => child.tokens)).toEqual(
+      settled.map((child) => child.tokens),
+    );
     expectNoSecrets(events);
     record("loop-makerChecker", states, events);
   });

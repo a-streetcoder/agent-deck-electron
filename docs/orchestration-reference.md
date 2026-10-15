@@ -117,6 +117,21 @@ once; spawn refuses the ninth. A running spawned child keeps its idle parent fro
 parking or refreshing resources; when the last one ends, the idle-parking deadline and
 any deferred resource refresh are armed again.
 
+### Capability profiles
+
+Loop children record `model` and `tokens` (`input`/`output`, Pi's summed usage) at settle,
+in the store and in `loop.child.upserted`. `aggregateCapabilityProfiles`
+(`packages/domain/src/capabilityProfiles.ts`) folds the public subagent runs and loop runs into
+one profile per agent name and role (`subagent` or the loop phase; an unnamed loop evaluator is
+`Goal evaluator`): settled runs, completed / failed / stopped (interrupted counts as stopped),
+pass rate = completed / (completed + failed), nearest-rank median and p90 of total tokens and
+duration, and the last run time, for the last 30 days and all time. Anonymous subagent runs are
+not profiled. `capabilityProfilesFromEvents` computes the same from the log. `GET
+/agents/profiles` and `GET /agents/:name/profile` serve it (by name, across projects); the
+Agents screen shows it per agent, and the `list_agents({project?})` bridge tool (a delegation
+tool) gives a parent each agent's first description line, its authored tools/outcome or the
+loop role defaults, and the profile, rounded and capped at 12,000 characters.
+
 ### Plan dependencies and dispatch
 
 A plan item may carry `dependsOn` (item ids), `assignee` and `verifiedBy` (agent names, compared

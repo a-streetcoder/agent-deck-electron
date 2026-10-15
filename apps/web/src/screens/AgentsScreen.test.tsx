@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { AgentInfo } from "@agent-deck/domain";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "../state/store.ts";
-import { AgentDetail, AgentsScreen } from "./AgentsScreen.tsx";
+import { AgentDetail, AgentRunProfile, AgentsScreen } from "./AgentsScreen.tsx";
 import { updateProject } from "../state/wsBridge.ts";
 
 const catalogMock = vi.hoisted(() => ({
@@ -312,5 +312,74 @@ describe("AgentDetail delegation metadata", () => {
     const interactive = screen.getByTestId("agent-interactive");
     expect(interactive.textContent).toContain("Interactive");
     expect(interactive.textContent).toContain("No");
+  });
+});
+
+describe("AgentRunProfile (A6)", () => {
+  const stats = (runs: number, extra: Record<string, unknown> = {}) => ({
+    runs,
+    completed: runs,
+    failed: 0,
+    stopped: 0,
+    passRate: runs ? 1 : null,
+    ...extra,
+  });
+
+  it("shows runs, pass rate, median tokens and duration per role, with a 30d/all toggle", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          name: "writer",
+          windowDays: 30,
+          profiles: [
+            {
+              agent: "writer",
+              role: "maker",
+              window: stats(2, {
+                failed: 1,
+                completed: 1,
+                passRate: 0.5,
+                medianTokens: 45_250,
+                medianDurationMs: 81_400,
+                lastRunAt: "2026-10-13T00:00:00.000Z",
+              }),
+              allTime: stats(5, { medianTokens: 900 }),
+            },
+            { agent: "writer", role: "subagent", window: stats(0), allTime: stats(1) },
+          ],
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AgentRunProfile name="writer" />);
+    expect(fetchMock).toHaveBeenCalledWith("/agents/writer/profile");
+    const table = await screen.findByRole("table");
+    const cells = (row: number) =>
+      Array.from(table.querySelectorAll("tbody tr")[row]!.querySelectorAll("td")).map(
+        (cell) => cell.textContent,
+      );
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(1);
+    expect(cells(0).slice(0, 5)).toEqual(["maker", "2", "50%", "45k", "1m 21s"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "All time" }));
+    expect(screen.getByRole("button", { name: "All time" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(2);
+    expect(cells(0).slice(0, 4)).toEqual(["maker", "5", "100%", "900"]);
+    expect(cells(1).slice(0, 4)).toEqual(["subagent", "1", "100%", "—"]);
+  });
+
+  it("says so when there are no runs, and when the history cannot load", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ profiles: [] }))),
+    );
+    render(<AgentRunProfile name="new agent" />);
+    expect(await screen.findByText("No finished runs in this range.")).toBeTruthy();
+    cleanup();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 500 })));
+    render(<AgentRunProfile name="writer" />);
+    expect(await screen.findByText("Run history is unavailable.")).toBeTruthy();
   });
 });

@@ -147,6 +147,35 @@ describe("loop verdict parsing (D7)", () => {
     });
   });
 
+  it("records each child's model and tokens at settle, branches included (A6)", async () => {
+    const engine = new LoopEngine({
+      executeRole: async ({ phase, branchIndex }) =>
+        phase === "evaluator"
+          ? { text: "SUCCESS\ndone", model: "judge", inputTokens: 3, outputTokens: 1 }
+          : branchIndex === 1
+            ? "plain text, no usage"
+            : { text: "report", model: "worker", inputTokens: 100, outputTokens: 20 },
+      runValidation: async () => ({ passed: true, evidence: "ok" }),
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "parallelAgents",
+        parallelBranches: ["A", "B"],
+        validationCommand: "",
+      }),
+      cwd(),
+    );
+    await engine.settled(run.id);
+    expect(run.status).toBe("completed");
+    expect(
+      run.iterations[0]!.children.map(({ phase, model, tokens }) => ({ phase, model, tokens })),
+    ).toEqual([
+      { phase: "branch", model: "worker", tokens: { input: 100, output: 20 } },
+      { phase: "branch", model: undefined, tokens: undefined },
+      { phase: "evaluator", model: "judge", tokens: { input: 3, output: 1 } },
+    ]);
+  });
+
   it("continues on a missing evaluator verdict and says so in the timeline", async () => {
     const engine = new LoopEngine({
       executeRole: async ({ phase }) =>

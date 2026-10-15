@@ -487,12 +487,14 @@ describe("secrets scan of the recorded fixtures", () => {
     "classificationOutput",
   ];
 
-  const keysOf = (value: unknown, out = new Set<string>()): Set<string> => {
-    if (Array.isArray(value)) for (const item of value) keysOf(item, out);
+  // Keys inside a tokens object are recorded as tokens.<key>: A6's loop child
+  // tokens.output is a count, not the child's raw output.
+  const keysOf = (value: unknown, out = new Set<string>(), prefix = ""): Set<string> => {
+    if (Array.isArray(value)) for (const item of value) keysOf(item, out, prefix);
     else if (value && typeof value === "object") {
       for (const [key, nested] of Object.entries(value)) {
-        out.add(key);
-        keysOf(nested, out);
+        out.add(prefix + key);
+        keysOf(nested, out, key === "tokens" ? "tokens." : "");
       }
     }
     return out;

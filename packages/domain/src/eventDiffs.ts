@@ -392,6 +392,8 @@ const CHILD_KEYS = [
   "startedAt",
   "endedAt",
   "error",
+  "model",
+  "tokens",
 ] as const satisfies readonly (keyof PublicLoopChild)[];
 
 const ARTIFACT_KEYS = [
@@ -449,6 +451,7 @@ function toPublicIteration(
     children: (iteration.children ?? []).map((child) => {
       const out = pick(child, CHILD_KEYS);
       if (out.error !== undefined) out.error = errorText(out.error, options);
+      if (out.tokens) out.tokens = { ...out.tokens };
       return out;
     }),
     artifacts: (iteration.artifacts ?? []).map((artifact) => pick(artifact, ARTIFACT_KEYS)),

@@ -2103,6 +2103,10 @@ export interface ChildRunOptions {
 export interface ChildRunResult {
   runId: string;
   text: string;
+  /** A6: the child's model and summed Pi usage (absent when Pi reported none). */
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 /** Failure after a durable generic child identity has been created/reclaimed. */
@@ -2858,7 +2862,17 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
             ...finalMetadata,
           },
         });
-        return { runId, text: result };
+        return {
+          runId,
+          text: result,
+          ...(finalMetadata.model ? { model: finalMetadata.model } : {}),
+          ...(finalMetadata.inputTokens !== undefined
+            ? { inputTokens: finalMetadata.inputTokens }
+            : {}),
+          ...(finalMetadata.outputTokens !== undefined
+            ? { outputTokens: finalMetadata.outputTokens }
+            : {}),
+        };
       }),
     );
   }).pipe(

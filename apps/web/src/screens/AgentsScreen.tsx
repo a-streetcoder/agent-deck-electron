@@ -31,6 +31,7 @@ import {
   SUBAGENT_EXPECTED_OUTCOME_LABELS,
   type AgentFilter,
   type AgentInfo,
+  type CapabilityProfile,
 } from "@agent-deck/domain";
 import { cn } from "@/lib/cn";
 import { MarkdownDocument } from "@/design-system/markdown/MarkdownDocument";
@@ -42,6 +43,7 @@ import { deleteAgent, renameAgent, setAgentDisabled, updateProject } from "../st
 import { AgentAvatar, agentSourceColor } from "../components/agents/AgentAvatar.tsx";
 import { AgentEditSheet } from "../components/agents/AgentEditSheet.tsx";
 import { ScopeChip } from "../components/ScopeChip.tsx";
+import { formatDuration, formatTokens } from "../components/RunMeta.tsx";
 import { sectionHeaderClass } from "@/design-system/styles";
 
 /**
@@ -163,6 +165,111 @@ function ChipList({ label, items }: { label: string; items: string[] | undefined
         ))}
       </div>
     </div>
+  );
+}
+
+/** A6: how this agent's settled runs went, per role (subagent and loop roles). */
+export function AgentRunProfile({ name }: { name: string }) {
+  const [profiles, setProfiles] = useState<CapabilityProfile[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [range, setRange] = useState<"window" | "allTime">("window");
+  useEffect(() => {
+    let live = true;
+    setProfiles(null);
+    setFailed(false);
+    fetch(`/agents/${encodeURIComponent(name)}/profile`)
+      .then((response) =>
+        response.ok ? response.json() : Promise.reject(new Error(String(response.status))),
+      )
+      .then((body: { profiles?: CapabilityProfile[] }) => {
+        if (live) setProfiles(body.profiles ?? []);
+      })
+      .catch(() => {
+        if (live) setFailed(true);
+      });
+    return () => {
+      live = false;
+    };
+  }, [name]);
+  const rows = profiles?.map((profile) => ({ role: profile.role, stats: profile[range] })) ?? [];
+  return (
+    <section
+      className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3"
+      aria-labelledby="agent-run-profile-title"
+    >
+      <div className="flex items-center justify-between pb-2">
+        <div id="agent-run-profile-title" className={cn(sectionHeaderClass, "text-text-muted")}>
+          Run history
+        </div>
+        <div className="flex gap-1" role="group" aria-label="Run history range">
+          {(
+            [
+              ["window", "30 days"],
+              ["allTime", "All time"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={range === value}
+              onClick={() => setRange(value)}
+              className={cn(
+                "rounded-capsule border px-2 py-0.5 text-micro",
+                range === value
+                  ? "border-border-strong text-text-primary"
+                  : "border-border-subtle text-text-muted",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {failed ? (
+        <p className="text-body text-text-secondary">Run history is unavailable.</p>
+      ) : profiles === null ? (
+        <p className="text-body text-text-muted">Loading…</p>
+      ) : rows.every((row) => row.stats.runs === 0) ? (
+        <p className="text-body text-text-secondary">No finished runs in this range.</p>
+      ) : (
+        <table className="w-full text-left text-caption tabular-nums text-text-secondary">
+          <thead className="text-text-muted">
+            <tr>
+              <th className="py-1 font-medium">Role</th>
+              <th className="py-1 font-medium">Runs</th>
+              <th className="py-1 font-medium">Pass rate</th>
+              <th className="py-1 font-medium">Median tokens</th>
+              <th className="py-1 font-medium">Median duration</th>
+              <th className="py-1 font-medium">Last run</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows
+              .filter((row) => row.stats.runs > 0)
+              .map(({ role, stats }) => (
+                <tr key={role} className="border-t border-border-subtle">
+                  <td className="py-1">{role}</td>
+                  <td className="py-1">{stats.runs}</td>
+                  <td className="py-1">
+                    {stats.passRate === null ? "—" : `${Math.round(stats.passRate * 100)}%`}
+                  </td>
+                  <td className="py-1">
+                    {stats.medianTokens === undefined ? "—" : formatTokens(stats.medianTokens)}
+                  </td>
+                  <td className="py-1">
+                    {stats.medianDurationMs === undefined
+                      ? "—"
+                      : formatDuration(stats.medianDurationMs)}
+                  </td>
+                  <td className="py-1">
+                    {stats.lastRunAt ? new Date(stats.lastRunAt).toLocaleDateString() : "—"}
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      )}
+    </section>
   );
 }
 
@@ -562,6 +669,7 @@ export function AgentDetail({
               <p className="text-body text-text-secondary">{agent.whenToUse}</p>
             </div>
           ) : null}
+          <AgentRunProfile name={agent.name} />
 
           <div className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-3">
             <div className="flex items-center justify-between pb-2">
