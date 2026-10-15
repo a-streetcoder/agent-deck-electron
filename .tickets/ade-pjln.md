@@ -24,3 +24,7 @@ No reference to AGENT_DECK_REMOTE_SERVER_URL remains outside the changelog/archi
 **2026-10-15T22:59:03Z**
 
 2026-10-15 started; worktree E:\agent-deck-wt\ade-pjln (wt/ade-pjln). 16a-16c are merged: the Team server setting + sign-in replace the env-driven modes.
+
+**2026-10-15T23:10:52Z**
+
+2026-10-16 implemented as 6f59d26: remote bootstrap, in-window sign-in, navigation guard, header listener, remote flags/branches and the two Remote launchers removed; remote-server.js → cloudflared-access.js (token helpers only); web has two modes (browser, local desktop); docs/ARCHITECTURE/electron-builder updated. Known gap for the fix round: AGENT_DECK_SERVER_URL pointing at a non-loopback backend would hand server paths to the local shell (guard: localShellActionsAllowed only when the control-plane origin is loopback). Contrarian + GPT (review59) running.
