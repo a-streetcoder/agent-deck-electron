@@ -100,6 +100,7 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
           parsed.data.continueSubagentID,
           reads,
           ctx.signal,
+          ctx.toolCallId,
         );
         return {
           content: `Deck subagent ID: ${result.runId}\n\n${result.text || "(the subagent returned no output)"}`,
@@ -239,6 +240,7 @@ export function registerDeckBridgeTools(bridge: BridgeRegistry, sessions: Sessio
               "parallel",
               parsed.data.worktree ?? false,
               ctx.signal,
+              ctx.toolCallId,
             );
             settled[index] = { status: "fulfilled", value };
           } catch (reason) {

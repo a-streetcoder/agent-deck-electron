@@ -1953,6 +1953,8 @@ export interface ChildRunOptions {
   artifactRootId?: string;
   artifactRootToken?: string;
   source: SubagentRunSource;
+  /** The bridge tool call of this turn: parent (tree edge) of a fresh run, turn call of every run. */
+  toolCallId?: string;
   /** Fresh parallel children only; continuation and single-child callers omit it. */
   worktree?: boolean;
 }
@@ -2239,6 +2241,12 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
                 createdAt,
                 updatedAt: createdAt,
                 source: runOptions?.source ?? "single",
+                ...(runOptions?.toolCallId
+                  ? {
+                      parentToolCallId: runOptions.toolCallId,
+                      turnToolCallId: runOptions.toolCallId,
+                    }
+                  : {}),
                 declaredReads: [...declaredReads],
               };
               const allocation = durable.prepareTurn
@@ -2270,6 +2278,8 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
                     task,
                     ...(agentName ? { agent: agentName } : {}),
                     declaredReads: [...declaredReads],
+                    // The continuing tool call; parentToolCallId keeps the creating one.
+                    turnToolCallId: runOptions?.toolCallId,
                     status: "starting",
                     updatedAt: createdAt,
                     completedAt: undefined,

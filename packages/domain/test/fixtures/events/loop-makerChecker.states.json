@@ -1,0 +1,1617 @@
+[
+  {
+    "events": 0,
+    "runs": []
+  },
+  {
+    "events": 1,
+    "runs": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "sessionId": "00000000-0000-4000-8000-000000000002",
+        "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+        "loopName": "maker-checker-events",
+        "structure": "makerChecker",
+        "launchContextScope": "firstIterationOnly",
+        "projectId": "00000000-0000-4000-8000-000000000003",
+        "status": "running",
+        "currentIteration": 0,
+        "maxIterations": 2,
+        "startedAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "writeTarget": "artifactMarkdown",
+        "iterations": []
+      }
+    ]
+  },
+  {
+    "events": 3,
+    "runs": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "sessionId": "00000000-0000-4000-8000-000000000002",
+        "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+        "loopName": "maker-checker-events",
+        "structure": "makerChecker",
+        "launchContextScope": "firstIterationOnly",
+        "projectId": "00000000-0000-4000-8000-000000000003",
+        "status": "running",
+        "currentIteration": 1,
+        "maxIterations": 2,
+        "startedAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "writeTarget": "artifactMarkdown",
+        "iterations": [
+          {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "index": 1,
+            "startedAt": "2026-01-01T00:00:00.000Z",
+            "validationPassed": null,
+            "timeline": [],
+            "children": [],
+            "artifacts": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "events": 6,
+    "runs": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "sessionId": "00000000-0000-4000-8000-000000000002",
+        "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+        "loopName": "maker-checker-events",
+        "structure": "makerChecker",
+        "launchContextScope": "firstIterationOnly",
+        "projectId": "00000000-0000-4000-8000-000000000003",
+        "status": "running",
+        "currentIteration": 1,
+        "maxIterations": 2,
+        "startedAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "writeTarget": "artifactMarkdown",
+        "iterations": [
+          {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "index": 1,
+            "startedAt": "2026-01-01T00:00:00.000Z",
+            "validationPassed": null,
+            "timeline": [
+              {
+                "id": "00000000-0000-4000-8000-000000000005",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "children": [
+              {
+                "id": "00000000-0000-4000-8000-000000000006",
+                "phase": "maker",
+                "agentName": "Maker",
+                "status": "running",
+                "startedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "artifacts": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "events": 9,
+    "runs": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "sessionId": "00000000-0000-4000-8000-000000000002",
+        "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+        "loopName": "maker-checker-events",
+        "structure": "makerChecker",
+        "launchContextScope": "firstIterationOnly",
+        "projectId": "00000000-0000-4000-8000-000000000003",
+        "status": "running",
+        "currentIteration": 1,
+        "maxIterations": 2,
+        "startedAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "writeTarget": "artifactMarkdown",
+        "iterations": [
+          {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "index": 1,
+            "startedAt": "2026-01-01T00:00:00.000Z",
+            "validationPassed": null,
+            "timeline": [
+              {
+                "id": "00000000-0000-4000-8000-000000000005",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000007",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "children": [
+              {
+                "id": "00000000-0000-4000-8000-000000000006",
+                "phase": "maker",
+                "agentName": "Maker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "artifacts": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "events": 12,
+    "runs": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "sessionId": "00000000-0000-4000-8000-000000000002",
+        "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+        "loopName": "maker-checker-events",
+        "structure": "makerChecker",
+        "launchContextScope": "firstIterationOnly",
+        "projectId": "00000000-0000-4000-8000-000000000003",
+        "status": "running",
+        "currentIteration": 1,
+        "maxIterations": 2,
+        "startedAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "writeTarget": "artifactMarkdown",
+        "iterations": [
+          {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "index": 1,
+            "startedAt": "2026-01-01T00:00:00.000Z",
+            "validationPassed": null,
+            "timeline": [
+              {
+                "id": "00000000-0000-4000-8000-000000000005",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000007",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000008",
+                "phase": "maker",
+                "roleName": "maker",
+                "note": "Saved report artifact: iteration-1-maker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "children": [
+              {
+                "id": "00000000-0000-4000-8000-000000000006",
+                "phase": "maker",
+                "agentName": "Maker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "artifacts": [
+              {
+                "id": "00000000-0000-4000-8000-000000000009",
+                "phase": "maker",
+                "filename": "iteration-1-maker.md",
+                "bytes": 63,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "events": 15,
+    "runs": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "sessionId": "00000000-0000-4000-8000-000000000002",
+        "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+        "loopName": "maker-checker-events",
+        "structure": "makerChecker",
+        "launchContextScope": "firstIterationOnly",
+        "projectId": "00000000-0000-4000-8000-000000000003",
+        "status": "running",
+        "currentIteration": 1,
+        "maxIterations": 2,
+        "startedAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "writeTarget": "artifactMarkdown",
+        "iterations": [
+          {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "index": 1,
+            "startedAt": "2026-01-01T00:00:00.000Z",
+            "validationPassed": null,
+            "timeline": [
+              {
+                "id": "00000000-0000-4000-8000-000000000005",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000007",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000008",
+                "phase": "maker",
+                "roleName": "maker",
+                "note": "Saved report artifact: iteration-1-maker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000010",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "children": [
+              {
+                "id": "00000000-0000-4000-8000-000000000006",
+                "phase": "maker",
+                "agentName": "Maker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000011",
+                "phase": "checker",
+                "agentName": "Checker",
+                "status": "running",
+                "startedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "artifacts": [
+              {
+                "id": "00000000-0000-4000-8000-000000000009",
+                "phase": "maker",
+                "filename": "iteration-1-maker.md",
+                "bytes": 63,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "events": 18,
+    "runs": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "sessionId": "00000000-0000-4000-8000-000000000002",
+        "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+        "loopName": "maker-checker-events",
+        "structure": "makerChecker",
+        "launchContextScope": "firstIterationOnly",
+        "projectId": "00000000-0000-4000-8000-000000000003",
+        "status": "running",
+        "currentIteration": 1,
+        "maxIterations": 2,
+        "startedAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "writeTarget": "artifactMarkdown",
+        "iterations": [
+          {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "index": 1,
+            "startedAt": "2026-01-01T00:00:00.000Z",
+            "validationPassed": null,
+            "timeline": [
+              {
+                "id": "00000000-0000-4000-8000-000000000005",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000007",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000008",
+                "phase": "maker",
+                "roleName": "maker",
+                "note": "Saved report artifact: iteration-1-maker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000010",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000012",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "children": [
+              {
+                "id": "00000000-0000-4000-8000-000000000006",
+                "phase": "maker",
+                "agentName": "Maker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000011",
+                "phase": "checker",
+                "agentName": "Checker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "artifacts": [
+              {
+                "id": "00000000-0000-4000-8000-000000000009",
+                "phase": "maker",
+                "filename": "iteration-1-maker.md",
+                "bytes": 63,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "events": 21,
+    "runs": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "sessionId": "00000000-0000-4000-8000-000000000002",
+        "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+        "loopName": "maker-checker-events",
+        "structure": "makerChecker",
+        "launchContextScope": "firstIterationOnly",
+        "projectId": "00000000-0000-4000-8000-000000000003",
+        "status": "running",
+        "currentIteration": 1,
+        "maxIterations": 2,
+        "startedAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "writeTarget": "artifactMarkdown",
+        "iterations": [
+          {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "index": 1,
+            "startedAt": "2026-01-01T00:00:00.000Z",
+            "validationPassed": null,
+            "timeline": [
+              {
+                "id": "00000000-0000-4000-8000-000000000005",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000007",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000008",
+                "phase": "maker",
+                "roleName": "maker",
+                "note": "Saved report artifact: iteration-1-maker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000010",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000012",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000013",
+                "phase": "checker",
+                "roleName": "checker",
+                "note": "Saved report artifact: iteration-1-checker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "children": [
+              {
+                "id": "00000000-0000-4000-8000-000000000006",
+                "phase": "maker",
+                "agentName": "Maker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000011",
+                "phase": "checker",
+                "agentName": "Checker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "artifacts": [
+              {
+                "id": "00000000-0000-4000-8000-000000000009",
+                "phase": "maker",
+                "filename": "iteration-1-maker.md",
+                "bytes": 63,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000014",
+                "phase": "checker",
+                "filename": "iteration-1-checker.md",
+                "bytes": 60,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "events": 24,
+    "runs": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "sessionId": "00000000-0000-4000-8000-000000000002",
+        "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+        "loopName": "maker-checker-events",
+        "structure": "makerChecker",
+        "launchContextScope": "firstIterationOnly",
+        "projectId": "00000000-0000-4000-8000-000000000003",
+        "status": "running",
+        "currentIteration": 1,
+        "maxIterations": 2,
+        "startedAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "writeTarget": "artifactMarkdown",
+        "iterations": [
+          {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "index": 1,
+            "startedAt": "2026-01-01T00:00:00.000Z",
+            "checkerDecision": "APPROVE",
+            "validationPassed": null,
+            "timeline": [
+              {
+                "id": "00000000-0000-4000-8000-000000000005",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000007",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000008",
+                "phase": "maker",
+                "roleName": "maker",
+                "note": "Saved report artifact: iteration-1-maker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000010",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000012",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000013",
+                "phase": "checker",
+                "roleName": "checker",
+                "note": "Saved report artifact: iteration-1-checker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000015",
+                "phase": "validation",
+                "roleName": "Validation",
+                "note": "validation started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "children": [
+              {
+                "id": "00000000-0000-4000-8000-000000000006",
+                "phase": "maker",
+                "agentName": "Maker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000011",
+                "phase": "checker",
+                "agentName": "Checker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "artifacts": [
+              {
+                "id": "00000000-0000-4000-8000-000000000009",
+                "phase": "maker",
+                "filename": "iteration-1-maker.md",
+                "bytes": 63,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000014",
+                "phase": "checker",
+                "filename": "iteration-1-checker.md",
+                "bytes": 60,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "events": 29,
+    "runs": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "sessionId": "00000000-0000-4000-8000-000000000002",
+        "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+        "loopName": "maker-checker-events",
+        "structure": "makerChecker",
+        "launchContextScope": "firstIterationOnly",
+        "projectId": "00000000-0000-4000-8000-000000000003",
+        "status": "running",
+        "currentIteration": 1,
+        "maxIterations": 2,
+        "startedAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "writeTarget": "artifactMarkdown",
+        "iterations": [
+          {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "index": 1,
+            "startedAt": "2026-01-01T00:00:00.000Z",
+            "checkerDecision": "APPROVE",
+            "validationPassed": null,
+            "validation": {
+              "classification": "completed",
+              "exitCode": 0,
+              "durationMs": 1000,
+              "passed": true
+            },
+            "timeline": [
+              {
+                "id": "00000000-0000-4000-8000-000000000005",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000007",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000008",
+                "phase": "maker",
+                "roleName": "maker",
+                "note": "Saved report artifact: iteration-1-maker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000010",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000012",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000013",
+                "phase": "checker",
+                "roleName": "checker",
+                "note": "Saved report artifact: iteration-1-checker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000015",
+                "phase": "validation",
+                "roleName": "Validation",
+                "note": "validation started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000016",
+                "phase": "validation",
+                "roleName": "Validation",
+                "note": "validation passed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "children": [
+              {
+                "id": "00000000-0000-4000-8000-000000000006",
+                "phase": "maker",
+                "agentName": "Maker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000011",
+                "phase": "checker",
+                "agentName": "Checker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "artifacts": [
+              {
+                "id": "00000000-0000-4000-8000-000000000009",
+                "phase": "maker",
+                "filename": "iteration-1-maker.md",
+                "bytes": 63,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000014",
+                "phase": "checker",
+                "filename": "iteration-1-checker.md",
+                "bytes": 60,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000017",
+                "phase": "validation",
+                "filename": "00000000-0000-4000-8000-000000000018-stdout.txt",
+                "bytes": 0,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000019",
+                "phase": "validation",
+                "filename": "00000000-0000-4000-8000-000000000020-stderr.txt",
+                "bytes": 0,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "events": 33,
+    "runs": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "sessionId": "00000000-0000-4000-8000-000000000002",
+        "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+        "loopName": "maker-checker-events",
+        "structure": "makerChecker",
+        "launchContextScope": "firstIterationOnly",
+        "projectId": "00000000-0000-4000-8000-000000000003",
+        "status": "running",
+        "currentIteration": 1,
+        "maxIterations": 2,
+        "startedAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "writeTarget": "artifactMarkdown",
+        "iterations": [
+          {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "index": 1,
+            "startedAt": "2026-01-01T00:00:00.000Z",
+            "checkerDecision": "APPROVE",
+            "validationPassed": true,
+            "validation": {
+              "classification": "completed",
+              "exitCode": 0,
+              "durationMs": 1000,
+              "passed": true
+            },
+            "timeline": [
+              {
+                "id": "00000000-0000-4000-8000-000000000005",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000007",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000008",
+                "phase": "maker",
+                "roleName": "maker",
+                "note": "Saved report artifact: iteration-1-maker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000010",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000012",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000013",
+                "phase": "checker",
+                "roleName": "checker",
+                "note": "Saved report artifact: iteration-1-checker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000015",
+                "phase": "validation",
+                "roleName": "Validation",
+                "note": "validation started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000016",
+                "phase": "validation",
+                "roleName": "Validation",
+                "note": "validation passed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000021",
+                "phase": "evaluator",
+                "roleName": "Goal evaluator",
+                "note": "evaluator started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "children": [
+              {
+                "id": "00000000-0000-4000-8000-000000000006",
+                "phase": "maker",
+                "agentName": "Maker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000011",
+                "phase": "checker",
+                "agentName": "Checker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000022",
+                "phase": "evaluator",
+                "status": "running",
+                "startedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "artifacts": [
+              {
+                "id": "00000000-0000-4000-8000-000000000009",
+                "phase": "maker",
+                "filename": "iteration-1-maker.md",
+                "bytes": 63,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000014",
+                "phase": "checker",
+                "filename": "iteration-1-checker.md",
+                "bytes": 60,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000017",
+                "phase": "validation",
+                "filename": "00000000-0000-4000-8000-000000000018-stdout.txt",
+                "bytes": 0,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000019",
+                "phase": "validation",
+                "filename": "00000000-0000-4000-8000-000000000020-stderr.txt",
+                "bytes": 0,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "events": 36,
+    "runs": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "sessionId": "00000000-0000-4000-8000-000000000002",
+        "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+        "loopName": "maker-checker-events",
+        "structure": "makerChecker",
+        "launchContextScope": "firstIterationOnly",
+        "projectId": "00000000-0000-4000-8000-000000000003",
+        "status": "running",
+        "currentIteration": 1,
+        "maxIterations": 2,
+        "startedAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "writeTarget": "artifactMarkdown",
+        "iterations": [
+          {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "index": 1,
+            "startedAt": "2026-01-01T00:00:00.000Z",
+            "checkerDecision": "APPROVE",
+            "validationPassed": true,
+            "validation": {
+              "classification": "completed",
+              "exitCode": 0,
+              "durationMs": 1000,
+              "passed": true
+            },
+            "timeline": [
+              {
+                "id": "00000000-0000-4000-8000-000000000005",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000007",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000008",
+                "phase": "maker",
+                "roleName": "maker",
+                "note": "Saved report artifact: iteration-1-maker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000010",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000012",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000013",
+                "phase": "checker",
+                "roleName": "checker",
+                "note": "Saved report artifact: iteration-1-checker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000015",
+                "phase": "validation",
+                "roleName": "Validation",
+                "note": "validation started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000016",
+                "phase": "validation",
+                "roleName": "Validation",
+                "note": "validation passed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000021",
+                "phase": "evaluator",
+                "roleName": "Goal evaluator",
+                "note": "evaluator started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000023",
+                "phase": "evaluator",
+                "roleName": "Goal evaluator",
+                "note": "evaluator completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "children": [
+              {
+                "id": "00000000-0000-4000-8000-000000000006",
+                "phase": "maker",
+                "agentName": "Maker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000011",
+                "phase": "checker",
+                "agentName": "Checker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000022",
+                "phase": "evaluator",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "artifacts": [
+              {
+                "id": "00000000-0000-4000-8000-000000000009",
+                "phase": "maker",
+                "filename": "iteration-1-maker.md",
+                "bytes": 63,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000014",
+                "phase": "checker",
+                "filename": "iteration-1-checker.md",
+                "bytes": 60,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000017",
+                "phase": "validation",
+                "filename": "00000000-0000-4000-8000-000000000018-stdout.txt",
+                "bytes": 0,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000019",
+                "phase": "validation",
+                "filename": "00000000-0000-4000-8000-000000000020-stderr.txt",
+                "bytes": 0,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "events": 39,
+    "runs": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "sessionId": "00000000-0000-4000-8000-000000000002",
+        "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+        "loopName": "maker-checker-events",
+        "structure": "makerChecker",
+        "launchContextScope": "firstIterationOnly",
+        "projectId": "00000000-0000-4000-8000-000000000003",
+        "status": "running",
+        "currentIteration": 1,
+        "maxIterations": 2,
+        "startedAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "writeTarget": "artifactMarkdown",
+        "iterations": [
+          {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "index": 1,
+            "startedAt": "2026-01-01T00:00:00.000Z",
+            "checkerDecision": "APPROVE",
+            "validationPassed": true,
+            "validation": {
+              "classification": "completed",
+              "exitCode": 0,
+              "durationMs": 1000,
+              "passed": true
+            },
+            "timeline": [
+              {
+                "id": "00000000-0000-4000-8000-000000000005",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000007",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000008",
+                "phase": "maker",
+                "roleName": "maker",
+                "note": "Saved report artifact: iteration-1-maker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000010",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000012",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000013",
+                "phase": "checker",
+                "roleName": "checker",
+                "note": "Saved report artifact: iteration-1-checker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000015",
+                "phase": "validation",
+                "roleName": "Validation",
+                "note": "validation started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000016",
+                "phase": "validation",
+                "roleName": "Validation",
+                "note": "validation passed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000021",
+                "phase": "evaluator",
+                "roleName": "Goal evaluator",
+                "note": "evaluator started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000023",
+                "phase": "evaluator",
+                "roleName": "Goal evaluator",
+                "note": "evaluator completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000024",
+                "phase": "evaluator",
+                "roleName": "Goal evaluator",
+                "note": "Saved report artifact: iteration-1-evaluator.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "children": [
+              {
+                "id": "00000000-0000-4000-8000-000000000006",
+                "phase": "maker",
+                "agentName": "Maker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000011",
+                "phase": "checker",
+                "agentName": "Checker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000022",
+                "phase": "evaluator",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "artifacts": [
+              {
+                "id": "00000000-0000-4000-8000-000000000009",
+                "phase": "maker",
+                "filename": "iteration-1-maker.md",
+                "bytes": 63,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000014",
+                "phase": "checker",
+                "filename": "iteration-1-checker.md",
+                "bytes": 60,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000017",
+                "phase": "validation",
+                "filename": "00000000-0000-4000-8000-000000000018-stdout.txt",
+                "bytes": 0,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000019",
+                "phase": "validation",
+                "filename": "00000000-0000-4000-8000-000000000020-stderr.txt",
+                "bytes": 0,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000025",
+                "phase": "evaluator",
+                "filename": "iteration-1-evaluator.md",
+                "bytes": 62,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "events": 41,
+    "runs": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "sessionId": "00000000-0000-4000-8000-000000000002",
+        "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+        "loopName": "maker-checker-events",
+        "structure": "makerChecker",
+        "launchContextScope": "firstIterationOnly",
+        "projectId": "00000000-0000-4000-8000-000000000003",
+        "status": "running",
+        "currentIteration": 1,
+        "maxIterations": 2,
+        "startedAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "writeTarget": "artifactMarkdown",
+        "iterations": [
+          {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "index": 1,
+            "startedAt": "2026-01-01T00:00:00.000Z",
+            "endedAt": "2026-01-01T00:00:00.000Z",
+            "checkerDecision": "APPROVE",
+            "goalDecision": "SUCCESS",
+            "validationPassed": true,
+            "validation": {
+              "classification": "completed",
+              "exitCode": 0,
+              "durationMs": 1000,
+              "passed": true
+            },
+            "timeline": [
+              {
+                "id": "00000000-0000-4000-8000-000000000005",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000007",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000008",
+                "phase": "maker",
+                "roleName": "maker",
+                "note": "Saved report artifact: iteration-1-maker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000010",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000012",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000013",
+                "phase": "checker",
+                "roleName": "checker",
+                "note": "Saved report artifact: iteration-1-checker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000015",
+                "phase": "validation",
+                "roleName": "Validation",
+                "note": "validation started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000016",
+                "phase": "validation",
+                "roleName": "Validation",
+                "note": "validation passed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000021",
+                "phase": "evaluator",
+                "roleName": "Goal evaluator",
+                "note": "evaluator started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000023",
+                "phase": "evaluator",
+                "roleName": "Goal evaluator",
+                "note": "evaluator completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000024",
+                "phase": "evaluator",
+                "roleName": "Goal evaluator",
+                "note": "Saved report artifact: iteration-1-evaluator.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "children": [
+              {
+                "id": "00000000-0000-4000-8000-000000000006",
+                "phase": "maker",
+                "agentName": "Maker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000011",
+                "phase": "checker",
+                "agentName": "Checker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000022",
+                "phase": "evaluator",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "artifacts": [
+              {
+                "id": "00000000-0000-4000-8000-000000000009",
+                "phase": "maker",
+                "filename": "iteration-1-maker.md",
+                "bytes": 63,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000014",
+                "phase": "checker",
+                "filename": "iteration-1-checker.md",
+                "bytes": 60,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000017",
+                "phase": "validation",
+                "filename": "00000000-0000-4000-8000-000000000018-stdout.txt",
+                "bytes": 0,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000019",
+                "phase": "validation",
+                "filename": "00000000-0000-4000-8000-000000000020-stderr.txt",
+                "bytes": 0,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000025",
+                "phase": "evaluator",
+                "filename": "iteration-1-evaluator.md",
+                "bytes": 62,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "events": 42,
+    "runs": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "sessionId": "00000000-0000-4000-8000-000000000002",
+        "catalogId": "bWFrZXItY2hlY2tlci1ldmVudHMubG9vcC5tZA",
+        "loopName": "maker-checker-events",
+        "structure": "makerChecker",
+        "launchContextScope": "firstIterationOnly",
+        "projectId": "00000000-0000-4000-8000-000000000003",
+        "status": "completed",
+        "currentIteration": 1,
+        "maxIterations": 2,
+        "stopReason": "success",
+        "startedAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "endedAt": "2026-01-01T00:00:00.000Z",
+        "writeTarget": "artifactMarkdown",
+        "iterations": [
+          {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "index": 1,
+            "startedAt": "2026-01-01T00:00:00.000Z",
+            "endedAt": "2026-01-01T00:00:00.000Z",
+            "checkerDecision": "APPROVE",
+            "goalDecision": "SUCCESS",
+            "validationPassed": true,
+            "validation": {
+              "classification": "completed",
+              "exitCode": 0,
+              "durationMs": 1000,
+              "passed": true
+            },
+            "timeline": [
+              {
+                "id": "00000000-0000-4000-8000-000000000005",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000007",
+                "phase": "maker",
+                "roleName": "Maker",
+                "note": "maker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000008",
+                "phase": "maker",
+                "roleName": "maker",
+                "note": "Saved report artifact: iteration-1-maker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000010",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000012",
+                "phase": "checker",
+                "roleName": "Checker",
+                "note": "checker completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000013",
+                "phase": "checker",
+                "roleName": "checker",
+                "note": "Saved report artifact: iteration-1-checker.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000015",
+                "phase": "validation",
+                "roleName": "Validation",
+                "note": "validation started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000016",
+                "phase": "validation",
+                "roleName": "Validation",
+                "note": "validation passed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000021",
+                "phase": "evaluator",
+                "roleName": "Goal evaluator",
+                "note": "evaluator started",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000023",
+                "phase": "evaluator",
+                "roleName": "Goal evaluator",
+                "note": "evaluator completed",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000024",
+                "phase": "evaluator",
+                "roleName": "Goal evaluator",
+                "note": "Saved report artifact: iteration-1-evaluator.md",
+                "timestamp": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "children": [
+              {
+                "id": "00000000-0000-4000-8000-000000000006",
+                "phase": "maker",
+                "agentName": "Maker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000011",
+                "phase": "checker",
+                "agentName": "Checker",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000022",
+                "phase": "evaluator",
+                "status": "completed",
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "endedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "artifacts": [
+              {
+                "id": "00000000-0000-4000-8000-000000000009",
+                "phase": "maker",
+                "filename": "iteration-1-maker.md",
+                "bytes": 63,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000014",
+                "phase": "checker",
+                "filename": "iteration-1-checker.md",
+                "bytes": 60,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000017",
+                "phase": "validation",
+                "filename": "00000000-0000-4000-8000-000000000018-stdout.txt",
+                "bytes": 0,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000019",
+                "phase": "validation",
+                "filename": "00000000-0000-4000-8000-000000000020-stderr.txt",
+                "bytes": 0,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000025",
+                "phase": "evaluator",
+                "filename": "iteration-1-evaluator.md",
+                "bytes": 62,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]
