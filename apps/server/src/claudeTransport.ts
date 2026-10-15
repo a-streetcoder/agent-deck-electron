@@ -232,21 +232,15 @@ function sessionFileModel(file: string): { provider: string; modelId: string } |
   }
 }
 
-/**
- * Launch guard: the model a new session would run on, as Pi picks it (explicit
- * choice, else the resumed session file, else Pi settings). Returns the model to
- * pin instead, or undefined when the launch is fine as is; throws the 409 when a
- * refused model has no bridge twin. Only acts for an owner whose anthropic
- * credential is OAuth-only.
- */
-export async function claudeLaunchModel(
+/** The model Pi would pick for a launch: explicit choice, else the resumed
+ * session file, else Pi settings; a refused `provider/model` id is split. */
+function launchChoice(
   ctx: Ctx,
   owner: UserIdentity | undefined,
   chosen: { provider?: string; model?: string },
   where: { cwd: string; sessionFile?: string },
-): Promise<{ provider: string; model: string } | undefined> {
-  const { refused } = await credentialTransport(await ownerRuntime(ctx, owner));
-  if (refused.size === 0) return undefined;
+  refused: ReadonlySet<string>,
+): { provider?: string; model?: string } {
   let { provider, model } = chosen;
   if (!model && where.sessionFile) {
     const restored = sessionFileModel(where.sessionFile);
@@ -263,24 +257,81 @@ export async function claudeLaunchModel(
     provider = model.slice(0, slash);
     model = model.slice(slash + 1);
   }
-  if (provider && model && !refused.has(provider)) return undefined;
-  await ensureBridgeCatalog(ctx);
-  const available = await ownerCatalog(ctx, owner);
+  return { provider, model };
+}
+
+/** The model to run among `available` (the owner's catalog), or undefined when
+ * it is not resolvable here; throws the 409 when a refused model has no twin. */
+function pinLaunchModel(
+  provider: string | undefined,
+  model: string | undefined,
+  refused: ReadonlySet<string>,
+  available: readonly { provider: string; id: string }[],
+): { provider: string; id: string } | undefined {
   if (!model) {
+    // Pi's own fallback, unless it would land on a refused sign-in.
+    if (refused.size === 0) return undefined;
     // ponytail: Pi's own fallback ranks anthropic early, so pin the first Claude
     // (else the first offered) model rather than replicate Pi's private ranking.
     // With nothing offered Pi would fall back to the sign-in itself: refuse.
     const pin = available.find((entry) => entry.provider === BRIDGE) ?? available[0];
     if (!pin) throw refusal();
-    return { provider: pin.provider, model: pin.id };
+    return { provider: pin.provider, id: pin.id };
   }
   if (!provider) {
     // A bare id resolves across providers in Pi; pin a non-refused match.
     const match =
       available.find((entry) => entry.provider === BRIDGE && entry.id === model) ??
       available.find((entry) => entry.id === model);
-    return match ? { provider: match.provider, model: match.id } : undefined;
+    return match && { provider: match.provider, id: match.id };
   }
   const choice = claudeChoice(provider, model, refused, available);
-  return { provider: choice.provider, model: choice.modelId };
+  return { provider: choice.provider, id: choice.modelId };
+}
+
+/**
+ * Launch guard: the model a new session would run on, as Pi picks it (explicit
+ * choice, else the resumed session file, else Pi settings). Returns the model to
+ * pin instead, or undefined when the launch is fine as is; throws the 409 when a
+ * refused model has no bridge twin. Only acts for an owner whose anthropic
+ * credential is OAuth-only.
+ */
+export async function claudeLaunchModel(
+  ctx: Ctx,
+  owner: UserIdentity | undefined,
+  chosen: { provider?: string; model?: string },
+  where: { cwd: string; sessionFile?: string },
+): Promise<{ provider: string; model: string } | undefined> {
+  const { refused } = await credentialTransport(await ownerRuntime(ctx, owner));
+  if (refused.size === 0) return undefined;
+  const { provider, model } = launchChoice(ctx, owner, chosen, where, refused);
+  if (provider && model && !refused.has(provider)) return undefined;
+  await ensureBridgeCatalog(ctx);
+  const pinned = pinLaunchModel(provider, model, refused, await ownerCatalog(ctx, owner));
+  return pinned && { provider: pinned.provider, model: pinned.id };
+}
+
+/**
+ * The model a draft's launch will run on (claudeLaunchModel's choice, without
+ * bridge discovery), among `available` (the owner's catalog). Null when nothing
+ * is resolvable before the launch (Pi's own fallback, an unmatched bare id, a
+ * refused model without a twin yet).
+ */
+export async function previewLaunchModel(
+  ctx: Ctx,
+  owner: UserIdentity | undefined,
+  chosen: { provider?: string; model?: string },
+  where: { cwd: string },
+  available: readonly { provider: string; id: string }[],
+): Promise<{ provider: string; id: string } | null> {
+  const { refused } = await credentialTransport(await ownerRuntime(ctx, owner));
+  const { provider, model } = launchChoice(ctx, owner, chosen, where, refused);
+  // Outside the catalog (an extension provider before a Models refresh) a
+  // non-refused explicit model still launches as named.
+  if (provider && model && !refused.has(provider)) return { provider, id: model };
+  try {
+    return pinLaunchModel(provider, model, refused, available) ?? null;
+  } catch {
+    return null;
+  }
 }

@@ -262,6 +262,7 @@ export function Composer() {
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Latest-wins token for the two stats refresh triggers (idle + compaction).
   const statsSeqRef = useRef(0);
+  const piStateSeqRef = useRef(0);
   // Previous values so stats refresh only on genuine transitions (a turn
   // completing / a compaction), never on the fresh/initial session state.
   const prevAgentStatusRef = useRef<"idle" | "running" | null>(null);
@@ -280,14 +281,18 @@ export function Composer() {
 
   const refreshPiState = useCallback(async (): Promise<void> => {
     if (!sessionId) return;
+    // Latest wins: a draft preview still in flight must not overwrite the state
+    // read after the first send started Pi.
+    const seq = ++piStateSeqRef.current;
+    const current = () => activeSessionRef.current === sessionId && seq === piStateSeqRef.current;
     try {
       const response = await fetch(`/sessions/${encodeURIComponent(sessionId)}/state`);
       if (!response.ok) throw new Error("session state unavailable");
-      if (activeSessionRef.current !== sessionId) return;
+      if (!current()) return;
       const { state } = (await response.json()) as {
         state: { model?: { provider: string; id: string }; thinkingLevel: string };
       };
-      if (activeSessionRef.current !== sessionId) return;
+      if (!current()) return;
       setPiState({
         provider: state.model?.provider,
         modelId: state.model?.id,
@@ -295,8 +300,22 @@ export function Composer() {
       });
       setPiStateStatus("loaded");
     } catch {
-      if (activeSessionRef.current === sessionId) setPiStateStatus("failed");
+      if (current()) setPiStateStatus("failed");
       // Session may be mid-restart; the next refresh wins.
+    }
+  }, [sessionId]);
+
+  const refreshModels = useCallback(async (): Promise<void> => {
+    if (!sessionId) return;
+    try {
+      const response = await fetch(`/sessions/${encodeURIComponent(sessionId)}/models`);
+      if (!response.ok) throw new Error("model catalog unavailable");
+      const data = (await response.json()) as { models: SessionModelInfo[] };
+      if (activeSessionRef.current !== sessionId) return;
+      setModels(data.models);
+      setModelCatalogStatus("loaded");
+    } catch {
+      if (activeSessionRef.current === sessionId) setModelCatalogStatus("failed");
     }
   }, [sessionId]);
 
@@ -360,19 +379,7 @@ export function Composer() {
     prevAgentStatusRef.current = null;
     if (!sessionId) return;
     void refreshPiState();
-    void fetch(`/sessions/${encodeURIComponent(sessionId)}/models`)
-      .then(async (response) => {
-        if (!response.ok) throw new Error("model catalog unavailable");
-        return (await response.json()) as { models: SessionModelInfo[] };
-      })
-      .then((data) => {
-        if (activeSessionRef.current !== sessionId) return;
-        setModels(data.models);
-        setModelCatalogStatus("loaded");
-      })
-      .catch(() => {
-        if (activeSessionRef.current === sessionId) setModelCatalogStatus("failed");
-      });
+    void refreshModels();
     return () => {
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
       // Invalidate reads at the boundary where this composer stops owning the
@@ -381,12 +388,21 @@ export function Composer() {
       imageLoadGenerationRef.current += 1;
       if (sessionId) pruneEmptyComposerDraft(sessionId);
     };
-  }, [sessionId, refreshPiState, pruneEmptyComposerDraft]);
+  }, [sessionId, refreshPiState, refreshModels, pruneEmptyComposerDraft]);
 
   // Draft settings mutate the same session identity, so refresh the launch
-  // preview without resetting the composer or its submission ownership.
+  // preview without resetting the composer or its submission ownership. The
+  // first send starts Pi under the same id: re-read its live state and its
+  // catalog then too.
+  const lifecycleRef = useRef(session?.lifecycle);
   useEffect(() => {
+    const previous = lifecycleRef.current;
+    lifecycleRef.current = session?.lifecycle;
     if (session?.lifecycle === "draft") void refreshPiState();
+    else if (previous === "draft") {
+      void refreshPiState();
+      void refreshModels();
+    }
   }, [
     session?.lifecycle,
     session?.agentName,
@@ -394,6 +410,7 @@ export function Composer() {
     session?.launchPlan,
     session?.draftThinkingLevel,
     refreshPiState,
+    refreshModels,
   ]);
 
   // Re-read the context fill ONLY on the two events that change it: a completed

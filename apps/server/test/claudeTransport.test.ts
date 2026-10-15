@@ -236,6 +236,30 @@ describe("PRV-01 launch and set_model choices", () => {
       modelId: "m",
     });
   });
+
+  it("previews the draft's launch model: the Pi default, or its bridge twin when refused", async () => {
+    const draftModel = async () => {
+      const { state } = (await (await fetch(endpoint(`/sessions/${sessionId}/state`))).json()) as {
+        state: { model: { provider: string; id: string } | null };
+      };
+      return state.model && { provider: state.model.provider, id: state.model.id };
+    };
+    writeAuth(API_KEY);
+    const modelId = (await anthropicModels())[0]!.id;
+    writeFileSync(
+      piSettingsFile,
+      JSON.stringify({ defaultProvider: "anthropic", defaultModel: modelId }),
+    );
+    // The draft's plan names no provider: the chip previews the Pi settings default.
+    expect(await draftModel()).toEqual({ provider: "anthropic", id: modelId });
+    writeAuth(OAUTH);
+    await discover([{ provider: "claude-bridge", id: modelId }]);
+    expect(await draftModel()).toEqual({ provider: "claude-bridge", id: modelId });
+    // No twin: nothing resolvable before the launch's own 409.
+    await discover([]);
+    expect(await draftModel()).toBeNull();
+    writeAuth(API_KEY);
+  });
 });
 
 describe("PRV-01 transport sources of truth", () => {
