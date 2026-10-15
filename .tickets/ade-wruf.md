@@ -34,3 +34,7 @@ Domain tests for sessionActivity (turn open + not live = idle; parked = idle; op
 **2026-10-15T09:04:49Z**
 
 2026-10-15 contrarian on cf04aa2: nothing blocks (merge clean, status truthfulness table holds across Pi crash and VM restart). Fix before close: waiting list must not be filtered by the member chip (loop approvals vanish); REST replies without activity overwrite the computed dot (pin, draft PATCH); catchUp per session_meta push copies every projection (use the human subscriber's waiting set); deep link before the boot resume + unknown-id notice + Copy link on the shared server only; docs wording (buttons hidden, route open; needsAttention shared; forkedFrom justification); forkedFrom shape validated; aria-label with activity. Follow-ups: checkpoint rollback still shown on another member's session (same harm as Fork/Re-run); provider auto-retry gap shows idle briefly; causationId-based member attribution later.
+
+**2026-10-15T09:12:17Z**
+
+2026-10-15 fix round 0c79814 (waiting list unfiltered, activity kept across REST replies and decorated on rename/pin/attention/draft replies, server-side open-human map fed by appends with reseed on writer.acquired, deep link read before the boot resume with unknown-id toast, Copy link on the shared server only, docs and forkedFrom normaliser, aria-label). GPT review36 of cf04aa2: pin reply covered; remaining sent as the final round: catalog response may restore a stale activity over a newer push (generation-aware merge), message-level fork of a plain fork inherits forkedFrom.
