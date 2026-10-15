@@ -20,3 +20,9 @@ GUARDRAILS: worktree E:/agent-deck-wt/<ticket> on wt/<ticket>; never git checkou
 ## Acceptance Criteria
 
 Domain tests mapping each kind; server tests for the events and the timeout expiry; web tests: open human nodes first in Activity and the tree, answer attribution shown; real-Pi test for one ask_user round trip through the unified events; tsc, eslint, prettier clean.
+
+## Notes
+
+**2026-10-15T08:19:53Z**
+
+2026-10-15 contrarian on 293067b: nothing blocks on correctness; attribution (REST requestUser, RPC deps.user, first answer wins) and secrets handling hold. Fix before close: extension UI requests settled by Pi itself never close (exit path, request.timeout, agent_end); includeServerEvents breaks the sparse-project tail walk (server.started pages treated as non-empty); afterMinutes above 5 cannot fire (Pi undici 300 s headersTimeout) -> cap 4 min; loop.run.removed must close the approval node; default answer must respect allowFreeform; supervisorRequest row hidden when a human node exists. Owner decision: loop approvals get only an in-app announcement (Electron main notifies per session; Human Approval runs have no session). Follow-ups: maker-checker ASK_HUMAN stop gets no human node; third-party extension inputs titled password/token could be withheld; merge conflict expected only in NodeTreeView.test.tsx (keep both). Fix round sent.
