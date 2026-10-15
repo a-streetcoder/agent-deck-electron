@@ -20,3 +20,9 @@ GUARDRAILS: worktree E:/agent-deck-wt/<ticket> on wt/<ticket>; never git checkou
 ## Acceptance Criteria
 
 Domain tests for the marking over recorded trees; server test for retry-from-node on a plan item and on a loop iteration; real-Pi test of a turn rollback through the node action; web test for the action; tsc, eslint, prettier clean.
+
+## Notes
+
+**2026-10-15T09:24:26Z**
+
+2026-10-15 implemented as 72f7a98 (trailer normalised): checkpoint.created carries its turn as payload.node; affectedRegion/failedVerifications in domain (log-position ordering); Run tree marking + one Retry from node action (turn resend / plan item retry route with plan.item.retried actor / loop retry); restore refused while a child runs. Developer gaps: only turns have checkpoints (plan items and loop children run outside the per-turn capture); pruned checkpoint can be named as frontier; first dropped prompt only, no attachments; loop retry route re-issues internally without the caller's headers (identity check unverified). Contrarian + GPT review37 running.
