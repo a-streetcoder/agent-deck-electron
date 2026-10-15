@@ -74,6 +74,10 @@ beforeAll(async () => {
     path.join(agentsDir, "Plain Checker.md"),
     "---\nname: Plain Checker\n---\nReview the change.\n",
   );
+  writeFileSync(
+    path.join(agentsDir, "Shell Checker.md"),
+    "---\nname: Shell Checker\n---\nRun the validation yourself before deciding.\n",
+  );
   process.env.AGENT_DECK_PI_ENV = JSON.stringify({
     HOME: tmpHome,
     USERPROFILE: tmpHome,
@@ -82,11 +86,24 @@ beforeAll(async () => {
   mock = await startMockProvider({
     chunkDelayMs: 15,
     // The default-tools maker writes one file through Pi's built-in write tool.
-    toolCall: (_message, body) =>
-      JSON.stringify(body.messages[0]).includes("# Agent: Plain Maker") &&
-      !body.messages.some((message) => message.role === "tool")
-        ? { name: "write", arguments: { path: "d6-made.txt", content: "made by maker\n" } }
-        : null,
+    toolCall: (_message, body) => {
+      const system = JSON.stringify(body.messages[0]);
+      const toolResults = body.messages.filter((message) => message.role === "tool").length;
+      if (system.includes("# Agent: Plain Maker") && toolResults === 0)
+        return { name: "write", arguments: { path: "d6-made.txt", content: "made by maker\n" } };
+      // D7: the checker runs the validation itself, then tries a write it must not get.
+      if (system.includes("# Agent: Shell Checker") && toolResults < 2)
+        return {
+          name: "checker_shell",
+          arguments: {
+            command:
+              toolResults === 0
+                ? `node -e "process.stdout.write('d7-validated')"`
+                : `node -e "require('fs').writeFileSync('d7-escape.txt', 'x')"`,
+          },
+        };
+      return null;
+    },
     reply: (message) => {
       if (message.includes("exact first non-empty line must be APPROVE")) {
         return "APPROVE\nChecker streamed concrete ordered evidence before approving.";
@@ -395,9 +412,10 @@ describe("loop run engine (real pi)", () => {
       validationPassed: true,
     });
     const phases = run.iterations[0]!.timeline.map((event) => event.phase);
-    expect(phases.indexOf("maker")).toBeLessThan(phases.indexOf("checker"));
-    expect(phases.indexOf("checker")).toBeLessThan(phases.indexOf("validation"));
-    expect(phases.indexOf("validation")).toBeLessThan(phases.indexOf("evaluator"));
+    // D7: validation runs before the checker decides.
+    expect(phases.indexOf("maker")).toBeLessThan(phases.indexOf("validation"));
+    expect(phases.indexOf("validation")).toBeLessThan(phases.indexOf("checker"));
+    expect(phases.indexOf("checker")).toBeLessThan(phases.indexOf("evaluator"));
     const prompts = mock.requests
       .slice(requestStart)
       .map((request) => request.messages.at(-1)?.content);
@@ -420,14 +438,14 @@ describe("loop run engine (real pi)", () => {
       });
     };
     expect(toolsFor("You are the maker")).toEqual(["read", "grep"]);
-    expect(toolsFor("Review only")).toEqual(["read", "grep"]);
+    expect(toolsFor("Review only")).toEqual(["read", "grep", "checker_shell"]);
     expect(toolsFor("Evaluate only")).toEqual([]);
     const artifacts = run.iterations[0]!.artifacts;
     expect(artifacts.map((artifact) => artifact.phase)).toEqual([
       "maker",
+      "validation",
+      "validation",
       "checker",
-      "validation",
-      "validation",
       "evaluator",
     ]);
     for (const artifact of artifacts) {
@@ -471,10 +489,49 @@ describe("loop run engine (real pi)", () => {
     expect(JSON.stringify(maker.messages[0])).toContain(
       "Configured default outcome: Direct project writes",
     );
-    expect(toolNames(checker).sort()).toEqual(["find", "grep", "ls", "read"]);
+    expect(toolNames(checker).sort()).toEqual(["checker_shell", "find", "grep", "ls", "read"]);
     expect(JSON.stringify(checker.messages[0])).toContain(
       "Configured default outcome: Report only",
     );
+  });
+
+  it("lets the checker run the validation command and refuses anything else (D7)", async () => {
+    const validationCommand = `node -e "process.stdout.write('d7-validated')"`;
+    const put = await fetch(`${base}/loops`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "shell-checker-loop",
+        goal: "Deliver checked work.",
+        structure: "makerChecker",
+        makerName: "Maker",
+        checkerName: "Shell Checker",
+        checkerRubric: "Run the validation yourself.",
+        validationCommand,
+        maxIterations: 1,
+      }),
+    });
+    expect(put.ok).toBe(true);
+    const requestStart = mock.requests.length;
+    const run = await waitTerminal(await startRun("shell-checker-loop"));
+    expect(run.status).toBe("completed");
+    expect(run.iterations[0]).toMatchObject({ checkerDecision: "APPROVE", validationPassed: true });
+    const checkerRequests = mock.requests
+      .slice(requestStart)
+      .filter((item) => JSON.stringify(item.messages[0]).includes("# Agent: Shell Checker"));
+    // The engine's own validation result is in the checker's prompt.
+    expect(JSON.stringify(checkerRequests[0]!.messages.at(-1))).toContain(
+      "Validation (already run by Agent Deck, before your review): passed",
+    );
+    const toolMessages = checkerRequests
+      .at(-1)!
+      .messages.filter((message) => message.role === "tool")
+      .map((message) => JSON.stringify(message.content));
+    expect(toolMessages).toHaveLength(2);
+    expect(toolMessages[0]).toContain("exit 0");
+    expect(toolMessages[0]).toContain("d7-validated");
+    expect(toolMessages[1]).toContain("checker_shell runs only the loop's validation command");
+    expect(existsSync(path.join(project, "d7-escape.txt"))).toBe(false);
   });
 
   it("streams real Pi Pipeline stages in strict order before evaluator finalization", async () => {

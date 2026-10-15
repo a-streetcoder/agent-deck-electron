@@ -54,6 +54,7 @@ import { normalizeSessionError, processFailureMessage } from "../sessionFailure.
 import { SubagentArtifactCapabilityError } from "@agent-deck/loop-catalog-native";
 import { effectiveDeclaredReads, MAX_MANAGED_SUBAGENT_TASK_BYTES } from "../declaredReads.ts";
 import type { SubagentRunSource, SubagentRunRecord } from "../subagentRunStore.ts";
+import { CHECKER_SHELL_TOOL, writeCheckerShellExtension } from "../checkerShell.ts";
 import {
   PiExited,
   PiHost,
@@ -2052,6 +2053,8 @@ export interface ChildLaunchOverrides {
   defaultExpectedOutcome?: SubagentExpectedOutcome;
   /** Tool list used when the named agent has no `tools:` frontmatter (loop triage). */
   defaultTools?: string[];
+  /** Loop checker: add `checker_shell` (validation command + read-only git) to a readOnly child. */
+  checkerShell?: { validationCommand?: string };
 }
 
 export interface ChildRunOptions {
@@ -2488,13 +2491,20 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
         if (childMemoryAdopted && childMemoryContext) childMemoryContext.commitUsage();
         writeFileSync(promptFile, launchSystemPrompt);
 
+        const checkerShell =
+          toolPolicy === "readOnly" && overrides?.checkerShell
+            ? writeCheckerShellExtension(promptDir, {
+                cwd: childCwd,
+                validationCommand: overrides.checkerShell.validationCommand,
+              })
+            : undefined;
         const childTools =
           runOptions?.worktree && !resolved
             ? [...new Set([...ANONYMOUS_WORKTREE_TOOLS, ...(childBridge?.toolNames ?? [])])]
             : resolveChildTools(
                 resolved?.tools ?? overrides?.defaultTools,
                 toolPolicy,
-                childBridge?.toolNames,
+                checkerShell ? [CHECKER_SHELL_TOOL] : childBridge?.toolNames,
               );
 
         // Read Pi, not the frozen launch plan: picker changes, restored sessions,
@@ -2538,10 +2548,15 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
                     ...(helperContext.extensions ?? []),
                     ...(resolved.extensions ?? []),
                     ...(childBridge ? [childBridge.extension] : []),
+                    ...(checkerShell ? [checkerShell] : []),
                   ]),
                 ]
-              : childBridge
-                ? [...(helperContext.extensions ?? []), childBridge.extension]
+              : childBridge || checkerShell
+                ? [
+                    ...(helperContext.extensions ?? []),
+                    ...(childBridge ? [childBridge.extension] : []),
+                    ...(checkerShell ? [checkerShell] : []),
+                  ]
                 : helperContext.extensions,
           }),
           cwd: childCwd,

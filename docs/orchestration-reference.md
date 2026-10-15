@@ -23,12 +23,13 @@ Each Loop role child launches with a tool policy and a fallback outcome contract
 filtered by the policy; with no `tools:` the child gets the set in the table. An agent's own
 `defaultExpectedOutcome` always wins over the fallback outcome.
 
-| Role (loop write target)                                                        | Tool policy  | No `tools:` frontmatter      | Fallback outcome      |
-| ------------------------------------------------------------------------------- | ------------ | ---------------------------- | --------------------- |
-| Maker / single agent, pipeline stage (checkout or worktree)                     | `configured` | Pi defaults                  | `directProjectWrites` |
-| Triage (checkout or worktree)                                                   | `configured` | `read`, `grep`, `find`, `ls` | `reportOnly`          |
-| Checker; any non-evaluator role in an `artifactMarkdown` loop (branches always) | `readOnly`   | `read`, `grep`, `find`, `ls` | `reportOnly`          |
-| Evaluator                                                                       | `none`       | none                         | `reportOnly`          |
+| Role (loop write target)                                                     | Tool policy  | No `tools:` frontmatter      | Fallback outcome      |
+| ---------------------------------------------------------------------------- | ------------ | ---------------------------- | --------------------- |
+| Maker / single agent, pipeline stage (checkout or worktree)                  | `configured` | Pi defaults                  | `directProjectWrites` |
+| Triage (checkout or worktree)                                                | `configured` | `read`, `grep`, `find`, `ls` | `reportOnly`          |
+| Checker (also gets `checker_shell`, below)                                   | `readOnly`   | `read`, `grep`, `find`, `ls` | `reportOnly`          |
+| Any other non-evaluator role in an `artifactMarkdown` loop (branches always) | `readOnly`   | `read`, `grep`, `find`, `ls` | `reportOnly`          |
+| Evaluator                                                                    | `none`       | none                         | `reportOnly`          |
 
 Pi's default `bash` and file tools are not sandboxed to the loop checkout or worktree: a child
 can reach the main checkout through absolute paths, and an authored `tools:` list is the way to
@@ -36,6 +37,34 @@ narrow it.
 
 `managed_subagent` and `managed_parallel` children are unchanged: no policy, Pi defaults without
 `tools:`, and `reportOnly` when the agent sets no outcome.
+
+### Loop checker and verdicts
+
+In `makerChecker` the order is maker, validation, checker, evaluator. The validation command
+runs before the checker decides, and its result (passed or failed, classification, exit code,
+command, last 2,000 characters of stdout and stderr) is part of the checker's prompt. A checker
+`FAIL` still ends the run as `agentFailed` (the checker may fail on scope), but the iteration
+keeps `validationPassed` and `validationEvidence` next to `checkerDecision`, and the timeline
+says "checker FAIL although validation passed" when they disagree.
+
+Besides its read-only tools the checker has `checker_shell` (`apps/server/src/checkerShell.ts`, a
+Pi extension generated per launch). It runs, in the loop's working directory, only:
+
+- the loop's configured validation command, exact text, through the platform shell;
+- `git status`, `git diff`, `git log` or `git show` with plain arguments, without a shell, with
+  `--no-pager`, `core.fsmonitor=false` and, except for `status`, `--no-ext-diff --no-textconv`.
+  Arguments with shell characters or spaces inside one argument, and `--output`, `--ext-diff`,
+  `--textconv`, `--exec`, `--upload-pack` and `--receive-pack`, are refused.
+
+Anything else is refused before it executes, and the refusal is the tool's error result. Git
+filters and attributes configured in the repository still apply to `status` and `diff`.
+
+Decision lines (checker and evaluator) are read by `parseVerdict`: the exact first non-empty line
+is `strict`; otherwise the first of the next three lines that is a decision token once markdown
+emphasis (`*`, `_`, `` ` ``, `#`, `>`) and trailing punctuation are trimmed is `lenient`; else
+`missing`. Iterations record `verdictParse` (evaluator) and `checkerVerdictParse`. A missing
+evaluator verdict continues as before (`CONTINUE`); a missing checker verdict still fails the
+run. Both a lenient read and a missing verdict add a timeline note.
 
 ### Delegation cancellation
 

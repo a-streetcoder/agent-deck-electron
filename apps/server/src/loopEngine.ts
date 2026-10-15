@@ -37,6 +37,7 @@ import {
   type LoopRunLaunchOwnership,
   type LoopRunStatus,
   type LoopValidationResult,
+  type LoopVerdictParse,
   type LoopStopReason,
   type SubagentExpectedOutcome,
   type LoopWorktreeReview,
@@ -228,7 +229,9 @@ export type ExecuteLoopRole = (request: {
  * `defaultExpectedOutcome` frontmatter win; these apply when it authors none.
  * Makers and pipeline stages writing to a checkout edit directly; checkers,
  * evaluators, triage, branches and artifact-only loops stay report-only.
- * Triage without `tools:` reads only; an explicit `tools:` list may let it edit. */
+ * Triage without `tools:` reads only; an explicit `tools:` list may let it edit.
+ * The checker also gets `checker_shell`: the loop's validation command and
+ * read-only git, nothing else (checkerShell.ts). */
 export function loopRoleLaunchDefaults(
   phase: Parameters<ExecuteLoopRole>[0]["phase"],
   writeTarget: LoopDefinition["writeTarget"],
@@ -237,9 +240,12 @@ export function loopRoleLaunchDefaults(
   defaultExpectedOutcome: SubagentExpectedOutcome;
   /** Used instead of Pi defaults when the agent has no `tools:` frontmatter. */
   defaultTools?: string[];
+  checkerShell?: true;
 } {
   if (phase === "evaluator") return { toolPolicy: "none", defaultExpectedOutcome: "reportOnly" };
-  if (phase === "checker" || writeTarget === "artifactMarkdown")
+  if (phase === "checker")
+    return { toolPolicy: "readOnly", defaultExpectedOutcome: "reportOnly", checkerShell: true };
+  if (writeTarget === "artifactMarkdown")
     return { toolPolicy: "readOnly", defaultExpectedOutcome: "reportOnly" };
   if (phase === "triage")
     return {
@@ -572,13 +578,48 @@ function unconfiguredValidation(cwd: string): ValidationResult {
   };
 }
 
-function exactFirstLine<T extends string>(text: string, allowed: Set<T>): T | undefined {
-  const first = text
+const MAX_VERDICT_PREAMBLE_LINES = 3;
+
+/** Read a role's decision line. The exact first non-empty line is `strict`;
+ * otherwise the first line that is a decision token once markdown emphasis and
+ * trailing punctuation are trimmed, after at most three preamble lines, is
+ * `lenient`. Anything else is `missing` and the caller applies its fallback. */
+export function parseVerdict<T extends string>(
+  text: string,
+  allowed: ReadonlySet<T>,
+): { decision?: T; parse: LoopVerdictParse } {
+  const lines = text
     .split(/\r?\n/)
-    .find((line) => line.trim().length > 0)
-    ?.trim()
-    .toUpperCase();
-  return first && allowed.has(first as T) ? (first as T) : undefined;
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, MAX_VERDICT_PREAMBLE_LINES + 1);
+  const first = lines[0]?.toUpperCase();
+  if (first && allowed.has(first as T)) return { decision: first as T, parse: "strict" };
+  for (const line of lines) {
+    const token = line
+      .replace(/^[\s>#*_`~]+/, "")
+      .replace(/[\s*_`~.,:;!?]+$/, "")
+      .toUpperCase();
+    if (allowed.has(token as T)) return { decision: token as T, parse: "lenient" };
+  }
+  return { parse: "missing" };
+}
+
+const TAIL_CHARS = 2_000;
+const tail = (value: string): string =>
+  value.length > TAIL_CHARS ? `â€¦${value.slice(-TAIL_CHARS)}` : value;
+
+/** Validation evidence handed to the checker before it decides. */
+function checkerValidationEvidence(validation: ValidationResult, configured: boolean): string {
+  if (!configured) return "Validation: no validation command is configured.";
+  return [
+    `Validation (already run by Agent Deck, before your review): ${validation.passed ? "passed" : "failed"} (${validation.classification}, exit ${validation.exitCode ?? "unavailable"})`,
+    `Command: ${validation.command}`,
+    validation.stdout.trim() ? `stdout tail:\n${tail(validation.stdout.trim())}` : "",
+    validation.stderr.trim() ? `stderr tail:\n${tail(validation.stderr.trim())}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function changedFilesForGit(cwd: string, reportOnly: boolean): LoopChangedFile[] {
@@ -1453,6 +1494,25 @@ export class LoopEngine {
     this.persist();
   }
 
+  /** Evaluator decision; a missing verdict continues, and the timeline says so. */
+  private goalVerdict(iteration: LoopRunIteration, output: string): LoopGoalDecision {
+    const { decision, parse } = parseVerdict(output, GOAL_DECISIONS);
+    iteration.verdictParse = parse;
+    if (parse !== "strict") {
+      iteration.timeline.push({
+        id: randomUUID(),
+        phase: "evaluator",
+        roleName: "Goal evaluator",
+        note:
+          parse === "missing"
+            ? "evaluator verdict missing; treated as CONTINUE"
+            : `evaluator verdict ${decision} read after a preamble or emphasis`,
+        timestamp: this.now(),
+      });
+    }
+    return decision ?? "CONTINUE";
+  }
+
   private stopped(run: LoopRun, signal: AbortSignal): boolean {
     if (!signal.aborted && run.status !== "stopping") return false;
     this.finalize(run, "stopped", "userStopped");
@@ -1982,8 +2042,7 @@ export class LoopEngine {
           );
           if (this.stopped(run, signal)) return;
           this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
-          const goalDecision =
-            exactFirstLine(iteration.evaluatorOutput, GOAL_DECISIONS) ?? "CONTINUE";
+          const goalDecision = this.goalVerdict(iteration, iteration.evaluatorOutput);
           iteration.goalDecision = goalDecision;
           iteration.endedAt = this.now();
           this.changed(run);
@@ -2099,7 +2158,7 @@ export class LoopEngine {
           if (this.stopped(run, signal)) return;
           iteration.evaluatorOutput = evaluatorOutput;
           this.persistArtifact(run, iteration, "evaluator", evaluatorOutput);
-          const goalDecision = exactFirstLine(evaluatorOutput, GOAL_DECISIONS) ?? "CONTINUE";
+          const goalDecision = this.goalVerdict(iteration, evaluatorOutput);
           iteration.goalDecision = goalDecision;
           iteration.endedAt = this.now();
           this.changed(run);
@@ -2210,8 +2269,7 @@ export class LoopEngine {
           );
           if (this.stopped(run, signal)) return;
           this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
-          const goalDecision =
-            exactFirstLine(iteration.evaluatorOutput, GOAL_DECISIONS) ?? "CONTINUE";
+          const goalDecision = this.goalVerdict(iteration, iteration.evaluatorOutput);
           iteration.goalDecision = goalDecision;
           iteration.endedAt = this.now();
           this.changed(run);
@@ -2296,8 +2354,7 @@ export class LoopEngine {
           );
           if (this.stopped(run, signal)) return;
           this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
-          const goalDecision =
-            exactFirstLine(iteration.evaluatorOutput, GOAL_DECISIONS) ?? "CONTINUE";
+          const goalDecision = this.goalVerdict(iteration, iteration.evaluatorOutput);
           iteration.goalDecision = goalDecision;
           iteration.endedAt = this.now();
           this.changed(run);
@@ -2320,6 +2377,15 @@ export class LoopEngine {
           continue;
         }
 
+        // Validation runs before the checker decides, so a checker FAIL is
+        // never the only evidence against a diff the deterministic check passed.
+        let validation: ValidationResult = unconfiguredValidation(cwd);
+        if (loop.validationCommand)
+          validation = await this.validation(run, iteration, cwd, loop.validationCommand, signal);
+        if (this.stopped(run, signal)) return;
+        iteration.validationPassed = loop.validationCommand ? validation.passed : null;
+        iteration.validationEvidence = validation.evidence;
+
         const checkerPrompt = [
           `Goal: ${loop.goal}`,
           `Success condition: ${loop.successCondition || loop.goal}`,
@@ -2327,6 +2393,7 @@ export class LoopEngine {
           "Review only; do not edit project files.",
           `Review criteria: ${loop.checkerRubric}`,
           `Maker report:\n${iteration.output}`,
+          checkerValidationEvidence(validation, Boolean(loop.validationCommand)),
           "The exact first non-empty line must be APPROVE, CONTINUE, REJECT, ASK_HUMAN, or FAIL. Then give concise rationale and concrete evidence.",
         ].join("\n\n");
         iteration.checkerOutput = await this.role(
@@ -2344,7 +2411,23 @@ export class LoopEngine {
         );
         if (this.stopped(run, signal)) return;
         this.persistArtifact(run, iteration, "checker", iteration.checkerOutput);
-        const checkerDecision = exactFirstLine(iteration.checkerOutput, CHECKER_DECISIONS);
+        const { decision: checkerDecision, parse: checkerParse } = parseVerdict(
+          iteration.checkerOutput,
+          CHECKER_DECISIONS,
+        );
+        iteration.checkerVerdictParse = checkerParse;
+        if (checkerParse !== "strict") {
+          iteration.timeline.push({
+            id: randomUUID(),
+            phase: "checker",
+            roleName: loop.checkerName ?? "Checker",
+            note:
+              checkerParse === "missing"
+                ? "checker verdict missing; run failed"
+                : `checker verdict ${checkerDecision} read after a preamble or emphasis`,
+            timestamp: this.now(),
+          });
+        }
         if (!checkerDecision) {
           iteration.endedAt = this.now();
           this.changed(run);
@@ -2353,18 +2436,22 @@ export class LoopEngine {
         }
         iteration.checkerDecision = checkerDecision;
         if (checkerDecision === "FAIL") {
+          // Honoured (the checker may fail on scope), but a passed validation is
+          // kept beside it on the iteration and named in the timeline.
+          if (loop.validationCommand && validation.passed) {
+            iteration.timeline.push({
+              id: randomUUID(),
+              phase: "checker",
+              roleName: loop.checkerName ?? "Checker",
+              note: "checker FAIL although validation passed",
+              timestamp: this.now(),
+            });
+          }
           iteration.endedAt = this.now();
           this.changed(run);
           this.finalize(run, "failed", "agentFailed");
           return;
         }
-
-        let validation: ValidationResult = unconfiguredValidation(cwd);
-        if (loop.validationCommand)
-          validation = await this.validation(run, iteration, cwd, loop.validationCommand, signal);
-        if (this.stopped(run, signal)) return;
-        iteration.validationPassed = loop.validationCommand ? validation.passed : null;
-        iteration.validationEvidence = validation.evidence;
 
         const evaluatorPrompt = [
           `Goal: ${loop.goal}`,
@@ -2391,8 +2478,7 @@ export class LoopEngine {
         );
         if (this.stopped(run, signal)) return;
         this.persistArtifact(run, iteration, "evaluator", iteration.evaluatorOutput);
-        const goalDecision =
-          exactFirstLine(iteration.evaluatorOutput, GOAL_DECISIONS) ?? "CONTINUE";
+        const goalDecision = this.goalVerdict(iteration, iteration.evaluatorOutput);
         iteration.goalDecision = goalDecision;
         iteration.endedAt = this.now();
         this.changed(run);

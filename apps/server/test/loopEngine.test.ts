@@ -15,7 +15,12 @@ import path from "node:path";
 import { cwd } from "node:process";
 import { type LoopChildRecord, type LoopDefinition } from "@agent-deck/domain";
 import { describe, expect, it, vi } from "vitest";
-import { LoopEngine, loopRoleLaunchDefaults, runValidationCommand } from "../src/loopEngine.ts";
+import {
+  LoopEngine,
+  loopRoleLaunchDefaults,
+  parseVerdict,
+  runValidationCommand,
+} from "../src/loopEngine.ts";
 
 /**
  * Loop engine control flow, hermetic: the agent executor is injected (no pi),
@@ -55,6 +60,7 @@ describe("loop role launch defaults", () => {
       expect(loopRoleLaunchDefaults("checker", target)).toEqual({
         toolPolicy: "readOnly",
         defaultExpectedOutcome: "reportOnly",
+        checkerShell: true,
       });
       expect(loopRoleLaunchDefaults("evaluator", target)).toEqual({
         toolPolicy: "none",
@@ -73,6 +79,137 @@ describe("loop role launch defaults", () => {
         defaultExpectedOutcome: "reportOnly",
       });
     }
+  });
+});
+
+describe("loop verdict parsing (D7)", () => {
+  const goal = new Set(["SUCCESS", "CONTINUE", "FAIL"] as const);
+  const checker = new Set(["APPROVE", "CONTINUE", "REJECT", "ASK_HUMAN", "FAIL"] as const);
+
+  it("reads strict, preamble, emphasis and missing verdicts", () => {
+    expect(parseVerdict("  success \nok", goal)).toEqual({ decision: "SUCCESS", parse: "strict" });
+    expect(parseVerdict("I checked the diff and the tests.\n\nSUCCESS\nok", goal)).toEqual({
+      decision: "SUCCESS",
+      parse: "lenient",
+    });
+    expect(parseVerdict("**ASK_HUMAN**.\nwhy", checker)).toEqual({
+      decision: "ASK_HUMAN",
+      parse: "lenient",
+    });
+    expect(parseVerdict("a\nb\nc\n## `FAIL`:", goal)).toEqual({
+      decision: "FAIL",
+      parse: "lenient",
+    });
+    // A fourth preamble line pushes the token out of reach; prose is never a verdict.
+    expect(parseVerdict("a\nb\nc\nd\nSUCCESS", goal)).toEqual({ parse: "missing" });
+    expect(parseVerdict("The goal is a SUCCESS overall.", goal)).toEqual({ parse: "missing" });
+    expect(parseVerdict("", goal)).toEqual({ parse: "missing" });
+  });
+
+  it("completes a Single Agent run whose evaluator writes one sentence first (G3)", async () => {
+    const engine = new LoopEngine({
+      executeRole: async ({ phase }) =>
+        phase === "evaluator" ? "I verified the file exists.\nSUCCESS\nDone." : "made",
+      runValidation: async () => ({ passed: true, evidence: "ok" }),
+    });
+    const run = engine.start(makeLoop(), cwd());
+    await engine.settled(run.id);
+    expect(run).toMatchObject({ status: "completed", stopReason: "success" });
+    expect(run.iterations).toHaveLength(1);
+    expect(run.iterations[0]).toMatchObject({ goalDecision: "SUCCESS", verdictParse: "lenient" });
+  });
+
+  it("continues on a missing evaluator verdict and says so in the timeline", async () => {
+    const engine = new LoopEngine({
+      executeRole: async ({ phase }) =>
+        phase === "evaluator" ? '{"name": "Read", "input": {}}' : "made",
+      runValidation: async () => ({ passed: true, evidence: "ok" }),
+    });
+    const run = engine.start(makeLoop({ maxIterations: 1 }), cwd());
+    await engine.settled(run.id);
+    expect(run).toMatchObject({ status: "notAchieved", stopReason: "maxIterationsReached" });
+    expect(run.iterations[0]).toMatchObject({ goalDecision: "CONTINUE", verdictParse: "missing" });
+    expect(run.iterations[0]!.timeline.map((event) => event.note)).toContain(
+      "evaluator verdict missing; treated as CONTINUE",
+    );
+  });
+});
+
+describe("maker-checker validation ordering (D7)", () => {
+  it("runs validation before the checker and hands it the result", async () => {
+    const order: string[] = [];
+    let checkerPrompt = "";
+    const engine = new LoopEngine({
+      executeRole: async ({ phase, prompt }) => {
+        order.push(phase);
+        if (phase === "checker") {
+          checkerPrompt = prompt;
+          return "Reviewed.\nAPPROVE\nok";
+        }
+        return phase === "evaluator" ? "SUCCESS\nok" : "made";
+      },
+      runValidation: async (_cwd, command) => {
+        order.push("validation");
+        return {
+          command,
+          workingDirectory: _cwd,
+          exitCode: 0,
+          durationMs: 1,
+          stdout: "12 tests passed",
+          stderr: "",
+          classification: "completed" as const,
+          passed: true,
+          evidence: "exit 0",
+        };
+      },
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "makerChecker",
+        makerName: "Maker",
+        checkerName: "Checker",
+        checkerRubric: "strict",
+        validationCommand: "pnpm test",
+      }),
+      cwd(),
+    );
+    await engine.settled(run.id);
+    expect(order).toEqual(["maker", "validation", "checker", "evaluator"]);
+    expect(checkerPrompt).toMatch(/Validation .*: passed \(completed, exit 0\)/);
+    expect(checkerPrompt).toContain("Command: pnpm test");
+    expect(checkerPrompt).toContain("stdout tail:\n12 tests passed");
+    expect(run).toMatchObject({ status: "completed" });
+    expect(run.iterations[0]).toMatchObject({
+      checkerDecision: "APPROVE",
+      checkerVerdictParse: "lenient",
+    });
+  });
+
+  it("honours a checker FAIL after validation passed and records both (G2)", async () => {
+    const engine = new LoopEngine({
+      executeRole: async ({ phase }) =>
+        phase === "checker" ? "FAIL\nTouched files outside scope." : "made",
+      runValidation: async () => ({ passed: true, evidence: "tests green" }),
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "makerChecker",
+        makerName: "Maker",
+        checkerName: "Checker",
+        checkerRubric: "scope",
+      }),
+      cwd(),
+    );
+    await engine.settled(run.id);
+    expect(run).toMatchObject({ status: "failed", stopReason: "agentFailed" });
+    expect(run.iterations[0]).toMatchObject({
+      checkerDecision: "FAIL",
+      validationPassed: true,
+      validationEvidence: "tests green",
+    });
+    const notes = run.iterations[0]!.timeline.map((event) => event.note);
+    expect(notes).toContain("checker FAIL although validation passed");
+    expect(notes.indexOf("validation passed")).toBeLessThan(notes.indexOf("checker started"));
   });
 });
 
