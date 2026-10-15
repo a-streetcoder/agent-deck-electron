@@ -23,6 +23,7 @@ vi.mock("./wsBridge.ts", () => ({ acknowledgeSessionAttention: acknowledge }));
 import {
   attentionEpisode,
   newlyAttentiveSessionIds,
+  newSessionlessHumanRequests,
   useDesktopAttention,
 } from "./useDesktopAttention.ts";
 import { useAppStore } from "./store.ts";
@@ -214,5 +215,50 @@ describe("attention episodes (SES-14)", () => {
     expect(
       newlyAttentiveSessionIds(null, [session("s1", true, "2026-08-17T10:00:00.000Z")]),
     ).toEqual([]);
+  });
+});
+
+describe("A8: session-less human requests", () => {
+  const requested = (seq: number, sessionId?: string) =>
+    ({
+      v: 1,
+      id: `e${seq}`,
+      seq,
+      ts: "2026-10-15T10:00:00.000Z",
+      logId: "log",
+      kind: "human.requested",
+      projectId: "p1",
+      ...(sessionId ? { sessionId } : {}),
+      subject: { type: "human", id: `h${seq}` },
+      actor: { type: "system" },
+      payload: { kind: "loopApproval", prompt: "Approve the release" },
+    }) as const;
+
+  it("announces only requests newer than the baseline that no session marker covers", () => {
+    const events = [requested(1), requested(2, "s1"), requested(3)];
+    expect(newSessionlessHumanRequests(null, events)).toEqual([]);
+    expect(newSessionlessHumanRequests(1, events).map((event) => event.seq)).toEqual([3]);
+  });
+
+  it("announces a loop approval that arrives after hydration", () => {
+    useAppStore.setState({
+      projectLog: { projectId: "p1", logId: "log", lastSeq: 1, events: [requested(1)] },
+    });
+    render(createElement(Harness));
+    expect(useAppStore.getState().attentionAnnouncement).toBeNull();
+    act(() =>
+      useAppStore.setState({
+        projectLog: {
+          projectId: "p1",
+          logId: "log",
+          lastSeq: 2,
+          events: [requested(1), requested(2)],
+        },
+      }),
+    );
+    expect(useAppStore.getState().attentionAnnouncement?.text).toBe(
+      "Loop approval needs a decision: Approve the release",
+    );
+    useAppStore.setState({ projectLog: null });
   });
 });

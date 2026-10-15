@@ -219,6 +219,8 @@ export interface AskUserAnswer {
   selections: string[];
   freeform?: string;
   comment?: string;
+  /** A8: nobody answered in time; the request's timeout policy supplied this default. */
+  defaulted?: true;
 }
 
 export interface AskUserCell {

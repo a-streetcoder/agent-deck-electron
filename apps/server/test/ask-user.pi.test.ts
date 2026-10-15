@@ -8,6 +8,7 @@ import {
   writeMockProviderExtension,
   type MockProviderServer,
 } from "@agent-deck/testkit";
+import { projectNodeTree, type EventEnvelope } from "@agent-deck/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
@@ -92,6 +93,50 @@ describe("real Pi parent ask_user bridge", () => {
       const toolPayload = JSON.stringify(mock.requests.at(-1)?.messages ?? []);
       expect(toolPayload).toContain(action === "answer" ? "answered" : "cancelled");
     }
+  });
+
+  it("A8: one ask_user round trip through the unified human events", async () => {
+    const ANSWER = "Ship\n\nComment: Approved";
+    const session = await createSession();
+    await session.prompt("human node");
+    const cell = await pendingAsk(session);
+    const answer = await fetch(
+      `http://127.0.0.1:${server.port}/sessions/${session.meta.id}/asks/${cell.requestId}/answer`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ selections: ["Ship"], comment: "Approved" }),
+      },
+    );
+    expect(answer.status).toBe(200);
+    await server.receipts.waitFor("idle", session.meta.id);
+    const page = (await (
+      await fetch(
+        `http://127.0.0.1:${server.port}/events?sessionId=${session.meta.id}&afterSeq=0&limit=1000`,
+      )
+    ).json()) as { events: EventEnvelope[] };
+    const human = page.events.filter((event) => event.kind.startsWith("human."));
+    expect(human.map((event) => event.kind)).toEqual(["human.requested", "human.answered"]);
+    expect(human[0]).toMatchObject({
+      subject: { type: "human", id: cell.requestId },
+      parent: { type: "turn" },
+      actor: { type: "agent", sessionId: session.meta.id },
+      payload: {
+        kind: "askUser",
+        prompt: "Decision for human node",
+        options: ["Ship", "Wait"],
+        timeoutPolicy: { type: "none" },
+      },
+    });
+    // Loopback has no identity: an anonymous member answered.
+    expect(human[1]).toMatchObject({
+      actor: { type: "user" },
+      payload: { by: { type: "user" }, answer: ANSWER },
+    });
+    const tree = projectNodeTree(page.events, { sessionId: session.meta.id });
+    const node = tree.nodes.get(`human:${cell.requestId}`);
+    expect(node).toMatchObject({ status: "done", human: { answer: ANSWER } });
+    expect(tree.nodes.get(node!.parent!)?.ref.type).toBe("turn");
   });
 
   it("returns timeout as structured non-error and closes the audit card", async () => {

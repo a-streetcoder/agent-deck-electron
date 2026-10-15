@@ -1,7 +1,13 @@
 import { ControlButton } from "@/design-system/components/NativeControls";
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { SessionMeta } from "@agent-deck/contracts";
-import type { EventActor, EventEnvelope } from "@agent-deck/domain";
+import {
+  eventLabel,
+  humanKindLabel,
+  type EventActor,
+  type EventEnvelope,
+  type OpenHumanRequest,
+} from "@agent-deck/domain";
 import { sectionHeaderClass } from "@/design-system/styles";
 import { cn } from "@/lib/cn";
 import { userDisplayName } from "@/lib/userIdentity";
@@ -10,6 +16,33 @@ import { refreshProjectLog, switchToSession } from "../state/wsBridge.ts";
 
 // ponytail: renders the newest rows only; virtualize if the full 2,000 are ever wanted.
 const SHOWN = 100;
+
+/** Server-wide boundaries, not the project's activity. */
+const SERVER_KINDS = new Set(["server.started", "writer.acquired"]);
+
+/**
+ * A8: the open human requests of the project over the whole log (a durable loop
+ * approval may be far older than the tail), refetched on every project log nudge.
+ */
+function useOpenHumanRequests(projectId: string | null, nudge: number | undefined) {
+  const [requests, setRequests] = useState<OpenHumanRequest[]>([]);
+  useEffect(() => {
+    let live = true;
+    const query = projectId === null ? "" : `?projectId=${encodeURIComponent(projectId)}`;
+    fetch(`/events/open-human${query}`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body: { requests?: OpenHumanRequest[] } | null) => {
+        if (live && body?.requests) setRequests(body.requests);
+      })
+      .catch(() => {
+        // Transient: the next nudge refetches.
+      });
+    return () => {
+      live = false;
+    };
+  }, [projectId, nudge]);
+  return requests;
+}
 
 export function actorLabel(actor: EventActor): string {
   if (actor.type === "user") return actor.id ? userDisplayName({ ...actor, id: actor.id }) : "user";
@@ -51,48 +84,95 @@ export function ActivityList() {
     void refreshProjectLog();
   }, [projectId]);
 
-  const events = log?.projectId === projectId ? log.events : [];
+  const all = log?.projectId === projectId ? log.events : undefined;
+  const events = useMemo(() => (all ?? []).filter((event) => !SERVER_KINDS.has(event.kind)), [all]);
   const shown = events.slice(-SHOWN).reverse();
+  // A8: requests waiting on a person, first and outside the collapsed list.
+  const waiting = useOpenHumanRequests(projectId, log?.lastSeq);
   return (
-    <details className="px-1.5 pb-1.5" data-testid="activity-list">
-      <summary className={cn(sectionHeaderClass, "cursor-pointer text-text-muted")}>
-        {events.length > SHOWN ? `Activity (newest ${SHOWN})` : `Activity (${events.length})`}
-      </summary>
-      {shown.length === 0 ? (
-        <div className="py-2 text-caption text-text-muted">No activity yet.</div>
-      ) : (
-        <ul className="max-h-40 space-y-0.5 overflow-y-auto pt-1">
-          {shown.map((event) => {
-            const link = subjectLink(event, sessions);
+    <>
+      {waiting.length > 0 ? (
+        <ul
+          className="space-y-0.5 px-1.5 pb-1"
+          data-testid="activity-waiting"
+          aria-label="Waiting on a person"
+        >
+          {waiting.map((request) => {
+            const session = sessions.find((candidate) => candidate.id === request.sessionId);
+            const target: AppView | undefined = session
+              ? "chat"
+              : request.kind === "loopApproval"
+                ? "loops"
+                : undefined;
+            const label = eventLabel(request.prompt) || "Waiting on a person";
             return (
               <li
-                key={event.seq}
+                key={request.id}
                 className="flex items-baseline gap-1.5 text-detail text-text-secondary"
-                data-testid={`activity-${event.seq}`}
+                data-testid="activity-waiting-row"
               >
-                <time className="shrink-0 text-text-muted" dateTime={event.ts}>
-                  {formatEventTime(event.ts)}
-                </time>
-                <span className="shrink-0">{actorLabel(event.actor)}</span>
-                <span className="shrink-0 font-mono text-code-sm">{event.kind}</span>
-                {link.view ? (
+                <span className="shrink-0 font-medium text-text-primary">
+                  {humanKindLabel(request.kind)}
+                </span>
+                <span className="shrink-0">{actorLabel(request.actor)}</span>
+                {target ? (
                   <ControlButton
                     className="min-w-0 truncate text-left text-accent hover:underline"
                     onClick={() => {
-                      if (link.view) setView(link.view);
-                      if (link.session) void switchToSession(link.session);
+                      setView(target);
+                      if (session) void switchToSession(session);
                     }}
                   >
-                    {link.label}
+                    {label}
                   </ControlButton>
                 ) : (
-                  <span className="min-w-0 truncate">{link.label}</span>
+                  <span className="min-w-0 truncate">{label}</span>
                 )}
               </li>
             );
           })}
         </ul>
-      )}
-    </details>
+      ) : null}
+      <details className="px-1.5 pb-1.5" data-testid="activity-list">
+        <summary className={cn(sectionHeaderClass, "cursor-pointer text-text-muted")}>
+          {events.length > SHOWN ? `Activity (newest ${SHOWN})` : `Activity (${events.length})`}
+        </summary>
+        {shown.length === 0 ? (
+          <div className="py-2 text-caption text-text-muted">No activity yet.</div>
+        ) : (
+          <ul className="max-h-40 space-y-0.5 overflow-y-auto pt-1">
+            {shown.map((event) => {
+              const link = subjectLink(event, sessions);
+              return (
+                <li
+                  key={event.seq}
+                  className="flex items-baseline gap-1.5 text-detail text-text-secondary"
+                  data-testid={`activity-${event.seq}`}
+                >
+                  <time className="shrink-0 text-text-muted" dateTime={event.ts}>
+                    {formatEventTime(event.ts)}
+                  </time>
+                  <span className="shrink-0">{actorLabel(event.actor)}</span>
+                  <span className="shrink-0 font-mono text-code-sm">{event.kind}</span>
+                  {link.view ? (
+                    <ControlButton
+                      className="min-w-0 truncate text-left text-accent hover:underline"
+                      onClick={() => {
+                        if (link.view) setView(link.view);
+                        if (link.session) void switchToSession(link.session);
+                      }}
+                    >
+                      {link.label}
+                    </ControlButton>
+                  ) : (
+                    <span className="min-w-0 truncate">{link.label}</span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </details>
+    </>
   );
 }

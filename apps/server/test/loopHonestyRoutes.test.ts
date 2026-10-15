@@ -78,6 +78,7 @@ function makeRoutes(
   extras: {
     engine?: LoopEngine;
     routeDependencies?: Partial<LoopRouteTestDependencies>;
+    events?: ServerContext["events"];
   } = {},
 ) {
   const fastify = Fastify();
@@ -186,7 +187,7 @@ function makeRoutes(
       // PRV-01: never probe the real Claude Code from these tests.
       claudeCodeLoggedIn: async () => true,
       settings: { get: () => ({ disabledModels: [] }) },
-      events: createEventProducers(disabledEventLog()),
+      events: extras.events ?? createEventProducers(disabledEventLog()),
     } as unknown as ServerContext,
     {
       canonicalCheckoutLockKey: canonicalCheckoutEffect,
@@ -272,6 +273,9 @@ describe("loop route honesty gate", () => {
 
   it("authors and launches Human Approval without executable resource allocation", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "loop-human-route-"));
+    const events = createEventProducers(disabledEventLog());
+    const humanRequested = vi.spyOn(events, "humanRequested");
+    const humanAnswered = vi.spyOn(events, "humanAnswered");
     const {
       fastify,
       createSession,
@@ -283,7 +287,7 @@ describe("loop route honesty gate", () => {
       indexRows,
       canonicalCheckoutEffect,
       createWorktreeEffect,
-    } = makeRoutes(home);
+    } = makeRoutes(home, undefined, undefined, { events });
     const providerEffect = vi.fn(async () => "must not run");
     const validationEffect = vi.fn(async () => true);
     const realEngine = new LoopEngine({
@@ -335,6 +339,15 @@ describe("loop route honesty gate", () => {
       { projectId: "project", retryOf: undefined },
     );
     expect(checkpoint.sessionId).toBeUndefined();
+    // A8: the checkpoint opens a human node under its run.
+    expect(humanRequested).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: checkpoint.id,
+        kind: "loopApproval",
+        prompt: "Review the release proposal.",
+        parent: { type: "loopRun", id: checkpoint.id },
+      }),
+    );
     expect(indexRows.size).toBe(0);
     expect(broadcast).not.toHaveBeenCalledWith(expect.objectContaining({ type: "session_meta" }));
     expect(createSession).not.toHaveBeenCalled();
@@ -363,6 +376,12 @@ describe("loop route honesty gate", () => {
       checkpoint.id,
       "approve",
       checkpoint.updatedAt,
+    );
+    // Loopback: an anonymous member decided; the log records the decision against the node.
+    expect(humanAnswered).toHaveBeenCalledWith(
+      { id: checkpoint.id, projectId: "project" },
+      { type: "user" },
+      "approve",
     );
 
     getEngine.mockReturnValue({ ...checkpoint, stopReason: "humanRejected" });

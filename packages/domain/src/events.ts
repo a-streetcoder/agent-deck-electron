@@ -22,6 +22,7 @@ export const NODE_REF_TYPES = [
   "loopRun",
   "loopIteration",
   "loopChild",
+  "human",
 ] as const;
 
 export type NodeRefType = (typeof NODE_REF_TYPES)[number];

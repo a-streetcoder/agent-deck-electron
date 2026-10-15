@@ -1,8 +1,26 @@
 import { randomUUID } from "node:crypto";
-import type { AskUserAnswer, AskUserCell, AskUserOption } from "@agent-deck/domain";
+import {
+  askUserAnswerText,
+  humanFromAskUser,
+  humanTimeoutMs,
+  humanTimeoutPolicy,
+  humanTimeoutPolicyParamSchema,
+  type AskUserAnswer,
+  type AskUserCell,
+  type AskUserOption,
+  type EventActor,
+  type HumanTimeoutPolicy,
+} from "@agent-deck/domain";
 import { z } from "zod";
 import type { BridgeCallResponse } from "@agent-deck/pi-host";
+import type { EventProducers } from "./eventProducers.ts";
 import type { SessionManager } from "./SessionManager.ts";
+
+/** A8: the human node events this coordinator writes. */
+export type AskUserEvents = Pick<
+  EventProducers,
+  "humanRequested" | "humanAnswered" | "humanExpired" | "humanCancelled"
+>;
 
 const optionSchema = z.union([
   z.string(),
@@ -19,8 +37,13 @@ export const askUserParamsSchema = z
     // Kept explicit for compatibility with the native harness. When false the
     // answer endpoint rejects a comment rather than silently discarding it.
     allowComment: z.boolean().default(false),
-    /** Seconds. Kept finite so a model cannot retain a bridge request forever. */
-    timeout: z.number().int().min(1).max(600).optional(),
+    /**
+     * Seconds. Kept finite so a model cannot retain a bridge request forever, and
+     * below the 300 s undici headersTimeout that fails Pi's bridge fetch first.
+     */
+    timeout: z.number().int().min(1).max(290).optional(),
+    /** A8: opt-in expiry; when set it replaces `timeout`. Absent: no policy. */
+    timeoutPolicy: humanTimeoutPolicyParamSchema.optional(),
   })
   .strict()
   .superRefine((value, issue) => {
@@ -53,6 +76,18 @@ export const askUserParamsSchema = z
         message: "allowMultiple requires at least two options",
       });
     }
+    const policy = value.timeoutPolicy;
+    if (
+      policy?.then === "default" &&
+      !value.allowFreeform &&
+      !options.includes(policy.default?.trim() ?? "")
+    ) {
+      issue.addIssue({
+        code: "custom",
+        path: ["timeoutPolicy", "default"],
+        message: "without free text the default must be one of the options",
+      });
+    }
     if (options.length === 0 && !value.allowFreeform) {
       issue.addIssue({
         code: "custom",
@@ -74,6 +109,7 @@ interface PendingAsk {
   sessionId: string;
   token: string;
   params: AskUserParams;
+  policy: HumanTimeoutPolicy;
   options: AskUserOption[];
   settle(result: BridgeCallResponse): void;
   timer: NodeJS.Timeout;
@@ -94,6 +130,7 @@ export class AskUserCoordinator {
   constructor(
     private readonly sessions: SessionManager,
     private readonly tokenForSession: (sessionId: string) => string | undefined,
+    private readonly events?: AskUserEvents,
   ) {}
 
   ask(
@@ -133,6 +170,9 @@ export class AskUserCoordinator {
       status: "pending",
     };
     session.openAskUser(cell);
+    const policy = humanTimeoutPolicy(params.timeoutPolicy);
+    const ref = { id, sessionId };
+    this.events?.humanRequested(humanFromAskUser(cell, policy));
 
     return new Promise((resolve) => {
       let settled = false;
@@ -148,14 +188,34 @@ export class AskUserCoordinator {
         signal?.removeEventListener("abort", abort);
         resolve(result);
       };
-      const close = (status: "cancelled" | "timed_out", reason: string): void => {
+      const close = (status: "cancelled" | "timed_out", reason: string, record = true): void => {
+        if (settled) return;
         session.closeAskUser(id, status, reason);
+        if (record) this.events?.humanCancelled(ref, reason);
         finish(content({ status, reason }));
       };
       const abort = (): void => close("cancelled", "The tool request was cancelled.");
+      const expire = (): void => {
+        if (settled || policy.type !== "expire") return;
+        this.events?.humanExpired(ref, policy);
+        if (policy.then === "blocked") {
+          close("timed_out", "No answer before the timeout policy expired: blocked.", false);
+          return;
+        }
+        // The run continues with the default: an offered title selects it, else free text.
+        const offered = options.find((option) => option.title === policy.default);
+        const answer: AskUserAnswer = offered
+          ? { selections: [offered.title], defaulted: true }
+          : { selections: [], freeform: policy.default, defaulted: true };
+        session.answerAskUser(id, answer);
+        finish(content({ status: "answered", ...answer }));
+      };
+      const policyMs = humanTimeoutMs(policy);
       const timer = setTimeout(
-        () => close("timed_out", "No answer was received before the timeout."),
-        (params.timeout ?? 110) * 1_000,
+        policyMs !== undefined
+          ? expire
+          : () => close("timed_out", "No answer was received before the timeout."),
+        policyMs ?? (params.timeout ?? 110) * 1_000,
       );
       timer.unref();
       const entry: PendingAsk = {
@@ -163,6 +223,7 @@ export class AskUserCoordinator {
         sessionId,
         token,
         params,
+        policy,
         options,
         settle: finish,
         timer,
@@ -180,10 +241,12 @@ export class AskUserCoordinator {
     });
   }
 
+  /** actor: the member who answered (any member on the shared server). */
   answer(
     sessionId: string,
     requestId: string,
     response: AskUserResponse,
+    actor: EventActor = { type: "user" },
   ): "ok" | "missing" | "forbidden" | "invalid" {
     const pending = this.pending.get(requestId);
     if (!pending) return "missing";
@@ -213,16 +276,22 @@ export class AskUserCoordinator {
       ...(comment ? { comment } : {}),
     };
     this.sessions.get(sessionId)?.answerAskUser(requestId, answer);
+    this.events?.humanAnswered({ id: requestId, sessionId }, actor, askUserAnswerText(answer));
     pending.settle(content({ status: "answered", ...answer }));
     return "ok";
   }
 
-  cancel(sessionId: string, requestId: string): "ok" | "missing" | "forbidden" {
+  cancel(
+    sessionId: string,
+    requestId: string,
+    actor: EventActor = { type: "user" },
+  ): "ok" | "missing" | "forbidden" {
     const pending = this.pending.get(requestId);
     if (!pending) return "missing";
     if (pending.sessionId !== sessionId || pending.token !== this.tokenForSession(sessionId))
       return "forbidden";
     this.sessions.get(sessionId)?.closeAskUser(requestId, "cancelled", "Cancelled by the user.");
+    this.events?.humanCancelled({ id: requestId, sessionId }, "Cancelled by the user.", actor);
     pending.settle(content({ status: "cancelled", reason: "Cancelled by the user." }));
     return "ok";
   }
@@ -231,6 +300,7 @@ export class AskUserCoordinator {
     for (const pending of [...this.pending.values()]) {
       if (pending.sessionId !== sessionId) continue;
       this.sessions.get(sessionId)?.closeAskUser(pending.id, "cancelled", reason);
+      this.events?.humanCancelled({ id: pending.id, sessionId }, reason);
       pending.settle(content({ status: "cancelled", reason }));
     }
   }
@@ -245,6 +315,10 @@ export class AskUserCoordinator {
       } catch (error) {
         errors.push(error);
       } finally {
+        this.events?.humanCancelled(
+          { id: pending.id, sessionId: pending.sessionId },
+          "The server is shutting down.",
+        );
         // The admitted /bridge request must settle even if projecting the
         // cancellation into one session's transcript fails.
         pending.settle(content({ status: "cancelled", reason: "The server is shutting down." }));

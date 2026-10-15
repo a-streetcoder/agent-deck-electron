@@ -1065,7 +1065,11 @@ async function initServer(
 
   // Parent-only human decision bridge. It is intentionally separate from the
   // Deck-agent bridge inventory and is never included in a child extension.
-  const askUser = new AskUserCoordinator(sessions, (sessionId) => bridgeTokens.get(sessionId));
+  const askUser = new AskUserCoordinator(
+    sessions,
+    (sessionId) => bridgeTokens.get(sessionId),
+    events,
+  );
   registerAskUserBridgeTool(bridge, askUser);
 
   // Native subagents, supervisor listing, and the session activity plan: the
@@ -1727,7 +1731,7 @@ async function initServer(
   registerProjectRoutes(ctx);
   registerSessionRoutes(ctx);
   registerComposerDraftRoutes(ctx, composerDrafts);
-  registerEventRoutes(fastify, eventLog);
+  registerEventRoutes(fastify, eventLog, () => logReaders.openHuman());
   registerAgentProfileRoutes(fastify, profileSources);
   registerSubagentDeltaRoute(fastify, subagentDeltas);
   // A1c: coalesced project_events nudges to every client (same reach as resources_changed).

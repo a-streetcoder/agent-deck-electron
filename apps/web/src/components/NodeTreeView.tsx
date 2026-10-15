@@ -2,7 +2,9 @@ import { ControlButton } from "@/design-system/components/NativeControls";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   eventLabel,
+  humanKindLabel,
   memoryToolCardLabel,
+  openHumanNodes,
   projectNodeTree,
   PROMPT_LABEL_MAX_CHARS,
   type AssistantCell,
@@ -58,7 +60,25 @@ const CHIP_TYPES = new Set([
   "loopIteration",
   "loopChild",
   "supervisorRequest",
+  "human",
 ]);
+
+/** A8: how a human node settled, with who answered (any member on the shared server). */
+export function humanOutcome(node: ExecutionNode): string | undefined {
+  const human = node.human;
+  if (!human) return undefined;
+  if (human.expired === "default")
+    return `Expired: default "${eventLabel(human.answer ?? "")}" used`;
+  if (human.expired === "blocked") return "Expired: blocked";
+  if (human.by) {
+    const answer = human.answer ? `: ${eventLabel(human.answer)}` : "";
+    return `Answered by ${actorLabel(human.by)}${answer}`;
+  }
+  if (human.cancelledReason) return human.cancelledReason;
+  return node.status === "pending"
+    ? `${humanKindLabel(human.kind)}: waiting on a person`
+    : undefined;
+}
 
 interface Joins {
   sessionId: string;
@@ -139,9 +159,30 @@ function turnLeaves(node: ExecutionNode, joins: Joins): Leaf[] {
   return leaves;
 }
 
-const NodeRow = memo(function NodeRow({ node, joins }: { node: ExecutionNode; joins: Joins }) {
+/** A8: a supervisor request's row duplicates its human node (same id): show the human one. */
+function duplicateRows(nodes: ReadonlyMap<string, ExecutionNode>): ReadonlySet<string> {
+  const hidden = new Set<string>();
+  for (const node of nodes.values()) {
+    if (node.ref.type === "supervisorRequest" && nodes.has(`human:${node.ref.id}`))
+      hidden.add(node.key);
+  }
+  return hidden;
+}
+
+const NO_HIDDEN: ReadonlySet<string> = new Set();
+
+const NodeRow = memo(function NodeRow({
+  node,
+  joins,
+  hidden = NO_HIDDEN,
+}: {
+  node: ExecutionNode;
+  joins: Joins;
+  hidden?: ReadonlySet<string>;
+}) {
   const tool = node.ref.type === "toolCall";
   const leaves = turnLeaves(node, joins);
+  const outcome = humanOutcome(node);
   const summary = (
     <span className="flex min-w-0 items-baseline gap-1.5">
       {CHIP_TYPES.has(node.ref.type) ? (
@@ -171,6 +212,11 @@ const NodeRow = memo(function NodeRow({ node, joins }: { node: ExecutionNode; jo
           </time>
         </>
       )}
+      {outcome ? (
+        <span className="min-w-0 truncate text-text-muted" data-testid="human-outcome">
+          {outcome}
+        </span>
+      ) : null}
     </span>
   );
   const nested = leaves.length > 0 || node.children.length > 0;
@@ -194,9 +240,11 @@ const NodeRow = memo(function NodeRow({ node, joins }: { node: ExecutionNode; jo
                 {leaf.kind === "reasoning" ? `Reasoning: ${leaf.text}` : leaf.text}
               </li>
             ))}
-            {node.children.map((child) => (
-              <NodeRow key={child.key} node={child} joins={joins} />
-            ))}
+            {node.children
+              .filter((child) => !hidden.has(child.key))
+              .map((child) => (
+                <NodeRow key={child.key} node={child} joins={joins} hidden={hidden} />
+              ))}
           </ul>
         </details>
       ) : (
@@ -296,13 +344,29 @@ export function NodeTreeView() {
 
   const root = tree?.roots[0];
   const forks = root?.forks ?? [];
+  // A8: open human nodes first; they also stay in place below.
+  const waiting = useMemo(() => (tree ? openHumanNodes(tree) : []), [tree]);
+  const hidden = useMemo(() => (tree ? duplicateRows(tree.nodes) : NO_HIDDEN), [tree]);
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2" data-testid="node-tree">
-      {root && (root.children.length > 0 || forks.length > 0) ? (
-        <ul className="space-y-0.5">
-          {root.children.map((node) => (
+      {waiting.length > 0 ? (
+        <ul
+          className="mb-2 space-y-0.5"
+          data-testid="open-human-nodes"
+          aria-label="Waiting on a person"
+        >
+          {waiting.map((node) => (
             <NodeRow key={node.key} node={node} joins={joins} />
           ))}
+        </ul>
+      ) : null}
+      {root && (root.children.length > 0 || forks.length > 0) ? (
+        <ul className="space-y-0.5">
+          {root.children
+            .filter((node) => !hidden.has(node.key))
+            .map((node) => (
+              <NodeRow key={node.key} node={node} joins={joins} hidden={hidden} />
+            ))}
           {forks.map((fork) => {
             const meta = sessions.find((candidate) => candidate.id === fork.sessionId);
             const title = meta?.title?.trim() || fork.label;

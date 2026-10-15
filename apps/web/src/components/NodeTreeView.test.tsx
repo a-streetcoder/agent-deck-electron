@@ -4,8 +4,13 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   emptyTranscript,
+  humanAnsweredDraft,
+  humanFromAskUser,
+  humanFromSupervisor,
+  humanRequestedDraft,
   parseEventLine,
   splitJsonl,
+  type EventDraft,
   type EventEnvelope,
   type TranscriptCell,
 } from "@agent-deck/domain";
@@ -243,4 +248,61 @@ it("A7: a verifier run sits under its producer, which shows the verdict chip wit
     .getAllByTestId("tree-node")
     .map((row) => within(row).getAllByTestId("tree-node-label")[0]!.textContent);
   expect(nested).toEqual(["verify: Build it"]);
+});
+
+it("A8: shows open human nodes first and who answered the settled ones", async () => {
+  const ale = { type: "user" as const, id: "ale@example.com", name: "Ale" };
+  const at = new Date("2026-10-15T10:00:00.000Z");
+  const envelope = (seq: number, draft: EventDraft): EventEnvelope => ({
+    v: 1,
+    id: `human-${seq}`,
+    seq,
+    ts: at.toISOString(),
+    logId: "log",
+    projectId: null,
+    ...draft,
+  });
+  const ask = (id: string, question: string) => ({
+    ...humanFromAskUser({ requestId: id, sessionId: SESSION, question, options: [] }),
+    parent: { type: "session" as const, id: SESSION },
+  });
+  served = [
+    ...recorded,
+    envelope(30, humanRequestedDraft(ask("ask-1", "Ship the release?"), at)),
+    envelope(31, humanAnsweredDraft(ask("ask-1", ""), ale, "Ship")),
+    envelope(32, humanRequestedDraft(ask("ask-2", "Which region?"), at)),
+  ];
+  render(<NodeTreeView />);
+  await waitFor(() => expect(screen.getByTestId("open-human-nodes")).toBeTruthy());
+  const tree = screen.getByTestId("node-tree");
+  // The waiting list comes before the tree itself.
+  expect(tree.firstElementChild).toBe(screen.getByTestId("open-human-nodes"));
+  const waiting = within(screen.getByTestId("open-human-nodes")).getAllByTestId("tree-node");
+  expect(waiting.map((row) => row.textContent)).toEqual([expect.stringContaining("Which region?")]);
+  expect(waiting[0]!.getAttribute("data-status")).toBe("pending");
+  const outcomes = screen.getAllByTestId("human-outcome").map((span) => span.textContent);
+  expect(outcomes).toContain("Answered by Ale: Ship");
+  expect(outcomes).toContain("Question: waiting on a person");
+});
+
+it("A8: a supervisor request's row gives way to its human node", async () => {
+  const request = recorded.find((event) => event.subject.type === "supervisorRequest")!;
+  const human = humanRequestedDraft(
+    humanFromSupervisor(
+      {
+        id: request.subject.id,
+        parentSessionId: SESSION,
+        cellId: request.parent!.id,
+        message: "Pick",
+      },
+      "child",
+    ),
+    new Date(request.ts),
+  );
+  served = [...recorded, { ...request, ...human, id: "human-dup", seq: 40, projectId: null }];
+  render(<NodeTreeView />);
+  await waitFor(() => expect(screen.getAllByTestId("tree-node").length).toBeGreaterThan(0));
+  const types = screen.getAllByTestId("tree-node").map((node) => node.getAttribute("data-type"));
+  expect(types).not.toContain("supervisorRequest");
+  expect(types).toContain("human");
 });

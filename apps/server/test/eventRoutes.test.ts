@@ -2,10 +2,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ServerMessage } from "@agent-deck/contracts";
-import type { EventEnvelope } from "@agent-deck/domain";
+import {
+  humanAnsweredDraft,
+  humanFromLoopApproval,
+  humanRequestedDraft,
+  type EventEnvelope,
+} from "@agent-deck/domain";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEventLog, type EventLog, type EventSubscriber } from "../src/eventLog.ts";
+import { createLogReaders } from "../src/eventReaders.ts";
 import { registerEventRoutes, startProjectEventNudges } from "../src/routes/events.ts";
 
 const cleanups: Array<() => unknown> = [];
@@ -183,5 +189,63 @@ describe("project_events nudges", () => {
     vi.advanceTimersByTime(200);
     expect(sent).toHaveLength(3);
     expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+});
+
+describe("A8: GET /events/open-human", () => {
+  it("lists a project's open requests from the whole log, an approval older than any tail included", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "agent-deck-open-human-"));
+    const log = createEventLog(dir, { warn: () => {} });
+    const readers = createLogReaders(log);
+    const fastify = Fastify();
+    registerEventRoutes(fastify, log, () => readers.openHuman());
+    cleanups.push(
+      () => rmSync(dir, { recursive: true, force: true }),
+      () => log.close(),
+      () => fastify.close(),
+    );
+    log.append(
+      humanRequestedDraft(
+        humanFromLoopApproval({ id: "run-old", checkpointPrompt: "Ship it?", projectId: "p1" }),
+        new Date(),
+      ),
+    );
+    log.append({
+      ...humanRequestedDraft(
+        { ...humanFromLoopApproval({ id: "run-p2", checkpointPrompt: "Other", projectId: "p2" }) },
+        new Date(),
+      ),
+    });
+    // Far more than the web's 200-event tail (and a page of the fold).
+    for (let i = 0; i < 1_200; i += 1) {
+      log.append({
+        kind: "plan.updated",
+        projectId: "p1",
+        subject: { type: "plan", id: "plan-1" },
+        actor: { type: "system" },
+        payload: {},
+      });
+    }
+    log.append({
+      kind: "writer.acquired",
+      subject: { type: "server", id: "w" },
+      actor: { type: "system" },
+      payload: {},
+    });
+    const get = async (query: string) =>
+      (await fastify.inject({ method: "GET", url: `/events/open-human${query}` })).json() as {
+        requests: { id: string; kind: string; prompt: string }[];
+      };
+    expect((await get("?projectId=p1")).requests).toEqual([
+      expect.objectContaining({ id: "run-old", kind: "loopApproval", prompt: "Ship it?" }),
+    ]);
+    expect((await get("")).requests.map((request) => request.id)).toEqual(["run-old", "run-p2"]);
+    log.append(humanAnsweredDraft({ id: "run-old", projectId: "p1" }, { type: "user" }, "approve"));
+    expect((await get("?projectId=p1")).requests).toEqual([]);
+    // The filtered reads carry the takeover boundary too.
+    const page = (
+      await fastify.inject({ method: "GET", url: "/events?projectId=p2&includeServerEvents=true" })
+    ).json() as { events: EventEnvelope[] };
+    expect(page.events.map((event) => event.kind)).toContain("writer.acquired");
   });
 });

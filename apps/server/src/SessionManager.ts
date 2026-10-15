@@ -13,6 +13,7 @@ import type {
   SubagentVerdict,
   TranscriptState,
   ChildTranscriptSnapshot,
+  EventActor,
 } from "@agent-deck/domain";
 import {
   buildLaunchArgs,
@@ -560,8 +561,8 @@ export class ManagedSession {
     await runPromiseUnwrapped(session.runtime, session.rt.abort);
   }
 
-  respondToUiRequest(raw: Record<string, unknown>): void {
-    runSyncUnwrapped(this.rt.respondToUiRequest(raw));
+  respondToUiRequest(raw: Record<string, unknown>, actor?: EventActor): void {
+    runSyncUnwrapped(this.rt.respondToUiRequest(raw, actor));
   }
 
   async getCommands(): Promise<Effect.Effect.Success<ManagedSessionRuntime["getCommands"]>> {

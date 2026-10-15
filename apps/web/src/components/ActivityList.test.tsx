@@ -1,9 +1,14 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionMeta } from "@agent-deck/contracts";
-import type { EventEnvelope } from "@agent-deck/domain";
+import {
+  humanAnsweredDraft,
+  humanFromAskUser,
+  humanRequestedDraft,
+  type EventEnvelope,
+} from "@agent-deck/domain";
 import { useAppStore } from "../state/store.ts";
 import { ActivityList } from "./ActivityList.tsx";
 
@@ -96,4 +101,118 @@ it("shows nothing from another project's log", () => {
   useAppStore.setState({ currentProjectId: "p2" });
   render(<ActivityList />);
   expect(screen.getByText("Activity (0)")).toBeTruthy();
+});
+
+it("A8: lists the server's open human requests first, outside the collapsed list, linked to where they are answered", async () => {
+  const ale = { type: "user" as const, id: "ale@example.com", name: "Ale" };
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL) =>
+    Response.json({
+      logId: "log-a",
+      requests: [
+        {
+          id: "ask-1",
+          kind: "askUser",
+          prompt: "Ship?\n\ncontext",
+          timeoutPolicy: { type: "none" },
+          projectId: "p1",
+          sessionId: "s1",
+          actor: { type: "agent", sessionId: "s1", agentName: "builder" },
+          requestedAt: "2026-10-15T10:00:00.000Z",
+        },
+        {
+          // Far older than the tail: the server reads the whole log.
+          id: "run-1",
+          kind: "loopApproval",
+          prompt: "Approve the release",
+          timeoutPolicy: { type: "none" },
+          projectId: "p1",
+          actor: { type: "system" },
+          requestedAt: "2026-09-01T10:00:00.000Z",
+        },
+      ],
+    }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  useAppStore.setState({
+    projectLog: {
+      projectId: "p1",
+      logId: "log-a",
+      lastSeq: 8,
+      events: [
+        event(7, {
+          ...humanRequestedDraft(
+            humanFromAskUser({
+              requestId: "ask-2",
+              sessionId: "s1",
+              question: "Done?",
+              options: [],
+            }),
+            new Date(),
+          ),
+          projectId: "p1",
+        } as Partial<EventEnvelope>),
+        event(8, {
+          ...humanAnsweredDraft({ id: "ask-2", sessionId: "s1" }, ale, "yes"),
+          projectId: "p1",
+        } as Partial<EventEnvelope>),
+      ],
+    },
+  });
+  render(<ActivityList />);
+  await waitFor(() => expect(screen.getByTestId("activity-waiting")).toBeTruthy());
+  expect(String(fetchMock.mock.calls[0]![0])).toBe("/events/open-human?projectId=p1");
+  const waiting = screen.getByTestId("activity-waiting");
+  // First in the panel, before the (collapsed) activity list.
+  expect(waiting.nextElementSibling).toBe(screen.getByTestId("activity-list"));
+  const rows = within(waiting)
+    .getAllByTestId("activity-waiting-row")
+    .map((row) => row.textContent);
+  expect(rows).toEqual([
+    expect.stringContaining("Ship?"),
+    expect.stringContaining("Approve the release"),
+  ]);
+  expect(rows[0]).toContain("Question");
+  expect(rows[0]).toContain("builder");
+  expect(rows[1]).toContain("Loop approval");
+  fireEvent.click(within(waiting).getByRole("button", { name: "Ship?" }));
+  expect(switchToSession).toHaveBeenCalledWith(session);
+  fireEvent.click(within(waiting).getByRole("button", { name: "Approve the release" }));
+  expect(useAppStore.getState().view).toBe("loops");
+  // The answer row in the list carries who answered.
+  const answeredRow = screen.getByTestId("activity-8");
+  expect(answeredRow.textContent).toContain("Ale");
+  expect(answeredRow.textContent).toContain("human.answered");
+  // A project log nudge refetches.
+  act(() =>
+    useAppStore.setState({ projectLog: { ...useAppStore.getState().projectLog!, lastSeq: 9 } }),
+  );
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  vi.unstubAllGlobals();
+});
+
+it("A8: hides server-wide restart and takeover rows from the activity rows", () => {
+  useAppStore.setState({
+    projectLog: {
+      projectId: "p1",
+      logId: "log-a",
+      lastSeq: 11,
+      events: [
+        event(9, { sessionId: "s1" }),
+        event(10, {
+          kind: "writer.acquired",
+          projectId: null,
+          subject: { type: "server", id: "y" },
+        }),
+        event(11, {
+          kind: "server.started",
+          projectId: null,
+          subject: { type: "server", id: "x" },
+        }),
+      ],
+    },
+  });
+  render(<ActivityList />);
+  expect(screen.getByText("Activity (1)")).toBeTruthy();
+  expect(screen.queryByTestId("activity-10")).toBeNull();
+  expect(screen.queryByTestId("activity-11")).toBeNull();
 });

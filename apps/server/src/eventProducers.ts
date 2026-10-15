@@ -10,6 +10,13 @@ import {
   EVENT_LABEL_MAX_CHARS,
   EVENT_TEXT_MAX_CHARS,
   eventLabel,
+  extensionUiAnswerText,
+  humanAnsweredDraft,
+  humanCancelledDraft,
+  humanExpiredDraft,
+  humanFromExtensionUi,
+  humanFromSupervisor,
+  humanRequestedDraft,
   MAX_PLAN_EVENT_ITEMS,
   PROMPT_LABEL_MAX_CHARS,
   redactPaths,
@@ -17,6 +24,9 @@ import {
   SUBAGENT_RESULT_READ,
   type EventActor,
   type EventDraft,
+  type HumanNodeRef,
+  type HumanRequest,
+  type HumanTimeoutPolicy,
   type NodeRef,
   type PathPrefix,
   type SubagentVerdict,
@@ -86,12 +96,28 @@ export interface EventProducers {
     safety: CheckpointRecord | null,
     actor: EventActor,
   ): void;
-  /** A blocking request opens; a progress_update is recorded (it is not a request). */
-  supervisorOpened(request: SupervisorRequest, childSessionId: string): void;
+  /**
+   * A blocking request opens; a progress_update is recorded (it is not a request).
+   * A8: a blocking one also opens a human node (options: the card's choices).
+   */
+  supervisorOpened(
+    request: SupervisorRequest,
+    childSessionId: string,
+    options?: readonly string[],
+  ): void;
   supervisorAnswered(request: SupervisorRequest, actor: EventActor): void;
   supervisorCancelled(request: SupervisorRequest): void;
   /** A3: the parent was handed a run's delta up to uptoSeq; false when the log refused it. */
   subagentResultRead(parentSessionId: string, runId: string, uptoSeq: number): boolean;
+  /**
+   * A8: a human node opens. A session request without a parent sits under the turn
+   * Pi is running (else the session) and follows it causally.
+   */
+  humanRequested(request: HumanRequest): void;
+  /** by: the member who answered (or the agent, for the parent's bridge tool). */
+  humanAnswered(ref: HumanNodeRef, by: EventActor, answer: string, withhold?: boolean): void;
+  humanExpired(ref: HumanNodeRef, policy: Extract<HumanTimeoutPolicy, { type: "expire" }>): void;
+  humanCancelled(ref: HumanNodeRef, reason: string, actor?: EventActor): void;
   loopUserAction(
     runId: string,
     projectId: string | undefined,
@@ -167,6 +193,31 @@ export function createEventProducers(
     turn?.promptEventId ? { causationId: turn.promptEventId } : {};
   const append = (draft: EventDraft): void => {
     log.append(draft);
+  };
+  const view = () => ({ pathPrefixes: pathPrefixes() });
+  const humanRequested = (request: HumanRequest): void => {
+    const sessionId = request.sessionId;
+    const turn = sessionId ? sessions.get(sessionId)?.active : undefined;
+    const placed: HumanRequest =
+      request.parent || !sessionId
+        ? request
+        : {
+            ...request,
+            parent: turn ? { type: "turn", id: turn.turnId } : { type: "session", id: sessionId },
+            ...(request.causationId ? {} : causedBy(turn)),
+          };
+    append(humanRequestedDraft(placed, new Date(), view()));
+  };
+  const humanAnswered = (
+    ref: HumanNodeRef,
+    by: EventActor,
+    answer: string,
+    withhold?: boolean,
+  ): void => {
+    append(humanAnsweredDraft(ref, by, answer, { ...view(), ...(withhold ? { withhold } : {}) }));
+  };
+  const humanCancelled = (ref: HumanNodeRef, reason: string, actor?: EventActor): void => {
+    append(humanCancelledDraft(ref, reason, actor, view()));
   };
 
   const supervisorPayload = (request: SupervisorRequest) => ({
@@ -256,7 +307,38 @@ export function createEventProducers(
     },
 
     turnHooks(meta) {
+      // A8: extension UI requests whose answer must not reach the log (MCP sign-in codes).
+      const withheld = new Set<string>();
+      const uiRef = (id: string): HumanNodeRef => ({
+        id: humanFromExtensionUi(meta.id, { id, method: "" }).id,
+        sessionId: meta.id,
+      });
       return {
+        uiRequested(request) {
+          const human = humanFromExtensionUi(meta.id, request);
+          if (human.withholdAnswer) withheld.add(request.id);
+          humanRequested(human);
+        },
+        uiResolved(id, response, actor) {
+          const answer = extensionUiAnswerText(response);
+          const hidden = withheld.delete(id);
+          if (answer === undefined) humanCancelled(uiRef(id), "Cancelled.", actor);
+          else humanAnswered(uiRef(id), actor ?? SYSTEM, answer, hidden);
+        },
+        uiClosed(id, reason) {
+          withheld.delete(id);
+          humanCancelled(uiRef(id), reason);
+        },
+        uiExpired(id, timeoutMs) {
+          withheld.delete(id);
+          append(
+            humanExpiredDraft(
+              uiRef(id),
+              { type: "expire", afterMinutes: timeoutMs / 60_000, then: "blocked" },
+              view(),
+            ),
+          );
+        },
         consumed() {
           const turns = turnsOf(meta.id);
           const next = turns.queued.shift();
@@ -404,7 +486,7 @@ export function createEventProducers(
       });
     },
 
-    supervisorOpened(request, childSessionId) {
+    supervisorOpened(request, childSessionId, options) {
       const progress = request.method === "progress_update";
       append({
         id: request.id,
@@ -416,6 +498,7 @@ export function createEventProducers(
         ...causeOf(request.parentSessionId),
         payload: supervisorPayload(request),
       });
+      if (!progress) humanRequested(humanFromSupervisor(request, childSessionId, options));
     },
 
     supervisorAnswered(request, actor) {
@@ -427,6 +510,11 @@ export function createEventProducers(
         causationId: request.id,
         payload: { id: request.id, response: clean(request.response ?? "", EVENT_TEXT_MAX_CHARS) },
       });
+      humanAnswered(
+        { id: request.id, sessionId: request.parentSessionId },
+        actor,
+        request.response ?? "",
+      );
     },
 
     supervisorCancelled(request) {
@@ -439,6 +527,10 @@ export function createEventProducers(
         // `response`, as in SupervisorRequest: the cancellation reason.
         payload: { id: request.id, response: clean(request.response ?? "", EVENT_TEXT_MAX_CHARS) },
       });
+      humanCancelled(
+        { id: request.id, sessionId: request.parentSessionId },
+        request.response ?? "Cancelled.",
+      );
     },
 
     subagentResultRead(parentSessionId, runId, uptoSeq) {
@@ -451,6 +543,13 @@ export function createEventProducers(
         payload: { uptoSeq },
       }).ok;
     },
+
+    humanRequested,
+    humanAnswered,
+    humanExpired(ref, policy) {
+      append(humanExpiredDraft(ref, policy, view()));
+    },
+    humanCancelled,
 
     loopUserAction(runId, projectId, action, actor) {
       append({

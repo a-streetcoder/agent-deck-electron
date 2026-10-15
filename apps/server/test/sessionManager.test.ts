@@ -3438,6 +3438,97 @@ describe("durable session attention", () => {
     },
   );
 
+  it("A8: reports a blocking extension UI request and who answered it to the turn hooks", async () => {
+    const { piHost } = makeFakePiHost();
+    const requested: unknown[] = [];
+    const resolved: unknown[] = [];
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const params = makeParams({
+            turnEvents: {
+              consumed: () => {},
+              current: () => undefined,
+              end: () => undefined,
+              completed: () => {},
+              uiRequested: (request) => requested.push(request),
+              uiResolved: (...args) => resolved.push(args),
+            },
+          });
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+          yield* Effect.fork(rt.ingest);
+          yield* rt.prompt("request-extension-ui");
+          yield* waitUntil(() => requested.length === 1);
+          expect(requested[0]).toMatchObject({ id: "extension-question-1", method: "confirm" });
+          const actor = { type: "user" as const, id: "ale@example.com" };
+          yield* rt.respondToUiRequest({ id: "extension-question-1", confirmed: true }, actor);
+          expect(resolved).toEqual([
+            [
+              "extension-question-1",
+              { type: "extension_ui_response", id: "extension-question-1", confirmed: true },
+              actor,
+            ],
+          ]);
+        }),
+      ),
+    );
+  }, 15_000);
+
+  it.each([
+    ["the turn ends", "extension-ui-in-turn", "turn-q"],
+    ["its own timeout runs out", "extension-ui-timeout", "timed-q"],
+    ["Pi exits", "request-extension-ui", "extension-question-1"],
+  ] as const)(
+    "A8: closes an extension UI request Pi settled on its own when %s",
+    async (_case, message, id) => {
+      const { piHost, pids } = makeFakePiHost();
+      const settled: unknown[] = [];
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const params = makeParams({
+              turnEvents: {
+                consumed: () => {},
+                current: () => undefined,
+                end: () => undefined,
+                completed: () => {},
+                uiRequested: () => {},
+                uiClosed: (...args) => settled.push(["closed", ...args]),
+                uiExpired: (...args) => settled.push(["expired", ...args]),
+              },
+            });
+            const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+            yield* Effect.fork(rt.ingest);
+            yield* rt.prompt(message);
+            if (message === "request-extension-ui") {
+              yield* waitUntil(() => params.meta.needsAttention === true);
+              for (const pid of pids) process.kill(pid);
+            }
+            yield* waitUntil(() => settled.length === 1);
+            expect(settled[0]).toEqual(
+              message === "extension-ui-timeout"
+                ? ["expired", id, 50]
+                : [
+                    "closed",
+                    id,
+                    message === "extension-ui-in-turn" ? "The turn ended." : "Pi exited.",
+                  ],
+            );
+            // A late answer is refused: Pi already discarded the dialog.
+            const late = yield* Effect.either(rt.respondToUiRequest({ id, value: "late" }));
+            expect(late._tag).toBe("Left");
+            const card = (yield* rt.snapshot).state.cells.find(
+              (cell) => cell.id === `question-${id}`,
+            );
+            expect(card).toMatchObject({ kind: "question", answered: true });
+            expect((yield* rt.parkingState).pendingExtensionUi).toBe(false);
+          }),
+        ),
+      );
+    },
+    15_000,
+  );
+
   it("keeps a passive setStatus out of the pending-UI blocker and off the badge", async () => {
     const { piHost } = makeFakePiHost();
     await Effect.runPromise(

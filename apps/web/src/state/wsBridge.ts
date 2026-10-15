@@ -1558,8 +1558,9 @@ export function refreshProjectLog(): Promise<void> {
 
 async function pullProjectLog(): Promise<void> {
   const projectId = useAppStore.getState().currentProjectId;
+  // A8: server.started too, so the restart rule closes memory-only human requests.
   const url = (cursor: string): string =>
-    `/events?${projectId === null ? "" : `projectId=${encodeURIComponent(projectId)}&`}${cursor}`;
+    `/events?${projectId === null ? "" : `projectId=${encodeURIComponent(projectId)}&includeServerEvents=true&`}${cursor}`;
   const stillOpen = (): boolean => useAppStore.getState().currentProjectId === projectId;
 
   for (let page = 0; page < PROJECT_LOG_MAX_PAGES; page += 1) {
@@ -1593,14 +1594,22 @@ async function pullProjectTail(
 ): Promise<void> {
   const first = await fetchJson<ProjectEventPage>(url(`limit=${PROJECT_LOG_TAIL}`));
   let tail = first;
+  // A8: server-wide server.started / writer.acquired rows are not the project's events: a page of only
+  // those counts as empty, and the skipped ones are kept (the restart rule needs them).
+  const restarts: ProjectEventPage["events"] = [];
+  const onlyRestarts = (page: ProjectEventPage): boolean =>
+    page.events.every(
+      (event) => event.kind === "server.started" || event.kind === "writer.acquired",
+    );
   for (
     let hop = 0;
     hop < PROJECT_LOG_MAX_TAIL_HOPS &&
-    tail.events.length === 0 &&
+    onlyRestarts(tail) &&
     tail.more &&
     tail.nextBeforeSeq !== undefined;
     hop += 1
   ) {
+    restarts.unshift(...tail.events);
     tail = await fetchJson<ProjectEventPage>(
       url(`beforeSeq=${tail.nextBeforeSeq}&limit=${PROJECT_LOG_TAIL}`),
     );
@@ -1608,9 +1617,13 @@ async function pullProjectTail(
   }
   if (!stillOpen()) return;
   // A fresh start: the cursor is the server's lastSeq when the walk began.
-  useAppStore
-    .getState()
-    .setProjectLog(ingestProjectEvents(null, projectId, { ...tail, lastSeq: first.lastSeq }));
+  useAppStore.getState().setProjectLog(
+    ingestProjectEvents(null, projectId, {
+      ...tail,
+      events: [...tail.events, ...restarts],
+      lastSeq: first.lastSeq,
+    }),
+  );
 }
 
 /** Who the server says we are. Best-effort: a loopback server answers null. A
