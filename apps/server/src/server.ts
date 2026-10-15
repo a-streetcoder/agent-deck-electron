@@ -1147,9 +1147,9 @@ async function initServer(
     },
     project: findProject,
     projectName: (id) => projects.find((item) => item.id === id)?.name,
-    turnCounts: () => logReaders.sessionTurns(),
+    sessionLogs: () => logReaders.sessionLogs(),
+    logStartedAt: () => logReaders.startedAt(),
     openHuman: openHumanNow,
-    log: eventLog,
   });
   // A5: run assigned plan items through the A4 spawn path as they become ready.
   const planDispatcher = createPlanDispatcher({

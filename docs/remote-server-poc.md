@@ -435,12 +435,18 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
 - **Agents reading shared sessions (SRV-15c).** Every agent on the server has
   `list_sessions({project?, member?, since?, limit?})` and `read_session({sessionId, since?})`,
   whoever owns the session: visibility is the point, nothing is hidden. `member` is an owner's
-  email or a display name only one owner has. `read_session` gives status, open questions, the
+  email (compared case-insensitively) or a display name only one owner has. `read_session` gives status, open questions, the
   latest plan, checkpoints and per turn who prompted it, its outcome, tool counts and the head of
   its final answer, plus the owner's Pi session file path and entry ids; the agent reads more of
   that file with its own read and grep tools, which works because every member's sessions run as
   the same Unix user. Reading a session changes nothing in it or in the log. Another session's
-  text may carry web content: it reaches the model quoted and labelled as data. Details in
+  text may carry web content: it reaches the model with token-like secrets redacted, quoted and
+  labelled as data. Residual risk: quoting stops that text from breaking the result's structure,
+  but its meaning still reaches an agent that has bash and spawn tools, so a planted instruction
+  in a co-worker's session can still persuade it; ADR 0003 is attribution, not isolation, and the
+  agent's actions stay attributed to whoever runs it. A session older than the event log, or a
+  server with the log off, shows turns read from the Pi file, split at every user message (a steer
+  or follow-up there reads as its own turn). Details in
   [orchestration-reference.md](orchestration-reference.md).
 - **Providers screen.** `GET /runtime/providers`, sign-in and sign-out act on the requesting
   user's dir. A sign-in in progress belongs to whoever started it: polling, answering or
