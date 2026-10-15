@@ -20,3 +20,9 @@ GUARDRAILS: worktree E:/agent-deck-wt/<ticket> on wt/<ticket>; never git checkou
 ## Acceptance Criteria
 
 Domain tests for normalisation of all six templates and graph validation; loopEngine + loops.pi green with no fixture change; a hand-written graph loop (pipeline + checker after stage two) runs end to end in one real-Pi test; web test for the graph view; docs/orchestration-reference.md updated; tsc, eslint, prettier clean.
+
+## Notes
+
+**2026-10-15T08:43:35Z**
+
+2026-10-15 contrarian on 42f035d: parity holds for the six templates (string-literal diff: only 'Checker report' is new; validation timing, tool-failure order, stop checks, parallel, triage limits, ASK_HUMAN, review session creation unchanged); control flow is truly one path, prompt/feedback choice still a kind-switch; merge clean against 35095f5. Fix before close: validation accepts shapes the interpreter mishandles (work after the checker, branches then stage, triage+checker, branches+checker) -> accept only the templates plus stages+one checker; human nodes in hand-written graphs are broken (label vs graph choose the checkpoint path) -> refuse the kind in hand-written graphs; export the loop-child status mapping from domain instead of the copy; never-ran nodes show skipped. Follow-ups: the real graph error never reaches the list UI; editor shows the label's form for custom graphs; 'Human node' now names both A8 requests and the A9 node kind.
