@@ -611,6 +611,13 @@ export const ServerMessage = Schema.Union(
    * subscribed client must resubscribe without carrying its prior sequence. */
   Schema.Struct({ type: Schema.Literal("session_rebind"), sessionId: Schema.String }),
   Schema.Struct({ type: Schema.Literal("resources_changed") }),
+  /** A1c: the event log gained events for this project (null = project-less) up to
+   * seq. A coalesced hint, not a stream: clients refetch GET /events?afterSeq. */
+  Schema.Struct({
+    type: Schema.Literal("project_events"),
+    projectId: Schema.NullOr(Schema.String),
+    seq: Schema.Number,
+  }),
   Schema.Struct({
     type: Schema.Literal("error"),
     message: Schema.String,

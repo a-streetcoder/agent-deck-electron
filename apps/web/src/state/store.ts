@@ -12,6 +12,7 @@ import { emptyTranscript, type PasteAttachment, type TranscriptState } from "@ag
 import { create } from "zustand";
 import type { PendingReviewComment, ReviewCommentSide } from "../lib/reviewComments.ts";
 import type { PendingElementContext } from "../lib/elementContext.ts";
+import type { ProjectLogState } from "./projectLog.ts";
 
 /** A jump-to-diff request raised by a pending review-comment card (Slice 12). */
 export interface DiffJumpRequest {
@@ -275,6 +276,8 @@ export interface AppState {
   softWrap: boolean;
   /** Bumped by resources_changed pushes; resource screens refetch on change. */
   resourcesVersion: number;
+  /** A1c: the open project's event log tail (Activity list); see projectLog.ts. */
+  projectLog: ProjectLogState | null;
   projects: ProjectMeta[];
   /** True once the initial /projects fetch has settled (avoids first-run flash). */
   projectsLoaded: boolean;
@@ -415,6 +418,7 @@ export interface AppState {
   setPanelExpanded(expanded: boolean): void;
   setSoftWrap(softWrap: boolean): void;
   bumpResourcesVersion(): void;
+  setProjectLog(projectLog: ProjectLogState | null): void;
   setProjects(projects: ProjectMeta[]): void;
   setCurrentProject(projectId: string | null): void;
   setCurrentAgent(agentName: string | null): void;
@@ -543,6 +547,7 @@ export const useAppStore = create<AppState>((set) => ({
   panelExpanded: initialPanelExpanded(),
   softWrap: initialSoftWrap(),
   resourcesVersion: 0,
+  projectLog: null,
   projects: [],
   projectsLoaded: false,
   currentProjectId: null,
@@ -618,6 +623,7 @@ export const useAppStore = create<AppState>((set) => ({
     set({ softWrap });
   },
   bumpResourcesVersion: () => set((state) => ({ resourcesVersion: state.resourcesVersion + 1 })),
+  setProjectLog: (projectLog) => set({ projectLog }),
   setProjects: (projects) => set({ projects, projectsLoaded: true }),
   setCurrentProject: (currentProjectId) =>
     set({

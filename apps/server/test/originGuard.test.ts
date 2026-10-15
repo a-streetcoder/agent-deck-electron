@@ -127,6 +127,12 @@ describe("REST origin guard", () => {
     expect(await restStatus("GET", "/health", "https://evil.example")).toBe(200);
   });
 
+  it("guards the event log read (A1c): it carries every project's activity", async () => {
+    expect(await restStatus("GET", "/events", "https://evil.example")).toBe(403);
+    expect(await restStatus("GET", "/events", base())).toBe(200);
+    expect(await restStatus("GET", "/events", undefined)).toBe(200);
+  });
+
   it("applies the same origin rule as the WebSocket upgrade", async () => {
     const origins = [
       undefined,

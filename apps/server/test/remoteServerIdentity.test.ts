@@ -129,6 +129,13 @@ describe("trusted proxy on the HTTP surface", () => {
     expect(refused.status).toBe(401);
     expect(await refused.json()).toMatchObject({ code: "unauthenticated" });
     expect((await fetch(endpoint("/me"))).status).toBe(401);
+    // A1c: the event log is the team stream; no identity, no read.
+    expect((await fetch(endpoint("/events"))).status).toBe(401);
+    const events = await fetch(endpoint("/events?projectId=null"), { headers: ale });
+    expect(events.status).toBe(200);
+    expect(await events.json()).toMatchObject({
+      events: [expect.objectContaining({ kind: "server.started", projectId: null })],
+    });
   });
 
   it("reports the verified user on /me (header or Access cookie)", async () => {
