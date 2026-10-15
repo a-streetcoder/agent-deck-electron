@@ -17,3 +17,9 @@ Owner direction 2026-10-15: the desktop is always local Agent Deck; a team serve
 
 A teammate installs the desktop, opens Settings > Team server, enters the URL, clicks Sign in, completes the browser login and sees 'Signed in as <name>'; Make shared / move / mirror / bring back work from then on; with an empty URL the app behaves exactly as local Agent Deck; no env variable needed by users.
 
+
+## Notes
+
+**2026-10-15T21:56:37Z**
+
+2026-10-15 owner approved (exact word) the SRV-16 tree 16a-16d.

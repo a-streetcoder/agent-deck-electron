@@ -1,6 +1,6 @@
 ---
 id: ade-wvbh
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-10-15T21:55:06Z
@@ -18,3 +18,9 @@ Main process: a small JSON settings store in app.getPath('userData') (apps/deskt
 
 node --test for the store (validation, override precedence, change resets the client); web test for the section; empty URL = no client, no network; typecheck, design-system check, prettier clean; docs 'Clients' section updated.
 
+
+## Notes
+
+**2026-10-15T21:56:37Z**
+
+2026-10-15 started; worktree E:\agent-deck-wt\ade-wvbh (wt/ade-wvbh).
