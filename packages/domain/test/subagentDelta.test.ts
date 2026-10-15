@@ -3,9 +3,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parseEventLine, splitJsonl, type EventEnvelope } from "../src/events.ts";
+import { projectNodeTree } from "../src/nodeTree.ts";
 import {
-  lastSubagentReadSeq,
-  SUBAGENT_DELTA_MAX_TOOL_CALLS,
+  SubagentDeltaIndex,
+  SUBAGENT_DELTA_MAX_DECISIONS,
   SUBAGENT_RESULT_READ,
   subagentDelta,
 } from "../src/subagentDelta.ts";
@@ -132,38 +133,38 @@ describe("subagentDelta over a recorded child log", () => {
     const delta = subagentDelta(recorded, { runId: RUN, sinceSeq: 0 });
     expect(delta).toEqual({
       runId: RUN,
-      sinceSeq: 0,
-      uptoSeq: 9,
-      full: true,
       statusNow: "completed",
-      turnsCompleted: 1,
       lastTurnOutcome: "completed",
-      toolCallsSinceLastLook: [{ id: "call_mock_3", name: "contact_supervisor", isError: false }],
-      openQuestions: [],
-      decisions: [],
       summaryHead: "Child summary: done.",
       summaryBytes: 20,
+      resultIsLatest: true,
+      full: true,
+      sinceSeq: 0,
+      uptoSeq: 9,
+      turnsCompleted: 1,
+      toolCalls: { contact_supervisor: 1 },
+      failedToolCalls: [],
+      openQuestions: [],
+      decisions: [],
     });
   });
 
   it("second look: only what changed after the parent's cursor", () => {
-    const sinceSeq = lastSubagentReadSeq(log, RUN);
-    expect(sinceSeq).toBe(9);
-    const delta = subagentDelta(log, { runId: RUN, sinceSeq });
+    const delta = subagentDelta(log, { runId: RUN, sinceSeq: 9 });
     expect(delta).toEqual({
       runId: RUN,
-      sinceSeq: 9,
-      uptoSeq: continuation.at(-1)!.seq,
-      full: false,
       statusNow: "failed",
       statusThen: "completed",
-      turnsCompleted: 1,
       lastTurnOutcome: "failed",
+      error: "bash exited 1",
+      resultIsLatest: true,
+      full: false,
+      sinceSeq: 9,
+      uptoSeq: continuation.at(-1)!.seq,
+      turnsCompleted: 1,
       partialTurns: 1,
-      toolCallsSinceLastLook: [
-        { id: "call_a", name: "read", isError: false },
-        { id: "call_b", name: "bash", isError: true },
-      ],
+      toolCalls: { read: 1, bash: 1 },
+      failedToolCalls: ["bash"],
       openQuestions: [{ id: uuid(202), method: "interview_request", message: "Which folder?" }],
       decisions: [
         {
@@ -174,8 +175,39 @@ describe("subagentDelta over a recorded child log", () => {
           response: "JSON",
         },
       ],
+    });
+  });
+
+  it("the index takes the cursor from the parent's read events and merges what it passes", () => {
+    const index = new SubagentDeltaIndex();
+    for (const event of log) index.apply(event);
+    expect(index.delta(RUN, "cursor")).toEqual(subagentDelta(log, { runId: RUN, sinceSeq: 9 }));
+    // The whole run from the start: both turns, both results' newest, counts merged.
+    expect(index.delta(RUN, "start")).toMatchObject({
+      full: true,
+      turnsCompleted: 2,
+      toolCalls: { contact_supervisor: 1, read: 1, bash: 1 },
       error: "bash exited 1",
     });
+    // A later cursor leaves an empty window; an older or equal one is ignored.
+    const upto = continuation.at(-1)!.seq;
+    index.apply(next(SUBAGENT_RESULT_READ, runRef, { uptoSeq: upto }));
+    index.apply(next(SUBAGENT_RESULT_READ, runRef, { uptoSeq: 9 }));
+    expect(index.get(RUN)!.cursor).toBe(upto);
+    expect(index.get(RUN)!.tail).toEqual([]);
+    expect(index.delta(RUN, "cursor")).toMatchObject({
+      sinceSeq: upto,
+      uptoSeq: upto,
+      statusThen: "failed",
+      turnsCompleted: 0,
+      toolCalls: {},
+      decisions: [],
+      openQuestions: [{ id: uuid(202) }],
+    });
+    // A removed run is dropped with its open requests.
+    index.apply(next("subagent.run.removed", runRef, { id: RUN }));
+    expect(index.get(RUN)).toBeUndefined();
+    expect(index.size).toBe(1); // the other run
   });
 
   it("a look with nothing new is empty but keeps the open questions and the cursor", () => {
@@ -185,7 +217,7 @@ describe("subagentDelta over a recorded child log", () => {
       uptoSeq: upto,
       full: false,
       turnsCompleted: 0,
-      toolCallsSinceLastLook: [],
+      toolCalls: {},
       decisions: [],
       openQuestions: [{ id: uuid(202) }],
     });
@@ -208,11 +240,11 @@ describe("subagentDelta over a recorded child log", () => {
     expect(delta.uptoSeq).toBe(continuation.at(-1)!.seq);
   });
 
-  it("keeps the newest tool calls and counts the rest", () => {
-    const calls = Array.from({ length: SUBAGENT_DELTA_MAX_TOOL_CALLS + 5 }, (_, i) => ({
+  it("counts tool calls per name and keeps the newest decisions", () => {
+    const calls = Array.from({ length: 105 }, (_, i) => ({
       id: `c${i}`,
-      name: "read",
-      isError: false,
+      name: i % 2 ? "read" : "bash",
+      isError: i === 4,
     }));
     const turn = next(
       "session.turn.completed",
@@ -220,9 +252,31 @@ describe("subagentDelta over a recorded child log", () => {
       { entryIds: [], toolCalls: calls, label: "big" },
       { sessionId: undefined, parent: runRef, actor: childActor },
     );
-    const delta = subagentDelta([...recorded, turn], { runId: RUN, sinceSeq: 9 });
-    expect(delta.toolCallsSinceLastLook).toHaveLength(SUBAGENT_DELTA_MAX_TOOL_CALLS);
-    expect(delta.toolCallsSinceLastLook[0]!.id).toBe("c5");
-    expect(delta.toolCallsOmitted).toBe(5);
+    const answers = Array.from({ length: SUBAGENT_DELTA_MAX_DECISIONS + 2 }, (_, i) => [
+      next(
+        "supervisor.request.opened",
+        { type: "supervisorRequest", id: `q${i}` },
+        { id: `q${i}`, method: "need_decision", message: `question ${i}` },
+        { parent: runRef, actor: childActor },
+      ),
+      next(
+        "supervisor.request.answered",
+        { type: "supervisorRequest", id: `q${i}` },
+        { id: `q${i}`, response: `answer ${i}` },
+      ),
+    ]).flat();
+    const delta = subagentDelta([...recorded, turn, ...answers], { runId: RUN, sinceSeq: 9 });
+    expect(delta.toolCalls).toEqual({ bash: 53, read: 52 });
+    expect(delta.failedToolCalls).toEqual(["bash"]);
+    expect(delta.decisions).toHaveLength(SUBAGENT_DELTA_MAX_DECISIONS);
+    expect(delta.decisions[0]!.response).toBe("answer 2");
+  });
+});
+
+describe("the read cursor in the node tree", () => {
+  it("is not a step of the run: the tree is the same without it", () => {
+    const withRead = projectNodeTree(log);
+    const withoutRead = projectNodeTree(log.filter((event) => event !== firstRead));
+    expect(withRead).toEqual(withoutRead);
   });
 });

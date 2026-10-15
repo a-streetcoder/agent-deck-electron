@@ -13,11 +13,12 @@ import { SUBAGENT_RESULT_READ, type EventEnvelope } from "@agent-deck/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 
-// A3: a parent delegates, reads the delta, continues the same child and reads it
-// again; the second delta holds only the continuation.
+// A3 against real Pi: a result hand-back (await_subagents, managed_subagent) counts
+// as seen, so the delta right after it is empty; full: true reads the whole run.
 process.env.AGENT_DECK_TEST = "1";
-const FIRST_PARENT = "delegate and look at the delta";
-const SECOND_PARENT = "continue the child and look again";
+const FIRST_PARENT = "spawn, await and look at the delta";
+const SECOND_PARENT = "delegate, continue the same child and look again";
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
 
 let mock: MockProviderServer;
 let server: AgentDeckServer;
@@ -28,15 +29,19 @@ const deltas: Array<Record<string, unknown>> = [];
 let childReplies = 0;
 
 const text = (content: unknown): string =>
-  typeof content === "string" ? content : JSON.stringify(content);
+  typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? (content as { text?: string }[]).map((part) => part.text ?? "").join("")
+      : JSON.stringify(content);
 const isChild = (body: ChatCompletionRequest): boolean =>
   body.messages.some(
     (message) =>
       (message.role === "system" || message.role === "developer") &&
       text(message.content).includes("focused subagent launched by Agent Deck"),
   );
-const runIdIn = (body: ChatCompletionRequest): string | undefined =>
-  /Deck subagent ID: ([0-9a-f-]{36})/i.exec(JSON.stringify(body.messages))?.[1];
+const toolTexts = (body: ChatCompletionRequest): string[] =>
+  body.messages.filter((message) => message.role === "tool").map((m) => text(m.content));
 
 async function waitUntil(predicate: () => boolean, what: string, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
@@ -48,34 +53,49 @@ beforeAll(async () => {
   mock = await startMockProvider({
     toolCall: (lastUser, body) => {
       if (isChild(body)) return null;
-      const last = body.messages.at(-1);
-      if (last?.role === "tool") {
-        const result = text(last.content);
-        if (result.includes('"uptoSeq"')) {
-          deltas.push(JSON.parse(result) as Record<string, unknown>);
-          return null;
-        }
-        if (result.includes("Deck subagent ID:")) {
-          // The newest managed_subagent result names the run.
-          return { name: "subagent_delta", arguments: { runId: runIdIn(body) } };
-        }
-        return null;
+      const results = toolTexts(body);
+      const last = results.at(-1);
+      if (last?.includes('"uptoSeq"') && body.messages.at(-1)?.role === "tool") {
+        deltas.push(JSON.parse(last) as Record<string, unknown>);
       }
+      // Run A: spawned and awaited; run B: managed_subagent, then continued.
+      const runA = results[0]?.match(UUID)?.[0] ?? "missing";
+      const runB = results[3]?.match(UUID)?.[0] ?? "missing";
       if (lastUser === FIRST_PARENT) {
-        return { name: "managed_subagent", arguments: { task: "First child task." } };
+        switch (results.length) {
+          case 0:
+            return { name: "spawn_subagent", arguments: { task: "First child task." } };
+          case 1:
+            return { name: "await_subagents", arguments: { runIds: [runA] } };
+          case 2:
+            return { name: "subagent_delta", arguments: { runId: runA } };
+          default:
+            return null;
+        }
       }
       if (lastUser === SECOND_PARENT) {
-        return {
-          name: "managed_subagent",
-          arguments: { task: "Second child task.", continueSubagentID: runIdIn(body) },
-        };
+        switch (results.length) {
+          case 3:
+            return { name: "managed_subagent", arguments: { task: "Second child task." } };
+          case 4:
+            return {
+              name: "managed_subagent",
+              arguments: { task: "Third child task.", continueSubagentID: runB },
+            };
+          case 5:
+            return { name: "subagent_delta", arguments: { runId: runB } };
+          case 6:
+            return { name: "subagent_delta", arguments: { runId: runB, full: true } };
+          default:
+            return null;
+        }
       }
       return null;
     },
     reply: (_lastUser, body) => {
       if (!isChild(body)) return "Parent done.";
       childReplies += 1;
-      return childReplies === 1 ? "FIRST_CHILD_RESULT" : "SECOND_CHILD_RESULT";
+      return ["FIRST", "SECOND", "THIRD"][childReplies - 1] + "_CHILD_RESULT";
     },
   });
   process.env.AGENT_DECK_PROVIDER_EXTENSIONS = writeMockProviderExtension(mock.baseUrl);
@@ -95,7 +115,7 @@ afterAll(async () => {
 });
 
 describe("subagent_delta real-Pi", () => {
-  it("a parent awaiting the same child twice sees the delta shrink to the new turn", async () => {
+  it("after a result hand-back the delta holds only what is new; full re-reads the run", async () => {
     const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -112,50 +132,65 @@ describe("subagent_delta real-Pi", () => {
     const managed = server.sessions.get(session.id)!;
 
     await managed.prompt(FIRST_PARENT);
-    await waitUntil(() => deltas.length === 1, "the first delta");
+    await waitUntil(() => deltas.length === 1, "the delta after await_subagents");
     await server.receipts.waitFor("idle", session.id);
     await managed.prompt(SECOND_PARENT);
-    await waitUntil(() => deltas.length === 2, "the second delta");
+    await waitUntil(() => deltas.length === 3, "the deltas after managed_subagent");
+    await server.receipts.waitFor("idle", session.id);
 
-    const [first, second] = deltas as [Record<string, unknown>, Record<string, unknown>];
-    expect(first).toMatchObject({
-      sinceSeq: 0,
-      full: true,
-      statusNow: "completed",
-      turnsCompleted: 1,
-      summaryHead: "FIRST_CHILD_RESULT",
-      filesTouched: [],
-    });
-    expect(second).toMatchObject({
-      sinceSeq: first.uptoSeq,
-      full: false,
-      statusThen: "completed",
-      statusNow: "completed",
-      turnsCompleted: 1,
-      summaryHead: "SECOND_CHILD_RESULT",
-    });
-    expect(second.uptoSeq as number).toBeGreaterThan(first.uptoSeq as number);
-    expect(JSON.stringify(second)).not.toContain("FIRST_CHILD_RESULT");
-
-    const runId = first.runId as string;
+    const [afterAwait, afterManaged, full] = deltas as [
+      Record<string, unknown>,
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ];
     const page = (await (
       await fetch(
         `http://127.0.0.1:${server.port}/events?sessionId=${session.id}&afterSeq=0&limit=1000`,
       )
     ).json()) as { events: EventEnvelope[] };
-    const reads = page.events.filter((event) => event.kind === SUBAGENT_RESULT_READ);
-    expect(reads.map((event) => [event.sessionId, event.subject.id, event.payload])).toEqual([
-      [session.id, runId, { uptoSeq: first.uptoSeq }],
-      [session.id, runId, { uptoSeq: second.uptoSeq }],
-    ]);
+    const seqs = (kind: string, runId: unknown) =>
+      page.events
+        .filter((event) => event.kind === kind && event.subject.id === runId)
+        .map((event) =>
+          kind === SUBAGENT_RESULT_READ
+            ? (event.payload as { uptoSeq: number }).uptoSeq
+            : event.seq,
+        );
 
-    // The result card's view: the whole run, both turns, cursor untouched.
+    // await_subagents delivered A's result: nothing new, not a full look.
+    expect(afterAwait).toMatchObject({ statusNow: "completed", full: false, turnsCompleted: 0 });
+    expect(afterAwait.summary).toBeUndefined();
+    expect(seqs("subagent.run.finished", afterAwait.runId)).toEqual([afterAwait.sinceSeq]);
+    expect(seqs(SUBAGENT_RESULT_READ, afterAwait.runId)).toEqual([afterAwait.sinceSeq]);
+
+    // Both of B's managed_subagent results count as seen the same way.
+    expect(afterManaged).toMatchObject({ statusNow: "completed", full: false, turnsCompleted: 0 });
+    expect(afterManaged.summary).toBeUndefined();
+    const finishedB = seqs("subagent.run.finished", afterManaged.runId);
+    expect(finishedB).toHaveLength(2);
+    expect(afterManaged.sinceSeq).toBe(finishedB[1]);
+    expect(seqs(SUBAGENT_RESULT_READ, afterManaged.runId)).toEqual(finishedB);
+
+    // The whole run: both child turns and the owner's full latest result.
+    expect(full).toMatchObject({
+      runId: afterManaged.runId,
+      statusNow: "completed",
+      full: true,
+      turnsCompleted: 2,
+      summary: "THIRD_CHILD_RESULT",
+    });
+
+    // The result card's view: the whole run with the public head.
     const card = (await (
       await fetch(
-        `http://127.0.0.1:${server.port}/sessions/${session.id}/subagent-runs/${runId}/delta`,
+        `http://127.0.0.1:${server.port}/sessions/${session.id}/subagent-runs/${String(full.runId)}/delta`,
       )
     ).json()) as { delta: Record<string, unknown>; hasEvents: boolean };
     expect(card.hasEvents).toBe(true);
-    expect(card.delta).toMatchObject({ full: true, turnsCompleted: 2 });
+    expect(card.delta).toMatchObject({
+      full: true,
+      turnsCompleted: 2,
+      summaryHead: "THIRD_CHILD_RESULT",
+    });
   });
 });

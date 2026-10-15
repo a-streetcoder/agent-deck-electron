@@ -17,6 +17,7 @@ import type {
   PublicSubagentRun,
   RunResult,
 } from "./eventDiffs.ts";
+import { SUBAGENT_RESULT_READ } from "./subagentDelta.ts";
 import type { DeckRun } from "./transcript.ts";
 import type { TurnToolCallRef } from "./turnRefs.ts";
 
@@ -214,6 +215,8 @@ export function projectNodeTree(
     touch({ type: "session", id: sessionId }, event, sessionId);
 
   for (const event of events) {
+    // A parent's read cursor (A3) is not a step of the run: no node, no updatedAt bump.
+    if (event.kind === SUBAGENT_RESULT_READ) continue;
     const session = sessionOf(event);
     const node = touch(event.subject, event, session);
     node.sessionId ??= session;

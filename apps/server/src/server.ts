@@ -154,13 +154,14 @@ const CHILD_MEMORY_TOOL_NAMES = new Set([
   "agent_deck_memory_search",
   "agent_deck_memory_mark_stale",
 ]);
-/** The bridge tools that start a child pi, withheld when delegation is off. */
+/** The delegation bridge tools (child launch, await, cancel, delta), withheld when delegation is off. */
 const DELEGATION_TOOL_NAMES = new Set([
   "managed_subagent",
   "managed_parallel",
   "spawn_subagent",
   "await_subagents",
   "cancel_subagent",
+  "subagent_delta",
 ]);
 
 /**
@@ -1048,15 +1049,18 @@ async function initServer(
 
   // Native subagents, supervisor listing, and the session activity plan: the
   // Deck-agent bridge tools every parent session gets.
-  registerDeckBridgeTools(bridge, sessions, eventLog);
+  // A3: what changed in a child run since its parent last looked; the trackers are
+  // part of the log readers' fold, the cursor is the parent's subagent.result.read.
+  const subagentDeltas = createSubagentDeltaReader({
+    index: () => logReaders.subagentDeltas(),
+    runs: subagentRuns,
+    recordRead: (parentSessionId, runId, uptoSeq) =>
+      events.subagentResultRead(parentSessionId, runId, uptoSeq),
+    warn: (message, error) => console.warn(message, error),
+  });
+  registerDeckBridgeTools(bridge, sessions, eventLog, subagentDeltas);
   registerSupervisorListBridgeTool(bridge, supervisor);
-  // A3: what changed in a child run since its parent last looked (cursor events in the log).
-  const subagentDeltas = createSubagentDeltaReader(eventLog, subagentRuns, (message, error) =>
-    console.warn(message, error),
-  );
-  registerSubagentDeltaBridgeTool(bridge, subagentDeltas, (parentSessionId, runId, uptoSeq) =>
-    events.subagentResultRead(parentSessionId, runId, uptoSeq),
-  );
+  registerSubagentDeltaBridgeTool(bridge, subagentDeltas);
 
   // Resource scanning follows the Pi subprocess HOME override so scanners,
   // configuration reloads, and Pi all observe the same user-owned files.

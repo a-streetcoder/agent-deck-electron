@@ -30,6 +30,8 @@ export function registerDeckBridgeTools(
   bridge: BridgeRegistry,
   sessions: SessionManager,
   events: Pick<EventLog, "subscribe"> = { subscribe: () => () => {} },
+  // A3: a result hand-back moves the parent's delta cursor past the finished event.
+  results: Pick<SubagentDeltaReader, "resultsDelivered"> = { resultsDelivered: () => {} },
 ): void {
   // Native subagents (native-subagent-bridge.md): a parent session can launch a
   // focused child pi to complete one task and report back. v1 is text-returning
@@ -113,6 +115,7 @@ export function registerDeckBridgeTools(
           ctx.signal,
           ctx.toolCallId,
         );
+        if (!ctx.signal?.aborted) results.resultsDelivered(ctx.sessionId, [result.runId]);
         return {
           content: `Deck subagent ID: ${result.runId}\n\n${result.text || "(the subagent returned no output)"}`,
         };
@@ -122,6 +125,9 @@ export function registerDeckBridgeTools(
         // Agent Deck had claimed or started that run.
         const errorRunId = error instanceof ChildRunError ? error.runId : undefined;
         const idLine = errorRunId ? `\nDeck subagent ID: ${errorRunId}` : "";
+        if (errorRunId && !ctx.signal?.aborted) {
+          results.resultsDelivered(ctx.sessionId, [errorRunId]);
+        }
         return { content: `Subagent failed.${idLine}\n\n${String(error)}`, isError: true };
       }
     },
@@ -277,6 +283,12 @@ export function registerDeckBridgeTools(
           signal: ctx.signal,
         },
       );
+      if (!ctx.signal?.aborted) {
+        results.resultsDelivered(
+          ctx.sessionId,
+          outcome.results.map((result) => result.id),
+        );
+      }
       return { content: JSON.stringify(outcome) };
     },
   );
@@ -459,6 +471,8 @@ export function registerDeckBridgeTools(
             : `${label} (failed)\n${String(result.reason)}`;
         })
         .join("\n\n");
+      if (!ctx.signal?.aborted)
+        results.resultsDelivered(ctx.sessionId, { toolCallId: ctx.toolCallId });
       return { content: rendered, isError: ctx.signal?.aborted || !anyOk };
     },
   );
@@ -707,16 +721,17 @@ export function registerSupervisorListBridgeTool(
  */
 export function registerSubagentDeltaBridgeTool(
   bridge: BridgeRegistry,
-  reader: SubagentDeltaReader,
-  delivered: (parentSessionId: string, runId: string, uptoSeq: number) => void,
+  reader: Pick<SubagentDeltaReader, "read" | "delivered">,
 ): void {
-  const paramsSchema = z.object({ runId: z.string().uuid() }).strict();
+  const paramsSchema = z
+    .object({ runId: z.string().uuid(), full: z.boolean().optional() })
+    .strict();
   bridge.register(
     {
       name: "subagent_delta",
       label: "Subagent delta",
       description:
-        "Get what changed in one of this session's Deck subagent runs since you last looked: status, completed turns, tool calls, open questions, answered decisions, the newest result head and the files touched in its worktree. The first look is a full summary; later looks report only what is new. Pass the Deck subagent ID from managed_subagent or managed_parallel. The full child transcript stays available in the Deck UI.",
+        "Get what changed in one of this session's Deck subagent runs since you last saw its result or looked: status, the newest result, completed turns, tool calls per tool, open questions, answered decisions and the files changed in its worktree. Results from managed_subagent, managed_parallel and await_subagents count as seen. The first look is a full summary; pass `full: true` to read the whole run again. Pass the Deck subagent ID from those tools.",
       parameters: {
         type: "object",
         properties: {
@@ -724,12 +739,16 @@ export function registerSubagentDeltaBridgeTool(
             type: "string",
             description: "The Deck subagent ID (a UUID) of a run this session started.",
           },
+          full: {
+            type: "boolean",
+            description: "Optional: summarize the whole run from the start instead of what is new.",
+          },
         },
         required: ["runId"],
         additionalProperties: false,
       },
       promptSnippet:
-        "subagent_delta(runId) — what changed in a subagent run since you last looked (first look: full summary).",
+        "subagent_delta(runId, full?) — what changed in a subagent run since you last looked (first look: full summary).",
     },
     async (params, ctx) => {
       const parsed = paramsSchema.safeParse(params);
@@ -739,17 +758,22 @@ export function registerSubagentDeltaBridgeTool(
           isError: true,
         };
       }
-      const read = await reader.read(ctx.sessionId, parsed.data.runId, "lastRead");
+      const { runId, full } = parsed.data;
+      const read = await reader.read(ctx.sessionId, runId, {
+        from: full ? "start" : "cursor",
+        privateResult: true,
+      });
       if (!read.ok) {
         return {
-          content: `not_found: no subagent run \`${parsed.data.runId}\` belongs to this session.`,
+          content: `not_found: no subagent run \`${runId}\` belongs to this session.`,
           isError: true,
         };
       }
-      if (read.hasEvents && read.delta.uptoSeq > read.delta.sinceSeq) {
-        delivered(ctx.sessionId, read.delta.runId, read.delta.uptoSeq);
+      // An aborted call never reaches the model: its look must not move the cursor.
+      if (read.hasEvents && !ctx.signal?.aborted) {
+        reader.delivered(ctx.sessionId, runId, read.delta.uptoSeq);
       }
-      return { content: renderSubagentDelta(read) };
+      return { content: renderSubagentDelta(read.delta, read.hasEvents) };
     },
   );
 }

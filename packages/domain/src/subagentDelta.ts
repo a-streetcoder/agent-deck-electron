@@ -1,20 +1,22 @@
 // A3 (VISION_ORCHESTRATION principle 5, delta not transcript): what a parent learns
 // about one child run since it last looked, folded from the run's events between two
 // cursors. Facts and references only: the full transcript stays in the Pi session
-// file (the transcript route), files touched come from git (the server adds them).
+// file (the transcript route), files changed come from git (the server adds them).
+//
+// One fold, two windows. A run's tracker keeps the facts up to the parent's cursor
+// (its last subagent.result.read) merged into one accumulator, and one small fact per
+// event after it; a new cursor merges the facts it passes. So the tracker never holds
+// raw events, and a look costs the events since the last look.
 import type { EventEnvelope } from "./events.ts";
-import {
-  projectSubagentRuns,
-  projectSupervisor,
-  type PublicSubagentRunStatus,
-  type RunResult,
-} from "./eventDiffs.ts";
+import type { PublicSubagentRunStatus, RunResult } from "./eventDiffs.ts";
 import type { TurnOutcome, TurnToolCallRef } from "./turnRefs.ts";
 
 /** The parent's last-looked cursor for a run: payload { uptoSeq }, subject the run. */
 export const SUBAGENT_RESULT_READ = "subagent.result.read";
-/** The newest tool calls are kept; older ones are counted in toolCallsOmitted. */
-export const SUBAGENT_DELTA_MAX_TOOL_CALLS = 100;
+/** The newest answered decisions a window keeps. */
+export const SUBAGENT_DELTA_MAX_DECISIONS = 20;
+/** Facts a run keeps after the parent's cursor (one per event) before merging the oldest. */
+export const SUBAGENT_DELTA_MAX_TAIL = 1_000;
 
 export interface SubagentDeltaQuestion {
   id: string;
@@ -29,160 +31,321 @@ export interface SubagentDeltaDecision extends SubagentDeltaQuestion {
 
 export interface SubagentDelta {
   runId: string;
-  /** The cursor this delta starts after (0: the first look). */
-  sinceSeq: number;
-  /** The newest run event folded in: the next look's sinceSeq. */
-  uptoSeq: number;
-  /** The first look: everything the log holds about the run. */
-  full: boolean;
-  /** Undefined when the log has no created event for the run (it predates the log). */
+  /** Undefined when no event of the run carried its state. */
   statusNow?: PublicSubagentRunStatus;
   /** The status at the cursor (later looks only). */
   statusThen?: PublicSubagentRunStatus;
-  /** Child turns completed since the cursor. */
-  turnsCompleted: number;
   lastTurnOutcome?: TurnOutcome;
-  /** Turns whose entry refs could not be read in time (their tool calls are missing). */
-  partialTurns?: number;
-  toolCallsSinceLastLook: TurnToolCallRef[];
-  toolCallsOmitted?: number;
-  /** Blocking child requests still pending now, whenever they were opened. */
-  openQuestions: SubagentDeltaQuestion[];
-  /** Requests answered since the cursor. */
-  decisions: SubagentDeltaDecision[];
-  /** Head of the newest result finished since the cursor. */
+  /** Head of the newest result finished in the window (the log's public head). */
   summaryHead?: string;
   summaryBytes?: number;
   error?: string;
+  /** That result is still the run's latest state (no update since): its owner may show the full text. */
+  resultIsLatest?: true;
+  /** The first look (sinceSeq 0): everything the log holds about the run. */
+  full: boolean;
+  /** The cursor this delta starts after. */
+  sinceSeq: number;
+  /** The newest run event folded in: the cursor to record once the delta is delivered. */
+  uptoSeq: number;
+  turnsCompleted: number;
+  /** Turns whose entry refs could not be read in time (their tool calls are missing). */
+  partialTurns?: number;
+  /** Tool calls per tool name. */
+  toolCalls: Record<string, number>;
+  /** Names of the tools whose calls failed. */
+  failedToolCalls: string[];
+  /** Blocking child requests still pending now, whenever they were opened. */
+  openQuestions: SubagentDeltaQuestion[];
+  /** Requests answered in the window (the newest SUBAGENT_DELTA_MAX_DECISIONS). */
+  decisions: SubagentDeltaDecision[];
 }
 
-type DeltaEvent = Pick<EventEnvelope, "seq" | "kind" | "subject" | "payload" | "actor"> &
-  Partial<Pick<EventEnvelope, "parent" | "id" | "ts" | "sessionId">>;
+/** Facts over a window of one run's events; a later window merges onto an earlier one. */
+interface Facts {
+  uptoSeq: number;
+  status?: PublicSubagentRunStatus;
+  turnsCompleted: number;
+  partialTurns: number;
+  lastTurnOutcome?: TurnOutcome;
+  toolCalls: Record<string, number>;
+  failedToolCalls: string[];
+  decisions: SubagentDeltaDecision[];
+  result?: RunResult;
+}
 
-const isRestart = (event: DeltaEvent): boolean =>
-  event.kind === "server.started" || event.kind === "writer.acquired";
+const emptyFacts = (uptoSeq = 0): Facts => ({
+  uptoSeq,
+  turnsCompleted: 0,
+  partialTurns: 0,
+  toolCalls: {},
+  failedToolCalls: [],
+  decisions: [],
+});
 
-/**
- * The run's own events, from events ascending by seq: run lifecycle, the child's turns, its
- * supervisor requests and their answers (joined on the request id), plus the
- * restart markers the supervisor fold needs. The parent's read markers are not part
- * of the run's history.
- */
-export function subagentRunEvents<T extends DeltaEvent>(events: Iterable<T>, runId: string): T[] {
-  const requests = new Set<string>();
-  const out: T[] = [];
-  for (const event of events) {
-    if (event.kind === SUBAGENT_RESULT_READ) continue;
-    const own =
-      (event.subject.type === "subagentRun" && event.subject.id === runId) ||
-      (event.parent?.type === "subagentRun" && event.parent.id === runId);
-    if (own && event.subject.type === "supervisorRequest") requests.add(event.subject.id);
-    if (
-      own ||
-      isRestart(event) ||
-      (event.subject.type === "supervisorRequest" && requests.has(event.subject.id))
-    ) {
-      out.push(event);
-    }
+function mergeFacts(a: Facts, b: Facts): Facts {
+  const toolCalls = { ...a.toolCalls };
+  for (const [name, count] of Object.entries(b.toolCalls)) {
+    toolCalls[name] = (toolCalls[name] ?? 0) + count;
   }
-  return out.sort((a, b) => a.seq - b.seq);
+  const status = b.status ?? a.status;
+  const lastTurnOutcome = b.lastTurnOutcome ?? a.lastTurnOutcome;
+  const result = b.result ?? a.result;
+  return {
+    uptoSeq: Math.max(a.uptoSeq, b.uptoSeq),
+    ...(status ? { status } : {}),
+    turnsCompleted: a.turnsCompleted + b.turnsCompleted,
+    partialTurns: a.partialTurns + b.partialTurns,
+    ...(lastTurnOutcome ? { lastTurnOutcome } : {}),
+    toolCalls,
+    failedToolCalls: [...new Set([...a.failedToolCalls, ...b.failedToolCalls])],
+    decisions: [...a.decisions, ...b.decisions].slice(-SUBAGENT_DELTA_MAX_DECISIONS),
+    ...(result ? { result } : {}),
+  };
 }
 
-/** The parent's last cursor for a run: the newest subagent.result.read uptoSeq, else 0. */
-export function lastSubagentReadSeq(events: Iterable<DeltaEvent>, runId: string): number {
-  let seq = 0;
-  for (const event of events) {
-    if (event.kind !== SUBAGENT_RESULT_READ || event.subject.id !== runId) continue;
-    const upto = (event.payload as { uptoSeq?: unknown } | null)?.uptoSeq;
-    if (typeof upto === "number" && upto > seq) seq = upto;
-  }
-  return seq;
+export interface SubagentRunTracker {
+  runId: string;
+  status?: PublicSubagentRunStatus;
+  /** Open blocking requests (a restart closes them: the supervisor restart rule). */
+  pending: Map<string, SubagentDeltaQuestion>;
+  /** The parent's cursor: the uptoSeq of its newest subagent.result.read. */
+  cursor: number;
+  /** Facts up to the cursor. */
+  base: Facts;
+  /** One fact per run event after the cursor, ascending. */
+  tail: Facts[];
+  /** The newest run event. */
+  lastSeq: number;
+  /** The newest subagent.run.finished: where a result hand-back puts the cursor. */
+  lastFinishedSeq?: number;
+  /** The newest run-state event is a finished one. */
+  latestIsFinished: boolean;
 }
 
-const question = (request: {
-  id: string;
-  method?: string;
-  title?: string;
-  message?: string;
-}): SubagentDeltaQuestion => ({
-  id: request.id,
-  ...(request.method ? { method: request.method } : {}),
-  ...(request.title ? { title: request.title } : {}),
-  ...(request.message ? { message: request.message } : {}),
+type DeltaEvent = Pick<EventEnvelope, "seq" | "kind" | "subject" | "payload"> &
+  Partial<Pick<EventEnvelope, "parent">>;
+
+const question = (payload: Partial<SubagentDeltaQuestion> | null | undefined, id: string) => ({
+  id,
+  ...(payload?.method ? { method: payload.method } : {}),
+  ...(payload?.title ? { title: payload.title } : {}),
+  ...(payload?.message ? { message: payload.message } : {}),
 });
 
 /**
- * Fold a run's events into what changed after sinceSeq. `events` may be the whole
- * log or any superset of the run's events; status and open questions are folded
- * over all of them, everything else only over the events after the cursor.
+ * Every subagent run's tracker, fed events in seq order (the server's log fold feeds
+ * it page by page). Removed runs are dropped; requests are joined to their run only
+ * while open.
+ */
+export class SubagentDeltaIndex {
+  private readonly runs = new Map<string, SubagentRunTracker>();
+  private readonly requestRun = new Map<string, string>();
+
+  get(runId: string): SubagentRunTracker | undefined {
+    return this.runs.get(runId);
+  }
+
+  get size(): number {
+    return this.runs.size;
+  }
+
+  apply(event: DeltaEvent): void {
+    if (event.kind === "server.started" || event.kind === "writer.acquired") {
+      for (const tracker of this.runs.values()) tracker.pending.clear();
+      this.requestRun.clear();
+      return;
+    }
+    if (event.kind === SUBAGENT_RESULT_READ) {
+      const upto = (event.payload as { uptoSeq?: unknown } | null)?.uptoSeq;
+      if (typeof upto === "number") this.advance(event.subject.id, upto);
+      return;
+    }
+    if (event.subject.type === "subagentRun") {
+      this.applyRunState(event);
+      return;
+    }
+    if (event.parent?.type === "subagentRun") {
+      const tracker = this.tracker(event.parent.id, event.seq);
+      if (event.kind === "session.turn.completed") {
+        const payload = (event.payload ?? {}) as {
+          toolCalls?: TurnToolCallRef[];
+          partial?: boolean;
+          outcome?: TurnOutcome;
+        };
+        const fact = emptyFacts(event.seq);
+        fact.turnsCompleted = 1;
+        fact.lastTurnOutcome = payload.outcome ?? "completed";
+        if (payload.partial) fact.partialTurns = 1;
+        for (const call of payload.toolCalls ?? []) {
+          fact.toolCalls[call.name] = (fact.toolCalls[call.name] ?? 0) + 1;
+          if (call.isError === true && !fact.failedToolCalls.includes(call.name)) {
+            fact.failedToolCalls.push(call.name);
+          }
+        }
+        this.push(tracker, fact);
+      } else if (
+        event.kind === "supervisor.request.opened" &&
+        event.subject.type === "supervisorRequest"
+      ) {
+        const id = event.subject.id;
+        tracker.pending.set(id, question(event.payload as Partial<SubagentDeltaQuestion>, id));
+        this.requestRun.set(id, tracker.runId);
+      }
+      return;
+    }
+    if (event.subject.type === "supervisorRequest") {
+      const id = event.subject.id;
+      const runId = this.requestRun.get(id);
+      const tracker = runId ? this.runs.get(runId) : undefined;
+      const open = tracker?.pending.get(id);
+      if (!tracker || !open) return;
+      if (
+        event.kind !== "supervisor.request.answered" &&
+        event.kind !== "supervisor.request.cancelled"
+      )
+        return;
+      tracker.pending.delete(id);
+      this.requestRun.delete(id);
+      tracker.lastSeq = Math.max(tracker.lastSeq, event.seq);
+      if (event.kind === "supervisor.request.answered") {
+        const response = (event.payload as { response?: unknown } | null)?.response;
+        const fact = emptyFacts(event.seq);
+        fact.decisions.push({ ...open, ...(typeof response === "string" ? { response } : {}) });
+        this.push(tracker, fact);
+      }
+    }
+  }
+
+  /** Record the parent's cursor; `create` starts a tracker for a run not seen yet. */
+  advance(runId: string, uptoSeq: number, create = false): void {
+    const tracker = create ? this.tracker(runId, 0) : this.runs.get(runId);
+    if (!tracker || uptoSeq <= tracker.cursor) return;
+    let passed = 0;
+    while (passed < tracker.tail.length && (tracker.tail[passed] as Facts).uptoSeq <= uptoSeq) {
+      tracker.base = mergeFacts(tracker.base, tracker.tail[passed] as Facts);
+      passed += 1;
+    }
+    tracker.tail.splice(0, passed);
+    tracker.cursor = uptoSeq;
+  }
+
+  /** The delta after the parent's cursor, or (`from: "start"`) the whole run. */
+  delta(runId: string, from: "cursor" | "start"): SubagentDelta | undefined {
+    const tracker = this.runs.get(runId);
+    if (!tracker) return undefined;
+    const since = tracker.tail.reduce(mergeFacts, emptyFacts(tracker.cursor));
+    const sinceSeq = from === "start" ? 0 : tracker.cursor;
+    const window = sinceSeq === 0 ? mergeFacts(tracker.base, since) : since;
+    const result = window.result;
+    const statusThen = sinceSeq > 0 ? tracker.base.status : undefined;
+    return {
+      runId,
+      ...(tracker.status ? { statusNow: tracker.status } : {}),
+      ...(statusThen ? { statusThen } : {}),
+      ...(window.lastTurnOutcome ? { lastTurnOutcome: window.lastTurnOutcome } : {}),
+      ...(result?.summary !== undefined ? { summaryHead: result.summary } : {}),
+      ...(result?.summaryBytes !== undefined ? { summaryBytes: result.summaryBytes } : {}),
+      ...(result?.error !== undefined ? { error: result.error } : {}),
+      ...(result && tracker.latestIsFinished ? { resultIsLatest: true as const } : {}),
+      full: sinceSeq === 0,
+      sinceSeq,
+      uptoSeq: Math.max(sinceSeq, tracker.lastSeq),
+      turnsCompleted: window.turnsCompleted,
+      ...(window.partialTurns ? { partialTurns: window.partialTurns } : {}),
+      toolCalls: window.toolCalls,
+      failedToolCalls: window.failedToolCalls,
+      openQuestions: [...tracker.pending.values()],
+      decisions: window.decisions,
+    };
+  }
+
+  private tracker(runId: string, seq: number): SubagentRunTracker {
+    let tracker = this.runs.get(runId);
+    if (!tracker) {
+      tracker = {
+        runId,
+        pending: new Map(),
+        cursor: 0,
+        base: emptyFacts(),
+        tail: [],
+        lastSeq: 0,
+        latestIsFinished: false,
+      };
+      this.runs.set(runId, tracker);
+    }
+    tracker.lastSeq = Math.max(tracker.lastSeq, seq);
+    return tracker;
+  }
+
+  // ponytail: a parent that never looks lets the tail reach the cap; past it the two
+  // oldest facts merge, so a cursor landing between them counts both after it.
+  private push(tracker: SubagentRunTracker, fact: Facts): void {
+    tracker.tail.push(fact);
+    if (tracker.tail.length > SUBAGENT_DELTA_MAX_TAIL) {
+      const [first, second] = tracker.tail.splice(0, 2) as [Facts, Facts];
+      tracker.tail.unshift(mergeFacts(first, second));
+    }
+  }
+
+  private applyRunState(event: DeltaEvent): void {
+    const runId = event.subject.id;
+    if (event.kind === "subagent.run.removed") {
+      const tracker = this.runs.get(runId);
+      for (const id of tracker?.pending.keys() ?? []) this.requestRun.delete(id);
+      this.runs.delete(runId);
+      return;
+    }
+    const payload = event.payload as {
+      run?: { status?: PublicSubagentRunStatus };
+      result?: RunResult;
+    } | null;
+    const status = payload?.run?.status;
+    if (!status) return;
+    const tracker = this.tracker(runId, event.seq);
+    tracker.status = status;
+    const finished = event.kind === "subagent.run.finished";
+    tracker.latestIsFinished = finished;
+    const fact = emptyFacts(event.seq);
+    fact.status = status;
+    if (finished) {
+      tracker.lastFinishedSeq = event.seq;
+      fact.result = payload?.result ?? { status };
+    }
+    this.push(tracker, fact);
+  }
+}
+
+/**
+ * The pure form: fold `events` (ascending by seq, any superset of the run's) with
+ * the cursor at sinceSeq. Read markers in `events` are ignored: the cursor is given.
  */
 export function subagentDelta(
   events: Iterable<DeltaEvent>,
   { runId, sinceSeq }: { runId: string; sinceSeq: number },
 ): SubagentDelta {
-  const own = subagentRunEvents(events, runId);
-  const runEvents = own.filter((event) => !isRestart(event));
-  const after = runEvents.filter((event) => event.seq > sinceSeq);
-  const statusAt = (upto: number): PublicSubagentRunStatus | undefined =>
-    projectSubagentRuns(runEvents.filter((event) => event.seq <= upto)).get(runId)?.status;
-
-  const delta: SubagentDelta = {
-    runId,
-    sinceSeq,
-    uptoSeq: Math.max(sinceSeq, runEvents.at(-1)?.seq ?? 0),
-    full: sinceSeq === 0,
-    turnsCompleted: 0,
-    toolCallsSinceLastLook: [],
-    openQuestions: [],
-    decisions: [],
-  };
-  const statusNow = statusAt(Number.POSITIVE_INFINITY);
-  if (statusNow) delta.statusNow = statusNow;
-  const statusThen = sinceSeq > 0 ? statusAt(sinceSeq) : undefined;
-  if (statusThen) delta.statusThen = statusThen;
-
-  const toolCalls: TurnToolCallRef[] = [];
-  let partialTurns = 0;
-  const answered = new Set<string>();
-  for (const event of after) {
-    if (event.kind === "session.turn.completed") {
-      const payload = (event.payload ?? {}) as {
-        toolCalls?: TurnToolCallRef[];
-        partial?: boolean;
-        outcome?: TurnOutcome;
-      };
-      delta.turnsCompleted += 1;
-      delta.lastTurnOutcome = payload.outcome ?? "completed";
-      if (payload.partial) partialTurns += 1;
-      for (const call of payload.toolCalls ?? []) {
-        toolCalls.push({ id: call.id, name: call.name, isError: call.isError === true });
-      }
-    } else if (event.kind === "supervisor.request.answered") {
-      answered.add(event.subject.id);
-    } else if (event.kind === "subagent.run.finished") {
-      const result = (event.payload as { result?: RunResult } | null)?.result;
-      delete delta.summaryHead;
-      delete delta.summaryBytes;
-      delete delta.error;
-      if (result?.summary !== undefined) delta.summaryHead = result.summary;
-      if (result?.summaryBytes !== undefined) delta.summaryBytes = result.summaryBytes;
-      if (result?.error !== undefined) delta.error = result.error;
+  const index = new SubagentDeltaIndex();
+  let placed = sinceSeq === 0;
+  for (const event of events) {
+    if (event.kind === SUBAGENT_RESULT_READ) continue;
+    if (!placed && event.seq > sinceSeq) {
+      index.advance(runId, sinceSeq, true);
+      placed = true;
     }
+    index.apply(event);
   }
-  if (partialTurns) delta.partialTurns = partialTurns;
-  delta.toolCallsSinceLastLook = toolCalls.slice(-SUBAGENT_DELTA_MAX_TOOL_CALLS);
-  if (toolCalls.length > SUBAGENT_DELTA_MAX_TOOL_CALLS) {
-    delta.toolCallsOmitted = toolCalls.length - SUBAGENT_DELTA_MAX_TOOL_CALLS;
-  }
-
-  for (const request of projectSupervisor(own).values()) {
-    if (request.status === "pending") delta.openQuestions.push(question(request));
-    else if (request.status === "answered" && answered.has(request.id)) {
-      delta.decisions.push({
-        ...question(request),
-        ...(request.response ? { response: request.response } : {}),
-      });
+  if (!placed) index.advance(runId, sinceSeq, true);
+  return (
+    index.delta(runId, "cursor") ?? {
+      runId,
+      full: true,
+      sinceSeq: 0,
+      uptoSeq: 0,
+      turnsCompleted: 0,
+      toolCalls: {},
+      failedToolCalls: [],
+      openQuestions: [],
+      decisions: [],
     }
-  }
-  return delta;
+  );
 }

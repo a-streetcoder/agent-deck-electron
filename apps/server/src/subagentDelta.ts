@@ -1,70 +1,89 @@
 // A3: the server half of the delta merge-back (VISION_ORCHESTRATION principle 5).
-// The pure fold is subagentDelta in @agent-deck/domain; this module feeds it the
-// run's events from the log, finds the parent's last cursor (its own
-// subagent.result.read events), adds the files the child touched (git, in its
-// retained worktree) and points at the full transcript route.
+// The per-run trackers live in the log readers' fold (SubagentDeltaIndex, fed with
+// the same pages as every other projection); this module answers one look, records
+// the parent's cursor (subagent.result.read) after a delivery, adds the files the
+// child changed in its retained worktree (git) and shapes the bounded model text.
 import { existsSync } from "node:fs";
 import {
-  lastSubagentReadSeq,
-  SUBAGENT_RESULT_READ,
-  subagentDelta,
   textHead,
-  type EventEnvelope,
   type SubagentDelta,
+  type SubagentDeltaIndex,
+  type SubagentDeltaQuestion,
 } from "@agent-deck/domain";
-import { MAX_EVENT_READ_LIMIT, type EventLog } from "./eventLog.ts";
 import { gitDiffNameStatus, gitListUntracked } from "./git.ts";
 import type { SubagentRunRecord } from "./subagentRunStore.ts";
 
-/** The model gets at most this much delta text, like other bounded hand-offs. */
+/** The model text never exceeds this many characters, and is always valid JSON. */
 export const SUBAGENT_DELTA_MAX_CHARS = 16_000;
 export const SUBAGENT_DELTA_MAX_FILES = 200;
+const QUESTION_FIELD_MAX_CHARS = 500;
+const ERROR_MAX_CHARS = 4_000;
+const PATH_MAX_CHARS = 300;
 
 export interface SubagentDeltaView extends SubagentDelta {
-  /** Repo-relative paths changed in the child's worktree since its base commit. */
-  filesTouched: string[];
-  filesTouchedOmitted?: number;
-  /** git could not list them (the worktree is gone or broken); filesTouched is empty. */
-  filesTouchedUnavailable?: true;
-  /** The full child transcript, on demand (the transcript route of the parent session). */
+  /** The owner's full private result (the model's look at a finished, latest result). */
+  summary?: string;
+  /**
+   * Repo-relative paths changed in the child's retained worktree since its base
+   * commit: cumulative, so present only on a full look or when turns completed.
+   */
+  filesChangedSinceBase?: string[];
+  filesChangedSinceBaseOmitted?: number;
+  /** git could not list them (the worktree was removed or is broken). */
+  filesChangedSinceBaseUnavailable?: true;
+  /** The full child transcript on demand (the web card's link; not in the model text). */
   transcript: { sessionId: string; runId: string; transcriptRoute: string };
 }
 
 export type SubagentDeltaRead =
-  | { ok: true; delta: SubagentDeltaView; hasEvents: boolean; record: SubagentRunRecord }
+  | { ok: true; delta: SubagentDeltaView; hasEvents: boolean }
   | { ok: false; reason: "not_found" };
 
 export interface SubagentDeltaReader {
   /**
-   * The delta of one run owned by callerSessionId. `since: "lastRead"` starts after
-   * the parent's last subagent.result.read (the bridge tool); `"start"` is the full
-   * summary (the web card), and never moves the parent's cursor.
+   * One look at a run owned by callerSessionId: after the parent's cursor, or from
+   * the start. `privateResult` swaps the log's result head for the owner's full text.
    */
   read(
     callerSessionId: string,
     runId: string,
-    since: "lastRead" | "start",
+    options: { from: "cursor" | "start"; privateResult?: boolean },
   ): Promise<SubagentDeltaRead>;
+  /** Record the cursor once a delta was delivered (monotonic: an older one is skipped). */
+  delivered(callerSessionId: string, runId: string, uptoSeq: number): void;
+  /**
+   * A result hand-back (managed_subagent, managed_parallel, await_subagents) delivered
+   * the run's newest finished event: the next look starts after it.
+   */
+  resultsDelivered(callerSessionId: string, runs: readonly string[] | { toolCallId: string }): void;
 }
 
-const relevant = (event: EventEnvelope): boolean =>
-  event.subject.type === "subagentRun" ||
-  event.parent?.type === "subagentRun" ||
-  event.subject.type === "supervisorRequest" ||
-  event.kind === "server.started" ||
-  event.kind === "writer.acquired";
+export interface SubagentDeltaDeps {
+  /** The caught-up trackers; undefined when the log is disabled. */
+  index: () => SubagentDeltaIndex | undefined;
+  runs: {
+    get(id: string): SubagentRunRecord | undefined;
+    list(parentSessionId: string): SubagentRunRecord[];
+  };
+  /** Append subagent.result.read; false when the log refused it (read-only, closed). */
+  recordRead: (parentSessionId: string, runId: string, uptoSeq: number) => boolean;
+  warn?: (message: string, error?: unknown) => void;
+}
 
-async function filesTouched(
+const terminal = (status: string): boolean => status !== "starting" && status !== "running";
+
+async function filesChanged(
   record: SubagentRunRecord,
   warn: (message: string, error?: unknown) => void,
-): Promise<
-  Pick<SubagentDeltaView, "filesTouched" | "filesTouchedOmitted" | "filesTouchedUnavailable">
-> {
+): Promise<Partial<SubagentDeltaView>> {
   const dir = record.worktreePath;
   const base = record.worktreeBaseCommit;
   // No retained worktree: the child ran in the parent's checkout, nothing to attribute.
-  if (!dir || !base || record.worktreeCleanup === "physical_removed") return { filesTouched: [] };
-  if (!existsSync(dir)) return { filesTouched: [], filesTouchedUnavailable: true };
+  if (!dir || !base) return { filesChangedSinceBase: [] };
+  // Removed after a merge (or by hand): the answer is unknown, not "nothing".
+  if (record.worktreeCleanup === "physical_removed" || !existsSync(dir)) {
+    return { filesChangedSinceBase: [], filesChangedSinceBaseUnavailable: true };
+  }
   try {
     const [changed, untracked] = await Promise.all([
       gitDiffNameStatus(dir, base),
@@ -72,78 +91,204 @@ async function filesTouched(
     ]);
     const files = [...new Set([...changed.map((entry) => entry.path), ...untracked])].sort();
     return {
-      filesTouched: files.slice(0, SUBAGENT_DELTA_MAX_FILES),
+      filesChangedSinceBase: files.slice(0, SUBAGENT_DELTA_MAX_FILES),
       ...(files.length > SUBAGENT_DELTA_MAX_FILES
-        ? { filesTouchedOmitted: files.length - SUBAGENT_DELTA_MAX_FILES }
+        ? { filesChangedSinceBaseOmitted: files.length - SUBAGENT_DELTA_MAX_FILES }
         : {}),
     };
   } catch (error) {
     warn(`[subagent-delta] git could not list the files of run ${record.id}`, error);
-    return { filesTouched: [], filesTouchedUnavailable: true };
+    return { filesChangedSinceBase: [], filesChangedSinceBaseUnavailable: true };
   }
 }
 
-export function createSubagentDeltaReader(
-  log: Pick<EventLog, "lastSeq" | "read">,
-  runs: { get(id: string): SubagentRunRecord | undefined },
-  warn: (message: string, error?: unknown) => void = () => {},
-): SubagentDeltaReader {
-  // ponytail: every subagent-related event since boot stays in memory (a few per
-  // run); fold per run or snapshot with A1e when the log outgrows that.
-  const events: EventEnvelope[] = [];
-  let afterSeq = 0;
-  const catchUp = (): void => {
-    while (log.lastSeq() > afterSeq) {
-      const page = log.read({ afterSeq, limit: MAX_EVENT_READ_LIMIT });
-      for (const event of page.events) if (relevant(event)) events.push(event);
-      if (page.nextAfterSeq === undefined || page.nextAfterSeq <= afterSeq) break;
-      afterSeq = page.nextAfterSeq;
-    }
+/** What the store knows about a run the log has no events for. */
+const storeOnlyDelta = (record: SubagentRunRecord): SubagentDelta => ({
+  runId: record.id,
+  statusNow: record.status,
+  ...(record.summary !== undefined ? { summaryHead: record.summary } : {}),
+  ...(record.error !== undefined ? { error: record.error } : {}),
+  full: true,
+  sinceSeq: 0,
+  uptoSeq: 0,
+  turnsCompleted: 0,
+  toolCalls: {},
+  failedToolCalls: [],
+  openQuestions: [],
+  decisions: [],
+});
+
+export function createSubagentDeltaReader(deps: SubagentDeltaDeps): SubagentDeltaReader {
+  const warn = deps.warn ?? (() => {});
+  let warnedReadOnly = false;
+  const owned = (caller: string, runId: string): SubagentRunRecord | undefined => {
+    const record = deps.runs.get(runId);
+    return record && record.parentSessionId === caller ? record : undefined;
   };
 
-  return {
-    async read(callerSessionId, runId, since) {
-      const record = runs.get(runId);
-      if (!record || record.parentSessionId !== callerSessionId) {
-        return { ok: false, reason: "not_found" };
-      }
-      catchUp();
-      const reads = events.filter(
-        (event) => event.kind === SUBAGENT_RESULT_READ && event.sessionId === callerSessionId,
-      );
-      const sinceSeq = since === "lastRead" ? lastSubagentReadSeq(reads, runId) : 0;
-      const delta = subagentDelta(events, { runId, sinceSeq });
-      const hasEvents = events.some(
-        (event) =>
-          (event.subject.type === "subagentRun" && event.subject.id === runId) ||
-          (event.parent?.type === "subagentRun" && event.parent.id === runId),
-      );
-      // A run older than the log has no created event: the store knows its status.
-      delta.statusNow ??= record.status;
-      const transcriptRoute = `/sessions/${encodeURIComponent(record.parentSessionId)}/subagent-runs/${encodeURIComponent(runId)}/transcript`;
-      return {
-        ok: true,
-        hasEvents,
-        record,
-        delta: {
-          ...delta,
-          ...(await filesTouched(record, warn)),
-          transcript: { sessionId: record.parentSessionId, runId, transcriptRoute },
+  const reader: SubagentDeltaReader = {
+    async read(callerSessionId, runId, { from, privateResult = false }) {
+      const record = owned(callerSessionId, runId);
+      if (!record) return { ok: false, reason: "not_found" };
+      const fromLog = deps.index()?.delta(runId, from);
+      const delta: SubagentDeltaView = {
+        ...(fromLog ?? storeOnlyDelta(record)),
+        transcript: {
+          sessionId: record.parentSessionId,
+          runId,
+          transcriptRoute: `/sessions/${encodeURIComponent(record.parentSessionId)}/subagent-runs/${encodeURIComponent(runId)}/transcript`,
         },
       };
+      // A run older than the log carries no state event: the store knows its status.
+      delta.statusNow ??= record.status;
+      if (privateResult && delta.resultIsLatest && terminal(record.status)) {
+        delete delta.summaryHead;
+        delete delta.error;
+        if (record.summary !== undefined) delta.summary = record.summary;
+        if (record.error !== undefined) delta.error = record.error;
+      }
+      if (delta.full || delta.turnsCompleted > 0) {
+        Object.assign(delta, await filesChanged(record, warn));
+      }
+      return { ok: true, delta, hasEvents: fromLog !== undefined };
+    },
+
+    delivered(callerSessionId, runId, uptoSeq) {
+      const tracker = deps.index()?.get(runId);
+      if (!tracker || uptoSeq <= tracker.cursor) return;
+      if (deps.recordRead(callerSessionId, runId, uptoSeq)) return;
+      if (!warnedReadOnly) {
+        warnedReadOnly = true;
+        warn(
+          "[subagent-delta] the event log refused the read cursor (read-only or closed): every look stays a full summary",
+        );
+      }
+    },
+
+    resultsDelivered(callerSessionId, runs) {
+      const ids = Array.isArray(runs)
+        ? runs
+        : deps.runs
+            .list(callerSessionId)
+            .filter(
+              (record) => record.turnToolCallId === (runs as { toolCallId: string }).toolCallId,
+            )
+            .map((record) => record.id);
+      for (const runId of ids) {
+        const record = owned(callerSessionId, runId);
+        const finishedSeq = deps.index()?.get(runId)?.lastFinishedSeq;
+        if (record && terminal(record.status) && finishedSeq !== undefined) {
+          reader.delivered(callerSessionId, runId, finishedSeq);
+        }
+      }
     },
   };
+  return reader;
 }
 
-/** The tool result text: the delta as JSON, or the store's result when the log has none. */
-export function renderSubagentDelta(read: Extract<SubagentDeltaRead, { ok: true }>): string {
-  if (!read.hasEvents) {
-    const { record } = read;
-    const result = record.error ?? record.summary ?? "(the subagent returned no output)";
-    return textHead(
-      `No event history for Deck subagent ${record.id} (it predates the event log or the log is unavailable).\nStatus: ${record.status}\n\n${result}`,
-      SUBAGENT_DELTA_MAX_CHARS,
-    );
+const capQuestion = <T extends SubagentDeltaQuestion & { response?: string }>(item: T): T => {
+  const out = { ...item };
+  for (const key of ["title", "message", "response"] as const) {
+    const value = out[key];
+    if (typeof value === "string")
+      out[key] = textHead(value, QUESTION_FIELD_MAX_CHARS) as T[typeof key];
   }
-  return textHead(JSON.stringify(read.delta, null, 2), SUBAGENT_DELTA_MAX_CHARS);
+  return out;
+};
+
+/**
+ * The tool result: the delta as compact JSON, newest state first, always valid and
+ * within SUBAGENT_DELTA_MAX_CHARS. Over the cap it drops the rarest tool names, then
+ * files, then the oldest decisions and questions, then cuts the result text.
+ */
+export function renderSubagentDelta(view: SubagentDeltaView, hasEvents = true): string {
+  const files = (view.filesChangedSinceBase ?? []).map((file) => textHead(file, PATH_MAX_CHARS));
+  const toolCalls = Object.entries(view.toolCalls).sort((a, b) => b[1] - a[1]);
+  let decisions = view.decisions.map(capQuestion);
+  let questions = view.openQuestions.map(capQuestion);
+  let summary = view.summary ?? view.summaryHead;
+  let error =
+    view.error !== undefined && view.error.length > ERROR_MAX_CHARS
+      ? `…${view.error.slice(-ERROR_MAX_CHARS)}`
+      : view.error;
+  const omitted = {
+    toolNames: 0,
+    files: view.filesChangedSinceBaseOmitted ?? 0,
+    decisions: 0,
+    questions: 0,
+  };
+  let keptTools = toolCalls.length;
+  let keptFiles = files.length;
+  let summaryTruncated = false;
+
+  const text = (): string =>
+    JSON.stringify({
+      statusNow: view.statusNow,
+      lastTurnOutcome: view.lastTurnOutcome,
+      summary,
+      ...(summaryTruncated ? { summaryTruncated: true, summaryBytes: view.summaryBytes } : {}),
+      error,
+      statusThen: view.statusThen,
+      runId: view.runId,
+      ...(hasEvents
+        ? {}
+        : { note: "No event history for this run: status and result from the store." }),
+      full: view.full,
+      sinceSeq: view.sinceSeq,
+      uptoSeq: view.uptoSeq,
+      turnsCompleted: view.turnsCompleted,
+      partialTurns: view.partialTurns,
+      toolCalls: Object.fromEntries(toolCalls.slice(0, keptTools)),
+      ...(omitted.toolNames ? { toolNamesOmitted: omitted.toolNames } : {}),
+      failedToolCalls: view.failedToolCalls,
+      ...(view.filesChangedSinceBase
+        ? {
+            filesChangedSinceBase: files.slice(0, keptFiles),
+            ...(omitted.files ? { filesChangedSinceBaseOmitted: omitted.files } : {}),
+            ...(view.filesChangedSinceBaseUnavailable
+              ? { filesChangedSinceBaseUnavailable: true }
+              : {}),
+          }
+        : {}),
+      openQuestions: questions,
+      ...(omitted.questions ? { openQuestionsOmitted: omitted.questions } : {}),
+      decisions,
+      ...(omitted.decisions ? { decisionsOmitted: omitted.decisions } : {}),
+    });
+  const over = (): number => text().length - SUBAGENT_DELTA_MAX_CHARS;
+
+  while (over() > 0 && keptTools > 0) {
+    const keep = Math.floor(keptTools / 2);
+    omitted.toolNames += keptTools - keep;
+    keptTools = keep;
+  }
+  while (over() > 0 && keptFiles > 0) {
+    const keep = Math.floor(keptFiles / 2);
+    omitted.files += keptFiles - keep;
+    keptFiles = keep;
+  }
+  while (over() > 0 && decisions.length > 0) {
+    const keep = Math.floor(decisions.length / 2);
+    omitted.decisions += decisions.length - keep;
+    decisions = keep ? decisions.slice(-keep) : [];
+  }
+  while (over() > 0 && questions.length > 0) {
+    const keep = Math.floor(questions.length / 2);
+    omitted.questions += questions.length - keep;
+    questions = questions.slice(0, keep);
+  }
+  // Escapes make the JSON longer than the text, so cut by the excess and re-measure.
+  while (over() > 0 && summary) {
+    summaryTruncated = true;
+    summary = textHead(summary, Math.max(0, summary.length - over() - 1));
+    if (summary === "…") summary = "";
+  }
+  while (over() > 0 && error) {
+    error = textHead(error, Math.max(0, error.length - over() - 1));
+    if (error === "…") error = "";
+  }
+  const out = text();
+  return out.length <= SUBAGENT_DELTA_MAX_CHARS
+    ? out
+    : JSON.stringify({ statusNow: view.statusNow, runId: view.runId, truncated: true });
 }

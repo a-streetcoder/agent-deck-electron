@@ -92,7 +92,7 @@ export function startProjectEventNudges(
  */
 export function registerSubagentDeltaRoute(
   fastify: FastifyInstance,
-  reader: SubagentDeltaReader,
+  reader: Pick<SubagentDeltaReader, "read">,
 ): void {
   fastify.get("/sessions/:parentSessionId/subagent-runs/:runId/delta", async (request, reply) => {
     const parsed = z
@@ -101,7 +101,9 @@ export function registerSubagentDeltaRoute(
     if (!parsed.success) {
       return reply.status(400).send({ error: "Parent session and run IDs must be UUIDs." });
     }
-    const read = await reader.read(parsed.data.parentSessionId, parsed.data.runId, "start");
+    const read = await reader.read(parsed.data.parentSessionId, parsed.data.runId, {
+      from: "start",
+    });
     if (!read.ok) return reply.status(404).send({ error: "Subagent run was not found." });
     return { delta: read.delta, hasEvents: read.hasEvents };
   });

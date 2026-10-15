@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import type { SubagentCell, SubagentDelta } from "@agent-deck/domain";
 import { sectionHeaderClass } from "@/design-system/styles";
+import { useAppStore } from "../state/store.ts";
 
 /** GET /sessions/:id/subagent-runs/:runId/delta: the run's full delta plus git facts. */
 interface SubagentDeltaView extends SubagentDelta {
-  filesTouched: string[];
-  filesTouchedOmitted?: number;
-  filesTouchedUnavailable?: true;
+  filesChangedSinceBase?: string[];
+  filesChangedSinceBaseOmitted?: number;
+  filesChangedSinceBaseUnavailable?: true;
 }
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -26,6 +27,11 @@ export function SubagentDeltaSummary({
   status: SubagentCell["status"];
 }) {
   const [delta, setDelta] = useState<SubagentDeltaView | null>(null);
+  // While the child runs, every project_events nudge refetches (new turns, questions
+  // opened or answered); a finished run refetches only when its status changes.
+  const nudge = useAppStore((state) =>
+    status === "running" ? (state.projectLog?.lastSeq ?? 0) : 0,
+  );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -43,31 +49,33 @@ export function SubagentDeltaSummary({
       }
     })();
     return () => controller.abort();
-  }, [parentSessionId, runId, status]);
+  }, [parentSessionId, runId, status, nudge]);
 
   if (!delta) return null;
-  const failed = delta.toolCallsSinceLastLook.filter((call) => call.isError).length;
-  const toolCalls = delta.toolCallsSinceLastLook.length + (delta.toolCallsOmitted ?? 0);
+  const toolCalls = Object.values(delta.toolCalls).reduce((sum, count) => sum + count, 0);
+  const files = delta.filesChangedSinceBase ?? [];
   return (
     <section className="space-y-1 text-detail text-text-muted" data-testid="subagent-delta">
       <div className={sectionHeaderClass}>What changed</div>
       <div data-testid="subagent-delta-activity">
         {plural(delta.turnsCompleted, "turn")} · {plural(toolCalls, "tool call")}
-        {failed ? ` · ${failed} failed` : ""}
+        {delta.failedToolCalls.length ? ` · failed: ${delta.failedToolCalls.join(", ")}` : ""}
       </div>
       <div className={sectionHeaderClass}>Files touched</div>
-      {delta.filesTouchedUnavailable ? (
+      {delta.filesChangedSinceBaseUnavailable ? (
         <div data-testid="subagent-delta-files-unavailable">Unavailable (worktree missing)</div>
-      ) : delta.filesTouched.length === 0 ? (
+      ) : files.length === 0 ? (
         <div data-testid="subagent-delta-files-none">None</div>
       ) : (
         <ul className="max-h-32 overflow-auto font-mono" data-testid="subagent-delta-files">
-          {delta.filesTouched.map((file) => (
+          {files.map((file) => (
             <li key={file} className="truncate">
               {file}
             </li>
           ))}
-          {delta.filesTouchedOmitted ? <li>…and {delta.filesTouchedOmitted} more</li> : null}
+          {delta.filesChangedSinceBaseOmitted ? (
+            <li>…and {delta.filesChangedSinceBaseOmitted} more</li>
+          ) : null}
         </ul>
       )}
       {delta.openQuestions.length > 0 ? (

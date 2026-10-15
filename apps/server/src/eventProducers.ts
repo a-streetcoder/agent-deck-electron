@@ -68,8 +68,8 @@ export interface EventProducers {
   supervisorOpened(request: SupervisorRequest, childSessionId: string): void;
   supervisorAnswered(request: SupervisorRequest, actor: EventActor): void;
   supervisorCancelled(request: SupervisorRequest): void;
-  /** A3: the parent was handed a run's delta up to uptoSeq (its next look starts there). */
-  subagentResultRead(parentSessionId: string, runId: string, uptoSeq: number): void;
+  /** A3: the parent was handed a run's delta up to uptoSeq; false when the log refused it. */
+  subagentResultRead(parentSessionId: string, runId: string, uptoSeq: number): boolean;
   loopUserAction(
     runId: string,
     projectId: string | undefined,
@@ -374,14 +374,14 @@ export function createEventProducers(
     },
 
     subagentResultRead(parentSessionId, runId, uptoSeq) {
-      append({
+      return log.append({
         kind: SUBAGENT_RESULT_READ,
         sessionId: parentSessionId,
         subject: { type: "subagentRun", id: runId },
         actor: agentActor(parentSessionId),
         ...causeOf(parentSessionId),
         payload: { uptoSeq },
-      });
+      }).ok;
     },
 
     loopUserAction(runId, projectId, action, actor) {

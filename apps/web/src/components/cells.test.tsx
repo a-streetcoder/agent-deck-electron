@@ -692,13 +692,11 @@ describe("subagent durable status and content", () => {
           full: true,
           statusNow: "completed",
           turnsCompleted: 2,
-          toolCallsSinceLastLook: [
-            { id: "a", name: "read", isError: false },
-            { id: "b", name: "bash", isError: true },
-          ],
+          toolCalls: { read: 1, bash: 1 },
+          failedToolCalls: ["bash"],
           openQuestions: [{ id: "q1", method: "interview_request", message: "Which folder?" }],
           decisions: [{ id: "q0", title: "Pick a format", response: "JSON" }],
-          filesTouched: ["src/a.ts", "new.txt"],
+          filesChangedSinceBase: ["src/a.ts", "new.txt"],
         },
       }),
     });
@@ -707,7 +705,7 @@ describe("subagent durable status and content", () => {
     fireEvent.click(screen.getByRole("button", { name: /Subagent result/i }));
 
     expect((await screen.findByTestId("subagent-delta-activity")).textContent).toBe(
-      "2 turns · 2 tool calls · 1 failed",
+      "2 turns · 2 tool calls · failed: bash",
     );
     expect(fetchMock).toHaveBeenCalledWith(
       "/sessions/12345678-1234-4234-8234-123456789abc/subagent-runs/durable-run/delta",
@@ -719,6 +717,48 @@ describe("subagent durable status and content", () => {
     // The text result stays, and the full transcript is one click away.
     expect(screen.getByTestId("subagent-output").textContent).toBe("partial output");
     expect(screen.getByRole("button", { name: "Open child transcript" })).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
+
+  it("refetches a running child's delta on each project_events nudge", async () => {
+    setParentSession();
+    useAppStore.setState({ projectLog: null });
+    const delta = (openQuestions: { id: string; message: string }[]) => ({
+      ok: true,
+      json: async () => ({
+        hasEvents: true,
+        delta: {
+          runId: "durable-run",
+          full: true,
+          sinceSeq: 0,
+          uptoSeq: 3,
+          turnsCompleted: 0,
+          toolCalls: {},
+          failedToolCalls: [],
+          openQuestions,
+          decisions: [],
+        },
+      }),
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(delta([]))
+      .mockResolvedValue(delta([{ id: "q1", message: "Which folder?" }]));
+    vi.stubGlobal("fetch", fetchMock);
+    renderSubagent({ status: "running", error: undefined });
+    await screen.findByTestId("subagent-delta");
+    expect(screen.queryByTestId("subagent-delta-questions")).toBeNull();
+
+    act(() => {
+      useAppStore.setState({
+        projectLog: { projectId: null, logId: "log", lastSeq: 7, events: [] },
+      });
+    });
+    expect((await screen.findByTestId("subagent-delta-questions")).textContent).toBe(
+      "Which folder?",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    useAppStore.setState({ projectLog: null });
     vi.unstubAllGlobals();
   });
 
