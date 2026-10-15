@@ -1,7 +1,8 @@
 import { ControlButton } from "@/design-system/components/NativeControls";
 import { Eye, GitFork, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { ForkProvenance, SessionMeta } from "@agent-deck/contracts";
+import type { ForkProvenance, SessionMeta, UserIdentity } from "@agent-deck/contracts";
+import { userDisplayName } from "@/lib/userIdentity";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { useAppStore } from "../state/store.ts";
 import { switchToSession } from "../state/wsBridge.ts";
@@ -22,6 +23,18 @@ function validProvenance(value: unknown): ForkProvenance | null {
     return null;
   }
   return item as unknown as ForkProvenance;
+}
+
+/** SRV-15b: "Forked from Alice's session “Title”" (whose, when the server knows). */
+export function forkOriginText(
+  title: string | undefined,
+  owner: UserIdentity | undefined,
+  me: { id: string } | null,
+): string {
+  const quoted = `“${title?.trim() || "Untitled session"}”`;
+  if (!owner) return `Forked from ${quoted}`;
+  const whose = me?.id === owner.id ? "your" : `${userDisplayName(owner)}'s`;
+  return `Forked from ${whose} session ${quoted}`;
 }
 
 function RecapDialog({ provenance, onClose }: { provenance: ForkProvenance; onClose: () => void }) {
@@ -89,8 +102,33 @@ export function ForkProvenanceCard({ session }: { session: SessionMeta }) {
     (session as SessionMeta & { forkProvenance?: unknown }).forkProvenance,
   );
   const sessions = useAppStore((state) => state.sessions);
+  const me = useAppStore((state) => state.me);
   const [recapOpen, setRecapOpen] = useState(false);
-  if (!provenance) return null;
+  if (!provenance) {
+    // SRV-15b: a plain fork (a full duplicate) has no recap, only its origin.
+    const from = session.forkedFrom;
+    if (!from) return null;
+    const source = sessions.find((candidate) => candidate.id === from.sessionId);
+    return (
+      <section
+        className="flex items-center gap-2 px-1 text-caption text-text-muted"
+        aria-label="Fork origin"
+        data-testid="fork-origin-line"
+      >
+        <GitFork size={13} className="shrink-0 text-accent" aria-hidden />
+        <span className="min-w-0 truncate">{forkOriginText(from.title, from.owner, me)}</span>
+        {source ? (
+          <ControlButton
+            type="button"
+            onClick={() => void switchToSession(source)}
+            className="shrink-0 text-accent hover:underline focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            Open source
+          </ControlButton>
+        ) : null}
+      </section>
+    );
+  }
   const source = sessions.find((candidate) => candidate.id === provenance.sourceSessionId);
 
   return (
@@ -103,7 +141,7 @@ export function ForkProvenanceCard({ session }: { session: SessionMeta }) {
         <GitFork size={18} className="shrink-0 text-accent" aria-hidden />
         <div className="min-w-0 flex-1">
           <p className="truncate text-label font-medium text-text-primary">
-            Forked from “{provenance.sourceTitle}”
+            {forkOriginText(provenance.sourceTitle, source?.createdBy, me)}
           </p>
           <p className="text-caption text-text-muted">
             {source ? "Source chat is available." : "Source chat is no longer available."}

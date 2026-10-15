@@ -446,6 +446,18 @@ const SessionFailureStatusFromSelf: Schema.Schema<"failed"> = Schema.declare(
   { identifier: "SessionFailureStatusPassThrough" },
 );
 
+/** SRV-15b: what a session is doing now, computed by the server for every row
+ * (`sessionActivity` in the domain package). */
+export const SessionActivity = Schema.Literal(
+  "running",
+  "needsInput",
+  "attention",
+  "failed",
+  "parked",
+  "idle",
+);
+export type SessionActivity = typeof SessionActivity.Type;
+
 export const SessionMeta = Schema.mutable(
   Schema.Struct({
     id: Schema.String,
@@ -577,6 +589,20 @@ export const SessionMeta = Schema.mutable(
     /** Immediate-source evidence for stable-entry forks only. Captured before
      * publication so it survives restart, source rename, and source deletion. */
     forkProvenance: Schema.optional(ForkProvenanceFromSelf),
+    /** SRV-15b: the session a plain fork (a full duplicate) was made from, as it
+     * was then: its owner and title, so the fork can say whose session it copies. */
+    forkedFrom: Schema.optional(
+      Schema.mutable(
+        Schema.Struct({
+          sessionId: Schema.String,
+          title: Schema.optional(Schema.String),
+          owner: Schema.optional(UserIdentity),
+        }),
+      ),
+    ),
+    /** SRV-15b: computed on GET /sessions and every session_meta push; never
+     * persisted (the server decorates copies, not its records). */
+    activity: Schema.optional(SessionActivity),
   }),
 );
 export type SessionMeta = typeof SessionMeta.Type;

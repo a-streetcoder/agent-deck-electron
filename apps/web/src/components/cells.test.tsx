@@ -224,6 +224,25 @@ describe("historic user message actions", () => {
     expect(screen.queryByRole("button", { name: "Fork before this message" })).toBeNull();
   });
 
+  it("SRV-15b: offers Fork and Re-run on your own session only (they run on the owner's credentials)", () => {
+    const alice = { id: "alice@example.com", name: "Alice" };
+    useAppStore.setState({
+      session: { id: "s1", cwd: "/tmp", createdAt: "now", createdBy: alice },
+      me: { id: "bob@example.com", email: "bob@example.com" },
+    });
+    try {
+      const view = render(<CellView cell={historic} />);
+      expect(screen.queryByRole("button", { name: "Fork before this message" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Re-run from this message" })).toBeNull();
+      act(() => useAppStore.setState({ me: { id: alice.id, email: alice.id } }));
+      view.rerender(<CellView cell={historic} />);
+      expect(screen.getByRole("button", { name: "Fork before this message" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Re-run from this message" })).toBeTruthy();
+    } finally {
+      useAppStore.setState({ me: null });
+    }
+  });
+
   it("confirms destructive rerun, traps initial focus, closes on Escape, and restores focus", () => {
     useAppStore.setState({ session: { id: "s1", cwd: "/tmp", createdAt: "now" } });
     render(<CellView cell={historic} />);

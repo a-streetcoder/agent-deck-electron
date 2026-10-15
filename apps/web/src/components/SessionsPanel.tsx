@@ -11,7 +11,9 @@ import {
   Send,
   Trash2,
 } from "lucide-react";
-import type { SessionMeta } from "@agent-deck/contracts";
+import type { SessionActivity, SessionMeta } from "@agent-deck/contracts";
+import { sessionActivity } from "@agent-deck/domain";
+import { AppCopyButton } from "@/design-system/components/AppCopyButton";
 import { cn } from "@/lib/cn";
 import { sortSessionsByActivity, sortSessionsWithPins } from "@/lib/sessionOrdering";
 import { projectDisplayName, sessionDisplayTitle } from "@/lib/sessionTitle";
@@ -24,6 +26,7 @@ import {
   forkSession,
   newChat,
   renameSession,
+  sessionLink,
   setSessionPinned,
   switchToSession,
 } from "../state/wsBridge.ts";
@@ -61,6 +64,26 @@ function TypingDots() {
   );
 }
 
+/** SRV-15b: the row's status dot (every row; the server computes it). */
+const ACTIVITY_DOT: Record<SessionActivity, { label: string; color: string }> = {
+  running: { label: "Running", color: "var(--color-brand-accent)" },
+  needsInput: { label: "Needs input", color: "var(--color-warning)" },
+  attention: { label: "Needs attention", color: "var(--color-accent)" },
+  failed: { label: "Failed", color: "var(--color-danger)" },
+  parked: { label: "Parked", color: "var(--color-text-muted)" },
+  idle: { label: "Idle", color: "var(--color-border-strong)" },
+};
+
+/** The activity words the row label does not already say (failed, parked, attention do). */
+const ACTIVITY_SPOKEN: Record<SessionActivity, string> = {
+  running: ", running",
+  needsInput: ", needs input",
+  attention: "",
+  failed: "",
+  parked: "",
+  idle: ", idle",
+};
+
 /** Native session-row caption (PiAgentSessionListViews.swift:439): abbreviated
  * date + short time of the last activity (updatedAt, falling back to createdAt). */
 function formatSessionTime(iso: string): string {
@@ -84,6 +107,8 @@ export function SessionRow({
   onSelect: () => void;
 }) {
   const [renaming, setRenaming] = useState(false);
+  // GET /me answers a person only behind the trusted proxy (the shared server).
+  const sharedServer = useAppStore((state) => state.me !== null);
   const [draft, setDraft] = useState(session.title ?? "");
   const rowRef = useRef<HTMLDivElement>(null);
   const pinControlRef = useRef<HTMLButtonElement>(null);
@@ -101,8 +126,15 @@ export function SessionRow({
     : !session.piSessionFile
       ? "Nothing to duplicate yet"
       : checkoutOwner
-        ? `Duplicate (shares ${checkoutOwner}'s checkout and blocks its merge while it exists)`
+        ? `Duplicate (shares ${checkoutOwner}'s checkout and blocks its merge while it exists; uncommitted edits in a deleted fork are swept into ${checkoutOwner}'s merge)`
         : "Duplicate";
+
+  // The open session's own stream is fresher than the last push; a waiting
+  // person still outranks it.
+  const activity: SessionActivity =
+    running && session.activity !== "needsInput"
+      ? "running"
+      : (session.activity ?? sessionActivity(session));
 
   const commitRename = (): void => {
     const title = draft.trim();
@@ -169,7 +201,7 @@ export function SessionRow({
           : session.parkedAt
             ? ", Parked; resumes on next command"
             : ""
-      }${session.needsAttention === true ? ", needs attention" : ""}`}
+      }${session.needsAttention === true ? ", needs attention" : ""}${ACTIVITY_SPOKEN[activity]}`}
       role="button"
       tabIndex={0}
       onClick={onSelect}
@@ -181,6 +213,15 @@ export function SessionRow({
         }
       }}
     >
+      <span
+        className="inline-block h-2 w-2 shrink-0 rounded-full"
+        style={{ background: ACTIVITY_DOT[activity].color }}
+        role="img"
+        aria-label={ACTIVITY_DOT[activity].label}
+        title={ACTIVITY_DOT[activity].label}
+        data-testid={`chat-activity-${session.id}`}
+        data-activity={activity}
+      />
       <div className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-label font-medium" data-testid="chat-title">
           {displayTitle}
@@ -286,6 +327,18 @@ export function SessionRow({
         >
           <GitFork size={12} />
         </ControlButton>
+        {sharedServer ? (
+          // A loopback origin opens nothing on a co-worker's machine: shared server only.
+          <span className="contents" onClick={(event) => event.stopPropagation()}>
+            <AppCopyButton
+              text={sessionLink(session.id)}
+              aria-label="Copy link"
+              copiedLabel="Link copied"
+              data-testid={`chat-copy-link-${session.id}`}
+              className="h-auto w-auto rounded border-0 bg-transparent p-0.5 text-text-muted hover:bg-transparent hover:text-text-primary"
+            />
+          </span>
+        ) : null}
         <ControlButton
           data-testid={`chat-delete-${session.id}`}
           className="rounded p-0.5 text-text-muted hover:text-danger"
@@ -341,6 +394,18 @@ export function SessionsMainPanel() {
   const { byNewest, currentSession, agentStatus, setView, projectName, pendingAttentionCount } =
     useSessionsData();
   const [search, setSearch] = useState("");
+  // SRV-15b: one chip per session owner; shown (and applied) only with two or more.
+  const [memberChip, setMemberChip] = useState<string | null>(null);
+  const owners = new Map<string, NonNullable<SessionMeta["createdBy"]>>();
+  for (const session of byNewest) {
+    if (session.createdBy && !owners.has(session.createdBy.id)) {
+      owners.set(session.createdBy.id, session.createdBy);
+    }
+  }
+  const member = owners.size > 1 && memberChip && owners.has(memberChip) ? memberChip : null;
+  const members = member
+    ? byNewest.filter((session) => session.createdBy?.id === member)
+    : byNewest;
 
   // Search sessions by title OR content (native Sessions search 18.1 "by title
   // or content"). Title is matched client-side over the displayed title (falls
@@ -368,12 +433,12 @@ export function SessionsMainPanel() {
     };
   }, [query]);
   const filtered = query
-    ? byNewest.filter(
+    ? members.filter(
         (s) =>
           sessionDisplayTitle(s.title, projectName(s.projectId)).toLowerCase().includes(query) ||
           contentIds.has(s.id),
       )
-    : byNewest;
+    : members;
 
   const groups = new Map<string, SessionMeta[]>();
   for (const session of filtered) {
@@ -413,7 +478,37 @@ export function SessionsMainPanel() {
             </ControlButton>
           </span>
         </div>
-        <ActivityList />
+        <ActivityList member={member} />
+        {owners.size > 1 ? (
+          <div
+            className="mb-1.5 flex flex-wrap items-center gap-1 px-0.5"
+            role="group"
+            aria-label="Filter by member"
+            data-testid="member-chips"
+          >
+            {[...owners.values()].map((owner) => {
+              const selected = member === owner.id;
+              return (
+                <ControlButton
+                  key={owner.id}
+                  className={cn(
+                    "flex h-6 w-6 items-center justify-center rounded-full border text-detail font-semibold",
+                    selected
+                      ? "border-primary bg-primary text-on-accent"
+                      : "border-selection-stroke bg-accent-surface text-text-primary hover:bg-hover",
+                  )}
+                  title={`Only ${userDisplayName(owner)}'s sessions and activity`}
+                  aria-label={userDisplayName(owner)}
+                  aria-pressed={selected}
+                  data-testid="member-chip"
+                  onClick={() => setMemberChip(selected ? null : owner.id)}
+                >
+                  {userInitials(owner)}
+                </ControlButton>
+              );
+            })}
+          </div>
+        ) : null}
         <ControlInput
           data-testid="sessions-search"
           className="mb-1.5 w-full rounded-lg border border-border-subtle bg-surface px-2.5 py-1 text-detail text-text-primary outline-none focus:border-accent"

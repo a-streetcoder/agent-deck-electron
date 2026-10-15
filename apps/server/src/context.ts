@@ -157,6 +157,8 @@ export interface ServerContext {
   githubConnections?: GitHubConnections;
   /** SRV-09: AGENT_DECK_TRUSTED_PROXY is set; host launchers (terminal, editor) refuse. */
   sharedServer?: boolean;
+  /** SRV-15b: copies of the metas with their computed `activity`; absent in narrow tests. */
+  withActivity?: (metas: readonly SessionMeta[]) => SessionMeta[];
   index: SessionIndex;
   projects: ProjectIndex;
   settings: SettingsStore;

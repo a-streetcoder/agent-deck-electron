@@ -216,3 +216,78 @@ it("A8: hides server-wide restart and takeover rows from the activity rows", () 
   expect(screen.queryByTestId("activity-10")).toBeNull();
   expect(screen.queryByTestId("activity-11")).toBeNull();
 });
+
+it("SRV-15b: a fork's session.created row says who forked whose session", () => {
+  const bob = { type: "user" as const, id: "bob@example.com", name: "Bob" };
+  useAppStore.setState({
+    sessions: [
+      { ...session, createdBy: { id: "ale@example.com", name: "Ale" } },
+      {
+        id: "s2",
+        cwd: "/tmp",
+        createdAt: "now",
+        title: "Fix the build (fork)",
+        forkedFrom: {
+          sessionId: "s1",
+          title: "Fix the build",
+          owner: { id: "ale@example.com", name: "Ale" },
+        },
+      },
+    ],
+    projectLog: {
+      projectId: "p1",
+      logId: "log-a",
+      lastSeq: 5,
+      events: [
+        event(5, {
+          kind: "session.created",
+          sessionId: "s2",
+          subject: { type: "session", id: "s2" },
+          parent: { type: "session", id: "s1" },
+          actor: bob,
+        }),
+      ],
+    },
+  });
+  render(<ActivityList />);
+  const row = screen.getByTestId("activity-5");
+  expect(row.textContent).toContain("Bob");
+  expect(within(row).getByTestId("activity-forked-from").textContent).toBe(
+    "forked from Ale's session “Fix the build”",
+  );
+});
+
+it("SRV-15b: the member chip shows that member's rows only (acted, or in their session)", () => {
+  useAppStore.setState({
+    sessions: [{ ...session, createdBy: { id: "bob@example.com" } }],
+  });
+  render(<ActivityList member="bob@example.com" />);
+  // Ale's prompt is hers; the agent and system rows ran in Bob's session.
+  expect(screen.getByText("Activity (2)")).toBeTruthy();
+  expect(screen.queryByText("turn.prompted")).toBeNull();
+});
+
+it("SRV-15b: the waiting list ignores the member chip (a loop approval belongs to no member)", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      Response.json({
+        logId: "log-a",
+        requests: [
+          {
+            id: "run-1",
+            kind: "loopApproval",
+            prompt: "Approve the release",
+            timeoutPolicy: { type: "none" },
+            projectId: "p1",
+            actor: { type: "system" },
+            requestedAt: "2026-09-01T10:00:00.000Z",
+          },
+        ],
+      }),
+    ),
+  );
+  render(<ActivityList member="bob@example.com" />);
+  await waitFor(() => expect(screen.getAllByTestId("activity-waiting-row")).toHaveLength(1));
+  vi.unstubAllGlobals();
+});

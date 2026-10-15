@@ -519,6 +519,13 @@ export class ManagedSession {
     return Effect.runSync(this.rt.isRunning);
   }
 
+  /** SRV-15b: an agent run is in progress on this runtime. */
+  get agentRunning(): boolean {
+    return this.rt.agentRunning
+      ? Effect.runSync(this.rt.agentRunning)
+      : this.snapshot().state.agentStatus === "running";
+  }
+
   async prompt(
     message: string,
     images?: Parameters<ManagedSessionRuntime["prompt"]>[1],
@@ -2131,6 +2138,12 @@ export class SessionManager {
       // SRV-15a: a fork belongs to the forker and runs on their credentials;
       // without an identity (desktop) it keeps the source owner.
       ...(owner ? { createdBy: owner } : {}),
+      // SRV-15b: the provenance line ("forked from Alice's session ...").
+      forkedFrom: {
+        sessionId: source.id,
+        ...(source.title ? { title: source.title } : {}),
+        ...(source.createdBy ? { owner: source.createdBy } : {}),
+      },
       ...(source.worktreeOwnerSessionId
         ? { worktreeOwnerSessionId: source.worktreeOwnerSessionId }
         : source.worktreePath
@@ -2211,6 +2224,9 @@ export class SessionManager {
       ...(forker ? { createdBy: forker } : {}),
     };
     if (!forkProvenance) delete meta.forkProvenance;
+    // SRV-15b: forkedFrom is a plain fork's origin; a message fork's is forkProvenance
+    // (a message fork of a plain fork must not claim the plain fork's source).
+    delete meta.forkedFrom;
     // A newly materialized fork is an independent recovery boundary. Retry
     // records are ordinal-anchored to the source's full active ancestry and
     // cannot safely survive a history rewrite.
