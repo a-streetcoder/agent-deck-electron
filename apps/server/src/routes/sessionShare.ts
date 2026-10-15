@@ -5,7 +5,13 @@ import { redactSecrets } from "@agent-deck/domain";
 import { z } from "zod";
 import type { ServerContext } from "../context.ts";
 import { userActor } from "../eventProducers.ts";
-import { gitDeleteTransferRef, gitErrorText, gitSharePlan, validTransferRef } from "../git.ts";
+import {
+  gitCarriesLfs,
+  gitDeleteTransferRef,
+  gitErrorText,
+  gitSharePlan,
+  validTransferRef,
+} from "../git.ts";
 import { MAX_DETACHED_SUBAGENTS, type SessionManager } from "../SessionManager.ts";
 import { createHandoffs, prepareSessionExport, type PushedTransfer } from "../sessionTransfer.ts";
 
@@ -126,8 +132,13 @@ export function registerSessionShareRoutes(ctx: ServerContext): void {
     if (refusal) return refuse(reply, refusal);
     try {
       const plan = await gitSharePlan(meta.cwd);
+      // ade-q0pz: the hook-free transfer push would leave LFS objects behind, so
+      // only the conversation can move (a snapshot share is refused). A failed
+      // detection counts as LFS.
+      const lfs = await gitCarriesLfs(meta.cwd, { untracked: plan.untracked }).catch(() => true);
       return {
         plan: {
+          ...(lfs ? { lfs: true } : {}),
           branch: plan.branch,
           head: plan.head,
           files: { tracked: plan.tracked, untracked: plan.untracked },
@@ -173,6 +184,7 @@ export function registerSessionShareRoutes(ctx: ServerContext): void {
       const project = projectOf(meta);
       const refusal = shareRefusal(meta, project, await liveState(sessions, id));
       if (refusal) return refuse(reply, refusal);
+      // A snapshot of an LFS checkout is refused by prepareSessionExport (share_refused).
       const link = project!.sharedTo!;
       const prepared = await prepareSessionExport(ctx, meta, {
         mode,
@@ -203,6 +215,9 @@ export function registerSessionShareRoutes(ctx: ServerContext): void {
   // pushed: after a refused import, and after every successful one (the device
   // proved it may push; the server's own delete can lack the rights).
   fastify.post("/sessions/:id/share/abort", async (request, reply) => {
+    // Device-only, as preflight and share: on a shared server any member could
+    // end another's hand-off (a return has its own owner-checked abort).
+    if (ctx.sharedServer) return refuse(reply, "This session is already on a shared server.");
     const { id } = request.params as { id: string };
     const parsed = abortBody.safeParse(request.body);
     const ref = parsed.success ? parsed.data.ref : undefined;

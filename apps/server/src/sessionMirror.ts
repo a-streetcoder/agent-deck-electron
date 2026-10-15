@@ -24,16 +24,23 @@ export const MAX_MIRROR_CELL_BYTES = 512 * 1024;
 /** Unsettled cells a client may ask for again by id. */
 export const MAX_OPEN_IDS = 20;
 
-/** A value under one of these keys is a secret whatever its type. */
+/** A value under a key ending in one of these words (`password`, `database_password`,
+ * `x-api-key`, `AWS_SECRET_ACCESS_KEY`, `DATABASE_URL`) is a secret whatever its
+ * type. Counters such as `inputTokens` and the ID_KEYS do not end in one. */
 const SECRET_KEY =
-  /^(?:token|(?:refresh|access|id|auth|bearer|session)[_-]?token|client[_-]?secret|secret|password|passwd|pwd|authorization|proxy[_-]?authorization|(?:set[_-])?cookie|api[_-]?key|apikey|x[_-]api[_-]key|private[_-]?key|credentials?)$/i;
+  /(?:token|secret|secret[_-]?(?:access[_-]?)?key|password|passwd|pwd|password[_-]?hash|authorization|cookie|api[_-]?key|apikey|private[_-]?key|credentials?|database[_-]?url|connection[_-]?string|dsn)$/i;
 /** Identity fields: never rewritten, so anchors and joins stay stable. */
 const ID_KEYS = new Set(["id", "parentId", "toolCallId", "requestId", "runId", "sessionId"]);
 /** A header line: everything after it on the line is the secret. */
 const HEADER_SECRET = /((?:proxy-)?(?:authorization|set-cookie|cookie)\s*:\s*)[^\r\n"\\]+/gi;
 /** `"refresh_token": "x"`, `password=x`, `\"token\":\"x\"` inside free text (any value length). */
 const KEYED_SECRET =
-  /((?:^|[^A-Za-z0-9])[A-Za-z0-9_-]*?(?:token|secret|password|passwd|pwd|authorization|cookie|api[_-]?key|apikey|private[_-]?key|credentials?)[\\"']*\s*[:=]\s*)(\\"(?:[^\\]|\\[^"])*\\"|"(?:[^"\\]|\\.)*"|'[^']*'|[^\s,;}&"'\\]+)/gi;
+  /((?:^|[^A-Za-z0-9])[A-Za-z0-9_-]*?(?:token|secret[_-]?(?:access[_-]?)?key|secret|password[_-]?hash|password|passwd|pwd|authorization|cookie|api[_-]?key|apikey|private[_-]?key|credentials?|database[_-]?url|connection[_-]?string|dsn)[\\"']*\s*[:=]\s*)(\\"(?:[^\\]|\\[^"])*\\"|"(?:[^"\\]|\\.)*"|'[^']*'|[^\s,;}&"'\\]+)/gi;
+/** `connection_string=AccountName=x;AccountKey=y`: an unquoted connection-string-like
+ * value runs to the end of the line (or a quote, plain or escaped), spaces, semicolons
+ * and backslashes (`Server=db\instance`) included. */
+const CONNECTION_SECRET =
+  /((?:^|[^A-Za-z0-9])[A-Za-z0-9_-]*?(?:database[_-]?url|connection[_-]?string|dsn)[\\"']*\s*[:=]\s*)(\\"(?:[^\\]|\\[^"])*\\"|"(?:[^"\\]|\\.)*"|'[^']*'|(?:[^\r\n"'\\]|\\(?!["'])[^\r\n])+)/gi;
 
 const quoted = (value: string): string =>
   value.startsWith('\\"')
@@ -47,6 +54,7 @@ const quoted = (value: string): string =>
 const redactText = (text: string): string =>
   redactSecrets(text)
     .replace(HEADER_SECRET, "$1<secret>")
+    .replace(CONNECTION_SECRET, (_match, lead: string, value: string) => `${lead}${quoted(value)}`)
     .replace(KEYED_SECRET, (_match, lead: string, value: string) => `${lead}${quoted(value)}`);
 
 /** A deep copy: secret-like keys lose their whole value, other strings are redacted. */

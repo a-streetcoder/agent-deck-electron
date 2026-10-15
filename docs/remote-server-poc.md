@@ -894,9 +894,34 @@ work twice.
   origin), the in-app browser and preview guests may never navigate to it, and the shell's own
   control-plane calls go through Electron's session so the Access cookie, not a header, is the
   credential.
+- **Remote-mode local shell actions are refused** (ade-q0pz): with
+  `AGENT_DECK_REMOTE_SERVER_URL` set, "Open file" and "Reveal in folder" for agents, prompts and
+  MCP configs, revealing subagent or Loop artifacts and a retained Loop worktree, and classifying
+  dropped files all fail before any path reaches the OS, because the path would come from the
+  server (a UNC path would open an SMB connection on Windows).
+- **`POST /sessions/:id/share/abort` is refused on the shared server** (409 `share_refused`, as
+  preflight and share): it is a device route; a return has its own owner-checked abort.
+- **Hooks are off for shared-server pushes and transfers** (ade-q0pz): Push and Commit and
+  push on the Git screen of the shared server (with the requester's GitHub token or, without
+  one, the service's credentials), the release on the shared server (its fetch, tag and
+  atomic push), every push made with a requester's token, and every git command of a session
+  transfer (snapshot capture, worktree add, reset, fetch, ref and branch cleanup) run with an
+  empty `core.hooksPath`. Local pushes and releases without a token keep the repository's
+  hooks. Git-screen and release errors reach the page with secrets redacted.
 
 ### Known gaps (POC)
 
+- Git LFS repositories cannot be pushed from the shared server or moved with their files
+  (ade-q0pz): a hook-free push skips git-lfs's pre-push upload. The Git screen answers 409 "LFS
+  repositories cannot be pushed from the shared server yet" when the checkout tracks LFS files,
+  or HEAD or any outgoing commit that changed an attributes file has a `.gitattributes` naming
+  `filter=lfs` (outgoing: not on the upstream, or on no remote without one); the session merge
+  push fails the same way. A snapshot is checked the same way plus its consented untracked
+  files (`git check-attr`). Moving an LFS checkout moves the conversation only (the dialog
+  disables "Move with my changes"; a snapshot share answers 409), and a return, which always
+  carries the snapshot, answers "LFS repositories cannot be moved yet." When detection itself
+  fails, the push, snapshot or return is refused (fail closed). A release is not refused: its
+  lease pushes only a commit the remote already has.
 - `session-authors.json` is one file rewritten per message; rows go with `DELETE
 /sessions/:id` and orphans are dropped at startup, but there is no size bound. Fine for two
   people, not for a fleet.

@@ -312,6 +312,26 @@ describe("Share to server", () => {
     expect(screen.queryByTestId("share-local-commits")).toBeNull();
   });
 
+  it("offers only the conversation for an LFS checkout", async () => {
+    routes = {
+      "POST /sessions/s1/share/preflight": preflight([], { lfs: true }),
+      "POST /sessions/s1/share": () => Response.json({ error: "stop here" }, { status: 500 }),
+    };
+    render(<ShareSessionButton />);
+    fireEvent.click(screen.getByTestId("share-session"));
+    expect((await screen.findByTestId("share-lfs")).textContent).toBe(
+      "LFS repositories cannot be moved with their files yet. The conversation moves alone.",
+    );
+    const snapshot = screen.getByRole("button", { name: "Move with my changes" });
+    expect((snapshot as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Conversation only" }));
+    await waitFor(() =>
+      expect(calls.find((call) => call.url === "/sessions/s1/share")?.body).toEqual({
+        mode: "conversation",
+      }),
+    );
+  });
+
   it("keeps the move when the server is still importing the first attempt", async () => {
     routes = {
       "POST /sessions/s1/share/preflight": preflight([]),

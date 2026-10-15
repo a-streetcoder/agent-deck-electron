@@ -43,6 +43,21 @@ const isPlainObject = (value) =>
   !Array.isArray(value) &&
   Object.getPrototypeOf(value) === Object.prototype;
 
+/** A parsed JSON value with `secret` replaced in every string and key. */
+const redactParsed = (value, secret) => {
+  if (typeof value === "string") return value.split(secret).join("<secret>");
+  if (Array.isArray(value)) return value.map((item) => redactParsed(item, secret));
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        redactParsed(key, secret),
+        redactParsed(item, secret),
+      ]),
+    );
+  }
+  return value;
+};
+
 /**
  * `run(args, timeoutMs, signal)` runs cloudflared (null when
  * AGENT_DECK_CLOUDFLARED is unset: every request then needs a sign-in that
@@ -200,11 +215,12 @@ export function createSharedServerClient({ origin, run, fetchImpl = fetch, timeo
       needsSignIn = true;
       return { status: 401, signInRequired: true };
     }
-    // Redact before parsing: nothing the server echoes can carry the token out.
+    // Redact before parsing and again after: nothing the server echoes (also as
+    // \uXXXX escapes, which only parsing decodes) can carry the token out.
     const text = (await response.text().catch(() => "")).split(accessToken).join("<secret>");
     let parsed = null;
     try {
-      parsed = text ? JSON.parse(text) : null;
+      parsed = text ? redactParsed(JSON.parse(text), accessToken) : null;
     } catch {
       parsed = null;
     }

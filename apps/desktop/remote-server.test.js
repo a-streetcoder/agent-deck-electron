@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  accessTokenHeaders,
   allowRemoteShellNavigation,
   cloudflaredLogin,
   cloudflaredToken,
@@ -10,6 +11,25 @@ import {
   retryInSlots,
   signInErrorText,
 } from "./remote-server.js";
+
+test("cf-access-token goes only to the Access host and is stripped after a redirect", () => {
+  const host = "deck.example.test";
+  const sent = { accept: "*/*", "CF-Access-Token": "stale", "cf-access-token": "stale" };
+  for (const url of [`https://${host}/api`, `wss://${host}/ws`]) {
+    assert.deepEqual(accessTokenHeaders(url, sent, host, "tok"), {
+      accept: "*/*",
+      "cf-access-token": "tok",
+    });
+  }
+  for (const url of [
+    "https://evil.example/steal",
+    `https://${host}.evil.example/`,
+    `http://${host}/`,
+    "not a url",
+  ]) {
+    assert.deepEqual(accessTokenHeaders(url, sent, host, "tok"), { accept: "*/*" }, url);
+  }
+});
 
 test("remote server origin accepts only credential-free https URLs", () => {
   assert.equal(remoteServerOrigin(undefined), null);

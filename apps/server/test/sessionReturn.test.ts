@@ -7,6 +7,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -15,8 +16,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { SessionMeta } from "@agent-deck/contracts";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { gitRestoreSnapshotInPlace, SnapshotResetError } from "../src/git.ts";
+import { gitFetchTransfer, gitRestoreSnapshotInPlace, SnapshotResetError } from "../src/git.ts";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
+import { createTransferWorktree } from "../src/sessionTransfer.ts";
 
 /**
  * SRV-12c3 without Pi: the return trip (a shared server sends a session back to
@@ -844,6 +846,51 @@ process.exit(0);
       pr: { url: "https://github.com/acme/app/pull/12", number: 12 },
     });
   });
+
+  it("Git screen: a tokenless push runs no hook, and a hook's secret never reaches the page", async () => {
+    const hooks = path.join(scratch, "git screen hooks");
+    const marker = path.join(scratch, "git-screen-hook-ran");
+    // A recognizable (fake) GitHub token pattern, printed by a failing pre-commit.
+    const secret = `ghp_${"Q0pz".repeat(9)}`;
+    mkdirSync(hooks);
+    writeFileSync(
+      path.join(hooks, "pre-push"),
+      `#!/bin/sh\necho ran > "${marker.replace(/\\/g, "/")}"\nexit 1\n`,
+      { mode: 0o755 },
+    );
+    writeFileSync(path.join(hooks, "pre-commit"), `#!/bin/sh\necho "${secret}" >&2\nexit 1\n`, {
+      mode: 0o755,
+    });
+    git(serverClone, "config", "core.hooksPath", hooks);
+    const extra = path.join(serverClone, "git-screen.txt");
+    try {
+      // Bea has no GitHub connection: the push would use the service's credentials.
+      const pushed = await post(urlB(`/projects/${PROJECT_B}/git/push`), {}, bea());
+      expect(pushed.status, await pushed.clone().text()).toBe(200);
+      expect(existsSync(marker)).toBe(false);
+
+      // A release on the shared server: fetch, tag and atomic push, no hook either.
+      const released = await post(urlB(`/projects/${PROJECT_B}/release`), { tag: "v9.9.9" }, bea());
+      expect(released.status, await released.clone().text()).toBe(200);
+      expect(git(bare, "tag", "-l", "v9.9.9")).toBe("v9.9.9");
+      expect(existsSync(marker)).toBe(false);
+
+      writeFileSync(extra, "x\n");
+      const committed = await post(
+        urlB(`/projects/${PROJECT_B}/git/commit`),
+        { message: "x" },
+        bea(),
+      );
+      expect(committed.status).toBe(500);
+      const text = await committed.text();
+      expect(text).not.toContain(secret);
+      expect(text).toContain("<secret>");
+    } finally {
+      git(serverClone, "config", "--unset", "core.hooksPath");
+      git(serverClone, "reset", "-q");
+      rmSync(extra, { force: true });
+    }
+  });
 });
 
 describe("restoring a returned snapshot into the original checkout", () => {
@@ -882,6 +929,56 @@ describe("restoring a returned snapshot into the original checkout", () => {
     writeFileSync(path.join(server, "new.md"), "new\n");
   };
   const baseFiles = { "README.md": "one\n", ".gitignore": "*.log\n" };
+
+  it("the fallback fresh worktree and every cleanup run no hook", async () => {
+    const marker = path.join(scratch, "snapshot-hook-ran");
+    const hook = `#!/bin/sh\necho ran >> "${marker.replace(/\\/g, "/")}"\n`;
+    const { repo, base, snapshot } = fixture("hooked", baseFiles, (server) => {
+      edit(server);
+      mkdirSync(path.join(server, ".githooks"));
+      for (const name of ["post-checkout", "post-index-change", "reference-transaction"])
+        writeFileSync(path.join(server, ".githooks", name), hook, { mode: 0o755 });
+    });
+    // A repository-relative hooks path: the snapshot's own .githooks once checked out.
+    git(repo, "config", "core.hooksPath", ".githooks");
+    const root = path.join(scratch, "transfer worktrees");
+    const ctx = {
+      worktreesRoot: root,
+      sessionWorktreeStore: {
+        reserveWorktree: () => "reservation",
+        deleteWorktree: async (target: string) => rmSync(target, { recursive: true, force: true }),
+      },
+    } as unknown as Parameters<typeof createTransferWorktree>[0];
+    const made = await createTransferWorktree(ctx, repo, { commit: snapshot, baseHead: base });
+    expect(git(made.worktree.path, "rev-parse", "HEAD")).toBe(base);
+    expect(existsSync(path.join(made.worktree.path, "new.md"))).toBe(true);
+    expect(existsSync(marker)).toBe(false);
+
+    // The cleanups run in the project checkout: hooks there (any configured path) stay off too.
+    const hooksDir = path.join(scratch, "project hooks");
+    mkdirSync(hooksDir);
+    for (const name of ["reference-transaction", "post-checkout", "post-index-change"])
+      writeFileSync(path.join(hooksDir, name), hook, { mode: 0o755 });
+    git(repo, "config", "core.hooksPath", hooksDir);
+    const branches = () => git(repo, "branch", "--list", "agent-deck/*");
+    // Discard after an abort.
+    await made.discard();
+    expect(branches()).toBe("");
+    expect(existsSync(marker), "discard").toBe(false);
+    // A failed import (the reset fails) discards what it made.
+    await expect(
+      createTransferWorktree(ctx, repo, { commit: snapshot, baseHead: "0".repeat(40) }),
+    ).rejects.toThrow();
+    expect(branches()).toBe("");
+    expect(existsSync(marker), "failed import").toBe(false);
+    // The fetch's private ref is deleted after the fetch.
+    const ref = `refs/agent-deck/transfer/${randomUUID()}`;
+    git(`${repo} server`, "update-ref", ref, snapshot);
+    git(repo, "remote", "add", "origin", `${repo} server`);
+    expect(await gitFetchTransfer(repo, ref, {})).toBe(snapshot);
+    expect(git(repo, "for-each-ref", "refs/agent-deck/import")).toBe("");
+    expect(existsSync(marker), "fetch cleanup").toBe(false);
+  });
 
   it("restores only a clean checkout at the base, the work uncommitted again", async () => {
     const { repo, base, snapshot } = fixture("clean", baseFiles, edit);
@@ -946,7 +1043,11 @@ describe("restoring a returned snapshot into the original checkout", () => {
     const husky = path.join(scratch, "husky hooks");
     mkdirSync(husky);
     writeFileSync(path.join(husky, "post-merge"), hook, { mode: 0o755 });
+    writeFileSync(path.join(husky, "post-index-change"), hook, { mode: 0o755 });
     git(repo, "config", "core.hooksPath", husky);
+    // A new mtime with the same content: the clean check's status refreshes the index.
+    const later = new Date(Date.now() + 60_000);
+    utimesSync(path.join(repo, "README.md"), later, later);
     expect(await gitRestoreSnapshotInPlace(repo, snapshot, base)).toBe(true);
     expect(existsSync(marker)).toBe(false);
   });

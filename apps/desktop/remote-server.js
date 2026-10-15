@@ -49,6 +49,28 @@ export function allowRemoteShellNavigation(url, controlPlaneOrigin, teamDomain) 
 }
 
 /**
+ * ade-q0pz: the headers to send for `url`: `cf-access-token` set only for
+ * https/wss requests to the Access `host`, and removed (in any case) from every
+ * other request, so a redirect to another host never carries the token.
+ */
+export function accessTokenHeaders(url, requestHeaders, host, accessToken) {
+  const headers = { ...requestHeaders };
+  for (const name of Object.keys(headers)) {
+    if (name.toLowerCase() === "cf-access-token") delete headers[name];
+  }
+  let parsed = null;
+  try {
+    parsed = new URL(url);
+  } catch {
+    // Not a URL: no token.
+  }
+  if (parsed?.host === host && (parsed.protocol === "https:" || parsed.protocol === "wss:")) {
+    headers["cf-access-token"] = accessToken;
+  }
+  return headers;
+}
+
+/**
  * Run `check(timeoutMs)` up to `attempts` times, one `slotMs` window each: a
  * fast failure (a 502 while the server restarts) waits out the rest of its
  * window, so attempt N starts at (N-1) x slotMs. The default 7 attempts put

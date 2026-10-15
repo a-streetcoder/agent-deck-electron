@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { ServerContext } from "../context.ts";
 import { userActor } from "../eventProducers.ts";
 import {
+  gitCarriesLfs,
   gitDeleteTransferRef,
   gitErrorText,
   gitRestoreSnapshotInPlace,
@@ -21,6 +22,8 @@ import {
   createTransferWorktree,
   fetchTransferSnapshot,
   HANDOFF_TTL_MS,
+  LFS_DETECTION_REFUSAL,
+  LFS_MOVE_REFUSAL,
   MAX_TRANSFER_BYTES,
   prepareSessionExport,
   resolveTransferLaunch,
@@ -123,7 +126,12 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
     const live = await liveState(sessions, meta.id);
     if (live.streaming) return "Wait until the session has finished responding.";
     if (live.liveSubagents) return "Wait until this session's subagents have finished.";
-    return undefined;
+    // ade-q0pz: the hook-free transfer push would leave LFS objects behind (the
+    // export checks the snapshot itself again); a failed detection refuses.
+    return gitCarriesLfs(meta.cwd).then(
+      (found) => (found ? LFS_MOVE_REFUSAL : undefined),
+      () => LFS_DETECTION_REFUSAL,
+    );
   };
 
   fastify.post("/sessions/:id/return", async (request, reply) => {

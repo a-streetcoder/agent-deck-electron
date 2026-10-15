@@ -21,6 +21,7 @@ import {
   PREVIEW_PARTITION,
 } from "./preview-guard.js";
 import {
+  accessTokenHeaders,
   allowRemoteShellNavigation,
   cloudflaredLogin,
   cloudflaredToken,
@@ -30,11 +31,7 @@ import {
   retryInSlots,
 } from "./remote-server.js";
 import { createSharedServerClient } from "./shared-server.js";
-import {
-  catalogEndpoint,
-  catalogListsPath,
-  parseResourceFileRequest,
-} from "./resource-file-request.js";
+import { localShellActionsAllowed, resolveResourceFile } from "./resource-file-request.js";
 import { checkForUpdates } from "./update-check.js";
 import {
   app,
@@ -710,7 +707,8 @@ function buildAppMenu() {
 /**
  * Resolve a renderer resource identity against the backend's current catalog.
  * No path supplied by the renderer reaches shell APIs unless the exact path is
- * present in the requested project-scoped agent/prompt/MCP catalog.
+ * present in the requested project-scoped agent/prompt/MCP catalog, and never
+ * in remote mode (resolveResourceFile in resource-file-request.js).
  */
 async function validatedResourceFile(event, request) {
   const expectedRendererOrigin = expectedRendererOriginNow();
@@ -729,43 +727,13 @@ async function validatedResourceFile(event, request) {
   ) {
     throw new Error("Resource file is unavailable");
   }
-  const parsedRequest = parseResourceFileRequest(request);
-  if (!parsedRequest) throw new Error("Resource file is unavailable");
-  const { kind, projectId, filePath } = parsedRequest;
-
-  if (projectId !== null) {
-    const projectsResponse = await controlPlaneFetch("/projects");
-    const projectsBody = await projectsResponse.json().catch(() => null);
-    if (
-      !projectsResponse.ok ||
-      !Array.isArray(projectsBody?.projects) ||
-      !projectsBody.projects.some((project) => project?.id === projectId)
-    ) {
-      throw new Error("Resource file is unavailable");
-    }
-  }
-
-  const query = projectId === null ? "" : `?projectId=${encodeURIComponent(projectId)}`;
-  const endpoint = catalogEndpoint(kind);
-  const response = await controlPlaneFetch(`${endpoint}${query}`);
-  if (!response.ok) throw new Error("Resource file is unavailable");
-  const body = await response.json().catch(() => null);
-  if (!catalogListsPath(kind, body, filePath)) {
-    throw new Error("Resource file is unavailable");
-  }
-
-  try {
-    // Check the exact catalog path before resolving it. A catalog scanner may
-    // have followed a symlink while reading metadata; shell APIs must never do so.
-    const requestedInfo = await lstat(filePath);
-    if (requestedInfo.isSymbolicLink() || !requestedInfo.isFile()) throw new Error("not a file");
-    const resolved = await realpath(filePath);
-    const info = await stat(resolved);
-    if (!info.isFile()) throw new Error("not a file");
-    return resolved;
-  } catch {
-    throw new Error("Resource file is unavailable");
-  }
+  return resolveResourceFile(request, {
+    remote: remoteServer,
+    controlPlaneFetch,
+    lstat,
+    realpath,
+    stat,
+  });
 }
 
 ipcMain.handle("resources:openFile", async (event, request) => {
@@ -828,6 +796,9 @@ ipcMain.handle("shell:openExternal", async (_event, rawUrl) => {
 });
 
 ipcMain.handle("subagents:revealArtifacts", async (event, rawRunId) => {
+  // ade-q0pz: the directory would come from the remote server (see localShellActionsAllowed).
+  if (!localShellActionsAllowed(remoteServer))
+    throw new Error("Subagent artifacts are unavailable");
   const runId = typeof rawRunId === "string" ? rawRunId : "";
   assertTrustedPickerSender(event, "Subagent artifacts are unavailable");
   if (
@@ -852,6 +823,7 @@ ipcMain.handle("subagents:revealArtifacts", async (event, rawRunId) => {
 });
 
 ipcMain.handle("loops:revealArtifacts", async (event, rawRunId) => {
+  if (!localShellActionsAllowed(remoteServer)) throw new Error("Loop run is unavailable");
   const runId = typeof rawRunId === "string" ? rawRunId : "";
   const expectedRendererOrigin = expectedRendererOriginNow();
   let senderOrigin = null;
@@ -928,6 +900,7 @@ ipcMain.handle("skills:trashRecovery", async (event, rawToken) => {
 });
 
 ipcMain.handle("loops:revealWorktree", async (event, rawRunId) => {
+  if (!localShellActionsAllowed(remoteServer)) throw new Error("Loop run is unavailable");
   const runId = typeof rawRunId === "string" ? rawRunId : "";
   const expectedRendererOrigin = expectedRendererOriginNow();
   let senderOrigin = null;
@@ -994,6 +967,11 @@ function boundedPickerPaths(filePaths) {
 }
 
 ipcMain.handle("drop:classifyPaths", async (event, rawPaths) => {
+  // ade-q0pz: no stat() of page-supplied paths for a remote page (a UNC path
+  // probes an SMB host); dropped files would be on the wrong machine anyway.
+  if (!localShellActionsAllowed(remoteServer)) {
+    throw new Error("Dropped attachments are unavailable");
+  }
   assertTrustedPickerSender(event, "Dropped attachments are unavailable");
   const paths = (Array.isArray(rawPaths) ? rawPaths : []).slice(0, 16).flatMap((item) => {
     if (
@@ -1221,11 +1199,18 @@ async function bootstrap() {
         const { host } = new URL(remoteServer);
         // ponytail: token fixed for the run; mid-run expiry (168 h) needs an app restart.
         const attach = (accessToken) => {
+          // One listener on every URL (Electron keeps only the last one per
+          // session): it adds the token for the Access host and strips it elsewhere.
           session.defaultSession.webRequest.onBeforeSendHeaders(
-            { urls: [`https://${host}/*`, `wss://${host}/*`] },
+            { urls: ["<all_urls>"] },
             (details, callback) =>
               callback({
-                requestHeaders: { ...details.requestHeaders, "cf-access-token": accessToken },
+                requestHeaders: accessTokenHeaders(
+                  details.url,
+                  details.requestHeaders,
+                  host,
+                  accessToken,
+                ),
               }),
           );
           startupTrace("cloudflared access token attached");

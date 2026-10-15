@@ -5,6 +5,7 @@ import {
   gitCommitSubjects,
   gitCreateAndPushReleaseTag,
   gitErrorText,
+  GitLfsPushRefusedError,
   gitLatestVersionTag,
   gitLocalTagExists,
   gitPush,
@@ -20,6 +21,13 @@ import { requestUser } from "../trustedProxy.ts";
 import { githubEnv, pushUsesGitHubToken } from "../githubConnections.ts";
 import { gitIdentityEnv } from "../gitIdentity.ts";
 import { runtimeEnvFiles } from "@agent-deck/resources";
+import { redactSecrets } from "@agent-deck/domain";
+
+/** ade-q0pz: git (and hook) output reaches the page with secrets redacted. */
+const redactedGitError = (error: unknown): string => redactSecrets(gitErrorText(error));
+/** An LFS repository refused before a hook-free push is a conflict, not a remote failure. */
+const pushFailureStatus = (error: unknown): number =>
+  error instanceof GitLfsPushRefusedError ? 409 : 502;
 
 // Commit-message generator prompt (native PiAgentShipService.commitMessageSystemPrompt).
 const COMMIT_MESSAGE_SYSTEM_PROMPT = `You are Agent Deck's git commit message generator. Your only job is to write a commit message from the supplied git status and diff.
@@ -54,6 +62,9 @@ export function registerGitRoutes(ctx: ServerContext): void {
     githubEnv(requestUser(request.raw), ctx.githubConnections);
   const commitEnv = (request: { raw: IncomingMessage }) =>
     gitIdentityEnv(requestUser(request.raw), ctx.gitIdentities);
+  // ade-q0pz: on a shared server every push runs without hooks, also a tokenless
+  // one (it uses the service's own credentials).
+  const pushOptions = { noHooks: ctx.sharedServer === true };
 
   // Whether a push from here uses the clicker's GitHub connection (the URL itself stays here).
   fastify.get("/projects/:id/git/push-remote", async (request, reply) => {
@@ -92,16 +103,16 @@ export function registerGitRoutes(ctx: ServerContext): void {
       if (message === "not_a_repo") {
         return reply.status(400).send({ error: "This project isn't a git repository." });
       }
-      return reply.status(500).send({ error: message });
+      return reply.status(500).send({ error: redactSecrets(message) });
     }
     // The commit landed; a subsequent push failure is reported separately so the
     // user knows the commit is safe locally even if the push didn't go out.
     if (parsed.data.push) {
       try {
-        await gitPush(project.path, pushEnv(request));
+        await gitPush(project.path, pushEnv(request), pushOptions);
       } catch (error) {
         broadcast({ type: "resources_changed" });
-        return reply.status(502).send({
+        return reply.status(pushFailureStatus(error)).send({
           error: `Committed, but the push failed: ${error instanceof Error ? error.message : String(error)}`,
           committed: true,
           pushed: false,
@@ -118,10 +129,10 @@ export function registerGitRoutes(ctx: ServerContext): void {
     const project = projects.find((p) => p.id === (request.params as { id: string }).id);
     if (!project) return reply.status(404).send({ error: "unknown project" });
     try {
-      await gitPush(project.path, pushEnv(request));
+      await gitPush(project.path, pushEnv(request), pushOptions);
     } catch (error) {
       return reply
-        .status(502)
+        .status(pushFailureStatus(error))
         .send({ error: `Push failed: ${error instanceof Error ? error.message : String(error)}` });
     }
     return { pushed: true };
@@ -138,7 +149,7 @@ export function registerGitRoutes(ctx: ServerContext): void {
     try {
       ({ status, diff } = await gitStatusAndDiff(project.path));
     } catch (error) {
-      return reply.status(400).send({ error: String(error) });
+      return reply.status(400).send({ error: redactSecrets(String(error)) });
     }
     if (!status) return reply.status(400).send({ error: "There are no changes to describe." });
     const defaults = envDefaults();
@@ -174,7 +185,7 @@ export function registerGitRoutes(ctx: ServerContext): void {
     const project = projects.find((p) => p.id === (request.params as { id: string }).id);
     if (!project) return reply.status(404).send({ error: "unknown project" });
     try {
-      const synchronization = await gitReleaseSynchronization(project.path);
+      const synchronization = await gitReleaseSynchronization(project.path, pushOptions);
       const latestTag = await gitLatestVersionTag(project.path);
       return {
         ...synchronization,
@@ -184,7 +195,7 @@ export function registerGitRoutes(ctx: ServerContext): void {
     } catch (error) {
       return reply.status(500).send({
         code: "preflight_failed",
-        error: `Release preflight failed: ${gitErrorText(error)}`,
+        error: `Release preflight failed: ${redactedGitError(error)}`,
       });
     }
   });
@@ -203,7 +214,7 @@ export function registerGitRoutes(ctx: ServerContext): void {
     try {
       subjects = (await gitCommitSubjects(project.path, range)).slice(0, 80);
     } catch (error) {
-      return reply.status(400).send({ error: gitErrorText(error) });
+      return reply.status(400).send({ error: redactedGitError(error) });
     }
     if (subjects.length === 0) {
       return { notes: "Performance and stability improvements." };
@@ -247,9 +258,9 @@ export function registerGitRoutes(ctx: ServerContext): void {
     const { tag, notes } = parsed.data;
     let synchronization: Awaited<ReturnType<typeof gitReleaseSynchronization>>;
     try {
-      synchronization = await gitReleaseSynchronization(project.path);
+      synchronization = await gitReleaseSynchronization(project.path, pushOptions);
     } catch (error) {
-      return reply.status(500).send({ code: "preflight_failed", error: gitErrorText(error) });
+      return reply.status(500).send({ code: "preflight_failed", error: redactedGitError(error) });
     }
     if (synchronization.state !== "ready") {
       const status =
@@ -260,7 +271,7 @@ export function registerGitRoutes(ctx: ServerContext): void {
             : 409;
       return reply.status(status).send({
         code: synchronization.state,
-        error: synchronization.blocker?.message ?? "Release synchronization failed.",
+        error: redactSecrets(synchronization.blocker?.message ?? "Release synchronization failed."),
         synchronization,
       });
     }
@@ -284,7 +295,7 @@ export function registerGitRoutes(ctx: ServerContext): void {
     } catch (error) {
       return reply.status(502).send({
         code: "remote_tag_lookup_failed",
-        error: `Couldn't check tag ${tag} on ${remote}: ${gitErrorText(error)}`,
+        error: `Couldn't check tag ${tag} on ${remote}: ${redactedGitError(error)}`,
       });
     }
     try {
@@ -297,7 +308,7 @@ export function registerGitRoutes(ctx: ServerContext): void {
     } catch (error) {
       return reply.status(500).send({
         code: "local_tag_lookup_failed",
-        error: `Couldn't check local tag ${tag}: ${gitErrorText(error)}`,
+        error: `Couldn't check local tag ${tag}: ${redactedGitError(error)}`,
       });
     }
 
@@ -310,23 +321,25 @@ export function registerGitRoutes(ctx: ServerContext): void {
         headSha,
         remote,
         remoteRef,
+        {},
+        pushOptions,
       );
     } catch (error) {
       return reply.status(500).send({
         code: "tag_creation_failed",
-        error: `Couldn't create local tag ${tag}: ${gitErrorText(error)}`,
+        error: `Couldn't create local tag ${tag}: ${redactedGitError(error)}`,
       });
     }
     if (!result.ok) {
       if (result.failure.code === "stale_local") {
         return reply.status(409).send({
           code: result.failure.code,
-          error: result.failure.message,
+          error: redactSecrets(result.failure.message),
         });
       }
       return reply.status(502).send({
         code: result.failure.code,
-        error: result.failure.message,
+        error: redactSecrets(result.failure.message),
         localRollback: result.failure.localRollback,
         remoteTag: result.failure.remoteTag,
       });
