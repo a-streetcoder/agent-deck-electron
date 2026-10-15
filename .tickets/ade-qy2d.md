@@ -1,6 +1,6 @@
 ---
 id: ade-qy2d
-status: in_progress
+status: closed
 deps: [ade-x3gn]
 links: []
 created: 2026-10-14T23:54:52Z
@@ -20,3 +20,9 @@ GUARDRAILS: worktree E:/agent-deck-wt/<ticket> on wt/<ticket>; never git checkou
 ## Acceptance Criteria
 
 Property test green over the recorded sequences; first boot imports with origin reconcile and a second boot emits zero; recovery events present; fixtures packages/domain/test/fixtures/events/{managed-subagent,loop-makerChecker}.jsonl recorded; the secrets scan from A1b1 passes on them; tsc/eslint/prettier clean.
+
+## Notes
+
+**2026-10-15T01:04:17Z**
+
+2026-10-15 merged (wt/ade-qy2d: 65adf20 + review round 44056da). Contrarian + GPT review16 applied: 4,000-char head caps with summaryBytes (errors keep the tail), redactPaths in domain before every cap (data dir, home, project roots, generic paths), artifactRootId/artifactDirectoryId dropped from public views, CAPABILITY_FIELDS exported, sinks always attached with resync on readonly/io/failed-reconcile, two-phase reconcile ordering, page-by-page fold, quarantine guard, turnToolCallId per turn and human-approval finished, loop.artifact.upserted, recorded sequences with continuation and removal, per-commit projection check, stable fixture ids. Tests: domain 30, server eventReconcile 4 + eventProducers.pi 2 + bridgeTools 23 + subagentRunStore 33 + loopEngine 59 + sessionManager.subagentContinuation 18. Known: quarantine guard covers only the boot that finds the corrupt file; a corrupt loop-runs.json already crashes startServer (warn callback references fastify before declaration: pre-existing, ticket it in D-lane); nested loop removals not representable.
