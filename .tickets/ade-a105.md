@@ -17,3 +17,9 @@ Owner decision 2026-10-15: the shared server becomes a product you install on a 
 
 All sub-tickets closed; a fresh host runs the shared server from the published image with docker compose up -d and passes the two-user smoke; the runbook describes install, upgrade, rollback; the DST stub is updated.
 
+
+## Notes
+
+**2026-10-15T21:59:26Z**
+
+2026-10-15 owner approved (exact word) the SRV-17 tree 17a-17c.

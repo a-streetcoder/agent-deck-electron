@@ -1,6 +1,6 @@
 ---
 id: ade-229e
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-10-15T21:53:37Z
@@ -22,3 +22,9 @@ Guardrails: no build runs on the Windows checkout (low memory); the developer wr
 
 docker build succeeds in CI; the container answers /health 200 and GET /projects with no sources or pnpm in the runtime stage; image published on a tag; docs section 'Container image' in remote-server-poc.md.
 
+
+## Notes
+
+**2026-10-15T21:59:27Z**
+
+2026-10-15 started; worktree E:\agent-deck-wt\ade-229e (wt/ade-229e). Builds never run on the Windows checkout: the Dockerfile is validated in CI or on the VM.
