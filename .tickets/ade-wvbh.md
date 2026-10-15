@@ -24,3 +24,7 @@ node --test for the store (validation, override precedence, change resets the cl
 **2026-10-15T21:56:37Z**
 
 2026-10-15 started; worktree E:\agent-deck-wt\ade-wvbh (wt/ade-wvbh).
+
+**2026-10-15T22:06:54Z**
+
+2026-10-15 implemented as a860cde; contrarian + GPT (review53) running. Developer deviations: a changed address needs a restart (main refuses shared-server requests until the window origin matches; 16b to make it seamless: preload asks main for the origin at load, window reload after Save); no ShareProjectControl hint (the control renders nothing without a server).
