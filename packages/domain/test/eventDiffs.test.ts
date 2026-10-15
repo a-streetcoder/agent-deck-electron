@@ -28,7 +28,7 @@ import {
   type EventDraft,
   type EventEnvelope,
 } from "../src/events.ts";
-import type { LoopRun } from "../src/loops.ts";
+import type { LoopChildRecord, LoopRun } from "../src/loops.ts";
 
 // Recorded by apps/server/test/eventProducers.pi.test.ts with
 // AGENT_DECK_RECORD_EVENT_FIXTURES=1: per real store commit the public view and how
@@ -446,6 +446,37 @@ describe("redactPaths", () => {
     expect(loop.iterations[0]!.children[0]!.error).toBe("crashed in <project>\\tool");
     expect(loop.iterations[0]!.timeline[0]!.note).toBe("wrote <path>");
   });
+
+  it("projects only finite numeric loop child token counts (A6)", () => {
+    const withTokens = (tokens: unknown) =>
+      toPublicLoopRun({
+        id: "l",
+        loopName: "L",
+        status: "completed",
+        currentIteration: 1,
+        maxIterations: 1,
+        startedAt: "a",
+        updatedAt: "b",
+        iterations: [
+          {
+            id: "i",
+            index: 1,
+            startedAt: "a",
+            output: "",
+            validationPassed: null,
+            timeline: [],
+            children: [{ id: "c", phase: "maker", tokens } as LoopChildRecord],
+            artifacts: [],
+          },
+        ],
+      } as LoopRun).iterations[0]!.children[0]!;
+    expect(withTokens({ input: 3, output: 4, raw: "secret" }).tokens).toEqual({
+      input: 3,
+      output: 4,
+    });
+    expect(withTokens({ input: "MAKER_RAW_OUTPUT", output: 5 }).tokens).toEqual({ output: 5 });
+    expect(withTokens({ input: Number.NaN, output: Infinity })).not.toHaveProperty("tokens");
+  });
 });
 
 describe("secrets scan of the recorded fixtures", () => {
@@ -487,12 +518,15 @@ describe("secrets scan of the recorded fixtures", () => {
     "classificationOutput",
   ];
 
-  const keysOf = (value: unknown, out = new Set<string>()): Set<string> => {
+  // Only the numeric leaves tokens.input and tokens.output (A6's loop child counts) are
+  // exempt: any other value under "output" is recorded as "output" and fails the scan.
+  const keysOf = (value: unknown, out = new Set<string>(), inTokens = false): Set<string> => {
     if (Array.isArray(value)) for (const item of value) keysOf(item, out);
     else if (value && typeof value === "object") {
       for (const [key, nested] of Object.entries(value)) {
-        out.add(key);
-        keysOf(nested, out);
+        const count = inTokens && (key === "input" || key === "output");
+        out.add(count && typeof nested === "number" ? `tokens.${key}` : key);
+        keysOf(nested, out, key === "tokens");
       }
     }
     return out;
@@ -508,6 +542,23 @@ describe("secrets scan of the recorded fixtures", () => {
         const keys = keysOf(values);
         // Loop child outputs use the key "output" (A4's result has tokens.output).
         const loopOnly = name.startsWith("loop") ? ["output"] : [];
+        // A6: every tokens.* value is a count.
+        const tokenValues: unknown[] = [];
+        const collect = (value: unknown): void => {
+          if (Array.isArray(value)) value.forEach(collect);
+          else if (value && typeof value === "object") {
+            for (const [key, nested] of Object.entries(value)) {
+              if (key === "tokens" && nested && typeof nested === "object") {
+                expect(Object.keys(nested).every((k) => k === "input" || k === "output")).toBe(
+                  true,
+                );
+                tokenValues.push(...Object.values(nested));
+              } else collect(nested);
+            }
+          }
+        };
+        collect(values);
+        for (const count of tokenValues) expect(Number.isFinite(count)).toBe(true);
         for (const key of [...CAPABILITY_FIELDS, ...LOOP_PRIVATE, ...loopOnly]) {
           expect(keys.has(key), key).toBe(false);
         }

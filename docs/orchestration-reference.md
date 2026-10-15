@@ -117,6 +117,26 @@ once; spawn refuses the ninth. A running spawned child keeps its idle parent fro
 parking or refreshing resources; when the last one ends, the idle-parking deadline and
 any deferred resource refresh are armed again.
 
+### Capability profiles
+
+Loop children record `model` and `tokens` (`input`/`output`, Pi's summed usage) at settle,
+in the store and in `loop.child.upserted`, also when the child fails after running (the
+executor attaches the usage to the error as `childUsage`). `aggregateCapabilityProfiles`
+(`packages/domain/src/capabilityProfiles.ts`) folds the public subagent runs and loop runs into
+one profile per agent name and role (`subagent` or the loop phase; an unnamed loop evaluator is
+`Goal evaluator`): settled runs, completed / failed / stopped (interrupted counts as stopped),
+the finished rate `passRate` = completed / (completed + failed), nearest-rank median and p90 of
+total tokens and duration, and the last run time, for the last 30 days (`[now - 30 d, now]`,
+both ends inclusive) and all time. Finished is not approved: a maker whose checker rejects it
+still finishes. Anonymous subagent runs are not profiled. `capabilityProfilesFromEvents`
+computes the same from the log for A1e projections; the stores stay authoritative. `GET
+/agents/profiles` and `GET /agents/:name/profile` serve it (by name, across projects); the
+Agents screen shows it per agent, and the `list_agents({project?})` bridge tool (a delegation
+tool; `project` is an id, or a name only one project has) gives a parent the loop role defaults
+once, then per agent its name, description and authored tools on labelled lines (control
+characters and line breaks flattened, each capped) and the profile on server-written lines,
+rounded, the whole capped at 12,000 characters.
+
 ### Plan dependencies and dispatch
 
 A plan item may carry `dependsOn` (item ids), `assignee` and `verifiedBy` (agent names, compared

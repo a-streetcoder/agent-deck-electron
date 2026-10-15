@@ -12,12 +12,12 @@ export interface RunMetaProps {
   className?: string;
 }
 
-function formatTokens(n: number): string {
+export function formatTokens(n: number): string {
   if (n < 1000) return String(n);
   return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
 }
 
-function formatDuration(ms: number): string {
+export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   const s = ms / 1000;
   // Round to one decimal BEFORE the <60 check so e.g. 59.97s reads "1m 0s",

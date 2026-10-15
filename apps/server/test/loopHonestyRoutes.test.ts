@@ -139,7 +139,10 @@ function makeRoutes(
       sessions: {
         create: createSession,
         destroy: destroySession,
-        runSubagent,
+        runSubagentResult: async (...args: unknown[]) => ({
+          runId: "child",
+          text: await runSubagent(...args),
+        }),
         announceCreated,
         removeLoopSessionSnapshot,
       },

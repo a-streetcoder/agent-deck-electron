@@ -217,7 +217,53 @@ export type ExecuteLoopRole = (request: {
   cwd: string;
   projectId?: string;
   signal: AbortSignal;
-}) => Promise<string>;
+}) => Promise<string | LoopRoleResult>;
+
+/** A child's model and summed Pi token usage, when the executor reports them. */
+export interface LoopRoleUsage {
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
+/** A role's text plus its usage. */
+export interface LoopRoleResult extends LoopRoleUsage {
+  text: string;
+}
+
+const count = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+
+/** A6: record the child's model and tokens at settle. */
+function recordRoleUsage(child: LoopChildRecord, usage: LoopRoleUsage | undefined): void {
+  if (!usage) return;
+  if (typeof usage.model === "string" && usage.model) child.model = usage.model;
+  const input = count(usage.inputTokens);
+  const output = count(usage.outputTokens);
+  if (input !== undefined || output !== undefined) {
+    child.tokens = {
+      ...(input !== undefined ? { input } : {}),
+      ...(output !== undefined ? { output } : {}),
+    };
+  }
+}
+
+function settleRoleResult(child: LoopChildRecord, result: string | LoopRoleResult): string {
+  if (typeof result === "string") return result;
+  recordRoleUsage(child, result);
+  return result.text;
+}
+
+/** A failed child's usage: executors attach it to the thrown error (or its cause) as
+ * `childUsage` (services/sessionManager.ts). */
+function errorRoleUsage(error: unknown): LoopRoleUsage | undefined {
+  for (let at = error, depth = 0; at && typeof at === "object" && depth < 3; depth += 1) {
+    const usage = (at as { childUsage?: unknown }).childUsage;
+    if (usage && typeof usage === "object") return usage as LoopRoleUsage;
+    at = (at as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
 
 /** Launch defaults per loop role. An agent's own `tools:` and
  * `defaultExpectedOutcome` frontmatter win; these apply when it authors none.
@@ -1597,7 +1643,7 @@ export class LoopEngine {
       ]
         .filter(Boolean)
         .join("\n\n");
-      const output = executeRole
+      const result = executeRole
         ? await executeRole({
             loop,
             prompt: effectivePrompt,
@@ -1613,6 +1659,7 @@ export class LoopEngine {
             signal,
           })
         : await executeAgent!({ ...loop, goal: effectivePrompt, agentName }, cwd, projectId);
+      const output = settleRoleResult(child, result);
       if (signal.aborted || run.status === "stopping") {
         child.status = "stopped";
         child.endedAt = this.now();
@@ -1640,6 +1687,7 @@ export class LoopEngine {
       this.changed(run);
       return output;
     } catch (error) {
+      recordRoleUsage(child, errorRoleUsage(error));
       child.error = error instanceof Error ? error.message : String(error);
       child.status = signal.aborted ? "stopped" : "failed";
       child.endedAt = this.now();
@@ -1679,7 +1727,7 @@ export class LoopEngine {
       ]
         .filter(Boolean)
         .join("\n\n");
-      const output = executeRole
+      const result = executeRole
         ? await executeRole({
             loop,
             prompt: effectivePrompt,
@@ -1695,6 +1743,7 @@ export class LoopEngine {
             cwd,
             projectId,
           );
+      const output = settleRoleResult(child, result);
       child.endedAt = this.now();
       if (signal.aborted || isLoopRunTerminal(run.status)) {
         child.status = "stopped";
@@ -1713,6 +1762,7 @@ export class LoopEngine {
       this.changed(run);
       return output;
     } catch (error) {
+      recordRoleUsage(child, errorRoleUsage(error));
       child.endedAt = this.now();
       if (signal.aborted || isLoopRunTerminal(run.status)) {
         child.status = "stopped";

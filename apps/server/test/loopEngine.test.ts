@@ -147,6 +147,85 @@ describe("loop verdict parsing (D7)", () => {
     });
   });
 
+  it("records each child's model and tokens at settle, branches included (A6)", async () => {
+    const engine = new LoopEngine({
+      executeRole: async ({ phase, branchIndex }) =>
+        phase === "evaluator"
+          ? { text: "SUCCESS\ndone", model: "judge", inputTokens: 3, outputTokens: 1 }
+          : branchIndex === 1
+            ? "plain text, no usage"
+            : { text: "report", model: "worker", inputTokens: 100, outputTokens: 20 },
+      runValidation: async () => ({ passed: true, evidence: "ok" }),
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "parallelAgents",
+        parallelBranches: ["A", "B"],
+        validationCommand: "",
+      }),
+      cwd(),
+    );
+    await engine.settled(run.id);
+    expect(run.status).toBe("completed");
+    expect(
+      run.iterations[0]!.children.map(({ phase, model, tokens }) => ({ phase, model, tokens })),
+    ).toEqual([
+      { phase: "branch", model: "worker", tokens: { input: 100, output: 20 } },
+      { phase: "branch", model: undefined, tokens: undefined },
+      { phase: "evaluator", model: "judge", tokens: { input: 3, output: 1 } },
+    ]);
+  });
+
+  it("keeps a failed child's usage from the thrown error (A6)", async () => {
+    const engine = new LoopEngine({
+      executeRole: async ({ branchIndex }) => {
+        if (branchIndex === 0) {
+          // services/sessionManager.ts attaches childUsage; a ChildRunError wraps it as cause.
+          const cause = Object.assign(new Error("child crashed"), {
+            childUsage: { model: "worker", inputTokens: 40, outputTokens: 2 },
+          });
+          throw new Error("child crashed", { cause });
+        }
+        if (branchIndex === 1) throw new Error("no usage");
+        return "SUCCESS\nok";
+      },
+      runValidation: async () => ({ passed: true, evidence: "ok" }),
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "parallelAgents",
+        parallelBranches: ["A", "B"],
+        validationCommand: "",
+      }),
+      cwd(),
+    );
+    await engine.settled(run.id);
+    const branches = run.iterations[0]!.children.filter((child) => child.phase === "branch");
+    expect(branches.map(({ status, model, tokens }) => ({ status, model, tokens }))).toEqual([
+      { status: "failed", model: "worker", tokens: { input: 40, output: 2 } },
+      { status: "failed", model: undefined, tokens: undefined },
+    ]);
+  });
+
+  it("keeps a failed single-agent maker's usage (A6)", async () => {
+    const engine = new LoopEngine({
+      executeRole: async () => {
+        throw Object.assign(new Error("maker failed"), {
+          childUsage: { model: "m", inputTokens: 7 },
+        });
+      },
+      runValidation: async () => ({ passed: true, evidence: "ok" }),
+    });
+    const run = engine.start(makeLoop({ maxIterations: 1 }), cwd());
+    await engine.settled(run.id);
+    expect(run.iterations[0]!.children[0]).toMatchObject({
+      phase: "maker",
+      status: "failed",
+      model: "m",
+      tokens: { input: 7 },
+    });
+  });
+
   it("continues on a missing evaluator verdict and says so in the timeline", async () => {
     const engine = new LoopEngine({
       executeRole: async ({ phase }) =>

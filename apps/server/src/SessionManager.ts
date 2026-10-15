@@ -1771,7 +1771,12 @@ export class SessionManager {
    * (inheriting the parent's provider/model/env) and return its final text.
    * Throws if the parent session is unknown.
    */
-  async runSubagent(
+  async runSubagent(...args: Parameters<SessionManager["runSubagentResult"]>): Promise<string> {
+    return (await this.runSubagentResult(...args)).text;
+  }
+
+  /** runSubagent with the child's model and token usage (A6: loop children record them). */
+  async runSubagentResult(
     parentSessionId: string,
     task: string,
     agentName?: string,
@@ -1781,18 +1786,16 @@ export class SessionManager {
     worktree = false,
     signal?: AbortSignal,
     parentToolCallId?: string,
-  ): Promise<string> {
+  ): Promise<ChildRunResult> {
     signal?.throwIfAborted();
     const parent = this.sessions.get(parentSessionId);
     if (!parent) throw new Error(`unknown parent session: ${parentSessionId}`);
-    return (
-      await parent.runChildAgent(task, agentName, toolPolicy, overrides, {
-        source,
-        ...(worktree ? { worktree: true } : {}),
-        ...(signal ? { signal } : {}),
-        ...(parentToolCallId ? { toolCallId: parentToolCallId } : {}),
-      })
-    ).text;
+    return await parent.runChildAgent(task, agentName, toolPolicy, overrides, {
+      source,
+      ...(worktree ? { worktree: true } : {}),
+      ...(signal ? { signal } : {}),
+      ...(parentToolCallId ? { toolCallId: parentToolCallId } : {}),
+    });
   }
 
   /** Generic managed_subagent entrypoint: spawn, then await the same child. */

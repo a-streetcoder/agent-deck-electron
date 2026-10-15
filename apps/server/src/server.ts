@@ -139,6 +139,11 @@ import {
 } from "./trustedProxy.ts";
 import { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import { SubagentRunStore } from "./subagentRunStore.ts";
+import {
+  currentProfiles,
+  registerAgentProfileRoutes,
+  registerListAgentsTool,
+} from "./agentProfiles.ts";
 import { createEventLog, disabledEventLog, type EventLog } from "./eventLog.ts";
 import { createEventProducers } from "./eventProducers.ts";
 import { createPlanDispatcher } from "./planDispatcher.ts";
@@ -160,6 +165,7 @@ const CHILD_MEMORY_TOOL_NAMES = new Set([
 ]);
 /** The delegation bridge tools (child launch, await, cancel, delta), withheld when delegation is off. */
 const DELEGATION_TOOL_NAMES = new Set([
+  "list_agents",
   "managed_subagent",
   "managed_parallel",
   "spawn_subagent",
@@ -1072,6 +1078,31 @@ async function initServer(
     warn: (message, error) => console.warn(message, error),
   });
   registerDeckBridgeTools(bridge, sessions, eventLog, subagentDeltas);
+  // A6: how each agent's runs went, for the Agents screen and a delegating parent.
+  const profileSources = {
+    subagentRuns: () => subagentRuns.publicRuns(),
+    loopRuns: () => loopEngine.publicRuns(),
+  };
+  registerListAgentsTool(bridge, {
+    agents: (sessionId, wanted) => {
+      const own = projectOfSession(sessionId);
+      // An id first; a name only when exactly one project has it.
+      const named = (name: string) => {
+        const matches = projects.list().filter((item) => item.name === name);
+        return matches.length === 1 ? matches[0] : undefined;
+      };
+      const project = wanted
+        ? (projects.find((item) => item.id === wanted) ?? named(wanted))
+        : own
+          ? projects.find((item) => item.id === own)
+          : undefined;
+      if (wanted && !project) return undefined;
+      return scanAgents(rootsFor(project?.id)).filter(
+        (agent) => !agent.shadowed && !agent.disabled && projectAllowsAgent(project, agent),
+      );
+    },
+    profiles: () => currentProfiles(profileSources),
+  });
   // A5: run assigned plan items through the A4 spawn path as they become ready.
   const planDispatcher = createPlanDispatcher({
     subscribe: (subscriber) => eventLog.subscribe(subscriber),
@@ -1694,6 +1725,7 @@ async function initServer(
   registerSessionRoutes(ctx);
   registerComposerDraftRoutes(ctx, composerDrafts);
   registerEventRoutes(fastify, eventLog);
+  registerAgentProfileRoutes(fastify, profileSources);
   registerSubagentDeltaRoute(fastify, subagentDeltas);
   // A1c: coalesced project_events nudges to every client (same reach as resources_changed).
   const stopEventNudges = startProjectEventNudges(eventLog, broadcast);

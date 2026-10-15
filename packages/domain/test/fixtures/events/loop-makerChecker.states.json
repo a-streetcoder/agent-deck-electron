@@ -148,7 +148,12 @@
                 "agentName": "Maker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               }
             ],
             "artifacts": []
@@ -210,7 +215,12 @@
                 "agentName": "Maker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               }
             ],
             "artifacts": [
@@ -287,7 +297,12 @@
                 "agentName": "Maker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               }
             ],
             "artifacts": [
@@ -377,7 +392,12 @@
                 "agentName": "Maker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               }
             ],
             "artifacts": [
@@ -488,7 +508,12 @@
                 "agentName": "Maker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               },
               {
                 "id": "00000000-0000-4000-8000-000000000017",
@@ -613,7 +638,12 @@
                 "agentName": "Maker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               },
               {
                 "id": "00000000-0000-4000-8000-000000000017",
@@ -621,7 +651,12 @@
                 "agentName": "Checker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               }
             ],
             "artifacts": [
@@ -746,7 +781,12 @@
                 "agentName": "Maker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               },
               {
                 "id": "00000000-0000-4000-8000-000000000017",
@@ -754,7 +794,12 @@
                 "agentName": "Checker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               }
             ],
             "artifacts": [
@@ -895,7 +940,12 @@
                 "agentName": "Maker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               },
               {
                 "id": "00000000-0000-4000-8000-000000000017",
@@ -903,7 +953,12 @@
                 "agentName": "Checker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               },
               {
                 "id": "00000000-0000-4000-8000-000000000022",
@@ -1057,7 +1112,12 @@
                 "agentName": "Maker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               },
               {
                 "id": "00000000-0000-4000-8000-000000000017",
@@ -1065,14 +1125,24 @@
                 "agentName": "Checker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               },
               {
                 "id": "00000000-0000-4000-8000-000000000022",
                 "phase": "evaluator",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               }
             ],
             "artifacts": [
@@ -1227,7 +1297,12 @@
                 "agentName": "Maker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               },
               {
                 "id": "00000000-0000-4000-8000-000000000017",
@@ -1235,14 +1310,24 @@
                 "agentName": "Checker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               },
               {
                 "id": "00000000-0000-4000-8000-000000000022",
                 "phase": "evaluator",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               }
             ],
             "artifacts": [
@@ -1407,7 +1492,12 @@
                 "agentName": "Maker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               },
               {
                 "id": "00000000-0000-4000-8000-000000000017",
@@ -1415,14 +1505,24 @@
                 "agentName": "Checker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               },
               {
                 "id": "00000000-0000-4000-8000-000000000022",
                 "phase": "evaluator",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               }
             ],
             "artifacts": [
@@ -1589,7 +1689,12 @@
                 "agentName": "Maker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               },
               {
                 "id": "00000000-0000-4000-8000-000000000017",
@@ -1597,14 +1702,24 @@
                 "agentName": "Checker",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               },
               {
                 "id": "00000000-0000-4000-8000-000000000022",
                 "phase": "evaluator",
                 "status": "completed",
                 "startedAt": "2026-01-01T00:00:00.000Z",
-                "endedAt": "2026-01-01T00:00:00.000Z"
+                "endedAt": "2026-01-01T00:00:00.000Z",
+                "model": "mock-model",
+                "tokens": {
+                  "input": 1,
+                  "output": 6
+                }
               }
             ],
             "artifacts": [

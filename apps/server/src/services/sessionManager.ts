@@ -2100,9 +2100,29 @@ export interface ChildRunOptions {
   onAccepted?: (runId: string) => void;
 }
 
-export interface ChildRunResult {
+/** A6: the child's model and summed Pi usage (fields absent when Pi reported none). */
+export interface ChildRunUsage {
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
+export interface ChildRunResult extends ChildRunUsage {
   runId: string;
   text: string;
+}
+
+function childRunUsage(metadata: ChildRunUsage): ChildRunUsage {
+  return {
+    ...(metadata.model ? { model: metadata.model } : {}),
+    ...(metadata.inputTokens !== undefined ? { inputTokens: metadata.inputTokens } : {}),
+    ...(metadata.outputTokens !== undefined ? { outputTokens: metadata.outputTokens } : {}),
+  };
+}
+
+/** A failure after the child ran carries its usage as `childUsage` (the loop engine reads it). */
+function withChildUsage(error: Error, metadata: ChildRunUsage): Error {
+  return Object.assign(error, { childUsage: childRunUsage(metadata) });
 }
 
 /** Failure after a durable generic child identity has been created/reclaimed. */
@@ -2779,7 +2799,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
               ...finalMetadata,
             },
           });
-          return yield* Effect.fail(reportedFailure);
+          return yield* Effect.fail(withChildUsage(reportedFailure, finalMetadata));
         }
 
         const result = childOutcome.right;
@@ -2839,7 +2859,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
               ...finalMetadata,
             },
           });
-          return yield* Effect.fail(reportedFailure);
+          return yield* Effect.fail(withChildUsage(reportedFailure, finalMetadata));
         }
 
         terminalPersisted = true;
@@ -2858,7 +2878,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
             ...finalMetadata,
           },
         });
-        return { runId, text: result };
+        return { runId, text: result, ...childRunUsage(finalMetadata) };
       }),
     );
   }).pipe(
