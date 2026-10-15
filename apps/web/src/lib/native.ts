@@ -57,7 +57,13 @@ export interface SharedServerBridge {
   origin: string;
   request(
     method: "GET" | "POST",
-    path: "/projects" | "/me" | `/projects/${string}/sessions/import`,
+    path:
+      | "/projects"
+      | "/me"
+      | `/projects/${string}/sessions/import`
+      // SRV-12c2: the live mirror of one moved session.
+      | `/sessions/${string}`
+      | `/events?sessionId=${string}`,
     body?: object,
   ): Promise<SharedServerResponse>;
   signIn(): Promise<{ ok: boolean; error?: string }>;

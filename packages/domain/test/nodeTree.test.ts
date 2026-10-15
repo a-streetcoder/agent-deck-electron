@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parseEventLine, splitJsonl, type EventEnvelope } from "../src/events.ts";
 import {
+  createNodeTreeReducer,
   loopChildStatus,
   deckRunsFromTree,
   nodesOfType,
@@ -530,5 +531,21 @@ describe("loopChildStatus (shared with the Loops graph view)", () => {
     expect(loopChildStatus({ endedAt: "t" })).toBe("done");
     expect(loopChildStatus({ startedAt: "t" })).toBe("running");
     expect(loopChildStatus({})).toBe("pending");
+  });
+});
+
+describe("createNodeTreeReducer (SRV-12c2 mirror)", () => {
+  it("events added in pages give the same tree as one fold, and tree() leaves the fold intact", () => {
+    for (const name of ["loop-makerChecker", "plan"]) {
+      const log = events(name);
+      const reducer = createNodeTreeReducer();
+      for (let i = 0; i < log.length; i += 3) {
+        reducer.add(log.slice(i, i + 3));
+        // A tree between pages must not change what the next pages build.
+        reducer.tree();
+      }
+      expect(shapes(reducer.tree())).toEqual(shapes(projectNodeTree(log)));
+      expect(reducer.tree()).toEqual(projectNodeTree(log));
+    }
   });
 });

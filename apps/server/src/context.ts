@@ -32,6 +32,7 @@ import type { GitIdentityMap } from "./gitIdentity.ts";
 import type { UserAgentDirs } from "./userAgentDirs.ts";
 import type { GitHubConnections } from "./githubConnections.ts";
 import type { gitCloneRepository } from "./git.ts";
+import type { RpcEndpoint } from "./rpcHandler.ts";
 import type { SkillStore } from "./skills/skillStore.ts";
 import type { InjectedCommandStore } from "./injectedCommands.ts";
 import type { SupervisorLog } from "./supervisor.ts";
@@ -170,6 +171,8 @@ export interface ServerContext {
   repoProjectSeams?: { fetch?: typeof fetch; clone?: typeof gitCloneRepository };
   /** SRV-15b: copies of the metas with their computed `activity`; absent in narrow tests. */
   withActivity?: (metas: readonly SessionMeta[]) => SessionMeta[];
+  /** SRV-12c2: one prompt through the RPC dispatch, as the requester; absent in narrow tests. */
+  promptSession?: RpcEndpoint["prompt"];
   index: SessionIndex;
   projects: ProjectIndex;
   settings: SettingsStore;

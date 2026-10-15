@@ -67,6 +67,8 @@ import { envDefaults, type ServerContext } from "../context.ts";
 import { HistoryActionCoordinator, HistoryActionError } from "../historyActions.ts";
 import { LaunchResourceResolutionError, resolveLaunchResources } from "../launchResources.ts";
 import { assembleSlashUniverseForSession } from "../slashUniverse.ts";
+import { MAX_OPEN_IDS, mirrorTranscript, sessionTranscriptSource } from "../sessionMirror.ts";
+import { emptyTranscript } from "@agent-deck/domain";
 
 const mergeLocks = new Set<string>();
 
@@ -81,6 +83,10 @@ export const refuseShared = (reply: { status(code: number): { send(body: unknown
   reply
     .status(409)
     .send({ code: "session_shared", error: SESSION_SHARED_ERROR.replace(/^session_shared: /, "") });
+
+/** SRV-12c2: a mirroring device tells a deleted session from any other 404 by this code. */
+const unknownSession = (reply: { status(code: number): { send(body: unknown): unknown } }) =>
+  reply.status(404).send({ code: "unknown_session", error: "unknown session" });
 
 /** The verified creator (trusted proxy), as the identity shape persisted on SessionMeta. */
 function sessionCreator(raw: IncomingMessage): UserIdentity | undefined {
@@ -151,6 +157,28 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     () => envDefaults().env,
     (sessionId) => broadcast({ type: "session_rebind", sessionId }),
   );
+
+  // A session with no pi session file never ran a turn (a draft, or an old
+  // entry from before session files existed). It has nothing to restore, but
+  // opening it should still work — sessions.resume launches a FRESH parent pi
+  // (resumeSessionPath is undefined) with the session's project/agent context
+  // and an empty transcript, rather than erroring.
+  const relaunch = (meta: SessionMeta) => {
+    const defaults = envDefaults();
+    return sessions.resume(
+      meta,
+      {
+        kind: "parent",
+        resumeSessionPath: meta.piSessionFile,
+        provider: defaults.provider,
+        model: defaults.model,
+        // Include provider-registration extensions so a session with no stored
+        // launch plan (old/draft) still relaunches with its provider available.
+        extensions: [...(defaults.extensions ?? []), ...(defaults.providerExtensions ?? [])],
+      },
+      defaults.env,
+    );
+  };
 
   let fileSearchSequence = 0;
   const activeFileSearches = new Map<
@@ -559,30 +587,106 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     if (meta.lifecycle === "draft") return { session: meta };
     // SRV-12c1: a pointer opens without Pi; it continues on the shared server.
     if (meta.sharedTo) return { session: decorated(meta) };
-    // A session with no pi session file never ran a turn (a draft, or an old
-    // entry from before session files existed). It has nothing to restore, but
-    // opening it should still work — sessions.resume launches a FRESH parent pi
-    // (resumeSessionPath is undefined) with the session's project/agent context
-    // and an empty transcript, rather than erroring.
-    const defaults = envDefaults();
     try {
-      const session = await sessions.resume(
-        meta,
-        {
-          kind: "parent",
-          resumeSessionPath: meta.piSessionFile,
-          provider: defaults.provider,
-          model: defaults.model,
-          // Include provider-registration extensions so a session with no stored
-          // launch plan (old/draft) still relaunches with its provider available.
-          extensions: [...(defaults.extensions ?? []), ...(defaults.providerExtensions ?? [])],
-        },
-        defaults.env,
-      );
+      const session = await relaunch(meta);
       return { session: session.meta };
     } catch (error) {
       return reply.status(500).send({ error: String(error) });
     }
+  });
+
+  // SRV-12c2: the session as GET /sessions lists it (with its activity), for a
+  // device that mirrors one session it moved here.
+  fastify.get("/sessions/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const meta =
+      sessions.get(id)?.meta ?? index.find((s) => s.id === id) ?? ctx.sessionDrafts?.find(id);
+    if (!meta) return unknownSession(reply);
+    return { session: decorated(meta) };
+  });
+
+  // SRV-12c2: the transcript cells after the client's anchor, redacted and capped
+  // (sessionMirror.ts). Any member may read it, as any member may open the session.
+  fastify.get("/sessions/:id/transcript", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const query = z
+      .object({
+        afterEntryId: z.string().min(1).max(300).optional(),
+        prefixHash: z
+          .string()
+          .regex(/^[0-9a-f]{40}$/)
+          .optional(),
+        // Repeated: openId=a&openId=b.
+        openId: z
+          .union([
+            z.string().min(1).max(300),
+            z.array(z.string().min(1).max(300)).max(MAX_OPEN_IDS),
+          ])
+          .optional(),
+      })
+      .safeParse(request.query);
+    if (!query.success) return reply.status(400).send({ error: "Invalid transcript query." });
+    const draft = ctx.sessionDrafts?.find(id);
+    const meta = draft ?? sessions.get(id)?.meta ?? index.find((s) => s.id === id);
+    if (!meta) return unknownSession(reply);
+    let read: Awaited<ReturnType<typeof sessionTranscriptSource>>;
+    try {
+      read = draft
+        ? { source: "file", state: emptyTranscript() }
+        : await sessionTranscriptSource(sessions, meta);
+    } catch {
+      // Never an empty answer the client would take for the transcript.
+      return reply.status(503).send({
+        code: "transcript_unavailable",
+        error: "The session's transcript cannot be read right now.",
+      });
+    }
+    const { afterEntryId, prefixHash, openId } = query.data;
+    const openIds = openId === undefined ? [] : Array.isArray(openId) ? openId : [openId];
+    return {
+      source: read.source,
+      ...mirrorTranscript(read.state, { afterEntryId, prefixHash, openIds }),
+    };
+  });
+
+  // SRV-12c2: a prompt from a device mirroring this session, through the same
+  // dispatch a socket prompt takes (pointer, hand-off and /mcp refusals, author,
+  // turn.prompted). The session runs as it does for any member's prompt.
+  fastify.post("/sessions/:id/prompt", async (request, reply) => {
+    const parsed = z
+      .object({
+        text: z
+          .string()
+          .max(32_000)
+          .refine((text) => text.trim() !== "", "empty prompt"),
+      })
+      .strict()
+      .safeParse(request.body);
+    if (!parsed.success)
+      return reply.status(400).send({ error: "Send a text of at most 32,000 characters." });
+    const { id } = request.params as { id: string };
+    const draft = ctx.sessionDrafts?.find(id);
+    const meta = draft ?? sessions.get(id)?.meta ?? index.find((s) => s.id === id);
+    if (!meta || !ctx.promptSession) return unknownSession(reply);
+    if (meta.sharedTo) return refuseShared(reply);
+    // Not running (ended, or not in the manager at all): open it as the resume route does.
+    if (!draft && !sessions.get(id)?.isRunning) {
+      const mutation = sessionMutations.owner(id);
+      if (mutation && mutation !== "resume")
+        return reply.status(409).send({
+          code: "session_mutation_busy",
+          error: "Another session mutation is already in progress. Try again when it finishes.",
+        });
+      try {
+        await relaunch(meta);
+      } catch (error) {
+        return reply.status(500).send({ error: String(error) });
+      }
+    }
+    const answer = await ctx.promptSession(requestUser(request.raw), id, parsed.data.text);
+    if (!answer.ok)
+      return reply.status(409).send({ error: answer.error ?? "The prompt was refused." });
+    return reply.status(202).send({ ok: true });
   });
 
   // SUB-14: how this session's plan evolved, oldest first. Read-only, and

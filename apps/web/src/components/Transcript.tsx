@@ -7,7 +7,10 @@ import {
 } from "@agent-deck/domain";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isTranscriptCellVisible } from "../lib/transcriptVisibility.ts";
-import { useAppStore } from "../state/store.ts";
+import { mirroredTranscript, useAppStore } from "../state/store.ts";
+import { openExternal } from "../lib/native.ts";
+import { MirrorReadOnlyContext, OnServer, type MirrorReadOnly } from "./MirrorReadOnly.tsx";
+import { hostOf } from "./SessionShare.tsx";
 import { CellView } from "./cells.tsx";
 import { ForkProvenanceCard } from "./ForkProvenanceCard.tsx";
 import { SessionPlanPanel } from "./SessionPlanPanel.tsx";
@@ -38,7 +41,8 @@ function questionNavigationLabel(
 }
 
 export function Transcript() {
-  const cells = useAppStore((state) => state.transcript.cells);
+  // SRV-12c2: a pointer shows its server session's transcript while it is mirrored.
+  const cells = useAppStore((state) => mirroredTranscript(state).cells);
   const transcriptVisibility = useAppStore((state) => state.transcriptVisibility);
   const transcriptVisibilityLoaded = useAppStore((state) => state.transcriptVisibilityLoaded);
   const effectiveVisibility = transcriptVisibilityLoaded
@@ -51,6 +55,26 @@ export function Transcript() {
   // One editor/settings discovery owner for the whole transcript. Individual
   // file rows retain only their local picker-menu state.
   const editorController = useOpenInEditor();
+  // SRV-12c2: cells mirrored from a shared server act on nothing here.
+  const mirror = useAppStore((state) =>
+    state.sharedMirror?.sessionId === state.session?.id && state.sharedMirror?.state
+      ? state.sharedMirror
+      : null,
+  );
+  const link = session?.sharedTo;
+  const readOnly = useMemo<MirrorReadOnly | null>(
+    () =>
+      mirror && link
+        ? {
+            host: hostOf(link.serverOrigin),
+            openOnServer: () =>
+              void openExternal(
+                `${link.serverOrigin}/?session=${encodeURIComponent(link.serverSessionId)}`,
+              ),
+          }
+        : null,
+    [mirror, link],
+  );
   // Only a genuinely new session shows the startup card. An existing session
   // already has a piSessionFile (set on switch, before its history streams in),
   // so it never flashes the card during the brief empty-transcript load gap.
@@ -169,6 +193,11 @@ export function Transcript() {
           ) : null}
         </section>
       ) : null}
+      {readOnly && mirror?.truncated ? (
+        <MirrorReadOnlyContext.Provider value={readOnly}>
+          <OnServer text={(host) => `Earlier messages are on ${host}`} />
+        </MirrorReadOnlyContext.Provider>
+      ) : null}
       <SessionPlanPanel />
       {cells.length === 0 ? (
         isNewSession ? (
@@ -195,11 +224,13 @@ export function Transcript() {
               data-question-navigation-cell={navigable ? cell.id : undefined}
               className={navigable ? "question-navigation-target" : undefined}
             >
-              <CellView
-                cell={cell}
-                editorController={editorController}
-                transcriptVisibility={effectiveVisibility}
-              />
+              <MirrorReadOnlyContext.Provider value={readOnly}>
+                <CellView
+                  cell={cell}
+                  editorController={readOnly ? undefined : editorController}
+                  transcriptVisibility={effectiveVisibility}
+                />
+              </MirrorReadOnlyContext.Provider>
             </div>
           );
         })

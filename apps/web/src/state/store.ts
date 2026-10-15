@@ -8,7 +8,12 @@ import type {
   TranscriptVisibilitySettings,
 } from "@agent-deck/contracts";
 import { DEFAULT_TRANSCRIPT_VISIBILITY } from "@agent-deck/contracts";
-import { emptyTranscript, type PasteAttachment, type TranscriptState } from "@agent-deck/domain";
+import {
+  emptyTranscript,
+  type NodeTree,
+  type PasteAttachment,
+  type TranscriptState,
+} from "@agent-deck/domain";
 import { create } from "zustand";
 import type { PendingReviewComment, ReviewCommentSide } from "../lib/reviewComments.ts";
 import type { PendingElementContext } from "../lib/elementContext.ts";
@@ -266,6 +271,30 @@ export interface CurrentUser {
   providersConnected?: boolean;
 }
 
+/** SRV-12c2: the open pointer's live view of its server session (renderer memory only). */
+export interface SharedMirror {
+  /** The local pointer's id. */
+  sessionId: string;
+  status: "connecting" | "live" | "unreachable" | "signIn" | "forbidden" | "gone" | "unavailable";
+  /** The server's refusal text (forbidden). */
+  error?: string;
+  /** The server transcript window; null shows the last local copy. */
+  state: TranscriptState | null;
+  /** Older cells are on the server only. */
+  truncated: boolean;
+  /** The server session's Run tree, reduced from its events as they arrive (not kept). */
+  tree: NodeTree | null;
+  /** The server session's meta (activity, owner), once read. */
+  server: SessionMeta | null;
+  lastSeq: number;
+  lastSyncAt?: number;
+}
+
+/** The transcript the open session shows: its server mirror's, when one is live. */
+export const mirroredTranscript = (state: AppState): TranscriptState =>
+  (state.sharedMirror?.sessionId === state.session?.id && state.sharedMirror?.state) ||
+  state.transcript;
+
 export interface AppState {
   connection: ConnectionStatus;
   me: CurrentUser | null;
@@ -513,6 +542,8 @@ export interface AppState {
   removeSession(sessionId: string): void;
   setSnapshot(state: TranscriptState, seq: number, streamGeneration?: string): void;
   setTranscript(state: TranscriptState, seq: number): void;
+  sharedMirror: SharedMirror | null;
+  setSharedMirror(mirror: SharedMirror | null): void;
   resetTranscript(): void;
   setError(error: string | null): void;
   /** Queue a transient toast; returns its id. */
@@ -979,6 +1010,8 @@ export const useAppStore = create<AppState>((set) => ({
   setSnapshot: (transcript, lastSeq, streamGeneration) =>
     set({ transcript, lastSeq, streamGeneration: streamGeneration ?? null }),
   setTranscript: (transcript, lastSeq) => set({ transcript, lastSeq }),
+  sharedMirror: null,
+  setSharedMirror: (sharedMirror) => set({ sharedMirror }),
   resetTranscript: () => set({ transcript: emptyTranscript(), lastSeq: 0, streamGeneration: null }),
   setError: (error) => set({ error }),
   pushToast: (toast) => {

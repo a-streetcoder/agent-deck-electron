@@ -1595,6 +1595,7 @@ async function initServer(
     close: closeWebSockets,
     broadcast: wsBroadcast,
     broadcastDiff: wsBroadcastDiff,
+    prompt: promptSession,
   } = setupWebSocket({
     fastify,
     sessions,
@@ -1662,7 +1663,9 @@ async function initServer(
     const guarded =
       mutatingMethods.has(request.method) ||
       request.routeOptions.url === "/fs/dirs" ||
-      request.routeOptions.url === "/events";
+      request.routeOptions.url === "/events" ||
+      // SRV-12c2: conversation content, read by Electron main (no Origin) only.
+      request.routeOptions.url === "/sessions/:id/transcript";
     if (guarded && !isTrustedOrigin(request.headers.origin, request.headers.host)) {
       return reply.status(403).send({
         code: "untrusted_origin",
@@ -1720,6 +1723,7 @@ async function initServer(
     sharedServer: trustedProxy !== null,
     importedSessionsDir: nodePath.join(dataDir, "imported-sessions"),
     withActivity,
+    promptSession,
     index,
     projects,
     settings,

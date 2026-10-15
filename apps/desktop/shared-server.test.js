@@ -278,3 +278,53 @@ test("a session export goes only to one project's import route, capped in size",
   assert.equal(calls[0].url, `${ORIGIN}/projects/${project}/sessions/import`);
   assert.equal(calls[0].init.body, JSON.stringify(envelope));
 });
+
+test("the live mirror reads one session and forwards text-only prompts", async () => {
+  const { run } = fakeRun();
+  const { fetchImpl, calls } = fakeFetch();
+  const client = createSharedServerClient({ origin: ORIGIN, run, fetchImpl });
+  const id = "9f1d2c3b-4a5e-4f60-8a71-b2c3d4e5f600";
+  for (const [method, path, body] of [
+    ["GET", "/sessions/not-a-uuid"],
+    ["GET", `/sessions/${id}/state`],
+    ["GET", `/sessions/${id}/transcript?afterEntryId=a&b=1`],
+    ["GET", `/sessions/${id}/transcript?afterEntryId=a b`],
+    ["GET", `/sessions/${id}/transcript?afterEntryId=a`],
+    ["GET", `/sessions/${id}/transcript?afterEntryId=a&prefixHash=xyz`],
+    [
+      "GET",
+      `/sessions/${id}/transcript?afterEntryId=a&prefixHash=${"a".repeat(40)}${"&openId=o".repeat(21)}`,
+    ],
+    ["GET", `/sessions/${id}`, { a: 1 }],
+    ["POST", `/sessions/${id}`],
+    ["GET", `/events?sessionId=${id}&afterSeq=1`],
+    ["GET", `/events?projectId=p&afterSeq=1&limit=10`],
+    ["GET", `/events?sessionId=${id}&afterSeq=-1&limit=10`],
+    ["GET", `/sessions/${id}/prompt`],
+    ["POST", `/sessions/${id}/prompt`],
+    ["POST", `/sessions/${id}/prompt`, { text: "" }],
+    ["POST", `/sessions/${id}/prompt`, { text: "   " }],
+    ["POST", `/sessions/${id}/prompt`, { text: 1 }],
+    ["POST", `/sessions/${id}/prompt`, { text: "x".repeat(32_001) }],
+    ["POST", `/sessions/${id}/prompt`, { text: "hi", images: [] }],
+    ["POST", `/sessions/${id}/prompt`, { text: "hi", streamingBehavior: "steer" }],
+    ["POST", `/sessions/${id}/prompt`, ["hi"]],
+    ["POST", `/sessions/${id}/prompt/x`, { text: "hi" }],
+  ]) {
+    await assert.rejects(client.request(method, path, body), `${method} ${path}`);
+  }
+  assert.equal(calls.length, 0);
+  for (const path of [
+    `/sessions/${id}`,
+    `/sessions/${id}/transcript`,
+    `/sessions/${id}/transcript?afterEntryId=tool-call_1%2Fx&prefixHash=${"0f".repeat(20)}`,
+    `/sessions/${id}/transcript?afterEntryId=a&prefixHash=${"0f".repeat(20)}${"&openId=tool-%28x%29".repeat(20)}`,
+    `/events?sessionId=${id}&afterSeq=0&limit=200`,
+  ]) {
+    assert.equal((await client.request("GET", path)).status, 200, path);
+  }
+  await client.request("POST", `/sessions/${id}/prompt`, { text: "x".repeat(32_000) });
+  assert.equal(calls.at(-1).url, `${ORIGIN}/sessions/${id}/prompt`);
+  assert.equal(calls.at(-1).init.body, JSON.stringify({ text: "x".repeat(32_000) }));
+  assert.equal(calls.length, 6);
+});

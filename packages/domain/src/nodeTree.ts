@@ -221,6 +221,19 @@ export function projectNodeTree(
   events: Iterable<NodeTreeEvent>,
   scope: NodeTreeScope = {},
 ): NodeTree {
+  const reducer = createNodeTreeReducer();
+  reducer.add(events);
+  return reducer.tree(scope);
+}
+
+/** The fold behind projectNodeTree, kept open: events added later continue it (a
+ * mirror keeps only this, not the events). `tree()` builds on a copy each time. */
+export interface NodeTreeReducer {
+  add(events: Iterable<NodeTreeEvent>): void;
+  tree(scope?: NodeTreeScope): NodeTree;
+}
+
+export function createNodeTreeReducer(): NodeTreeReducer {
   const drafts = new Map<string, Draft>();
   // Event id -> the subject it was about: a causationId points at an event.
   const subjectOfEvent = new Map<string, string>();
@@ -252,314 +265,340 @@ export function projectNodeTree(
     return node;
   };
   /** at: the fold position of the event that set it (the current one while folding). */
-  const setStatus = (node: Draft, status: NodeStatus, ts: string, at = position): void => {
-    node.status = status;
-    if (TERMINAL.has(status)) {
-      node.endedAt = ts;
-      node.endEvent = at;
-    } else {
-      delete node.endedAt;
-      delete node.endEvent;
-    }
-  };
+  const setStatus = (node: Draft, status: NodeStatus, ts: string, at = position): void =>
+    setNodeStatus(node, status, ts, at);
   const sessionNode = (sessionId: string, event: NodeTreeEvent): Draft =>
     drafts.get(nodeKey({ type: "session", id: sessionId })) ??
     touch({ type: "session", id: sessionId }, event, sessionId);
 
-  for (const event of events) {
-    position += 1;
-    // A parent's read cursor (A3) is not a step of the run: no node, no updatedAt bump.
-    if (event.kind === SUBAGENT_RESULT_READ) continue;
-    const session = sessionOf(event);
-    const node = touch(event.subject, event, session);
-    node.sessionId ??= session;
-    subjectOfEvent.set(event.id, node.key);
-    const parent = event.parent;
-    if (event.kind === "session.created" && parent?.type === "session") {
-      // A fork is a session of its own: a link row on the source, never its child.
-      node.forkedFrom ??= parent.id;
-    } else if (parent && !node.explicitParent) {
-      node.explicitParent = {
-        key: nodeKey(parent, session),
-        ref: parent,
-        ...(session ? { sessionId: session } : {}),
-      };
-    }
-    if (event.causationId && !node.causeParent) {
-      const cause = subjectOfEvent.get(event.causationId);
-      if (cause && cause !== node.key) node.causeParent = cause;
-    }
-    if (event.sessionId && node.ref.type !== "session") {
-      node.sessionParent ??= sessionNode(event.sessionId, event).key;
-    }
-    const payload = (event.payload ?? {}) as Record<string, unknown>;
-    const ts = event.ts;
+  const add = (events: Iterable<NodeTreeEvent>): void => {
+    for (const event of events) {
+      position += 1;
+      // A parent's read cursor (A3) is not a step of the run: no node, no updatedAt bump.
+      if (event.kind === SUBAGENT_RESULT_READ) continue;
+      const session = sessionOf(event);
+      const node = touch(event.subject, event, session);
+      node.sessionId ??= session;
+      subjectOfEvent.set(event.id, node.key);
+      const parent = event.parent;
+      if (event.kind === "session.created" && parent?.type === "session") {
+        // A fork is a session of its own: a link row on the source, never its child.
+        node.forkedFrom ??= parent.id;
+      } else if (parent && !node.explicitParent) {
+        node.explicitParent = {
+          key: nodeKey(parent, session),
+          ref: parent,
+          ...(session ? { sessionId: session } : {}),
+        };
+      }
+      if (event.causationId && !node.causeParent) {
+        const cause = subjectOfEvent.get(event.causationId);
+        if (cause && cause !== node.key) node.causeParent = cause;
+      }
+      if (event.sessionId && node.ref.type !== "session") {
+        node.sessionParent ??= sessionNode(event.sessionId, event).key;
+      }
+      const payload = (event.payload ?? {}) as Record<string, unknown>;
+      const ts = event.ts;
 
-    switch (event.kind) {
-      case "server.started":
-        node.label = "Server started";
-        restarts.push({ order: node.order, ts, position });
-        // The restart rule: memory-only work open at a restart never completes.
-        for (const other of drafts.values()) {
-          if (other.ref.type === "supervisorRequest" && other.status === "pending") {
-            setStatus(other, "interrupted", ts);
-          } else if (other.ref.type === "turn" && other.status === "running") {
-            setStatus(other, "interrupted", ts);
-          } else if (
-            other.ref.type === "human" &&
-            other.status === "pending" &&
-            other.human?.kind !== "loopApproval"
-          ) {
-            // A loop checkpoint is durable; every other wait died with the process.
-            setStatus(other, "interrupted", ts);
-          }
-        }
-        break;
-      case "writer.acquired":
-        // A8: a writer takeover; the previous writer's waits died with it (as the
-        // supervisor projection already reads it). Its turns are left as they are.
-        node.label = "Writer acquired";
-        for (const other of drafts.values()) {
-          if (other.status !== "pending") continue;
-          if (
-            other.ref.type === "supervisorRequest" ||
-            (other.ref.type === "human" && other.human?.kind !== "loopApproval")
-          ) {
-            setStatus(other, "interrupted", ts);
-          }
-        }
-        break;
-      case "session.created":
-        node.label = str(payload.title) ?? "Session";
-        setStatus(node, "running", ts);
-        break;
-      case "session.removed":
-        node.removed = true;
-        setStatus(node, "stopped", ts);
-        break;
-      case "turn.prompted":
-        if (node.label === "turn") node.label = str(payload.label) ?? "Turn";
-        setStatus(node, "running", ts);
-        break;
-      case "turn.rejected":
-        // A rejected steer leaves the turn it joined running; a rejected prompt never ran.
-        if (payload.mode === "prompt") setStatus(node, "error", ts);
-        break;
-      case "session.turn.completed": {
-        node.label = str(payload.label) ?? node.label;
-        node.entryIds = Array.isArray(payload.entryIds)
-          ? payload.entryIds.filter((id): id is string => typeof id === "string")
-          : [];
-        node.toolCalls = Array.isArray(payload.toolCalls)
-          ? (payload.toolCalls as TurnToolCallRef[]).filter(
-              (call) => call && typeof call.id === "string",
-            )
-          : [];
-        if (payload.partial === true) node.partial = true;
-        setStatus(node, TURN_OUTCOME[String(payload.outcome)] ?? "done", ts);
-        for (const call of node.toolCalls) {
-          const tool = touch({ type: "toolCall", id: call.id }, event, node.sessionId);
-          tool.label = call.name || "tool";
-          tool.isError = call.isError === true;
-          tool.explicitParent ??= { key: node.key, ref: node.ref };
-          setStatus(tool, call.isError ? "error" : "done", ts);
-        }
-        break;
-      }
-      case "plan.changed": {
-        node.label = "Plan";
-        // A5 generation: the latest event that set a whole plan (reconcile imports are
-        // history from before the log), as planGeneration reads it.
-        if (
-          (payload.kind === "created" || payload.kind === "replaced") &&
-          event.origin !== "reconcile"
-        ) {
-          node.planGeneration = event.id;
-        }
-        const items = Array.isArray(payload.items)
-          ? (payload.items as {
-              id?: unknown;
-              status?: unknown;
-              title?: unknown;
-              runId?: unknown;
-              dependsOn?: unknown;
-              isolated?: unknown;
-            }[])
-          : [];
-        const open = items.some((item) => item.status !== "done" && item.status !== "skipped");
-        node.planItems = items.flatMap((item) => {
-          const id = str(item.id);
-          const runId = str(item.runId);
-          const title = str(item.title);
-          return id
-            ? [
-                {
-                  id,
-                  status: String(item.status),
-                  ...(title ? { title } : {}),
-                  ...(runId ? { runId } : {}),
-                  ...(Array.isArray(item.dependsOn)
-                    ? {
-                        dependsOn: item.dependsOn.filter(
-                          (dep): dep is string => typeof dep === "string",
-                        ),
-                      }
-                    : {}),
-                  ...(item.isolated === true ? { isolated: true as const } : {}),
-                },
-              ]
-            : [];
-        });
-        setStatus(node, open ? "running" : "done", ts);
-        break;
-      }
-      case "checkpoint.created":
-      case "checkpoint.rolledBack": {
-        node.label = str(payload.label) ?? "Checkpoint";
-        const turnIndex = typeof payload.turnIndex === "number" ? payload.turnIndex : undefined;
-        if (event.kind === "checkpoint.created" && turnIndex !== undefined) {
-          const owner = payload.node as Partial<StoredNodeRef> | undefined;
-          const type = str(owner?.type);
-          const id = str(owner?.id);
-          node.checkpoint = { turnIndex, ...(type && id ? { node: { type, id } } : {}) };
-        }
-        // A rollback makes its target current again (the node ends here) and truncates
-        // the later captures, except the safety one it took first.
-        if (event.kind === "checkpoint.rolledBack" && node.checkpoint) {
-          node.checkpoint.rolledBackAt = position;
-        }
-        if (event.kind === "checkpoint.rolledBack" && turnIndex !== undefined) {
+      switch (event.kind) {
+        case "server.started":
+          node.label = "Server started";
+          restarts.push({ order: node.order, ts, position });
+          // The restart rule: memory-only work open at a restart never completes.
           for (const other of drafts.values()) {
-            const index = other.checkpoint?.turnIndex;
-            if (
-              other.sessionId === node.sessionId &&
-              index !== undefined &&
-              index > turnIndex &&
-              index !== payload.safetyTurnIndex
+            if (other.ref.type === "supervisorRequest" && other.status === "pending") {
+              setStatus(other, "interrupted", ts);
+            } else if (other.ref.type === "turn" && other.status === "running") {
+              setStatus(other, "interrupted", ts);
+            } else if (
+              other.ref.type === "human" &&
+              other.status === "pending" &&
+              other.human?.kind !== "loopApproval"
             ) {
-              other.removed = true;
+              // A loop checkpoint is durable; every other wait died with the process.
+              setStatus(other, "interrupted", ts);
             }
           }
+          break;
+        case "writer.acquired":
+          // A8: a writer takeover; the previous writer's waits died with it (as the
+          // supervisor projection already reads it). Its turns are left as they are.
+          node.label = "Writer acquired";
+          for (const other of drafts.values()) {
+            if (other.status !== "pending") continue;
+            if (
+              other.ref.type === "supervisorRequest" ||
+              (other.ref.type === "human" && other.human?.kind !== "loopApproval")
+            ) {
+              setStatus(other, "interrupted", ts);
+            }
+          }
+          break;
+        case "session.created":
+          node.label = str(payload.title) ?? "Session";
+          setStatus(node, "running", ts);
+          break;
+        case "session.removed":
+          node.removed = true;
+          setStatus(node, "stopped", ts);
+          break;
+        case "turn.prompted":
+          if (node.label === "turn") node.label = str(payload.label) ?? "Turn";
+          setStatus(node, "running", ts);
+          break;
+        case "turn.rejected":
+          // A rejected steer leaves the turn it joined running; a rejected prompt never ran.
+          if (payload.mode === "prompt") setStatus(node, "error", ts);
+          break;
+        case "session.turn.completed": {
+          node.label = str(payload.label) ?? node.label;
+          node.entryIds = Array.isArray(payload.entryIds)
+            ? payload.entryIds.filter((id): id is string => typeof id === "string")
+            : [];
+          node.toolCalls = Array.isArray(payload.toolCalls)
+            ? (payload.toolCalls as TurnToolCallRef[]).filter(
+                (call) => call && typeof call.id === "string",
+              )
+            : [];
+          if (payload.partial === true) node.partial = true;
+          setStatus(node, TURN_OUTCOME[String(payload.outcome)] ?? "done", ts);
+          for (const call of node.toolCalls) {
+            const tool = touch({ type: "toolCall", id: call.id }, event, node.sessionId);
+            tool.label = call.name || "tool";
+            tool.isError = call.isError === true;
+            tool.explicitParent ??= { key: node.key, ref: node.ref };
+            setStatus(tool, call.isError ? "error" : "done", ts);
+          }
+          break;
         }
-        setStatus(node, "done", ts);
-        break;
-      }
-      case "supervisor.progress.recorded":
-        node.label = str(payload.message) ?? "Progress";
-        node.progress = true;
-        setStatus(node, "done", ts);
-        break;
-      case "supervisor.request.opened":
-        node.label = str(payload.title) ?? str(payload.method) ?? "Request";
-        setStatus(node, "pending", ts);
-        break;
-      case "supervisor.request.answered":
-        setStatus(node, "done", ts);
-        break;
-      case "supervisor.request.cancelled":
-        if (node.status !== "done") setStatus(node, "stopped", ts);
-        break;
-      case "subagent.run.created":
-      case "subagent.run.updated":
-      case "subagent.run.verified":
-      case "subagent.run.finished": {
-        const run = payload.run as PublicSubagentRun | undefined;
-        if (!run) break;
-        const result = payload.result as RunResult | undefined;
-        node.subagentRun = {
-          ...run,
-          ...(result?.summary !== undefined ? { summary: result.summary } : {}),
-          ...(result?.summaryBytes !== undefined ? { summaryBytes: result.summaryBytes } : {}),
-          ...(result?.error !== undefined ? { error: result.error } : {}),
-        };
-        node.label = run.agent ? `${run.agent}: ${run.task}` : run.task;
-        setStatus(node, SUBAGENT_STATUS[run.status] ?? "running", ts);
-        break;
-      }
-      case "loop.run.started":
-      case "loop.run.updated":
-      case "loop.run.finished": {
-        const run = payload.run as PublicLoopRunSummary | undefined;
-        if (!run) break;
-        node.loopRun = run;
-        node.label = run.loopName;
-        // A Human Approval pause is stopped/humanInputRequired: it waits on a person.
-        const paused = run.status === "stopped" && run.stopReason === "humanInputRequired";
-        setStatus(node, paused ? "pending" : (LOOP_STATUS[run.status] ?? "running"), ts);
-        break;
-      }
-      case "loop.iteration.started":
-      case "loop.iteration.updated": {
-        const iteration = payload.iteration as PublicLoopIterationSummary | undefined;
-        if (!iteration) break;
-        node.loopIteration = iteration;
-        node.label = `Iteration ${iteration.index}`;
-        setStatus(node, iteration.endedAt ? "done" : "running", ts);
-        break;
-      }
-      case "loop.child.upserted": {
-        const child = payload.child as PublicLoopChild | undefined;
-        if (!child) break;
-        node.loopChild = child;
-        node.label = child.agentName ? `${child.phase}: ${child.agentName}` : child.phase;
-        setStatus(node, loopChildStatus(child), ts);
-        break;
-      }
-      case "human.requested": {
-        const prompt = str(payload.prompt);
-        node.human = {
-          ...(str(payload.kind) ? { kind: str(payload.kind) } : {}),
-          ...(prompt ? { prompt } : {}),
-          ...(Array.isArray(payload.options)
-            ? { options: payload.options.filter((o): o is string => typeof o === "string") }
-            : {}),
-          ...(str(payload.expiresAt) ? { expiresAt: str(payload.expiresAt) } : {}),
-        };
-        node.label = (prompt && eventLabel(prompt)) || "Waiting on a person";
-        setStatus(node, "pending", ts);
-        break;
-      }
-      case "human.answered":
-        // The first settlement wins: a late duplicate never rewrites who answered.
-        if (node.status !== "pending" && node.status !== "running") break;
-        node.human = {
-          ...node.human,
-          by: (payload.by as EventActor | undefined) ?? event.actor,
-          ...(typeof payload.answer === "string" ? { answer: payload.answer } : {}),
-        };
-        setStatus(node, "done", ts);
-        break;
-      case "human.expired": {
-        if (node.status !== "pending" && node.status !== "running") break;
-        const usedDefault = payload.then === "default";
-        node.human = {
-          ...node.human,
-          expired: usedDefault ? "default" : "blocked",
-          ...(usedDefault && typeof payload.answer === "string" ? { answer: payload.answer } : {}),
-        };
-        setStatus(node, usedDefault ? "done" : "stopped", ts);
-        break;
-      }
-      case "human.cancelled":
-        if (node.status !== "pending" && node.status !== "running") break;
-        node.human = { ...node.human, cancelledReason: str(payload.reason) ?? "Cancelled" };
-        setStatus(node, "stopped", ts);
-        break;
-      case "subagent.run.removed":
-      case "loop.run.removed": {
-        node.removed = true;
-        // A8: eviction counts a waiting approval as terminal; nobody can answer it now.
-        const approval = drafts.get(nodeKey({ type: "human", id: node.ref.id }));
-        if (event.kind === "loop.run.removed" && approval?.status === "pending") {
-          approval.human = { ...approval.human, cancelledReason: "The loop run was removed." };
-          setStatus(approval, "stopped", ts);
+        case "plan.changed": {
+          node.label = "Plan";
+          // A5 generation: the latest event that set a whole plan (reconcile imports are
+          // history from before the log), as planGeneration reads it.
+          if (
+            (payload.kind === "created" || payload.kind === "replaced") &&
+            event.origin !== "reconcile"
+          ) {
+            node.planGeneration = event.id;
+          }
+          const items = Array.isArray(payload.items)
+            ? (payload.items as {
+                id?: unknown;
+                status?: unknown;
+                title?: unknown;
+                runId?: unknown;
+                dependsOn?: unknown;
+                isolated?: unknown;
+              }[])
+            : [];
+          const open = items.some((item) => item.status !== "done" && item.status !== "skipped");
+          node.planItems = items.flatMap((item) => {
+            const id = str(item.id);
+            const runId = str(item.runId);
+            const title = str(item.title);
+            return id
+              ? [
+                  {
+                    id,
+                    status: String(item.status),
+                    ...(title ? { title } : {}),
+                    ...(runId ? { runId } : {}),
+                    ...(Array.isArray(item.dependsOn)
+                      ? {
+                          dependsOn: item.dependsOn.filter(
+                            (dep): dep is string => typeof dep === "string",
+                          ),
+                        }
+                      : {}),
+                    ...(item.isolated === true ? { isolated: true as const } : {}),
+                  },
+                ]
+              : [];
+          });
+          setStatus(node, open ? "running" : "done", ts);
+          break;
         }
-        break;
+        case "checkpoint.created":
+        case "checkpoint.rolledBack": {
+          node.label = str(payload.label) ?? "Checkpoint";
+          const turnIndex = typeof payload.turnIndex === "number" ? payload.turnIndex : undefined;
+          if (event.kind === "checkpoint.created" && turnIndex !== undefined) {
+            const owner = payload.node as Partial<StoredNodeRef> | undefined;
+            const type = str(owner?.type);
+            const id = str(owner?.id);
+            node.checkpoint = { turnIndex, ...(type && id ? { node: { type, id } } : {}) };
+          }
+          // A rollback makes its target current again (the node ends here) and truncates
+          // the later captures, except the safety one it took first.
+          if (event.kind === "checkpoint.rolledBack" && node.checkpoint) {
+            node.checkpoint.rolledBackAt = position;
+          }
+          if (event.kind === "checkpoint.rolledBack" && turnIndex !== undefined) {
+            for (const other of drafts.values()) {
+              const index = other.checkpoint?.turnIndex;
+              if (
+                other.sessionId === node.sessionId &&
+                index !== undefined &&
+                index > turnIndex &&
+                index !== payload.safetyTurnIndex
+              ) {
+                other.removed = true;
+              }
+            }
+          }
+          setStatus(node, "done", ts);
+          break;
+        }
+        case "supervisor.progress.recorded":
+          node.label = str(payload.message) ?? "Progress";
+          node.progress = true;
+          setStatus(node, "done", ts);
+          break;
+        case "supervisor.request.opened":
+          node.label = str(payload.title) ?? str(payload.method) ?? "Request";
+          setStatus(node, "pending", ts);
+          break;
+        case "supervisor.request.answered":
+          setStatus(node, "done", ts);
+          break;
+        case "supervisor.request.cancelled":
+          if (node.status !== "done") setStatus(node, "stopped", ts);
+          break;
+        case "subagent.run.created":
+        case "subagent.run.updated":
+        case "subagent.run.verified":
+        case "subagent.run.finished": {
+          const run = payload.run as PublicSubagentRun | undefined;
+          if (!run) break;
+          const result = payload.result as RunResult | undefined;
+          node.subagentRun = {
+            ...run,
+            ...(result?.summary !== undefined ? { summary: result.summary } : {}),
+            ...(result?.summaryBytes !== undefined ? { summaryBytes: result.summaryBytes } : {}),
+            ...(result?.error !== undefined ? { error: result.error } : {}),
+          };
+          node.label = run.agent ? `${run.agent}: ${run.task}` : run.task;
+          setStatus(node, SUBAGENT_STATUS[run.status] ?? "running", ts);
+          break;
+        }
+        case "loop.run.started":
+        case "loop.run.updated":
+        case "loop.run.finished": {
+          const run = payload.run as PublicLoopRunSummary | undefined;
+          if (!run) break;
+          node.loopRun = run;
+          node.label = run.loopName;
+          // A Human Approval pause is stopped/humanInputRequired: it waits on a person.
+          const paused = run.status === "stopped" && run.stopReason === "humanInputRequired";
+          setStatus(node, paused ? "pending" : (LOOP_STATUS[run.status] ?? "running"), ts);
+          break;
+        }
+        case "loop.iteration.started":
+        case "loop.iteration.updated": {
+          const iteration = payload.iteration as PublicLoopIterationSummary | undefined;
+          if (!iteration) break;
+          node.loopIteration = iteration;
+          node.label = `Iteration ${iteration.index}`;
+          setStatus(node, iteration.endedAt ? "done" : "running", ts);
+          break;
+        }
+        case "loop.child.upserted": {
+          const child = payload.child as PublicLoopChild | undefined;
+          if (!child) break;
+          node.loopChild = child;
+          node.label = child.agentName ? `${child.phase}: ${child.agentName}` : child.phase;
+          setStatus(node, loopChildStatus(child), ts);
+          break;
+        }
+        case "human.requested": {
+          const prompt = str(payload.prompt);
+          node.human = {
+            ...(str(payload.kind) ? { kind: str(payload.kind) } : {}),
+            ...(prompt ? { prompt } : {}),
+            ...(Array.isArray(payload.options)
+              ? { options: payload.options.filter((o): o is string => typeof o === "string") }
+              : {}),
+            ...(str(payload.expiresAt) ? { expiresAt: str(payload.expiresAt) } : {}),
+          };
+          node.label = (prompt && eventLabel(prompt)) || "Waiting on a person";
+          setStatus(node, "pending", ts);
+          break;
+        }
+        case "human.answered":
+          // The first settlement wins: a late duplicate never rewrites who answered.
+          if (node.status !== "pending" && node.status !== "running") break;
+          node.human = {
+            ...node.human,
+            by: (payload.by as EventActor | undefined) ?? event.actor,
+            ...(typeof payload.answer === "string" ? { answer: payload.answer } : {}),
+          };
+          setStatus(node, "done", ts);
+          break;
+        case "human.expired": {
+          if (node.status !== "pending" && node.status !== "running") break;
+          const usedDefault = payload.then === "default";
+          node.human = {
+            ...node.human,
+            expired: usedDefault ? "default" : "blocked",
+            ...(usedDefault && typeof payload.answer === "string"
+              ? { answer: payload.answer }
+              : {}),
+          };
+          setStatus(node, usedDefault ? "done" : "stopped", ts);
+          break;
+        }
+        case "human.cancelled":
+          if (node.status !== "pending" && node.status !== "running") break;
+          node.human = { ...node.human, cancelledReason: str(payload.reason) ?? "Cancelled" };
+          setStatus(node, "stopped", ts);
+          break;
+        case "subagent.run.removed":
+        case "loop.run.removed": {
+          node.removed = true;
+          // A8: eviction counts a waiting approval as terminal; nobody can answer it now.
+          const approval = drafts.get(nodeKey({ type: "human", id: node.ref.id }));
+          if (event.kind === "loop.run.removed" && approval?.status === "pending") {
+            approval.human = { ...approval.human, cancelledReason: "The loop run was removed." };
+            setStatus(approval, "stopped", ts);
+          }
+          break;
+        }
+        // loop.timeline / loop.artifact / loop.review / loop.run.userAction: facts on an
+        // existing node that the detail panes read from the stores; no status change.
       }
-      // loop.timeline / loop.artifact / loop.review / loop.run.userAction: facts on an
-      // existing node that the detail panes read from the stores; no status change.
     }
+  };
+  // Finalize on copies: the fold's own drafts stay as they are for the next events.
+  const tree = (scope: NodeTreeScope = {}): NodeTree =>
+    finalizeNodeTree(
+      new Map([...drafts].map(([key, node]) => [key, { ...node, children: [] }])),
+      restarts,
+      position,
+      scope,
+    );
+  return { add, tree };
+}
+
+function setNodeStatus(node: Draft, status: NodeStatus, ts: string, at: number): void {
+  node.status = status;
+  if (TERMINAL.has(status)) {
+    node.endedAt = ts;
+    node.endEvent = at;
+  } else {
+    delete node.endedAt;
+    delete node.endEvent;
   }
+}
+
+function finalizeNodeTree(
+  drafts: Map<string, Draft>,
+  restarts: readonly { order: number; ts: string; position: number }[],
+  position: number,
+  scope: NodeTreeScope,
+): NodeTree {
+  const setStatus = (node: Draft, status: NodeStatus, ts: string, at = position): void =>
+    setNodeStatus(node, status, ts, at);
 
   // Link: explicit parent, else the cause's subject, else the session. A parent that
   // only exists as a reference (a toolCall no completed turn listed yet, a run whose

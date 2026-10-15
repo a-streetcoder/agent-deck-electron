@@ -13,6 +13,20 @@ const ALLOWED = new Set(["GET /projects", "POST /projects", "GET /me"]);
 /** SRV-12c1: a session move into one shared project (a UUID), the only patterned path. */
 const IMPORT_PATH =
   /^\/projects\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/sessions\/import$/;
+/** SRV-12c2: the live mirror of one moved session (UUIDs; the query exactly as the page builds it). */
+const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+/** A strictly percent-encoded cell id. */
+const ID = "[A-Za-z0-9._~%-]{1,300}";
+const MIRROR_READS = [
+  new RegExp(String.raw`^/sessions/${UUID}$`),
+  new RegExp(
+    String.raw`^/sessions/${UUID}/transcript(?:\?afterEntryId=${ID}&prefixHash=[0-9a-f]{40}(?:&openId=${ID}){0,20})?$`,
+  ),
+  new RegExp(String.raw`^/events\?sessionId=${UUID}&afterSeq=\d{1,15}&limit=\d{1,4}$`),
+];
+const PROMPT_PATH = new RegExp(`^/sessions/${UUID}/prompt$`);
+/** The forwarded prompt's text at most, as the server's prompt route checks it. */
+export const MAX_PROMPT_CHARS = 32_000;
 /** The session export the server accepts at most; checked here before it travels. */
 export const MAX_IMPORT_BYTES = 16 * 1024 * 1024;
 
@@ -53,15 +67,28 @@ export function createSharedServerClient({ origin, run, fetchImpl = fetch, timeo
 
   async function request(method, path, body) {
     const sessionImport = method === "POST" && typeof path === "string" && IMPORT_PATH.test(path);
+    const prompt = method === "POST" && typeof path === "string" && PROMPT_PATH.test(path);
+    const mirrorRead =
+      method === "GET" && typeof path === "string" && MIRROR_READS.some((read) => read.test(path));
     if (
       typeof method !== "string" ||
       typeof path !== "string" ||
-      (!sessionImport && !ALLOWED.has(`${method} ${path}`))
+      (!sessionImport && !prompt && !mirrorRead && !ALLOWED.has(`${method} ${path}`))
     ) {
       throw new Error("This request to the shared server is not allowed.");
     }
     let payload;
-    if (sessionImport) {
+    if (prompt) {
+      // A forwarded prompt is text only: no images, files, steering or other keys.
+      const valid =
+        isPlainObject(body) &&
+        Object.keys(body).length === 1 &&
+        typeof body.text === "string" &&
+        body.text.trim() !== "" &&
+        body.text.length <= MAX_PROMPT_CHARS;
+      if (!valid) throw new Error("This request to the shared server is not allowed.");
+      payload = JSON.stringify({ text: body.text });
+    } else if (sessionImport) {
       // The shape the server validates in full (sessionTransfer.ts); here only
       // what keeps the call from carrying anything but a session export.
       const valid =
