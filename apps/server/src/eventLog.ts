@@ -763,7 +763,7 @@ export function createEventLog(dataDir: string, options: EventLogOptions = {}): 
       kind: "server.started",
       subject: { type: "server", id: randomId() },
       actor: { type: "system" },
-      payload: { pid: process.pid, unparsableLines, repairedBytes },
+      payload: { unparsableLines, repairedBytes },
     });
   }
   return log;

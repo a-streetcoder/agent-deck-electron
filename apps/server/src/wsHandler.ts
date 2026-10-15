@@ -16,6 +16,7 @@ import type { FileService } from "./services/files.ts";
 import type { TerminalGateway } from "./terminalGateway.ts";
 import { authenticateProxiedRequest, type CloudflareAccessVerifier } from "./trustedProxy.ts";
 import type { SessionAuthorStore } from "./sessionAuthors.ts";
+import type { EventProducers } from "./eventProducers.ts";
 
 export interface WebSocketLayer {
   /** Push a server message to every connected RPC client (wrapped as a frame). */
@@ -52,6 +53,8 @@ export function setupWebSocket(deps: {
   sessionImages: SessionImageStore;
   sessionPastes: SessionPasteStore;
   sessionAuthors?: SessionAuthorStore;
+  /** A1 event log producers (turn.prompted). */
+  events?: EventProducers;
   /** SRV-09: trusted proxy on, host launchers refuse. */
   sharedServer?: boolean;
   /** Remote-server POC: browser origin reachable through the trusted proxy. */
@@ -77,6 +80,7 @@ export function setupWebSocket(deps: {
     sessionImages: deps.sessionImages,
     sessionPastes: deps.sessionPastes,
     sessionAuthors: deps.sessionAuthors,
+    events: deps.events,
     sharedServer: deps.sharedServer,
   });
 

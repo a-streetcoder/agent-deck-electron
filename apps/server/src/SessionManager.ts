@@ -42,6 +42,8 @@ import {
   type ChildBridgeFactory,
   type ChildMemoryRecall,
   type ChildToolPolicy,
+  type SessionTurnEvents,
+  type TurnContext,
   type ChildLaunchOverrides,
   type ChildRunOptions,
   type ChildRunResult,
@@ -85,6 +87,24 @@ export class SessionCreationError extends Error {
   ) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = "SessionCreationError";
+  }
+}
+
+/**
+ * A1 event log: the route that asked for a fork announces it. `created` runs once
+ * the new session has launched and seeded, BEFORE its inherited plan is restored;
+ * `abandoned` runs when a launch that already announced it then fails.
+ */
+export interface SessionAnnounce {
+  created(meta: SessionMeta): void;
+  abandoned(meta: SessionMeta): void;
+}
+
+function announceAbandoned(announce: SessionAnnounce | undefined, meta: SessionMeta): void {
+  try {
+    announce?.abandoned(meta);
+  } catch {
+    // The event log is not authoritative: never mask the launch failure.
   }
 }
 
@@ -693,7 +713,11 @@ export class SessionManager {
      * checkpoint service's per-turn capture here. Best-effort — failures are
      * swallowed and never surface (capture is inert until S18b restores).
      */
-    private readonly onCheckpointCapture?: (meta: SessionMeta, label: string) => Promise<void>,
+    private readonly onCheckpointCapture?: (
+      meta: SessionMeta,
+      label: string,
+      turn?: TurnContext,
+    ) => Promise<void>,
     private readonly loopSnapshots?: LoopSessionSnapshotStore,
     private readonly subagentRuns?: SubagentRunStore,
     private readonly decorateUserCell?: (
@@ -730,6 +754,8 @@ export class SessionManager {
     private readonly gitIdentities?: GitIdentityMap,
     /** SRV-11: the session owner's own Pi agent dir (userAgentDirs.ts). */
     private readonly userAgentDirs?: UserAgentDirs,
+    /** A1 event log: per-session turn hooks (server.ts wires the producers). */
+    private readonly turnEventsFor?: (meta: SessionMeta) => SessionTurnEvents,
   ) {}
 
   /** Reconfigure all live deadlines. Existing parked placeholders remain cold. */
@@ -1472,16 +1498,17 @@ export class SessionManager {
       // fire-and-forget after the session-file flush at each idle).
       ...(this.onCheckpointCapture !== undefined
         ? {
-            captureCheckpoint: (label: string) =>
+            captureCheckpoint: (label: string, turn?: TurnContext) =>
               Effect.promise(async () => {
                 try {
-                  await this.onCheckpointCapture?.(meta, label);
+                  await this.onCheckpointCapture?.(meta, label, turn);
                 } catch {
                   // Best-effort: a capture failure must never surface.
                 }
               }),
           }
         : {}),
+      ...(this.turnEventsFor ? { turnEvents: this.turnEventsFor(meta) } : {}),
     };
   }
 
@@ -1802,6 +1829,7 @@ export class SessionManager {
     sessionFilePath: string,
     copyTo: string,
     env?: Record<string, string | undefined>,
+    announce?: SessionAnnounce,
   ): Promise<ManagedSession> {
     copyFileSync(sessionFilePath, copyTo);
     const meta: SessionMeta = {
@@ -1843,12 +1871,15 @@ export class SessionManager {
     }
     let session: ManagedSession | undefined;
     let rollbackImages: (() => void) | undefined;
+    let announced = false;
     try {
       // Establish image ownership before history seeding, so reconstructed cells
       // resolve to the source's stable opaque refs instead of importing new ids.
       rollbackImages = this.forkSessionImages?.(source.id, meta.id);
       session = this.launch(meta, plan, env);
       await session.seedFromHistory();
+      announce?.created(meta);
+      announced = true;
       // plan_set before startIngestion — safe for the same reason as resume()
       // (plans arrive only via bridge tools, never pi stdout).
       if (meta.plan && meta.plan.length > 0) session.restorePlan(meta.plan);
@@ -1860,6 +1891,7 @@ export class SessionManager {
       // Launch/seeding failure removes both the half-built Pi owner and the
       // target manifest. Shared content-addressed blobs remain GC-safe.
       if (session) await this.destroy(meta.id).catch(() => {});
+      if (announced) announceAbandoned(announce, meta);
       try {
         rollbackImages?.();
       } catch {
@@ -1884,6 +1916,7 @@ export class SessionManager {
     branchFile: string,
     env?: Record<string, string | undefined>,
     forkProvenance?: ForkProvenance,
+    announce?: SessionAnnounce,
   ): Promise<ManagedSession> {
     const now = new Date().toISOString();
     const meta: SessionMeta = {
@@ -1932,10 +1965,13 @@ export class SessionManager {
           : original;
     let session: ManagedSession | undefined;
     let rollbackAttachments: (() => void) | undefined;
+    let announced = false;
     try {
       rollbackAttachments = this.forkSessionImages?.(source.id, meta.id);
       session = this.launch(meta, plan, env, true);
       await session.seedFromHistory();
+      announce?.created(meta);
+      announced = true;
       if (meta.plan?.length) session.restorePlan(meta.plan);
       session.startIngestion();
       this.announceCreated(session);
@@ -1943,6 +1979,7 @@ export class SessionManager {
       return session;
     } catch (error) {
       if (session) await this.destroy(meta.id).catch(() => {});
+      if (announced) announceAbandoned(announce, meta);
       try {
         rollbackAttachments?.();
       } catch {

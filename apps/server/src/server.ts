@@ -131,6 +131,7 @@ import {
 import { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import { SubagentRunStore } from "./subagentRunStore.ts";
 import { createEventLog, disabledEventLog, type EventLog } from "./eventLog.ts";
+import { createEventProducers } from "./eventProducers.ts";
 import { localPathPrefixes, startEventProducers } from "./eventReconcile.ts";
 import { resolveTrustedDataDir } from "./trustedDataDir.ts";
 import { SupervisorLog } from "./supervisor.ts";
@@ -291,10 +292,21 @@ async function initServer(
     eventLog = disabledEventLog();
   }
   startupCleanups.push(() => eventLog.close());
+  // Free event text never carries these roots (A1 policy); project roots are read live.
+  const events = createEventProducers(eventLog, {
+    pathPrefixes: () =>
+      localPathPrefixes(
+        dataDir,
+        projects.list().map((project) => project.path),
+      ),
+  });
   const receipts = new ReceiptBus(process.env.AGENT_DECK_TEST === "1");
   const index = new SessionIndex(dataDir);
+  // The live session first: a fork or a deferred launch emits before its index row exists.
   projectOfSession = (sessionId) =>
-    index.find((session) => session.id === sessionId)?.projectId ?? null;
+    sessions.get(sessionId)?.meta.projectId ??
+    index.find((session) => session.id === sessionId)?.projectId ??
+    null;
   const composerDrafts = options.composerDraftStore ?? new FileComposerDraftStore(dataDir);
   const settings = new SettingsStore(dataDir);
   const mcpPolicy = options.mcpPolicyStore ?? new FileMcpPolicyStore(settings);
@@ -448,7 +460,10 @@ async function initServer(
   // dir, so built directly here (not a runtime layer) — see services/checkpoints.ts.
   const checkpoints = makeCheckpointService({ dataDir });
   // SUB-14: durable plan history, kept off the meta broadcast path.
-  const planEvents = makePlanEventService({ dataDir });
+  const planEvents = makePlanEventService({
+    dataDir,
+    onRecorded: (event, op) => events.planChanged(event.sessionId, op, event),
+  });
   const loopSnapshots = new LoopSessionSnapshotStore(dataDir, (message, error) =>
     fastify.log.warn({ err: error }, message),
   );
@@ -697,13 +712,18 @@ async function initServer(
     // the diff refresh above, so it never perturbs the idle / diff_refreshed
     // receipt timing. Best-effort — a capture failure is swallowed by the
     // facade; the receipt lets tests synchronize on the capture attempt.
-    async (meta, label) => {
-      await checkpoints.capture({
+    async (meta, label, turn) => {
+      const record = await checkpoints.capture({
         sessionId: meta.id,
         cwd: meta.worktreePath ?? meta.cwd,
         sessionFile: meta.piSessionFile,
         label,
       });
+      try {
+        if (record) events.checkpointCreated(meta.id, record, { turn });
+      } catch {
+        // The event log is not authoritative: the receipt below must still fire.
+      }
       receipts.emit("checkpoint_captured", meta.id);
     },
     loopSnapshots,
@@ -777,6 +797,7 @@ async function initServer(
     () => settings.get().subagentsEnabled,
     gitIdentities,
     userAgentDirs,
+    (meta) => events.turnHooks(meta),
   );
   // Loop run engine (native single-agent loop). Each run's agent executor is
   // built per-run, bound to a parent session in the project cwd.
@@ -1343,6 +1364,7 @@ async function initServer(
   // ended session EXACTLY as the POST /sessions/:id/resume route does (same
   // env-derived fallback plan), so rollback reuses the one correct resume() path.
   const rollback = makeCheckpointRollback({
+    events,
     sessions,
     checkpoints,
     receipts,
@@ -1387,6 +1409,7 @@ async function initServer(
     sessionImages,
     sessionPastes,
     sessionAuthors,
+    events,
     sharedServer: trustedProxy !== null,
     publicOrigin: trustedProxy?.publicOrigin,
     accessVerifier,
@@ -1454,6 +1477,7 @@ async function initServer(
     fastify,
     sessions,
     planEvents,
+    events,
     sessionImages,
     agentAvatars,
     projectImages,

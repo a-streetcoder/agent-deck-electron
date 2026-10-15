@@ -217,3 +217,27 @@ export function redactPaths(text: string, prefixes: readonly PathPrefix[] = []):
 
 /** "<path>", keeping the sentence punctuation a path match swallowed at its end. */
 const generic = (match: string): string => `<path>${/[).,;:]*$/.exec(match)?.[0] ?? ""}`;
+
+const SECRET_PATTERNS: ReadonlyArray<[RegExp, string]> = [
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, "<secret>"],
+  [/\b(?:sk|pk|rk)-(?:[A-Za-z0-9]+-)*[A-Za-z0-9_]{16,}/g, "<secret>"],
+  [/\bgh[pousr]_[A-Za-z0-9]{20,}/g, "<secret>"],
+  [/\bgithub_pat_[A-Za-z0-9_]{20,}/g, "<secret>"],
+  [/\bxox[abprs]-[A-Za-z0-9-]{10,}/g, "<secret>"],
+  [/\bAKIA[0-9A-Z]{16}\b/g, "<secret>"],
+  [/\bAIza[0-9A-Za-z_-]{35}/g, "<secret>"],
+  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, "<secret>"],
+  [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{16,}/gi, "$1 <secret>"],
+  [
+    /\b((?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|token|secret|password|passwd|pwd)["']?\s*[:=]\s*["']?)[^\s"',;]{6,}/gi,
+    "$1<secret>",
+  ],
+];
+
+/** Replace token-like strings (provider keys, bearer tokens, key=value secrets) in free event text. */
+export function redactSecrets(text: string): string {
+  let result = text;
+  for (const [pattern, replacement] of SECRET_PATTERNS)
+    result = result.replace(pattern, replacement);
+  return result;
+}

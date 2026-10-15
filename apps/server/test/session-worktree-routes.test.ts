@@ -6,6 +6,8 @@ import type { ServerResponse } from "node:http";
 import Fastify from "fastify";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerContext } from "../src/context.ts";
+import { disabledEventLog } from "../src/eventLog.ts";
+import { createEventProducers } from "../src/eventProducers.ts";
 import type * as GitModule from "../src/git.ts";
 import type { McpAssignmentStore } from "../src/mcpAssignments.ts";
 import { fingerprintLaunchResources, resolveLaunchResources } from "../src/launchResources.ts";
@@ -228,6 +230,7 @@ function makeRoute(
     sessionImages: { deleteSession: state.deleteSessionImages },
     sessionPastes: { deleteSession: state.deleteSessionPastes },
     dropDiffCache: state.dropDiffCache,
+    events: createEventProducers(disabledEventLog()),
   } as unknown as ServerContext;
   registerSessionRoutes(ctx);
   return { fastify, state, sessions, index, ctx };

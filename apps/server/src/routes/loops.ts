@@ -29,7 +29,7 @@ import {
   writeLoopFile,
 } from "@agent-deck/resources";
 import type { ThinkingLevel } from "@agent-deck/pi-host";
-import type { FastifyReply } from "fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
   createLoopWorktree,
@@ -50,6 +50,7 @@ import { SessionCreationError } from "../SessionManager.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
 import { finalizeExtensions } from "./shared.ts";
 import { requestUser } from "../trustedProxy.ts";
+import { userActor, type LoopUserAction } from "../eventProducers.ts";
 import {
   claudeChoice,
   claudeLaunchModel,
@@ -160,6 +161,13 @@ export function registerLoopRoutes(
     worktreesRoot,
   } = ctx;
   const loopWorktreesRoot = ensurePrivateLoopWorktreesRoot(worktreesRoot);
+  // A1: the person behind each Loop action; the engine's own run events are system.
+  const recordLoopAction = (
+    request: FastifyRequest,
+    run: { id: string; projectId?: string },
+    action: LoopUserAction,
+  ): void =>
+    ctx.events.loopUserAction(run.id, run.projectId, action, userActor(requestUser(request.raw)));
   // Trust-boundary lock: at most one destructive Loop may own a canonical
   // checkout. Interrupted runs seed durable recovery locks before onReady.
   const checkoutLocks = new Map<
@@ -667,6 +675,7 @@ export function registerLoopRoutes(
           projectId: body.projectId,
           retryOf: body.retryOf,
         });
+        recordLoopAction(request, run, "start");
         return reply.status(201).send({ run, worktree: null });
       } catch (error) {
         if (run) loopEngine.rollbackStart(run.id);
@@ -971,6 +980,9 @@ export function registerLoopRoutes(
         releaseCheckoutLock();
       }
     });
+    // Only now: every fallible startup step above can still roll the parent back.
+    ctx.events.sessionCreated(parent.meta, userActor(runner));
+    recordLoopAction(request, run, "start");
     return reply.status(201).send({ run, worktree });
   });
 
@@ -1131,6 +1143,7 @@ export function registerLoopRoutes(
       const applied = loopEngine.transitionWorktreeReview(id, applyingUpdatedAt, "applied", {
         error: undefined,
       });
+      recordLoopAction(request, applied, "apply");
       return { run: applied };
     } catch (error) {
       if (applyingUpdatedAt) {
@@ -1301,6 +1314,7 @@ export function registerLoopRoutes(
         archivedPath,
         error: undefined,
       });
+      recordLoopAction(request, discarded, "discard");
       return { run: discarded };
     } catch {
       return worktreeUnavailable(reply);
@@ -1355,6 +1369,7 @@ export function registerLoopRoutes(
     const run = loopEngine.get((request.params as { id: string }).id);
     if (!run) return reply.status(404).send({ error: "unknown loop run" });
     await loopEngine.stop(run.id);
+    recordLoopAction(request, run, "stop");
     return { ok: true };
   });
 

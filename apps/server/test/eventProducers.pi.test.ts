@@ -25,6 +25,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
 import { LoopEngine } from "../src/loopEngine.ts";
 import { CAPABILITY_FIELDS, SubagentRunStore } from "../src/subagentRunStore.ts";
+import { stableFixtureText } from "./fixtures/eventScan.ts";
 
 /**
  * A1b2 against real Pi: one managed_subagent run (fresh, continued, then removed with
@@ -77,29 +78,11 @@ function logEvents(prefix: string): EventEnvelope[] {
     .filter((event): event is EventEnvelope => event?.kind.startsWith(prefix) ?? false);
 }
 
-/** Map uuids, timestamps and durations to stable values so re-recording does not churn. */
-function stable(text: string): string {
-  const ids = new Map<string, string>();
-  const withIds = text.replace(
-    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
-    (id) => {
-      if (!ids.has(id)) {
-        ids.set(id, `00000000-0000-4000-8000-${String(ids.size + 1).padStart(12, "0")}`);
-      }
-      return ids.get(id)!;
-    },
-  );
-  // One fixed instant: collisions between real timestamps vary from run to run.
-  return withIds
-    .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, "2026-01-01T00:00:00.000Z")
-    .replace(/("durationMs":\s*)\d+/g, (_match, key: string) => `${key}1000`);
-}
-
 function record(name: string, states: unknown[], events: EventEnvelope[]): void {
   if (process.env.AGENT_DECK_RECORD_EVENT_FIXTURES !== "1") return;
   mkdirSync(FIXTURES, { recursive: true });
   const separator = "\n<<<events>>>\n";
-  const text = stable(
+  const text = stableFixtureText(
     `${JSON.stringify(states, null, 2)}${separator}${events.map((event) => JSON.stringify(event)).join("\n")}`,
   );
   const [statesText, eventsText] = text.split(separator) as [string, string];

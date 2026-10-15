@@ -26,6 +26,8 @@ const MAX_EVENTS_PER_SESSION = 100;
 export interface PlanEventServiceOptions {
   readonly dataDir: string;
   readonly maxPerSession?: number;
+  /** A1 event log: called once per recorded event, after the store write. */
+  readonly onRecorded?: (event: SessionPlanEvent, op: PlanChangeOperation) => void;
 }
 
 /**
@@ -121,6 +123,7 @@ export const makePlanEventService = (options: PlanEventServiceOptions): PlanEven
         at: new Date().toISOString(),
       };
       Effect.runSync(store.set(sessionId, [...existing, event].slice(-cap)));
+      options.onRecorded?.(event, op);
     },
 
     deleteSession: (sessionId) => {

@@ -23,6 +23,7 @@ import type { McpDefinitionStore } from "./mcpDefinitions.ts";
 import type { ProjectIndex, SessionIndex, SettingsStore } from "./persistence.ts";
 import type { AgentSessionPlan, SessionManager } from "./SessionManager.ts";
 import type { PlanEventServiceShape } from "./services/planEvents.ts";
+import type { EventProducers } from "./eventProducers.ts";
 import type { SessionImageStore } from "./sessionImages.ts";
 import type { SessionPasteStore } from "./sessionPastes.ts";
 import type { SessionAuthorStore } from "./sessionAuthors.ts";
@@ -137,6 +138,8 @@ export interface ServerContext {
   composerDrafts?: ComposerDraftStore;
   /** SUB-14: durable per-session plan history (read side + delete cleanup). */
   planEvents: PlanEventServiceShape;
+  /** A1 event log producers (tests: createEventProducers(disabledEventLog())). */
+  events: EventProducers;
   sessionImages: SessionImageStore;
   agentAvatars: AgentAvatarStore;
   projectImages: ProjectImageStore;

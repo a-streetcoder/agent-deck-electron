@@ -24,6 +24,8 @@ import {
 import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerContext } from "../src/context.ts";
+import { disabledEventLog } from "../src/eventLog.ts";
+import { createEventProducers } from "../src/eventProducers.ts";
 
 vi.mock("../src/git.ts", async (importOriginal) => {
   const actual = (await importOriginal()) as object;
@@ -181,6 +183,7 @@ function makeRoutes(
       // PRV-01: never probe the real Claude Code from these tests.
       claudeCodeLoggedIn: async () => true,
       settings: { get: () => ({ disabledModels: [] }) },
+      events: createEventProducers(disabledEventLog()),
     } as unknown as ServerContext,
     {
       canonicalCheckoutLockKey: canonicalCheckoutEffect,

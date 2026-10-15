@@ -21,6 +21,7 @@ import type { SessionImageStore } from "./sessionImages.ts";
 import type { IncomingMessage } from "node:http";
 import type { SessionPasteStore } from "./sessionPastes.ts";
 import type { SessionAuthorStore } from "./sessionAuthors.ts";
+import { userActor, type EventProducers, type PromptMode } from "./eventProducers.ts";
 import { requestUser, SHARED_SERVER_REFUSAL, type AuthenticatedUser } from "./trustedProxy.ts";
 import type { CheckpointServiceShape } from "./services/checkpoints.ts";
 import type { FileService } from "./services/files.ts";
@@ -87,6 +88,8 @@ export function createRpcConnection(deps: {
   sessionImages?: SessionImageStore;
   sessionPastes?: SessionPasteStore;
   sessionAuthors?: SessionAuthorStore;
+  /** A1 event log producers (turn.prompted). */
+  events?: EventProducers;
   /** Verified identity of this connection's user (trusted proxy); absent on loopback. */
   user?: AuthenticatedUser;
   /** SRV-09: behind the trusted proxy, host launchers (external terminal, editor) refuse. */
@@ -117,6 +120,24 @@ export function createRpcConnection(deps: {
         id: deps.user.id,
         ...(deps.user.name ? { name: deps.user.name } : {}),
       });
+    }
+  };
+  // A1 turn.prompted, at the same point: emitted before Pi sees the message so the
+  // turn's later agent events can name it as their cause. The returned callback
+  // records a rejection and restores the session's previous turn.
+  const promptEvent = (sessionId: string, message: string, mode: PromptMode): (() => void) => {
+    try {
+      const attempt = deps.events?.turnPrompted(sessionId, userActor(deps.user), mode, message);
+      return () => {
+        try {
+          attempt?.rejected();
+        } catch {
+          // Preserve the prompt failure.
+        }
+      };
+    } catch {
+      // The event log is not authoritative: never cost the prompt.
+      return () => {};
     }
   };
   const unstageAuthor = (sessionId: string, message: string): void => {
@@ -828,7 +849,11 @@ export function createRpcConnection(deps: {
       cleanups.get(sessionId)?.();
       cleanups.delete(sessionId);
       try {
-        const result = await rollback.rollback({ sessionId, turnIndex: request.turnIndex });
+        const result = await rollback.rollback({
+          sessionId,
+          turnIndex: request.turnIndex,
+          actor: userActor(deps.user),
+        });
         // Re-subscribe to the RELAUNCHED session: subscribe() pushes a fresh
         // snapshot of the restored transcript (seq restarts on the new bus, so
         // the stale client lastSeq falls back to a snapshot, which resets it).
@@ -859,6 +884,7 @@ export function createRpcConnection(deps: {
         case "prompt": {
           let stagedPastes: { rollback: () => void } | undefined;
           let stagedImages: { rollback: () => void } | undefined;
+          let rejectPrompt: (() => void) | undefined;
           try {
             // Author first: the catch unstages by (session, text, author), so it
             // must only run once this request has staged its own record.
@@ -875,6 +901,16 @@ export function createRpcConnection(deps: {
             stagedImages = request.images?.length
               ? sessionImages?.stage(session.meta.id, request.message, request.images)
               : undefined;
+            // The Composer sends a steer or follow-up as a prompt with a streaming behavior.
+            rejectPrompt = promptEvent(
+              session.meta.id,
+              request.transcriptText ?? request.message,
+              request.streamingBehavior === "steer"
+                ? "steer"
+                : request.streamingBehavior === "followUp"
+                  ? "follow_up"
+                  : "prompt",
+            );
             await session.prompt(
               request.message,
               request.images?.map(({ type, data, mimeType }) => ({ type, data, mimeType })),
@@ -882,6 +918,7 @@ export function createRpcConnection(deps: {
               request.titleSource,
             );
           } catch (error) {
+            rejectPrompt?.();
             try {
               stagedImages?.rollback();
             } catch {
@@ -901,20 +938,26 @@ export function createRpcConnection(deps: {
           }
           break;
         }
-        case "steer":
+        case "steer": {
           stageAuthor(session.meta.id, request.message);
+          const rejectSteer = promptEvent(session.meta.id, request.message, "steer");
           await session.steer(request.message).catch((error: unknown) => {
+            rejectSteer();
             unstageAuthor(session.meta.id, request.message);
             throw error;
           });
           break;
-        case "follow_up":
+        }
+        case "follow_up": {
           stageAuthor(session.meta.id, request.message);
+          const rejectFollowUp = promptEvent(session.meta.id, request.message, "follow_up");
           await session.followUp(request.message).catch((error: unknown) => {
+            rejectFollowUp();
             unstageAuthor(session.meta.id, request.message);
             throw error;
           });
           break;
+        }
         case "abort":
           await session.abort();
           break;
@@ -1015,6 +1058,8 @@ export function setupRpcEndpoint(deps: {
   sessionImages: SessionImageStore;
   sessionPastes: SessionPasteStore;
   sessionAuthors?: SessionAuthorStore;
+  /** A1 event log producers (turn.prompted). */
+  events?: EventProducers;
   sharedServer?: boolean;
 }): RpcEndpoint {
   const {
@@ -1065,6 +1110,7 @@ export function setupRpcEndpoint(deps: {
       sessionImages,
       sessionPastes,
       sessionAuthors: deps.sessionAuthors,
+      events: deps.events,
       sharedServer: deps.sharedServer,
       user: upgradeRequest ? requestUser(upgradeRequest) : undefined,
       send: (frame) => sendTo(socket, frame),

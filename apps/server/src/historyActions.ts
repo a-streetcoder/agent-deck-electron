@@ -7,7 +7,7 @@ import type {
 } from "@agent-deck/contracts";
 import type { UserCell } from "@agent-deck/domain";
 import { activeEntryChain } from "./services/sessionManager.ts";
-import type { SessionManager, ManagedSession } from "./SessionManager.ts";
+import type { SessionAnnounce, SessionManager, ManagedSession } from "./SessionManager.ts";
 import type { SessionIndex } from "./persistence.ts";
 import type { SessionImageStore } from "./sessionImages.ts";
 import type { SessionMutationClaims } from "./sessionMutationClaims.ts";
@@ -139,6 +139,8 @@ export class HistoryActionCoordinator {
     sessionId: string,
     entryId: string,
     action: "fork" | "rerun",
+    /** A1 event log: the requesting route announces a materialized fork. */
+    announce?: SessionAnnounce,
   ): Promise<HistoryActionResult> {
     const releaseClaim = this.claims.tryClaim(sessionId, "history");
     if (!releaseClaim) {
@@ -326,6 +328,8 @@ export class HistoryActionCoordinator {
             branchFile,
             this.env(),
             forkProvenance,
+            // Only when given: callers and tests see the original four-argument call.
+            ...((announce ? [announce] : []) as [SessionAnnounce?]),
           );
           committed = true;
           return { outcome: "forked", session: targetSession.meta, draft };

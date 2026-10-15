@@ -716,7 +716,8 @@ export interface ProjectedSupervisorRequest {
 }
 
 /**
- * supervisor.request.opened / answered / cancelled, payload = the request fields. The
+ * supervisor.progress.recorded and supervisor.request.opened / answered / cancelled,
+ * payload = the request fields. The
  * supervisor log is memory-only, so a request still pending at a later server.started
  * is closed as interrupted (the restart rule).
  */
@@ -735,7 +736,10 @@ export function projectSupervisor(
     const id = event.subject.id;
     const payload = (event.payload ?? {}) as Partial<ProjectedSupervisorRequest>;
     const old = state.get(id);
-    if (event.kind === "supervisor.request.opened") {
+    if (event.kind === "supervisor.progress.recorded") {
+      // A progress_update is not a request, but SupervisorLog lists it as "recorded".
+      state.set(id, { ...payload, id, status: "recorded" });
+    } else if (event.kind === "supervisor.request.opened") {
       state.set(id, { status: "pending", ...payload, id });
     } else if (event.kind === "supervisor.request.answered" && old) {
       state.set(id, { ...old, ...payload, id, status: "answered" });

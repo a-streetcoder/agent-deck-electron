@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import type { SemanticRecallStatus } from "@agent-deck/contracts";
 import { markMemoriesUsed, type MemoryStore, renderRecalledMemories } from "@agent-deck/memory";
 import { z } from "zod";
+import type { EventActor } from "@agent-deck/domain";
+import { userActor } from "../eventProducers.ts";
 import { supervisorRequestTitle, type SupervisorMethod } from "../supervisor.ts";
+import { requestUser } from "../trustedProxy.ts";
 import type { ServerContext } from "../context.ts";
 
 /** A tool call arriving from a session's generated bridge extension. */
@@ -42,7 +45,12 @@ export interface BridgeRouteHandles {
    * makes lookup owner-scoped for model-facing callers; REST omits it to retain
    * the existing human out-of-band behavior.
    */
-  answerSupervisor(requestId: string, response: string, expectedParentSessionId?: string): boolean;
+  answerSupervisor(
+    requestId: string,
+    response: string,
+    expectedParentSessionId?: string,
+    actor?: EventActor,
+  ): boolean;
 }
 
 /**
@@ -65,6 +73,7 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     agentMemoryEnabled,
     memoryBaseDir,
     semanticRecall,
+    events,
   } = ctx;
 
   // Handle a child subagent's contact_supervisor call. progress_update records +
@@ -104,13 +113,14 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     const parent = sessions.get(route.parentSessionId);
 
     if (method === "progress_update") {
-      supervisor.record({
+      const progress = supervisor.record({
         parentSessionId: route.parentSessionId,
         cellId: route.cellId,
         method,
         title,
         message,
       });
+      events.supervisorOpened(progress, childSessionId);
       parent?.appendSubagentProgress(route.cellId, title ? `${title}: ${message}` : message);
       return { content: "Progress recorded." };
     }
@@ -121,7 +131,7 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
       Array.isArray(params.options) && params.options.every((o) => typeof o === "string")
         ? (params.options as string[])
         : undefined;
-    supervisor.record({
+    const opened = supervisor.record({
       id: requestId,
       parentSessionId: route.parentSessionId,
       cellId: route.cellId,
@@ -129,6 +139,7 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
       title,
       message,
     });
+    events.supervisorOpened(opened, childSessionId);
     parent?.openSupervisorQuestion({
       requestId,
       subagentCellId: route.cellId,
@@ -166,7 +177,8 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     parentSessionId: string,
     reason: string,
   ): void {
-    supervisor.markCancelled(requestId, reason);
+    const cancelled = supervisor.markCancelled(requestId, reason);
+    if (cancelled) events.supervisorCancelled(cancelled);
     sessions.get(parentSessionId)?.closeSupervisorQuestion(requestId, reason);
   }
 
@@ -198,6 +210,7 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     requestId: string,
     response: string,
     expectedParentSessionId?: string,
+    actor?: EventActor,
   ): boolean {
     const pending = pendingSupervisor.get(requestId);
     if (
@@ -206,7 +219,16 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     ) {
       return false;
     }
-    supervisor.markAnswered(requestId, response);
+    const answered = supervisor.markAnswered(requestId, response);
+    // REST passes the person; the parent-only bridge tool answers as its agent.
+    if (answered)
+      events.supervisorAnswered(
+        answered,
+        actor ??
+          (expectedParentSessionId
+            ? { type: "agent", sessionId: expectedParentSessionId }
+            : { type: "system" }),
+      );
     sessions.get(pending.parentSessionId)?.answerSupervisorQuestion(requestId, response);
     pending.settle({ content: response });
     return true;
@@ -477,7 +499,12 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     async (request, reply) => {
       const parsed = supervisorAnswerBody.safeParse(request.body);
       if (!parsed.success) return reply.code(400).send({ error: parsed.error.message });
-      const ok = answerSupervisor(request.params.requestId, parsed.data.response);
+      const ok = answerSupervisor(
+        request.params.requestId,
+        parsed.data.response,
+        undefined,
+        userActor(requestUser(request.raw)),
+      );
       if (!ok) return reply.code(404).send({ error: "no pending supervisor request with that id" });
       return { ok: true };
     },
