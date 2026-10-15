@@ -28,3 +28,7 @@ node --test for the store (validation, override precedence, change resets the cl
 **2026-10-15T22:06:54Z**
 
 2026-10-15 implemented as a860cde; contrarian + GPT (review53) running. Developer deviations: a changed address needs a restart (main refuses shared-server requests until the window origin matches; 16b to make it seamless: preload asks main for the origin at load, window reload after Save); no ShareProjectControl hint (the control renders nothing without a server).
+
+**2026-10-15T22:11:35Z**
+
+2026-10-15 GPT review (review53): remote-attach page could persist a hostile address (fixed: team-server IPC refused and preload capability hidden in remote mode), view.team-server missing from KEYBINDING_COMMANDS (fixed + palette test), ShareProjectControl hint (added per project row). Fix round landed as dc56801; contrarian still running.
