@@ -2,7 +2,9 @@ import { ControlButton } from "@/design-system/components/NativeControls";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   eventLabel,
+  humanKindLabel,
   memoryToolCardLabel,
+  openHumanNodes,
   projectNodeTree,
   PROMPT_LABEL_MAX_CHARS,
   type AssistantCell,
@@ -57,7 +59,25 @@ const CHIP_TYPES = new Set([
   "loopIteration",
   "loopChild",
   "supervisorRequest",
+  "human",
 ]);
+
+/** A8: how a human node settled, with who answered (any member on the shared server). */
+export function humanOutcome(node: ExecutionNode): string | undefined {
+  const human = node.human;
+  if (!human) return undefined;
+  if (human.expired === "default")
+    return `Expired: default "${eventLabel(human.answer ?? "")}" used`;
+  if (human.expired === "blocked") return "Expired: blocked";
+  if (human.by) {
+    const answer = human.answer ? `: ${eventLabel(human.answer)}` : "";
+    return `Answered by ${actorLabel(human.by)}${answer}`;
+  }
+  if (human.cancelledReason) return human.cancelledReason;
+  return node.status === "pending"
+    ? `${humanKindLabel(human.kind)}: waiting on a person`
+    : undefined;
+}
 
 interface Joins {
   sessionId: string;
@@ -141,6 +161,7 @@ function turnLeaves(node: ExecutionNode, joins: Joins): Leaf[] {
 const NodeRow = memo(function NodeRow({ node, joins }: { node: ExecutionNode; joins: Joins }) {
   const tool = node.ref.type === "toolCall";
   const leaves = turnLeaves(node, joins);
+  const outcome = humanOutcome(node);
   const summary = (
     <span className="flex min-w-0 items-baseline gap-1.5">
       {CHIP_TYPES.has(node.ref.type) ? (
@@ -169,6 +190,11 @@ const NodeRow = memo(function NodeRow({ node, joins }: { node: ExecutionNode; jo
           </time>
         </>
       )}
+      {outcome ? (
+        <span className="min-w-0 truncate text-text-muted" data-testid="human-outcome">
+          {outcome}
+        </span>
+      ) : null}
     </span>
   );
   const nested = leaves.length > 0 || node.children.length > 0;
@@ -294,8 +320,21 @@ export function NodeTreeView() {
 
   const root = tree?.roots[0];
   const forks = root?.forks ?? [];
+  // A8: open human nodes first; they also stay in place below.
+  const waiting = useMemo(() => (tree ? openHumanNodes(tree) : []), [tree]);
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2" data-testid="node-tree">
+      {waiting.length > 0 ? (
+        <ul
+          className="mb-2 space-y-0.5"
+          data-testid="open-human-nodes"
+          aria-label="Waiting on a person"
+        >
+          {waiting.map((node) => (
+            <NodeRow key={node.key} node={node} joins={joins} />
+          ))}
+        </ul>
+      ) : null}
       {root && (root.children.length > 0 || forks.length > 0) ? (
         <ul className="space-y-0.5">
           {root.children.map((node) => (

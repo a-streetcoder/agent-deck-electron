@@ -139,7 +139,7 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
       title,
       message,
     });
-    events.supervisorOpened(opened, childSessionId);
+    events.supervisorOpened(opened, childSessionId, options);
     parent?.openSupervisorQuestion({
       requestId,
       subagentCellId: route.cellId,
@@ -451,6 +451,7 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
         request.params.sessionId,
         request.params.requestId,
         parsed.data,
+        userActor(requestUser(request.raw)),
       );
       if (result === "missing")
         return reply.code(404).send({
@@ -473,7 +474,11 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
   fastify.post<{ Params: { sessionId: string; requestId: string } }>(
     "/sessions/:sessionId/asks/:requestId/cancel",
     async (request, reply) => {
-      const result = askUser.cancel(request.params.sessionId, request.params.requestId);
+      const result = askUser.cancel(
+        request.params.sessionId,
+        request.params.requestId,
+        userActor(requestUser(request.raw)),
+      );
       if (result === "missing")
         return reply.code(404).send({
           code: "ask_user_not_pending",

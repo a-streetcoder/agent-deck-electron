@@ -43,6 +43,18 @@ export function registerAskUserBridgeTool(
             maximum: 600,
             description: "Optional timeout in seconds (1–600).",
           },
+          timeoutPolicy: {
+            type: "object",
+            description:
+              "Optional: what happens when nobody answers in time (replaces timeout). then 'default' answers with the default and continues; 'blocked' returns timed_out and marks the request blocked.",
+            properties: {
+              afterMinutes: { type: "number", exclusiveMinimum: 0, maximum: 10 },
+              then: { type: "string", enum: ["default", "blocked"] },
+              default: { type: "string", description: "The answer used when then is 'default'." },
+            },
+            required: ["afterMinutes", "then"],
+            additionalProperties: false,
+          },
         },
         required: ["question"],
         additionalProperties: false,

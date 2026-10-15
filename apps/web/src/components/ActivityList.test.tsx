@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionMeta } from "@agent-deck/contracts";
-import type { EventEnvelope } from "@agent-deck/domain";
+import {
+  humanAnsweredDraft,
+  humanFromAskUser,
+  humanFromLoopApproval,
+  humanRequestedDraft,
+  type EventEnvelope,
+} from "@agent-deck/domain";
 import { useAppStore } from "../state/store.ts";
 import { ActivityList } from "./ActivityList.tsx";
 
@@ -96,4 +102,66 @@ it("shows nothing from another project's log", () => {
   useAppStore.setState({ currentProjectId: "p2" });
   render(<ActivityList />);
   expect(screen.getByText("Activity (0)")).toBeTruthy();
+});
+
+it("A8: lists open human requests first, outside the collapsed list, linked to where they are answered", () => {
+  const ale = { type: "user" as const, id: "ale@example.com", name: "Ale" };
+  const asked = (seq: number, draft: ReturnType<typeof humanRequestedDraft>) =>
+    event(seq, { ...draft, projectId: "p1" } as Partial<EventEnvelope>);
+  const ask = humanFromAskUser({
+    requestId: "ask-1",
+    sessionId: "s1",
+    question: "Ship?",
+    options: [],
+  });
+  useAppStore.setState({
+    projectLog: {
+      projectId: "p1",
+      logId: "log-a",
+      lastSeq: 8,
+      events: [
+        asked(
+          5,
+          humanRequestedDraft({ ...ask, parent: { type: "session", id: "s1" } }, new Date()),
+        ),
+        asked(
+          6,
+          humanRequestedDraft(
+            humanFromLoopApproval({
+              id: "run-1",
+              checkpointPrompt: "Approve the release",
+              projectId: "p1",
+            }),
+            new Date(),
+          ),
+        ),
+        asked(
+          7,
+          humanRequestedDraft({ ...ask, id: "ask-2", prompt: "Already answered" }, new Date()),
+        ),
+        asked(8, humanAnsweredDraft({ id: "ask-2", sessionId: "s1" }, ale, "yes")),
+      ],
+    },
+  });
+  render(<ActivityList />);
+  const waiting = screen.getByTestId("activity-waiting");
+  // First in the panel, before the (collapsed) activity list.
+  expect(waiting.nextElementSibling).toBe(screen.getByTestId("activity-list"));
+  const rows = within(waiting)
+    .getAllByTestId("activity-waiting-row")
+    .map((row) => row.textContent);
+  expect(rows).toEqual([
+    expect.stringContaining("Ship?"),
+    expect.stringContaining("Approve the release"),
+  ]);
+  expect(rows[0]).toContain("Question");
+  expect(rows[1]).toContain("Loop approval");
+  fireEvent.click(within(waiting).getByRole("button", { name: "Ship?" }));
+  expect(switchToSession).toHaveBeenCalledWith(session);
+  fireEvent.click(within(waiting).getByRole("button", { name: "Approve the release" }));
+  expect(useAppStore.getState().view).toBe("loops");
+  // The answer row in the list carries who answered.
+  const answeredRow = screen.getByTestId("activity-8");
+  expect(answeredRow.textContent).toContain("Ale");
+  expect(answeredRow.textContent).toContain("human.answered");
 });

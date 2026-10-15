@@ -1000,7 +1000,7 @@ export function createRpcConnection(deps: {
           await session.setThinkingLevel(request.level);
           break;
         case "ui_response":
-          session.respondToUiRequest(request.response);
+          session.respondToUiRequest(request.response, userActor(deps.user));
           break;
       }
       replyOk();

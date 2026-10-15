@@ -1,7 +1,13 @@
 import { ControlButton } from "@/design-system/components/NativeControls";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import type { SessionMeta } from "@agent-deck/contracts";
-import type { EventActor, EventEnvelope } from "@agent-deck/domain";
+import {
+  humanKindLabel,
+  openHumanNodes,
+  projectNodeTree,
+  type EventActor,
+  type EventEnvelope,
+} from "@agent-deck/domain";
 import { sectionHeaderClass } from "@/design-system/styles";
 import { cn } from "@/lib/cn";
 import { userDisplayName } from "@/lib/userIdentity";
@@ -53,46 +59,92 @@ export function ActivityList() {
 
   const events = log?.projectId === projectId ? log.events : [];
   const shown = events.slice(-SHOWN).reverse();
+  // A8: requests waiting on a person, first and outside the collapsed list.
+  // ponytail: from the project tail only; a request older than the tail drops out.
+  const waiting = useMemo(() => openHumanNodes(projectNodeTree(events)), [events]);
   return (
-    <details className="px-1.5 pb-1.5" data-testid="activity-list">
-      <summary className={cn(sectionHeaderClass, "cursor-pointer text-text-muted")}>
-        {events.length > SHOWN ? `Activity (newest ${SHOWN})` : `Activity (${events.length})`}
-      </summary>
-      {shown.length === 0 ? (
-        <div className="py-2 text-caption text-text-muted">No activity yet.</div>
-      ) : (
-        <ul className="max-h-40 space-y-0.5 overflow-y-auto pt-1">
-          {shown.map((event) => {
-            const link = subjectLink(event, sessions);
+    <>
+      {waiting.length > 0 ? (
+        <ul
+          className="space-y-0.5 px-1.5 pb-1"
+          data-testid="activity-waiting"
+          aria-label="Waiting on a person"
+        >
+          {waiting.map((node) => {
+            const session = sessions.find((candidate) => candidate.id === node.sessionId);
+            const target: AppView | undefined = session
+              ? "chat"
+              : node.human?.kind === "loopApproval"
+                ? "loops"
+                : undefined;
             return (
               <li
-                key={event.seq}
+                key={node.key}
                 className="flex items-baseline gap-1.5 text-detail text-text-secondary"
-                data-testid={`activity-${event.seq}`}
+                data-testid="activity-waiting-row"
               >
-                <time className="shrink-0 text-text-muted" dateTime={event.ts}>
-                  {formatEventTime(event.ts)}
-                </time>
-                <span className="shrink-0">{actorLabel(event.actor)}</span>
-                <span className="shrink-0 font-mono text-code-sm">{event.kind}</span>
-                {link.view ? (
+                <span className="shrink-0 font-medium text-text-primary">
+                  {humanKindLabel(node.human?.kind)}
+                </span>
+                <span className="shrink-0">{actorLabel(node.actor)}</span>
+                {target ? (
                   <ControlButton
                     className="min-w-0 truncate text-left text-accent hover:underline"
                     onClick={() => {
-                      if (link.view) setView(link.view);
-                      if (link.session) void switchToSession(link.session);
+                      setView(target);
+                      if (session) void switchToSession(session);
                     }}
                   >
-                    {link.label}
+                    {node.label}
                   </ControlButton>
                 ) : (
-                  <span className="min-w-0 truncate">{link.label}</span>
+                  <span className="min-w-0 truncate">{node.label}</span>
                 )}
               </li>
             );
           })}
         </ul>
-      )}
-    </details>
+      ) : null}
+      <details className="px-1.5 pb-1.5" data-testid="activity-list">
+        <summary className={cn(sectionHeaderClass, "cursor-pointer text-text-muted")}>
+          {events.length > SHOWN ? `Activity (newest ${SHOWN})` : `Activity (${events.length})`}
+        </summary>
+        {shown.length === 0 ? (
+          <div className="py-2 text-caption text-text-muted">No activity yet.</div>
+        ) : (
+          <ul className="max-h-40 space-y-0.5 overflow-y-auto pt-1">
+            {shown.map((event) => {
+              const link = subjectLink(event, sessions);
+              return (
+                <li
+                  key={event.seq}
+                  className="flex items-baseline gap-1.5 text-detail text-text-secondary"
+                  data-testid={`activity-${event.seq}`}
+                >
+                  <time className="shrink-0 text-text-muted" dateTime={event.ts}>
+                    {formatEventTime(event.ts)}
+                  </time>
+                  <span className="shrink-0">{actorLabel(event.actor)}</span>
+                  <span className="shrink-0 font-mono text-code-sm">{event.kind}</span>
+                  {link.view ? (
+                    <ControlButton
+                      className="min-w-0 truncate text-left text-accent hover:underline"
+                      onClick={() => {
+                        if (link.view) setView(link.view);
+                        if (link.session) void switchToSession(link.session);
+                      }}
+                    >
+                      {link.label}
+                    </ControlButton>
+                  ) : (
+                    <span className="min-w-0 truncate">{link.label}</span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </details>
+    </>
   );
 }

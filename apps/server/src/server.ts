@@ -1057,7 +1057,11 @@ async function initServer(
 
   // Parent-only human decision bridge. It is intentionally separate from the
   // Deck-agent bridge inventory and is never included in a child extension.
-  const askUser = new AskUserCoordinator(sessions, (sessionId) => bridgeTokens.get(sessionId));
+  const askUser = new AskUserCoordinator(
+    sessions,
+    (sessionId) => bridgeTokens.get(sessionId),
+    events,
+  );
   registerAskUserBridgeTool(bridge, askUser);
 
   // Native subagents, supervisor listing, and the session activity plan: the

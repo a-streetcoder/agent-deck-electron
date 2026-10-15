@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { SessionMeta } from "@agent-deck/contracts";
+import { eventLabel, humanKindLabel, type EventEnvelope } from "@agent-deck/domain";
 import { isElectron, notifyAttention, syncAttention } from "@/lib/native";
 import { projectDisplayName, sessionDisplayTitle } from "@/lib/sessionTitle";
 import { useAppStore } from "./store.ts";
@@ -31,6 +32,21 @@ export function newlyAttentiveSessionIds(
     .map((session) => session.id);
 }
 
+/**
+ * A8: human requests without a session (a loop approval) that arrived after the seq
+ * already seen; null = the first observation, a baseline that announces nothing. A
+ * session's own requests raise its durable attention marker instead.
+ */
+export function newSessionlessHumanRequests(
+  afterSeq: number | null,
+  events: readonly EventEnvelope[],
+): EventEnvelope[] {
+  if (afterSeq === null) return [];
+  return events.filter(
+    (event) => event.seq > afterSeq && event.kind === "human.requested" && !event.sessionId,
+  );
+}
+
 /** Observe every session's backend-owned durable marker, not only the selected
  * transcript. Main independently fetches backend truth for its distinct badge. */
 export function useDesktopAttention(): void {
@@ -40,7 +56,9 @@ export function useDesktopAttention(): void {
   const view = useAppStore((state) => state.view);
   const projects = useAppStore((state) => state.projects);
   const attentionRoutingToken = useAppStore((state) => state.attentionRoutingToken);
+  const projectLog = useAppStore((state) => state.projectLog);
   const previousRef = useRef<Map<string, string | null> | null>(null);
+  const humanSeenRef = useRef<{ logId: string; seq: number } | null>(null);
   const acknowledgingRef = useRef(new Set<string>());
 
   useEffect(() => {
@@ -75,6 +93,28 @@ export function useDesktopAttention(): void {
       });
     }
   }, [projects, sessions, sessionsLoaded]);
+
+  // ponytail: in-app announcement only. Electron main notifies per session and checks
+  // the backend's session attention, so a session-less loop approval needs a
+  // project-level attention source there before it can raise a desktop notification.
+  useEffect(() => {
+    if (!projectLog) return;
+    const seen = humanSeenRef.current;
+    humanSeenRef.current = { logId: projectLog.logId, seq: projectLog.lastSeq };
+    const fresh = newSessionlessHumanRequests(
+      seen && seen.logId === projectLog.logId ? seen.seq : null,
+      projectLog.events,
+    );
+    if (fresh.length === 0) return;
+    const first = fresh[0]!.payload as { kind?: string; prompt?: string };
+    useAppStore
+      .getState()
+      .setAttentionAnnouncement(
+        fresh.length === 1
+          ? `${humanKindLabel(first.kind)} needs a decision: ${eventLabel(first.prompt ?? "")}`
+          : `${fresh.length} requests need a decision.`,
+      );
+  }, [projectLog]);
 
   useEffect(() => {
     const acknowledgeIfVisible = (): void => {

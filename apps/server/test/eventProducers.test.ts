@@ -399,7 +399,10 @@ describe("A1b1 producers", () => {
     h.events.supervisorCancelled(supervisor.markCancelled(other.id, "The subagent ended.")!);
     expect(supervisor.markCancelled(other.id, "again")).toBeUndefined();
     expect(supervisor.markAnswered("unknown", "x")).toBeUndefined();
-    const [progress, opened, answered, , cancelled] = h.all();
+    // A8 human.* events are written next to these (humanNode.test.ts).
+    const [progress, opened, answered, , cancelled] = h
+      .all()
+      .filter((event) => !event.kind.startsWith("human."));
     // The projection A1d reads agrees with SupervisorLog, progress rows included.
     expect(
       [...projectSupervisor(h.all()).values()].map((r) => [r.id, r.status, r.response]),
@@ -466,7 +469,9 @@ describe("A1b1 producers", () => {
       )!,
       userActor(),
     );
-    const [prompted, opened, answered] = h.all();
+    const [prompted, opened, answered] = h
+      .all()
+      .filter((event) => !event.kind.startsWith("human."));
     const label = (prompted!.payload as { label: string }).label;
     expect(label.startsWith("Inspect <home>\\private and <dataDir>\\events with <secret>")).toBe(
       true,

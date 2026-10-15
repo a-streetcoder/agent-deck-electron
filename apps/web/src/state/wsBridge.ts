@@ -1558,8 +1558,9 @@ export function refreshProjectLog(): Promise<void> {
 
 async function pullProjectLog(): Promise<void> {
   const projectId = useAppStore.getState().currentProjectId;
+  // A8: server.started too, so the restart rule closes memory-only human requests.
   const url = (cursor: string): string =>
-    `/events?${projectId === null ? "" : `projectId=${encodeURIComponent(projectId)}&`}${cursor}`;
+    `/events?${projectId === null ? "" : `projectId=${encodeURIComponent(projectId)}&includeServerEvents=true&`}${cursor}`;
   const stillOpen = (): boolean => useAppStore.getState().currentProjectId === projectId;
 
   for (let page = 0; page < PROJECT_LOG_MAX_PAGES; page += 1) {

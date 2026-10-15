@@ -19,7 +19,7 @@ import type {
 } from "./eventDiffs.ts";
 import { SUBAGENT_RESULT_READ } from "./subagentDelta.ts";
 import type { DeckRun } from "./transcript.ts";
-import type { TurnToolCallRef } from "./turnRefs.ts";
+import { eventLabel, type TurnToolCallRef } from "./turnRefs.ts";
 
 export type NodeStatus = "pending" | "running" | "done" | "error" | "stopped" | "interrupted";
 
@@ -64,6 +64,23 @@ export interface ExecutionNode {
   loopRun?: PublicLoopRunSummary;
   loopIteration?: PublicLoopIterationSummary;
   loopChild?: PublicLoopChild;
+  /** human (A8): the request, and its answer or expiry once settled. */
+  human?: HumanNodeFacts;
+}
+
+/** What the tree keeps of a human node: the request and how it settled. */
+export interface HumanNodeFacts {
+  kind?: string;
+  prompt?: string;
+  options?: string[];
+  expiresAt?: string;
+  /** Who answered (any member on the shared server). */
+  by?: EventActor;
+  answer?: string;
+  /** The timeout policy fired: "default" answered with the default, "blocked" did not. */
+  expired?: "default" | "blocked";
+  /** Closed without an answer. */
+  cancelledReason?: string;
 }
 
 export interface NodeTree {
@@ -252,6 +269,13 @@ export function projectNodeTree(
             setStatus(other, "interrupted", ts);
           } else if (other.ref.type === "turn" && other.status === "running") {
             setStatus(other, "interrupted", ts);
+          } else if (
+            other.ref.type === "human" &&
+            other.status === "pending" &&
+            other.human?.kind !== "loopApproval"
+          ) {
+            // A loop checkpoint is durable; every other wait died with the process.
+            setStatus(other, "interrupted", ts);
           }
         }
         break;
@@ -364,6 +388,46 @@ export function projectNodeTree(
         setStatus(node, childStatus(child), ts);
         break;
       }
+      case "human.requested": {
+        const prompt = str(payload.prompt);
+        node.human = {
+          ...(str(payload.kind) ? { kind: str(payload.kind) } : {}),
+          ...(prompt ? { prompt } : {}),
+          ...(Array.isArray(payload.options)
+            ? { options: payload.options.filter((o): o is string => typeof o === "string") }
+            : {}),
+          ...(str(payload.expiresAt) ? { expiresAt: str(payload.expiresAt) } : {}),
+        };
+        node.label = (prompt && eventLabel(prompt)) || "Waiting on a person";
+        setStatus(node, "pending", ts);
+        break;
+      }
+      case "human.answered":
+        // The first settlement wins: a late duplicate never rewrites who answered.
+        if (node.status !== "pending" && node.status !== "running") break;
+        node.human = {
+          ...node.human,
+          by: (payload.by as EventActor | undefined) ?? event.actor,
+          ...(typeof payload.answer === "string" ? { answer: payload.answer } : {}),
+        };
+        setStatus(node, "done", ts);
+        break;
+      case "human.expired": {
+        if (node.status !== "pending" && node.status !== "running") break;
+        const usedDefault = payload.then === "default";
+        node.human = {
+          ...node.human,
+          expired: usedDefault ? "default" : "blocked",
+          ...(usedDefault && typeof payload.answer === "string" ? { answer: payload.answer } : {}),
+        };
+        setStatus(node, usedDefault ? "done" : "stopped", ts);
+        break;
+      }
+      case "human.cancelled":
+        if (node.status !== "pending" && node.status !== "running") break;
+        node.human = { ...node.human, cancelledReason: str(payload.reason) ?? "Cancelled" };
+        setStatus(node, "stopped", ts);
+        break;
       case "subagent.run.removed":
       case "loop.run.removed":
         node.removed = true;

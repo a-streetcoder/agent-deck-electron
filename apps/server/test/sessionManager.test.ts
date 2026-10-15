@@ -3390,6 +3390,42 @@ describe("durable session attention", () => {
     },
   );
 
+  it("A8: reports a blocking extension UI request and who answered it to the turn hooks", async () => {
+    const { piHost } = makeFakePiHost();
+    const requested: unknown[] = [];
+    const resolved: unknown[] = [];
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const params = makeParams({
+            turnEvents: {
+              consumed: () => {},
+              current: () => undefined,
+              end: () => undefined,
+              completed: () => {},
+              uiRequested: (request) => requested.push(request),
+              uiResolved: (...args) => resolved.push(args),
+            },
+          });
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+          yield* Effect.fork(rt.ingest);
+          yield* rt.prompt("request-extension-ui");
+          yield* waitUntil(() => requested.length === 1);
+          expect(requested[0]).toMatchObject({ id: "extension-question-1", method: "confirm" });
+          const actor = { type: "user" as const, id: "ale@example.com" };
+          yield* rt.respondToUiRequest({ id: "extension-question-1", confirmed: true }, actor);
+          expect(resolved).toEqual([
+            [
+              "extension-question-1",
+              { type: "extension_ui_response", id: "extension-question-1", confirmed: true },
+              actor,
+            ],
+          ]);
+        }),
+      ),
+    );
+  }, 15_000);
+
   it("keeps a passive setStatus out of the pending-UI blocker and off the badge", async () => {
     const { piHost } = makeFakePiHost();
     await Effect.runPromise(

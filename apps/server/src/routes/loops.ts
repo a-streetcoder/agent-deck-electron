@@ -3,6 +3,7 @@ import { chmodSync, lstatSync, mkdirSync, realpathSync, renameSync } from "node:
 import nodePath from "node:path";
 import {
   canRetryLoopRun,
+  humanFromLoopApproval,
   isLoopAvailableInProject,
   isLoopRunTerminal,
   isRunnableLoopStructure,
@@ -678,6 +679,9 @@ export function registerLoopRoutes(
           retryOf: body.retryOf,
         });
         recordLoopAction(request, run, "start");
+        // A8: the checkpoint waits on a person (a run that failed to start never asks).
+        if (run.stopReason === "humanInputRequired")
+          ctx.events.humanRequested(humanFromLoopApproval(run));
         return reply.status(201).send({ run, worktree: null });
       } catch (error) {
         if (run) loopEngine.rollbackStart(run.id);
@@ -1342,13 +1346,21 @@ export function registerLoopRoutes(
       .safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     try {
-      return {
-        run: loopEngine.resolveHumanApproval(
-          id,
+      const waiting = loopEngine.get(id)?.stopReason === "humanInputRequired";
+      const run = loopEngine.resolveHumanApproval(
+        id,
+        parsed.data.decision,
+        parsed.data.expectedUpdatedAt,
+      );
+      // A8: any member may decide; the log records who (a repeated decision is a no-op).
+      if (waiting) {
+        ctx.events.humanAnswered(
+          { id: run.id, ...(run.projectId ? { projectId: run.projectId } : {}) },
+          userActor(requestUser(request.raw)),
           parsed.data.decision,
-          parsed.data.expectedUpdatedAt,
-        ),
-      };
+        );
+      }
+      return { run };
     } catch (error) {
       const typed = error as { code?: string; message?: string };
       if (typed.code === "loop_human_approval_conflict") {

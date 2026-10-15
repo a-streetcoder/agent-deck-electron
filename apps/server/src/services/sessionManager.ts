@@ -19,6 +19,7 @@ import {
   type AskUserAnswer,
   type AskUserCell,
   type DomainEvent,
+  type EventActor,
   type IngestState,
   type ProviderRetryCell,
   type SessionPlanItem,
@@ -245,6 +246,18 @@ export interface SessionTurnEvents {
   /** A user turn ended at this idle: snapshot it and close it. */
   end(): TurnContext | undefined;
   completed(turn: TurnRefs, context: TurnContext | undefined, child?: ChildTurnInfo): void;
+  /** A8: a blocking extension_ui_request opened (a human node). */
+  uiRequested?(request: {
+    id: string;
+    method: string;
+    title?: string;
+    message?: string;
+    options?: string[];
+  }): void;
+  /** A8: answered or cancelled over the ui_response RPC; actor: who answered. */
+  uiResolved?(id: string, response: Record<string, unknown>, actor?: EventActor): void;
+  /** A8: Pi settled the request itself (the MCP sign-in paste box). */
+  uiClosed?(id: string, reason: string): void;
 }
 
 /** Bound on the child's get_entries after it settled; a slow Pi yields a partial report. */
@@ -472,7 +485,10 @@ export interface ManagedSessionRuntime {
     reason: string,
   ) => Effect.Effect<void>;
   /** Fails (Error) on an invalid/unknown UI-request id — surfaced to the caller. */
-  readonly respondToUiRequest: (raw: Record<string, unknown>) => Effect.Effect<void, Error>;
+  readonly respondToUiRequest: (
+    raw: Record<string, unknown>,
+    actor?: EventActor,
+  ) => Effect.Effect<void, Error>;
 
   // pi RPC operations.
   readonly prompt: (
@@ -1308,6 +1324,7 @@ export const makeManagedSessionRuntime = (
         // answerable methods; this was its unguarded sibling.
         if (isAnswerableUiRequest(e.method)) {
           pendingUiRequests.set(e.id, e.method);
+          quietly(() => params.turnEvents?.uiRequested?.(piEvent as typeof e));
           markNeedsAttention();
         }
       }
@@ -1331,8 +1348,11 @@ export const makeManagedSessionRuntime = (
         }
         emit(domainEvent);
         // Ingest closes a question Pi settled on its own (MCP sign-in paste box).
-        if (domainEvent.type === "question_answered")
-          pendingUiRequests.delete(domainEvent.cellId.slice("question-".length));
+        if (domainEvent.type === "question_answered") {
+          const id = domainEvent.cellId.slice("question-".length);
+          if (pendingUiRequests.delete(id))
+            quietly(() => params.turnEvents?.uiClosed?.(id, "Settled by Pi."));
+        }
         if (domainEvent.type === "provider_retry") retryChanged = true;
         if (domainEvent.type === "cell_delta" && !sawFirstDelta) {
           sawFirstDelta = true;
@@ -1827,7 +1847,7 @@ export const makeManagedSessionRuntime = (
           pendingAskUser.delete(requestId);
           emit({ type: "ask_user_closed", cellId: `ask-user-${requestId}`, status, reason });
         }),
-      respondToUiRequest: (raw) =>
+      respondToUiRequest: (raw, actor) =>
         Effect.gen(function* () {
           const id = raw.id;
           if (typeof id !== "string" || !pendingUiRequests.has(id)) {
@@ -1846,6 +1866,7 @@ export const makeManagedSessionRuntime = (
             );
           }
           pendingUiRequests.delete(id);
+          quietly(() => params.turnEvents?.uiResolved?.(id, response, actor));
           // Fire-and-forget write (like the legacy PiSession path); a dead pi
           // just swallows it rather than surfacing an error to the caller.
           yield* handle
