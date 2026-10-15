@@ -44,3 +44,7 @@ docker build succeeds in CI; the container answers /health 200 and GET /projects
 **2026-10-15T22:32:20Z**
 
 2026-10-15 contrarian: blockers = 0.0.0.0 default (already fixed in ac7c61e) and the home outside the volume (transcripts, settings, skills, gh/git config lost on replacement; per-user symlinked dirs recreated empty); recommended = home at /data/home via useradd, ripgrep/fd-find in the image (Pi downloads unpinned binaries otherwise), smoke before publish in CI, no latest for prereleases, AGENT_DECK_APP_VERSION build arg, .dockerignore nested patterns, startup refusal of a non-loopback host without the trusted proxy, docs. Round 2 sent.
+
+**2026-10-15T22:40:41Z**
+
+2026-10-15 round 2 landed as 272c66d (home at /data/home + server creates it, bindHost safety net with tests, ripgrep/fd-find/openssh-client, PI_SKIP_VERSION_CHECK, APP_VERSION build arg, smoke before publish + PR builds + latest=auto, .dockerignore, docs). VM validation green incl. volume survival and the refusal/typo cases. Verification pass review57 launched.

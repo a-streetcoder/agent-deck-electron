@@ -36,3 +36,7 @@ node --test on the state machine (startup paths: cached token ok, expired -> nee
 **2026-10-15T22:35:17Z**
 
 2026-10-15 implemented as b715697 (status state machine, silent startup, Sign in/out with signedOut list, team pinning with accept-team, window-origin via sendSync + reload after Save, renderer transfer guard, cloudflared gating, sidebar indicator). Contrarian + GPT (review56) running.
+
+**2026-10-15T22:40:41Z**
+
+2026-10-15 GPT review (review56): seven should-fix (new-origin consent for a pinned team, renderer-origin check in the window-origin handler, sign-out must invalidate a pending token lookup, Save/transfer mutual exclusion, client-generation tagging of status updates, request IPC must not reject, Sign in enabled before discovery resolved). Fix round sent with 'merge poc/shared-server (16c) first'.

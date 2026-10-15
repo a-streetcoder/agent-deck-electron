@@ -1,6 +1,6 @@
 ---
 id: ade-u5bg
-status: in_progress
+status: closed
 deps: [ade-wvbh]
 links: []
 created: 2026-10-15T21:55:07Z
@@ -36,3 +36,7 @@ node --test for the resolution order and for the verifier (wrong checksum -> fil
 **2026-10-15T22:31:40Z**
 
 2026-10-15 contrarian: no security blocker (tar reader fails safe on 11 crafted inputs; hash compare full-length); should-fix = runner resolved once at client creation (installing cloudflared mid-run needs a restart), env override loses to the stored path, remote-attach silently switches to the cloudflared flow, docs on version bumps; the sign-in gating criterion handed to 16b. Additions sent to the developer.
+
+**2026-10-15T22:40:41Z**
+
+2026-10-15 fix round (1cbf823: full writes + hash of the file on disk, size caps, manual https redirects with host allow-list, 10-minute deadline, quoted PATH, lazy per-call runner, env override wins, remote mode env-only, checksums cross-checked against release digests, tar refusal tests, docs) verified by the architect; squashed f34b2ff, merged f52cb44; typecheck + design-system + 42 desktop node tests + TeamServerScreen green. CLOSED. Follow-ups: a stored cloudflaredPath from an older pinned version is used until removed (treat paths outside the current version folder as stale); no download for Windows arm64/ia32; old version folders not cleaned.
