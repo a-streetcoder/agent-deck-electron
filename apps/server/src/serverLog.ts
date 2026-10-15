@@ -6,7 +6,7 @@
 type Level = "info" | "warn" | "error";
 
 // One line per entry, so a journal grep on the scope finds the whole entry.
-const oneLine = (text: string): string => text.replace(/\r/g, "\r").replace(/\n/g, "\n");
+const oneLine = (text: string): string => text.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
 
 const messageOf = (value: unknown): string =>
   value instanceof Error ? value.message : String(value);

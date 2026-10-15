@@ -30,7 +30,7 @@ describe("serverLog", () => {
     });
     expect(formatServerLog("x", "m", chained)).toBe("[x] m: TypeError: outer (cause: inner)");
     expect(formatServerLog("x", "two\nlines", new Error("bad\r\ntoken"))).toBe(
-      "[x] two\nlines: bad\r\ntoken",
+      "[x] two\\nlines: bad\\r\\ntoken",
     );
   });
 
