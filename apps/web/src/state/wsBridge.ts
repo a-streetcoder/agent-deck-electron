@@ -1538,17 +1538,51 @@ export async function switchToAgent(agentName: string | null): Promise<void> {
   await activateSession(useAppStore.getState().currentProjectId, agentName);
 }
 
-export async function addProject(path: string): Promise<ProjectMeta | undefined> {
+const STILL_CLONING =
+  "The server is still cloning; reload in a minute and the project will be there.";
+
+/**
+ * The message for a refused add. A repository clone that outlives the proxy
+ * (Cloudflare's 524, or another non-JSON 5xx page) is still running on the
+ * server; a 409 naming a project means it exists, so the list is reloaded.
+ */
+async function addProjectError(response: Response, cloning: boolean): Promise<string> {
+  const text = await response.text();
+  let body: { error?: unknown; projectId?: unknown } | null = null;
+  try {
+    body = JSON.parse(text) as { error?: unknown; projectId?: unknown };
+  } catch {
+    // not JSON (a proxy's HTML page)
+  }
+  if (cloning && (response.status === 524 || (response.status >= 500 && !body)))
+    return STILL_CLONING;
+  if (typeof body?.projectId === "string") await refreshProjects();
+  if (typeof body?.error === "string" && body.error.trim()) return body.error;
+  return text || `Request failed (${response.status}).`;
+}
+
+/**
+ * Register a project: a folder path, or (SRV-12a, shared server only) a GitHub
+ * repository the server clones. `rethrow` hands the error to a caller that
+ * shows it inline instead of the global error banner.
+ */
+export async function addProject(
+  source: string | { repo: string; ref?: string },
+  options: { rethrow?: boolean } = {},
+): Promise<ProjectMeta | undefined> {
   const store = useAppStore.getState();
   try {
-    const { project } = await fetchJson<{ project: ProjectMeta }>("/projects", {
+    const response = await fetch("/projects", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path }),
+      body: JSON.stringify(typeof source === "string" ? { path: source } : source),
     });
+    if (!response.ok) throw new Error(await addProjectError(response, typeof source !== "string"));
+    const { project } = (await response.json()) as { project: ProjectMeta };
     await refreshProjects();
     return project;
   } catch (error) {
+    if (options.rethrow) throw error;
     store.setError(String(error));
     return undefined;
   }

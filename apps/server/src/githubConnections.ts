@@ -354,12 +354,27 @@ export function githubEnv(
     ["url.https://github.com/.insteadOf", "git@github.com:"],
     ["url.https://github.com/.insteadOf", "ssh://git@github.com/"],
   ];
+  return { GH_TOKEN: token, ...gitConfigEnv(config, base) };
+}
+
+/**
+ * SRV-12a: the git env for an anonymous clone: an empty `credential.helper`
+ * clears every inherited helper (the server's own credentials), as above.
+ */
+export function noCredentialHelperEnv(
+  base: Record<string, string | undefined> = process.env,
+): Record<string, string> {
+  return gitConfigEnv([["credential.helper", ""]], base);
+}
+
+/** GIT_CONFIG_* entries appended after any GIT_CONFIG_COUNT already in `base`. */
+function gitConfigEnv(
+  config: Array<[string, string]>,
+  base: Record<string, string | undefined>,
+): Record<string, string> {
   const existing = Number(base.GIT_CONFIG_COUNT);
   const start = Number.isInteger(existing) && existing > 0 ? existing : 0;
-  const env: Record<string, string> = {
-    GH_TOKEN: token,
-    GIT_CONFIG_COUNT: String(start + config.length),
-  };
+  const env: Record<string, string> = { GIT_CONFIG_COUNT: String(start + config.length) };
   config.forEach(([key, value], index) => {
     env[`GIT_CONFIG_KEY_${start + index}`] = key;
     env[`GIT_CONFIG_VALUE_${start + index}`] = value;

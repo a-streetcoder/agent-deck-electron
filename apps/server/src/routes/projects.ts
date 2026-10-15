@@ -8,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -15,14 +16,16 @@ import {
 import { homedir, tmpdir } from "node:os";
 import nodePath from "node:path";
 import { promisify } from "node:util";
-import type { ProjectMeta } from "@agent-deck/contracts";
+import type { ProjectMeta, UserIdentity } from "@agent-deck/contracts";
+import { redactSecrets } from "@agent-deck/domain";
 import type { FastifyReply } from "fastify";
 import { detectProjectType, discoverProjects, scanAgents } from "@agent-deck/resources";
 import { projectAllowsAgent } from "../agentCuration.ts";
 import { AgentAvatarStoreError } from "../agentAvatars.ts";
 import { z } from "zod";
 import type { ServerContext } from "../context.ts";
-import { githubEnv } from "../githubConnections.ts";
+import { gitCloneRepository } from "../git.ts";
+import { githubEnv, noCredentialHelperEnv } from "../githubConnections.ts";
 import { requestUser } from "../trustedProxy.ts";
 import {
   normalizeGitHubIssueDetail,
@@ -46,6 +49,59 @@ const createProjectBody = z.object({
   path: z.string(),
   name: z.string().optional(),
 });
+
+// SRV-12a: GitHub owner and repository names. The repository name becomes a
+// folder under the project root on any platform: no dot folder (".", "..", and
+// hidden), no Windows reserved device name, no trailing dot or space.
+const GITHUB_OWNER = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+const GITHUB_REPO = /^[A-Za-z0-9._-]{1,100}$/;
+const UNSAFE_FOLDER_NAME = /^\.|[. ]$|^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
+const safeRepoName = (name: string): boolean =>
+  GITHUB_REPO.test(name) && !UNSAFE_FOLDER_NAME.test(name);
+
+/** git check-ref-format rules for a branch or tag given to `git clone --branch=`. */
+export function validGitRef(ref: string): boolean {
+  return (
+    ref.length > 0 &&
+    ref.length <= 250 &&
+    ref !== "@" &&
+    !ref.startsWith("-") &&
+    !ref.includes("..") &&
+    !ref.includes("@{") &&
+    // Control characters, space, and ~ ^ : ? * [ \ are refused.
+    // eslint-disable-next-line no-control-regex
+    !/[\x00-\x20\x7f~^:?*[\\]/.test(ref) &&
+    !ref.endsWith(".") &&
+    ref.split("/").every((part) => part !== "" && !part.startsWith(".") && !part.endsWith(".lock"))
+  );
+}
+const GIT_REF = z.string().refine(validGitRef, "not a valid branch or tag name");
+
+const identityOf = (user: { id: string; name?: string }): UserIdentity => ({
+  id: user.id,
+  ...(user.name ? { name: user.name } : {}),
+});
+
+/** A clone in progress lives in a hidden sibling of the project root until it is renamed. */
+const CLONE_TEMP_PREFIX = ".agent-deck-clone-";
+
+const createRepoProjectBody = z.object({
+  repo: z.string().max(300),
+  ref: GIT_REF.optional(),
+});
+
+/** `owner/name` or `https://github.com/owner/name(.git)`, else undefined. */
+export function parseGitHubRepo(input: string): { owner: string; name: string } | undefined {
+  const text = input.trim();
+  const match =
+    /^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(text) ??
+    /^([^/:\s]+)\/([^/\s]+?)(?:\.git)?$/.exec(text);
+  if (!match) return undefined;
+  const [, owner = "", name = ""] = match;
+  return GITHUB_OWNER.test(owner) && safeRepoName(name) ? { owner, name } : undefined;
+}
+
+const CLONE_URL = /^https:\/\/github\.com\/([A-Za-z0-9-]+)\/[A-Za-z0-9._-]+\.git$/;
 
 const patchProjectBody = z.object({
   assignedAgentNames: z.array(RESOURCE_NAME).optional(),
@@ -263,7 +319,239 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     };
   });
 
+  // SRV-12a: a shared project from a GitHub repository, cloned under the project
+  // root as the requester. The API answer is untrusted (it becomes a path and a
+  // URL): only its repository fields are used, and each is checked. A clone runs
+  // in a hidden sibling (invisible to /fs/dirs and discovery) and is renamed into
+  // place only once it is complete.
+  const cloningInto = new Set<string>();
+  const projectRoot = (): string | undefined => {
+    const configured = process.env.AGENT_DECK_PROJECT_ROOT?.trim();
+    if (!configured) return undefined;
+    try {
+      const root = realpathSync.native(nodePath.resolve(configured));
+      return statSync(root).isDirectory() ? root : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  // No clone is in flight at registration: a leftover temp folder is from a crash.
+  {
+    const root = ctx.sharedServer ? projectRoot() : undefined;
+    for (const entry of root ? readdirSync(root, { withFileTypes: true }) : []) {
+      if (!entry.name.startsWith(CLONE_TEMP_PREFIX)) continue;
+      try {
+        rmSync(nodePath.join(root!, entry.name), { recursive: true, force: true, maxRetries: 3 });
+      } catch (error) {
+        console.warn(`[projects] could not remove a stale clone: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  const createRepoProject = async (
+    request: { raw: IncomingMessage; body: unknown },
+    reply: FastifyReply,
+  ) => {
+    if (!ctx.sharedServer)
+      return reply
+        .status(400)
+        .send({ error: "Adding a project from a repository needs a shared server." });
+    const parsed = createRepoProjectBody.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+    const wanted = parseGitHubRepo(parsed.data.repo);
+    if (!wanted)
+      return reply.status(400).send({
+        error: "Enter a GitHub repository as owner/name or https://github.com/owner/name.",
+      });
+    const user = requestUser(request.raw);
+    if (!user) return reply.status(403).send({ error: "sign in to add a shared project" });
+    // Never clone into the server user's home folder.
+    const root = projectRoot();
+    if (!root)
+      return reply.status(409).send({
+        error:
+          "The server has no project root folder (AGENT_DECK_PROJECT_ROOT); ask the operator to set it.",
+      });
+
+    // The connection is read once: its token answers both the API and the clone.
+    // Anonymous, inherited credential helpers are cleared, so a repository that
+    // turns private meanwhile cannot clone with the server's own credentials.
+    const tokenEnv = githubEnv(user, ctx.githubConnections);
+    const token = tokenEnv.GH_TOKEN;
+    const env = token ? tokenEnv : noCredentialHelperEnv();
+    const fetchFn = ctx.repoProjectSeams?.fetch ?? fetch;
+    let response: Response;
+    try {
+      response = await fetchFn(
+        `https://api.github.com/repos/${encodeURIComponent(wanted.owner)}/${encodeURIComponent(wanted.name)}`,
+        {
+          headers: {
+            accept: "application/vnd.github+json",
+            "user-agent": "agent-deck",
+            ...(token ? { authorization: `Bearer ${token}` } : {}),
+          },
+          signal: AbortSignal.timeout(15_000),
+        },
+      );
+    } catch {
+      return reply.status(502).send({ error: "GitHub could not be reached." });
+    }
+    if (token && response.status === 401)
+      return reply.status(409).send({ error: "GitHub connection expired, reconnect in Settings" });
+    if (response.status === 403) {
+      if (!token)
+        return reply.status(409).send({
+          error: "GitHub rate limit for anonymous requests; connect GitHub in Settings",
+        });
+      const body = (await response.json().catch(() => null)) as { message?: unknown } | null;
+      const message =
+        typeof body?.message === "string" ? redactSecrets(body.message.trim()).slice(0, 200) : "";
+      return reply
+        .status(502)
+        .send({ error: message ? `GitHub refused: ${message}` : "GitHub answered 403." });
+    }
+    // Anonymous, a private repository answers 404 like a missing one.
+    if (!token && response.status === 404)
+      return reply.status(409).send({ error: "connect GitHub first" });
+    if (response.status === 404)
+      return reply
+        .status(404)
+        .send({ error: "Repository not found, or your GitHub account cannot see it." });
+    if (!response.ok)
+      return reply.status(502).send({ error: `GitHub answered ${response.status}.` });
+    const repo = (await response.json().catch(() => null)) as {
+      id?: unknown;
+      name?: unknown;
+      default_branch?: unknown;
+      private?: unknown;
+      clone_url?: unknown;
+    } | null;
+    const repoId = repo?.id;
+    const name = repo?.name;
+    const defaultBranch = repo?.default_branch;
+    const cloneUrl = repo?.clone_url;
+    const cloneOwner = typeof cloneUrl === "string" ? CLONE_URL.exec(cloneUrl)?.[1] : undefined;
+    if (
+      typeof repoId !== "number" ||
+      !Number.isSafeInteger(repoId) ||
+      typeof name !== "string" ||
+      !safeRepoName(name) ||
+      typeof defaultBranch !== "string" ||
+      !validGitRef(defaultBranch) ||
+      typeof cloneUrl !== "string" ||
+      !cloneOwner
+    ) {
+      return reply.status(502).send({ error: "GitHub sent an unexpected repository answer." });
+    }
+    if (repo?.private === true && !token)
+      return reply.status(409).send({ error: "connect GitHub first" });
+
+    // The same repository again: un-hide it like the path flow, or point at it.
+    const sameRepo = (): ProjectMeta | undefined => projects.find((p) => p.repoId === repoId);
+    const existing = sameRepo();
+    if (existing?.hidden) {
+      const restored = { ...existing, hidden: false };
+      projects.upsert(restored);
+      return reply.status(200).send({ project: restored });
+    }
+    if (existing)
+      return reply.status(409).send({
+        error: `This repository is already the project "${existing.name}".`,
+        projectId: existing.id,
+      });
+    // A folder held by another repository's project (a fork, a same-named repo)
+    // falls back to <owner>-<name>.
+    const holderOf = (dest: string): ProjectMeta | undefined =>
+      projects.find((p) => canonicalPath(p.path) === canonicalPath(dest));
+    let dest: string | undefined;
+    let holder: ProjectMeta | undefined;
+    for (const folder of [name, `${cloneOwner}-${name}`]) {
+      const candidate = nodePath.join(root, folder);
+      if (nodePath.dirname(candidate) !== root || !safeRepoName(folder)) continue;
+      const taken = holderOf(candidate);
+      if (!taken) {
+        dest = candidate;
+        break;
+      }
+      holder ??= taken;
+    }
+    if (!dest)
+      return reply.status(409).send({
+        error: `The folder ${name} is held by another repository's project "${holder?.name ?? name}".`,
+        ...(holder ? { projectId: holder.id } : {}),
+      });
+    const folderName = nodePath.basename(dest);
+    if (cloningInto.has(dest))
+      return reply
+        .status(409)
+        .send({ error: `${folderName} is still cloning; try again shortly.` });
+    if (existsSync(dest))
+      return reply
+        .status(409)
+        .send({ error: `A folder named ${folderName} already exists in the project root.` });
+
+    cloningInto.add(dest);
+    const temp = nodePath.join(root, `${CLONE_TEMP_PREFIX}${randomUUID()}`);
+    const dropTemp = () => rmSync(temp, { recursive: true, force: true, maxRetries: 3 });
+    try {
+      try {
+        await (ctx.repoProjectSeams?.clone ?? gitCloneRepository)(
+          cloneUrl,
+          temp,
+          parsed.data.ref ?? defaultBranch,
+          env,
+        );
+      } catch (error) {
+        dropTemp();
+        const stderr = String((error as { stderr?: unknown }).stderr ?? "").trim();
+        const detail = redactSecrets(token ? stderr.split(token).join("<secret>") : stderr);
+        return reply.status(502).send({
+          error: `The clone failed${detail ? `: ${detail.slice(-1_000)}` : "."}`,
+        });
+      }
+      // Someone may have registered the repository or the folder meanwhile.
+      const raced = sameRepo() ?? holderOf(dest);
+      if (raced) {
+        dropTemp();
+        return reply.status(409).send({
+          error: `This repository or folder became the project "${raced.name}" meanwhile.`,
+          projectId: raced.id,
+        });
+      }
+      try {
+        if (existsSync(dest)) throw Object.assign(new Error("exists"), { code: "EEXIST" });
+        renameSync(temp, dest);
+      } catch (error) {
+        dropTemp();
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "EEXIST" || code === "ENOTEMPTY" || code === "EPERM")
+          return reply
+            .status(409)
+            .send({ error: `A folder named ${folderName} already exists in the project root.` });
+        throw error;
+      }
+    } finally {
+      cloningInto.delete(dest);
+    }
+    const project: ProjectMeta = {
+      id: randomUUID(),
+      path: dest,
+      name,
+      type: detectProjectType(dest),
+      createdAt: new Date().toISOString(),
+      origin: cloneUrl,
+      repoId,
+      defaultBranch,
+      createdBy: identityOf(user),
+    };
+    projects.upsert(project);
+    watchProject(project.path);
+    return reply.status(201).send({ project });
+  };
+
   fastify.post("/projects", async (request, reply) => {
+    if (request.body && typeof request.body === "object" && "repo" in request.body)
+      return createRepoProject(request, reply);
     const parsed = createProjectBody.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ error: parsed.error.message });
@@ -290,6 +578,9 @@ export function registerProjectRoutes(ctx: ServerContext): void {
       type: detectProjectType(projectPath),
       createdAt: new Date().toISOString(),
     };
+    // SRV-12a: on a shared server the delete rule covers folder projects too.
+    const creator = ctx.sharedServer ? requestUser(request.raw) : undefined;
+    if (creator) project.createdBy = identityOf(creator);
     projects.upsert(project);
     watchProject(project.path);
     return reply.status(201).send({ project });
@@ -373,6 +664,17 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     const { id } = request.params as { id: string };
     const project = projects.find((p) => p.id === id);
     if (!project) return reply.status(404).send({ error: "unknown project" });
+    // SRV-12a (owner answer 2): only its creator or the operator removes a shared project.
+    if (ctx.sharedServer && project.createdBy) {
+      const user = requestUser(request.raw);
+      const allowed =
+        !!user &&
+        (user.id === project.createdBy.id || ctx.userAgentDirs?.isOperator(user) === true);
+      if (!allowed)
+        return reply.status(403).send({
+          error: "Only the person who added this project, or the operator, can remove it.",
+        });
+    }
     const hasLiveSession = sessions.list().some((s) => s.projectId === id && !s.endedAt);
     if (hasLiveSession) {
       return reply.status(409).send({ error: "project has a live session" });

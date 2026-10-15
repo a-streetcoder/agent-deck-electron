@@ -76,3 +76,39 @@ describe("SessionStartupCard draft with no projects (remote server)", () => {
     );
   });
 });
+
+describe("SessionStartupCard on the shared server (SRV-12a)", () => {
+  afterEach(() => useAppStore.setState({ me: null }));
+
+  it("does not move another draft to the project when the clone finishes after a switch", async () => {
+    vi.stubGlobal("window", Object.assign(window, { agentDeck: undefined }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("not found", { status: 404 })),
+    );
+    let finish!: (project: { id: string; name: string; path: string; createdAt: string }) => void;
+    vi.mocked(addProject).mockImplementationOnce(
+      () => new Promise((resolve) => (finish = resolve)),
+    );
+    useAppStore.setState({
+      me: { id: "ale@example.test", email: "ale@example.test" },
+      projects: [],
+      session: { id: "draft-a", cwd: "/tmp", createdAt: "now", lifecycle: "draft" },
+    });
+    render(<SessionStartupCard />);
+    fireEvent.click(screen.getByTestId("startup-add-project"));
+    fireEvent.change(await screen.findByTestId("startup-add-project-repo"), {
+      target: { value: "acme/app" },
+    });
+    fireEvent.click(screen.getByTestId("startup-add-project-repo-confirm"));
+    await waitFor(() => expect(vi.mocked(addProject)).toHaveBeenCalled());
+
+    // The user opens another draft while the clone runs.
+    useAppStore.setState({
+      session: { id: "draft-b", cwd: "/tmp", createdAt: "now", lifecycle: "draft" },
+    });
+    finish({ id: "p-app", name: "app", path: "/srv/streetcoding/app", createdAt: "now" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(vi.mocked(updateSessionDraft)).not.toHaveBeenCalled();
+  });
+});

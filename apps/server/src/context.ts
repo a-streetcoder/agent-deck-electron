@@ -31,6 +31,7 @@ import type { SessionAuthorStore } from "./sessionAuthors.ts";
 import type { GitIdentityMap } from "./gitIdentity.ts";
 import type { UserAgentDirs } from "./userAgentDirs.ts";
 import type { GitHubConnections } from "./githubConnections.ts";
+import type { gitCloneRepository } from "./git.ts";
 import type { SkillStore } from "./skills/skillStore.ts";
 import type { InjectedCommandStore } from "./injectedCommands.ts";
 import type { SupervisorLog } from "./supervisor.ts";
@@ -158,6 +159,8 @@ export interface ServerContext {
   githubConnections?: GitHubConnections;
   /** SRV-09: AGENT_DECK_TRUSTED_PROXY is set; host launchers (terminal, editor) refuse. */
   sharedServer?: boolean;
+  /** SRV-12a test seams: the GitHub API fetch and the clone behind POST /projects { repo }. */
+  repoProjectSeams?: { fetch?: typeof fetch; clone?: typeof gitCloneRepository };
   /** SRV-15b: copies of the metas with their computed `activity`; absent in narrow tests. */
   withActivity?: (metas: readonly SessionMeta[]) => SessionMeta[];
   index: SessionIndex;

@@ -1,3 +1,4 @@
+import type { ProjectMeta } from "@agent-deck/contracts";
 import { AppSwitch } from "../design-system/components/AppSwitch.tsx";
 import { Card } from "../design-system/components/Card.tsx";
 import { ControlSelect } from "../design-system/components/NativeControls.tsx";
@@ -7,6 +8,7 @@ import { Folder, Plus, WandSparkles } from "lucide-react";
 import { canPickLocalPaths, chooseDirectory } from "@/lib/native";
 import { Button } from "../design-system/components/Button.tsx";
 import { useAppStore } from "../state/store.ts";
+import { ProjectSourcePicker } from "./ProjectSourcePicker.tsx";
 import { ServerProjectPathPicker } from "./ServerFolderBrowser.tsx";
 
 /**
@@ -35,11 +37,19 @@ export function SessionStartupCard() {
   };
   const project = projects.find((p) => p.id === session?.projectId) ?? null;
 
+  // An add (a repository clone can take minutes) applies to the draft it was
+  // started from: this closure keeps that render's session id, and the project
+  // is selected only while that draft is still the open one.
+  const startedFor = session?.id;
+  const selectProject = async (created: ProjectMeta): Promise<void> => {
+    setAddingProject(false);
+    if (useAppStore.getState().session?.id !== startedFor) return;
+    await update({ projectId: created.id, agentName: created.defaultAgentName ?? null });
+  };
   const addAndSelectProject = async (path: string): Promise<void> => {
     setAddingProject(false);
     const created = await addProject(path);
-    if (created)
-      await update({ projectId: created.id, agentName: created.defaultAgentName ?? null });
+    if (created) await selectProject(created);
   };
   const startAddProject = async (): Promise<void> => {
     if (!canPickLocalPaths()) {
@@ -107,10 +117,16 @@ export function SessionStartupCard() {
                 <Plus size={13} aria-hidden /> Add project…
               </Button>
               {addingProject ? (
-                <ServerProjectPathPicker
-                  onConfirm={addAndSelectProject}
-                  confirmLabel="Add and use this project"
+                <ProjectSourcePicker
                   testIdPrefix="startup-add-project"
+                  onAdded={selectProject}
+                  folder={
+                    <ServerProjectPathPicker
+                      onConfirm={addAndSelectProject}
+                      confirmLabel="Add and use this project"
+                      testIdPrefix="startup-add-project"
+                    />
+                  }
                 />
               ) : null}
               <AppSwitch

@@ -277,6 +277,17 @@ export const DiscoveredProject = Schema.mutable(
 );
 export type DiscoveredProject = typeof DiscoveredProject.Type;
 
+/** Who did something, as verified by the trusted proxy in front of a shared
+ * server (remote-server POC). `id` is the verified email; `name` is display
+ * only. Absent on every record written by a single-user loopback server. */
+export const UserIdentity = Schema.mutable(
+  Schema.Struct({
+    id: Schema.String,
+    name: Schema.optional(Schema.String),
+  }),
+);
+export type UserIdentity = typeof UserIdentity.Type;
+
 export const ProjectMeta = Schema.mutable(
   Schema.Struct({
     id: Schema.String,
@@ -313,6 +324,14 @@ export const ProjectMeta = Schema.mutable(
      * same path un-hides it.
      */
     hidden: Schema.optional(Schema.Boolean),
+    /** SRV-12a shared project: the GitHub clone URL it was cloned from. */
+    origin: Schema.optional(Schema.String),
+    /** SRV-12a: the GitHub repository id, the project's identity across machines. */
+    repoId: Schema.optional(Schema.Number),
+    /** SRV-12a: the repository's default branch when it was cloned. */
+    defaultBranch: Schema.optional(Schema.String),
+    /** SRV-12a: who added the shared project; only they or the operator may delete it. */
+    createdBy: Schema.optional(UserIdentity),
   }),
 );
 export type ProjectMeta = typeof ProjectMeta.Type;
@@ -428,17 +447,6 @@ export const MemoryRecallSnapshot = Schema.mutable(
   }),
 );
 export type MemoryRecallSnapshot = typeof MemoryRecallSnapshot.Type;
-
-/** Who did something, as verified by the trusted proxy in front of a shared
- * server (remote-server POC). `id` is the verified email; `name` is display
- * only. Absent on every record written by a single-user loopback server. */
-export const UserIdentity = Schema.mutable(
-  Schema.Struct({
-    id: Schema.String,
-    name: Schema.optional(Schema.String),
-  }),
-);
-export type UserIdentity = typeof UserIdentity.Type;
 
 /** Future producers may add live statuses, but this version acts only on failed. */
 const SessionFailureStatusFromSelf: Schema.Schema<"failed"> = Schema.declare(

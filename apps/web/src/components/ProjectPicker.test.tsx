@@ -98,3 +98,82 @@ describe("ProjectPicker with no projects", () => {
     expect(vi.mocked(addProject)).not.toHaveBeenCalled();
   });
 });
+
+describe("ProjectPicker on the shared server (SRV-12a)", () => {
+  afterEach(() => useAppStore.setState({ me: null }));
+
+  const openAdd = () => {
+    vi.stubGlobal("window", Object.assign(window, { agentDeck: undefined }));
+    useAppStore.setState({ projects: [], currentProjectId: null });
+    render(<ProjectPicker />);
+    fireEvent.click(screen.getByTestId("project-picker"));
+    fireEvent.click(screen.getByTestId("add-project"));
+  };
+
+  it("defaults to Repository, hints at connecting GitHub, and sends { repo, ref }", async () => {
+    const fetchMock = stubServerFolders();
+    fetchMock.mockImplementation(async (input: string) =>
+      input === "/runtime/github"
+        ? Response.json({ available: true, configured: true, connection: null })
+        : new Response("not found", { status: 404 }),
+    );
+    useAppStore.setState({ me: { id: "ale@example.test", email: "ale@example.test" } });
+    vi.mocked(addProject).mockResolvedValueOnce({
+      id: "p1",
+      path: "/srv/streetcoding/app",
+      name: "app",
+      createdAt: "2026-10-15T00:00:00Z",
+    });
+    openAdd();
+
+    expect(screen.queryByTestId("server-folder-browser")).toBeNull();
+    await screen.findByTestId("add-project-github-hint");
+    fireEvent.change(screen.getByTestId("add-project-repo"), { target: { value: "acme/app" } });
+    fireEvent.change(screen.getByTestId("add-project-repo-ref"), { target: { value: "dev" } });
+    fireEvent.click(screen.getByTestId("add-project-repo-confirm"));
+    await waitFor(() =>
+      expect(vi.mocked(addProject)).toHaveBeenCalledWith(
+        { repo: "acme/app", ref: "dev" },
+        { rethrow: true },
+      ),
+    );
+    await waitFor(() => expect(screen.queryByTestId("project-menu")).toBeNull());
+  });
+
+  it("shows the server's refusal inline and keeps the folder browser one tab away", async () => {
+    stubServerFolders();
+    useAppStore.setState({ me: { id: "ale@example.test", email: "ale@example.test" } });
+    vi.mocked(addProject).mockRejectedValueOnce(new Error("connect GitHub first"));
+    openAdd();
+
+    fireEvent.change(screen.getByTestId("add-project-repo"), { target: { value: "acme/private" } });
+    fireEvent.click(screen.getByTestId("add-project-repo-confirm"));
+    expect((await screen.findByTestId("add-project-error")).textContent).toBe(
+      "connect GitHub first",
+    );
+    fireEvent.click(screen.getByTestId("add-project-source-folder"));
+    await screen.findByTestId("server-folder-agent-deck");
+  });
+
+  it("shows no Connect GitHub hint when the server has no GitHub app", async () => {
+    const fetchMock = stubServerFolders();
+    let asked = false;
+    fetchMock.mockImplementation(async (input: string) => {
+      asked = asked || input === "/runtime/github";
+      return Response.json({ available: true, configured: false, connection: null });
+    });
+    useAppStore.setState({ me: { id: "ale@example.test", email: "ale@example.test" } });
+    openAdd();
+    await waitFor(() => expect(asked).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByTestId("add-project-github-hint")).toBeNull();
+  });
+
+  it("offers only the folder flow off the shared server", async () => {
+    stubServerFolders();
+    openAdd();
+    await screen.findByTestId("server-folder-browser");
+    expect(screen.queryByTestId("add-project-source-repo")).toBeNull();
+    expect(screen.queryByTestId("add-project-repo")).toBeNull();
+  });
+});
