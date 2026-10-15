@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import type { UserIdentity } from "@agent-deck/contracts";
+import type { SessionMeta, UserIdentity } from "@agent-deck/contracts";
 import type * as PiHostModule from "../src/services/piHost.ts";
 import type * as UserAgentDirsModule from "../src/userAgentDirs.ts";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
@@ -190,4 +190,21 @@ describe("SRV-15a fork routes on a shared server", () => {
     },
     30_000,
   );
+
+  it("a message fork of a plain fork names the plain fork, not its source (SRV-15b)", async () => {
+    const fork = async (id: string, route: string) => {
+      const response = await fetch(endpoint(`/sessions/${id}/${route}`), {
+        method: "POST",
+        headers: { ...asBob, "content-type": "application/json" },
+        body: JSON.stringify({ entryId: "entry-user-1" }),
+      });
+      expect(response.status).toBe(201);
+      return ((await response.json()) as { session: SessionMeta }).session;
+    };
+    const plain = await fork(SOURCE, "fork");
+    expect(plain.forkedFrom?.sessionId).toBe(SOURCE);
+    const message = await fork(plain.id, "history/fork");
+    expect(message.forkedFrom).toBeUndefined();
+    expect(message.forkProvenance?.sourceSessionId).toBe(plain.id);
+  }, 30_000);
 });

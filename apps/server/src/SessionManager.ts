@@ -2224,6 +2224,9 @@ export class SessionManager {
       ...(forker ? { createdBy: forker } : {}),
     };
     if (!forkProvenance) delete meta.forkProvenance;
+    // SRV-15b: forkedFrom is a plain fork's origin; a message fork's is forkProvenance
+    // (a message fork of a plain fork must not claim the plain fork's source).
+    delete meta.forkedFrom;
     // A newly materialized fork is an independent recovery boundary. Retry
     // records are ordinal-anchored to the source's full active ancestry and
     // cannot safely survive a history rewrite.

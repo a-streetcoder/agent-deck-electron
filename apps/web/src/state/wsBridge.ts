@@ -127,9 +127,10 @@ function takeLinkedSessionId(): string | null {
 
 /** SRV-15b: open a shared link's session; false (with a notice) when it is unknown or deleted. */
 async function openLinkedSession(sessionId: string): Promise<boolean> {
+  const generationsAtRequest = new Map(attentionMetaGeneration);
   const { sessions } = await fetchJson<{ sessions: SessionMeta[] }>("/sessions");
   const store = useAppStore.getState();
-  store.setSessions(sessions);
+  store.setSessions(mergeCatalogAttention(sessions, generationsAtRequest));
   const target = sessions.find((session) => session.id === sessionId);
   if (!target) {
     store.pushToast({ kind: "info", message: "The shared session no longer exists." });
@@ -951,8 +952,9 @@ export async function refreshProjects(): Promise<void> {
 }
 
 export async function refreshSessions(): Promise<void> {
+  const generationsAtRequest = new Map(attentionMetaGeneration);
   const { sessions } = await fetchJson<{ sessions: SessionMeta[] }>("/sessions");
-  useAppStore.getState().setSessions(sessions);
+  useAppStore.getState().setSessions(mergeCatalogAttention(sessions, generationsAtRequest));
 }
 
 let activationToken = 0;
@@ -962,7 +964,8 @@ const attentionMetaGeneration = new Map<string, number>();
 
 /** Preserve attention transitions published after a catalog request began.
  * Other catalog fields still come from the response; only backend-owned
- * attention truth is protected from an older HTTP snapshot. */
+ * attention truth, and the computed activity (SRV-15b: a "running" catalog must
+ * not undo a later idle push), is protected from an older HTTP snapshot. */
 function mergeCatalogAttention(
   sessions: SessionMeta[],
   generationsAtRequest: ReadonlyMap<string, number>,
@@ -976,9 +979,11 @@ function mergeCatalogAttention(
     }
     const current = currentSessions.find((candidate) => candidate.id === session.id);
     if (!current) return session;
-    return current.needsAttention === true
-      ? { ...session, needsAttention: true as const }
-      : { ...session, needsAttention: false as const };
+    return {
+      ...session,
+      needsAttention: current.needsAttention === true,
+      ...(current.activity ? { activity: current.activity } : {}),
+    };
   });
 }
 

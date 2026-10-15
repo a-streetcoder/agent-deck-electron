@@ -23,6 +23,7 @@ vi.mock("./clientTransport.ts", () => ({
 import {
   acknowledgeSessionAttention,
   focusSessionFromNotification,
+  refreshSessions,
   switchToSession,
 } from "./wsBridge.ts";
 import { useAppStore } from "./store.ts";
@@ -247,5 +248,35 @@ describe("notification session routing", () => {
     await staleNotification;
 
     expect(useAppStore.getState().session?.id).toBe(newestTarget.id);
+  });
+});
+
+describe("catalog vs pushed activity (SRV-15b)", () => {
+  it("a delayed catalog captured while running does not undo a newer idle push", async () => {
+    const delayed = deferredResponse();
+    vi.mocked(fetch).mockReturnValueOnce(delayed.promise);
+    const refresh = refreshSessions();
+    transportMock.host?.onServerMessage({
+      type: "session_meta",
+      session: { ...session("current"), activity: "idle" },
+    });
+    delayed.resolve(
+      jsonResponse({
+        sessions: [{ ...session("current"), title: "Renamed", activity: "running" }],
+      }),
+    );
+    await refresh;
+    const row = useAppStore.getState().sessions.find((item) => item.id === "current");
+    expect(row?.activity).toBe("idle");
+    // Other catalog fields still come from the response.
+    expect(row?.title).toBe("Renamed");
+  });
+
+  it("a catalog with no newer push applies its activity", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({ sessions: [{ ...session("current"), activity: "needsInput" }] }),
+    );
+    await refreshSessions();
+    expect(useAppStore.getState().sessions[0]?.activity).toBe("needsInput");
   });
 });
