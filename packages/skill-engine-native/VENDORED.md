@@ -25,15 +25,7 @@ Layout:
 
 ## Provenance and licence
 
-The source repository (`a-streetcoder/Syncr`) is private, and its package was published as
-`UNLICENSED`; the source files carry no licence headers. The same organisation owns Syncr and this
-repository. This repository's root licence is MIT, so without a folder note the vendored code
-reads as MIT-licensed wherever this repository is published. **The owner must confirm publication
-under the root MIT licence, or add a licence note for this folder, before the branch is pushed.**
-Neither `Cargo.toml` declares a `license` field yet; that waits for the owner's decision.
-
-Since vendoring, this copy is the source of truth. Syncr's crate is no longer tracked.
-
-Test notes: the crate declares 165 Rust tests; 9 are `cfg(unix)` and do not run on Windows.
-`engine/tests/codex_system_skills.rs` reads the real `~/.codex/skills/.system` when it exists
-and asserts at least six skills; it skips when the folder is absent.
+The source repository (`a-streetcoder/Syncr`) is private and its package was published as
+`UNLICENSED`; the source files carry no licence headers. Both repositories belong to the same owner,
+who confirmed on 2026-10-15 that the vendored engine is published under this repository's root MIT
+licence. Both `Cargo.toml` files declare `license = "MIT"`.

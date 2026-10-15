@@ -60,3 +60,7 @@ Follow-ups (to ticket separately):
 - CI has never run the engine's Rust tests on Windows or macOS, nor on Rust 1.88 with the cfg(unix) code compiled; the first push is the first run.
 - rust-cache shared-key names still say loop-catalog-native-* although they now cache both crates.
 - PACKAGES_READ_TOKEN repository secret is now unused; delete it.
+
+**2026-10-15T07:46:33Z**
+
+2026-10-15 owner confirmed the licence (both repos theirs): license = MIT in both Cargo.toml, VENDORED.md provenance paragraph updated. Merged as ca1ee12; VM: pnpm install + native build done (8.65 s, skill-engine-native.linux-x64.node verified), build:web + restart follow with SRV-06.
