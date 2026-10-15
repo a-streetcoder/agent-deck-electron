@@ -42,3 +42,7 @@ To be written per sub-ticket after the owner approves the split and answers the 
 **2026-10-15T07:37:11Z**
 
 2026-10-15 sub-tickets written per the owner's answers and the oracle memo: ade-wgkk (SRV-12a repo projects), ade-t77e (SRV-12b Make shared + remote client), ade-shxc (v1 snapshot move + frozen pointer), ade-iarr (v2 live mirror), ade-k7s3 (v3 return trip + merge as PR). The ticket tree awaits the word approved; SRV-12a starts after SRV-06 merges.
+
+**2026-10-15T12:24:45Z**
+
+2026-10-15 owner replied 'Approved' to the SRV-12 ticket tree (ade-wgkk, ade-t77e, ade-shxc, ade-iarr, ade-k7s3). SRV-12a (ade-wgkk) starts now in dependency order.

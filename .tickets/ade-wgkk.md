@@ -1,6 +1,6 @@
 ---
 id: ade-wgkk
-status: open
+status: in_progress
 deps: [ade-gfs4]
 links: []
 created: 2026-10-15T07:37:06Z
