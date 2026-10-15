@@ -1,6 +1,6 @@
 ---
 id: ade-p5ik
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-15T02:54:58Z
@@ -20,3 +20,9 @@ GUARDRAILS as every ticket. Smallest change: a shared `serverLog` helper used by
 ## Acceptance Criteria
 
 No `fastify.log` call remains that cannot be seen in the journal on the VM or the terminal locally; a unit test for the helper; tsc, eslint, prettier clean.
+
+## Notes
+
+**2026-10-15T03:07:41Z**
+
+2026-10-15 merged (wt/ade-p5ik: b526057 + review round 89445da). Contrarian + GPT review27 applied: error name/code/first stderr line/one cause level appended, CR/LF escaped so each entry is one line, stack only with AGENT_DECK_DEBUG=1, /me provider check logs the error name once per user per process, honest wording in the header and DEVELOPMENT.md, grep test widened over apps/server/src and packages/*/src. 12 silenced calls replaced, 9 console calls moved; remaining console calls listed in the note. Tests: serverLog 5, eventCutover + eventLog green post-merge; tsc, eslint, prettier clean.
