@@ -645,8 +645,10 @@ repository's root (`git rev-parse --show-toplevel`) is refused too: share the ro
 server, which clones it as in [Shared projects from a repository](#shared-projects-from-a-repository).
 
 - **The token stays in Electron main.** The page asks main over IPC (`shared-server:request`),
-  which allows only `GET /projects`, `POST /projects { repo, ref? }`, `GET /me` and a session
-  move (`POST /projects/<uuid>/sessions/import`, below) to the
+  which allows only `GET /projects`, `POST /projects { repo, ref? }`, `GET /me`, a session
+  move (`POST /projects/<uuid>/sessions/import`, below) and the live mirror of a moved session
+  (`GET /sessions/<uuid>`, `GET /sessions/<uuid>/transcript?afterEntryId=`,
+  `GET /events?sessionId=<uuid>&afterSeq=&limit=`, `POST /sessions/<uuid>/prompt { text }`) to the
   configured origin, adds `cf-access-token` from `cloudflared access token`, never follows a
   redirect, and hands back only the status and the JSON body (with the token redacted should the
   server echo it). Without a valid token (none cached, expired, or Access answers 401 or a login
@@ -734,12 +736,48 @@ the user: the local row stays, with the same title, and becomes a read-only poin
   (`<server>/?session=<id>`) and **Continue locally**, a plain fork that has no link. Prompts,
   rollback, re-run, message fork, rename, merge, plan retry and composer drafts answer
   `409 session_shared`; delete removes only the local copy.
+- **Live mirror** (SRV-12c2): while a pointer is the open session, the page reads its server
+  session through Electron main (the same allow-listed client, never the local backend):
+  `GET /sessions/<id>` (meta with its activity and owner), `GET /events?sessionId=<id>` from a
+  cursor kept in memory (the A1c read; facts and references only, reduced into the Run tree as
+  they arrive and not kept) and, when there are new events, the server session is running or a
+  cell is still open, `GET /sessions/<id>/transcript`. The transcript route answers the running
+  session's in-memory transcript (mid-stream cells included) or its Pi file (unreadable: 503) as
+  a window of the newest 200 cells and 2 MB, each cell measured first (over 512 KB it becomes a
+  notice, never walked) and redacted: secret-like keys (tokens, secrets, passwords,
+  authorization, cookies, API and private keys, credentials) lose their whole value, free text
+  loses secret-looking strings and key/value pairs; ids are never rewritten. An answer carries
+  `firstId` (the client drops older cells), `truncated` ("Earlier messages are on <host>") and
+  `prefixHash` (sha1 of the window's settled cells). The next read names its last cell, that
+  hash and up to 20 `openId` cells still changing; the server sends those again plus the new
+  ones, or the whole window when a settled cell changed (a later verdict, a cell hidden from
+  the model). The page reads the whole window again whenever the server session stops running.
+  Any member may read it, as any member may open the session; the route is behind the
+  browser-origin check. The poll runs every 3 seconds while the server session is active and
+  the window is focused, every 15 seconds otherwise, and stops while the window is hidden or
+  the pointer is not open. Nothing is stored: the cursor, the tree and the mirrored window live
+  in renderer memory only. **Read-only**: mirrored cells offer no answers, history actions or
+  editors; open questions say "Answer on <host>" with Open on server, and images and child
+  transcripts show "(on <host>)". **The composer comes back** as "Runs on <host> as <owner>":
+  a text prompt (at most 32,000 characters, no attachments, no steering) goes to
+  `POST /sessions/<id>/prompt { text }`, which opens a session that is not running as the
+  resume route does and dispatches the prompt through the same RPC path as a socket prompt
+  (author is the Access identity of the device user, as for any member; Loop review sessions
+  refuse on both paths). Send waits while the server session is answering or waiting for a
+  person. Everything else on the pointer still answers `409 session_shared`. **States**: no
+  answer, 5xx or a 404 without the server's own code: the last local copy with "Last local
+  copy; <host> is unreachable." and Retry; 401: "Sign in to <host>" (the Make shared sign-in);
+  403: the server's text, no retry; `404 unknown_session`: "This session no longer exists on
+  <host>." with **Unlink** (`PATCH /sessions/:id/shared-to { sharedTo: null }` on the local
+  backend: the pointer becomes an ordinary local session again, resumed from its own Pi file;
+  the one local write of the mirror, accepted because it ends the mirror) and Continue locally.
+  Both return to this device's copy from the move: turns run on the server are not brought
+  back. Unlink leaves the server copy as it is, including a turn still running there.
 - **Events**: `session.shared` on both logs (`direction` out or in, mode, ids, host or device;
   no paths, no content).
 - **Owner check on the live server**: verify that GitHub accepts `refs/agent-deck/*` for push,
   fetch and delete; the branch fallback covers a refusal.
-- **Not covered (v1)**: the pointer does not follow the server session (live mirror, SRV-12c2)
-  and nothing comes back to the device (SRV-12c3). If the app closes between the push and the
+- **Not covered**: nothing comes back to the device (SRV-12c3). If the app closes between the push and the
   import, the ref stays on the remote until the hand-off expires on the device (15 minutes, if the
   app is still running) or is deleted by hand (`git push origin --delete
 refs/agent-deck/transfer/<id>`).

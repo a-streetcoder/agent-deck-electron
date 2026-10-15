@@ -65,28 +65,33 @@ const pointerTranscripts = new Map<string, { version: string; state: TranscriptS
 const MAX_POINTER_TRANSCRIPTS = 32;
 
 export async function pointerTranscript(meta: SessionMeta): Promise<TranscriptState> {
-  try {
-    const file = meta.piSessionFile!;
-    const info = await stat(file);
-    const version = `${info.mtimeMs}:${info.size}`;
-    const cached = pointerTranscripts.get(meta.id);
-    if (cached?.version === version) return cached.state;
-    const { byId, leafId } = parsePiSessionFile(await readFile(file, "utf8"));
-    const state = transcriptFromEntries({ entries: [...byId.values()], leafId } as Parameters<
-      typeof transcriptFromEntries
-    >[0]);
-    pointerTranscripts.delete(meta.id);
-    pointerTranscripts.set(meta.id, { version, state });
-    if (pointerTranscripts.size > MAX_POINTER_TRANSCRIPTS)
-      pointerTranscripts.delete(pointerTranscripts.keys().next().value!);
-    return state;
-  } catch {
-    return emptyTranscript();
-  }
+  return readPiTranscript(meta).catch(() => emptyTranscript());
+}
+
+/** SRV-12c2: the same read, failing when the Pi file cannot be read (the mirror answers 503). */
+export async function readPiTranscript(meta: SessionMeta): Promise<TranscriptState> {
+  const file = meta.piSessionFile!;
+  const info = await stat(file);
+  const version = `${info.mtimeMs}:${info.size}`;
+  const cached = pointerTranscripts.get(meta.id);
+  if (cached?.version === version) return cached.state;
+  const { byId, leafId } = parsePiSessionFile(await readFile(file, "utf8"));
+  const state = transcriptFromEntries({ entries: [...byId.values()], leafId } as Parameters<
+    typeof transcriptFromEntries
+  >[0]);
+  pointerTranscripts.delete(meta.id);
+  pointerTranscripts.set(meta.id, { version, state });
+  if (pointerTranscripts.size > MAX_POINTER_TRANSCRIPTS)
+    pointerTranscripts.delete(pointerTranscripts.keys().next().value!);
+  return state;
 }
 
 /** For tests: how many pointer transcripts are cached. */
 export const pointerTranscriptCacheSize = (): number => pointerTranscripts.size;
+
+/** SRV-12c2: a prompt to a Loop review session. */
+export const LOOP_REVIEW_PROMPT_REFUSAL =
+  "A Loop review session runs from its Loop. Open the run from Loops instead.";
 
 /** SRV-12c1: requests refused while a session is handed to the shared server. */
 const MOVE_FROZEN = new Set([
@@ -460,6 +465,16 @@ export function createRpcConnection(deps: {
         );
         return;
       }
+    }
+
+    // SRV-12c2: a Loop review session is driven by its run, never by a person's
+    // prompt (socket or POST /sessions/:id/prompt, which comes through here too).
+    if (
+      (request.type === "prompt" || request.type === "steer" || request.type === "follow_up") &&
+      sessions.get(request.sessionId)?.meta?.loopReviewRunId
+    ) {
+      replyError(LOOP_REVIEW_PROMPT_REFUSAL);
+      return;
     }
 
     // SRV-12c1: a session moved to a shared server is a frozen pointer: it shows
@@ -1124,6 +1139,15 @@ export interface RpcEndpoint {
   broadcast: (message: ServerMessage) => void;
   /** Push a diff notification to every connected RPC client (Slice 9). */
   broadcastDiff: (message: DiffPush) => void;
+  /**
+   * SRV-12c2: one `prompt` request as `user`, through the same dispatch a socket
+   * frame takes (pointer, hand-off and /mcp refusals, author, turn.prompted).
+   */
+  prompt: (
+    user: AuthenticatedUser | undefined,
+    sessionId: string,
+    message: string,
+  ) => Promise<{ ok: boolean; error?: string }>;
 }
 
 export function setupRpcEndpoint(deps: {
@@ -1180,7 +1204,41 @@ export function setupRpcEndpoint(deps: {
       return;
     }
     clients.add(socket);
-    const connection = createRpcConnection({
+    const connection = connectionFor(
+      upgradeRequest ? requestUser(upgradeRequest) : undefined,
+      (frame) => sendTo(socket, frame),
+      // Terminal push backpressure reads the real socket send-buffer depth.
+      () => socket.bufferedAmount,
+    );
+    socket.on("close", () => {
+      clients.delete(socket);
+      connection.close();
+    });
+    socket.on("message", (raw: Buffer) => {
+      if (admissionClosed) {
+        socket.close(1012, "Server shutting down");
+        return;
+      }
+      track(connection.handleMessage(raw.toString("utf8")));
+    });
+  });
+
+  function track(operation: Promise<void>): Promise<void> {
+    inFlight.add(operation);
+    void operation
+      .catch(() => {})
+      .finally(() => {
+        inFlight.delete(operation);
+      });
+    return operation;
+  }
+
+  function connectionFor(
+    user: AuthenticatedUser | undefined,
+    send: (frame: RpcServerFrame) => void,
+    bufferedAmount?: () => number,
+  ): RpcConnection {
+    return createRpcConnection({
       drafts: deps.drafts,
       externalTerminal: deps.externalTerminal,
       sessions,
@@ -1197,29 +1255,31 @@ export function setupRpcEndpoint(deps: {
       events: deps.events,
       sharedServer: deps.sharedServer,
       terminalEnv: deps.terminalEnv,
-      user: upgradeRequest ? requestUser(upgradeRequest) : undefined,
-      send: (frame) => sendTo(socket, frame),
-      // Terminal push backpressure reads the real socket send-buffer depth.
-      bufferedAmount: () => socket.bufferedAmount,
+      user,
+      send,
+      ...(bufferedAmount ? { bufferedAmount } : {}),
     });
-    socket.on("close", () => {
-      clients.delete(socket);
+  }
+
+  const prompt: RpcEndpoint["prompt"] = async (user, sessionId, message) => {
+    if (admissionClosed) return { ok: false, error: "The server is shutting down." };
+    let answer: { ok: boolean; error?: string } = { ok: false, error: "No reply." };
+    const connection = connectionFor(user, (frame) => {
+      if (frame.kind === "reply" && frame.id === 1)
+        answer = frame.ok ? { ok: true } : { ok: false, error: frame.error };
+    });
+    try {
+      await track(
+        connection.handleMessage(
+          JSON.stringify({ id: 1, request: { type: "prompt", sessionId, message } }),
+        ),
+      );
+    } finally {
+      // Nothing subscribes through this connection except a draft's first prompt.
       connection.close();
-    });
-    socket.on("message", (raw: Buffer) => {
-      if (admissionClosed) {
-        socket.close(1012, "Server shutting down");
-        return;
-      }
-      const operation = connection.handleMessage(raw.toString("utf8"));
-      inFlight.add(operation);
-      void operation
-        .catch(() => {})
-        .finally(() => {
-          inFlight.delete(operation);
-        });
-    });
-  });
+    }
+    return answer;
+  };
 
   const closeAdmission = (): void => {
     if (admissionClosed) return;
@@ -1230,5 +1290,5 @@ export function setupRpcEndpoint(deps: {
     await Promise.allSettled([...inFlight]);
   };
 
-  return { wss, closeAdmission, drain, broadcast, broadcastDiff };
+  return { wss, closeAdmission, drain, broadcast, broadcastDiff, prompt };
 }

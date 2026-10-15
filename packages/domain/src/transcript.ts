@@ -142,6 +142,34 @@ export interface NoticeCell {
   id: string;
   message: string;
   level: "info" | "warning" | "error";
+  /** SRV-12c2: stands in for a mirrored cell that is still changing (too large to send). */
+  open?: true;
+}
+
+/**
+ * SRV-12c2: a cell that can still change (streaming, running, waiting for an
+ * answer). The shared server and the mirroring device read it the same way.
+ */
+export function isOpenCell(cell: TranscriptCell): boolean {
+  switch (cell.kind) {
+    case "assistant":
+      return cell.streaming;
+    case "tool":
+    case "subagent":
+      return cell.status === "running";
+    case "question":
+      return !cell.answered;
+    case "supervisor_question":
+      return !cell.answered && cell.closed !== true;
+    case "ask_user":
+      return cell.status === "pending";
+    case "provider_retry":
+      return cell.status === "retrying";
+    case "notice":
+      return cell.open === true;
+    default:
+      return false;
+  }
 }
 
 /**

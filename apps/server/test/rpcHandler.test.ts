@@ -12,7 +12,7 @@ import type {
 import type { DiffGateway } from "../src/diffGateway.ts";
 import type { EditorLauncher, EditorOpenInput } from "../src/editorLauncher.ts";
 import type { CheckpointRollbackGateway } from "../src/checkpointRollback.ts";
-import { createRpcConnection } from "../src/rpcHandler.ts";
+import { createRpcConnection, setupRpcEndpoint } from "../src/rpcHandler.ts";
 import type { OpenedScript, ScriptRunnerGateway } from "../src/scriptRunnerGateway.ts";
 import type { ManagedSession, SessionManager } from "../src/SessionManager.ts";
 import type { CheckpointInfo } from "@agent-deck/contracts";
@@ -2052,5 +2052,50 @@ describe("draft RPC lifecycle", () => {
       ok: false,
       error: "startup failed; draft retained",
     });
+  });
+});
+
+describe("setupRpcEndpoint prompt (SRV-12c2 REST prompt)", () => {
+  const endpoint = (manager: SessionManager, drafts?: SessionDraftGateway) =>
+    setupRpcEndpoint({
+      sessions: manager,
+      drafts,
+      terminals: makeTerminalGateway().gateway,
+      diffs: makeDiffGateway().gateway,
+      editors: makeEditorLauncher().launcher,
+      files: makeFileService().service,
+      scripts: makeScriptGateway().gateway,
+      checkpoints: makeCheckpointService().service,
+      rollback: makeRollbackGateway().gateway,
+      sessionImages: undefined as never,
+      sessionPastes: undefined as never,
+    });
+
+  it("dispatches one prompt as the socket path does and answers its reply", async () => {
+    const { session, ops } = makeSession("s1");
+    const rpc = endpoint(makeManager({ s1: session }));
+    expect(
+      await rpc.prompt({ id: "a@example.com", email: "a@example.com" }, "s1", "hello"),
+    ).toEqual({ ok: true });
+    expect(ops.prompt).toHaveBeenCalledWith("hello", undefined, undefined, undefined);
+    expect(await rpc.prompt(undefined, "nope", "hello")).toEqual({
+      ok: false,
+      error: "unknown session",
+    });
+    ops.prompt.mockRejectedValueOnce(new Error("busy"));
+    expect(await rpc.prompt(undefined, "s1", "again")).toEqual({ ok: false, error: "Error: busy" });
+  });
+
+  it("keeps the pointer refusal: a moved session is not prompted", async () => {
+    const { session, ops } = makeSession("s1");
+    const drafts = {
+      find: () => undefined,
+      sharedPointer: (id: string) => (id === "s1" ? session.meta : undefined),
+    } as unknown as SessionDraftGateway;
+    const rpc = endpoint(makeManager({ s1: session }), drafts);
+    const answer = await rpc.prompt(undefined, "s1", "hello");
+    expect(answer.ok).toBe(false);
+    expect(answer.error).toMatch(/session_shared/);
+    expect(ops.prompt).not.toHaveBeenCalled();
   });
 });

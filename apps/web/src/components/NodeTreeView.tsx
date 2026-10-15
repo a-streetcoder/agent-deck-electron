@@ -20,7 +20,7 @@ import {
   type UserCell,
 } from "@agent-deck/domain";
 import { toolPresentation } from "@/components/transcript/toolPresentation";
-import { useAppStore } from "../state/store.ts";
+import { mirroredTranscript, useAppStore } from "../state/store.ts";
 import type { ProjectEventPage } from "../state/projectLog.ts";
 import { rollbackToCheckpoint, sendPrompt, switchToSession } from "../state/wsBridge.ts";
 import { actorLabel, formatEventTime } from "./ActivityList.tsx";
@@ -174,7 +174,6 @@ function duplicateRows(nodes: ReadonlyMap<string, ExecutionNode>): ReadonlySet<s
 }
 
 const NO_HIDDEN: ReadonlySet<string> = new Set();
-
 /** A10: one failed verification, its marked region and the checkpoint it may restore. */
 interface Failure {
   /** Unique in the view: a plan node can carry several items blocked before their run. */
@@ -500,16 +499,24 @@ function useSessionEvents(sessionId: string | null): EventEnvelope[] {
 }
 
 export function NodeTreeView() {
-  const sessionId = useAppStore((state) => state.session?.id ?? null);
+  // SRV-12c2: a pointer's tree is its server session's, from the mirror's events.
+  const pointer = useAppStore((state) => state.session?.sharedTo?.serverSessionId ?? null);
+  const localId = useAppStore((state) => state.session?.id ?? null);
+  const sessionId = pointer ?? localId;
   const mcpServerNames = useAppStore((state) => state.session?.mcpServerNames);
-  const cells = useAppStore((state) => state.transcript.cells);
+  const cells = useAppStore((state) => mirroredTranscript(state).cells);
   const sessions = useAppStore((state) => state.sessions);
-  const events = useSessionEvents(sessionId);
-  // The tree changes only when events arrive; a streamed token changes only the joins.
-  const tree = useMemo(
-    () => (sessionId ? projectNodeTree(events, { sessionId }) : null),
-    [events, sessionId],
+  const localEvents = useSessionEvents(pointer ? null : localId);
+  // The mirror keeps only the tree it reduced, not the events.
+  const mirrorTree = useAppStore((state) =>
+    state.sharedMirror?.sessionId === localId ? state.sharedMirror.tree : null,
   );
+  // The tree changes only when events arrive; a streamed token changes only the joins.
+  const localTree = useMemo(
+    () => (!pointer && sessionId ? projectNodeTree(localEvents, { sessionId }) : null),
+    [localEvents, sessionId, pointer],
+  );
+  const tree = pointer ? mirrorTree : localTree;
   const joins = useMemo(
     () => joinCells(sessionId ?? "", cells, mcpServerNames),
     [sessionId, cells, mcpServerNames],
@@ -520,7 +527,10 @@ export function NodeTreeView() {
   // A8: open human nodes first; they also stay in place below.
   const waiting = useMemo(() => (tree ? openHumanNodes(tree) : []), [tree]);
   const hidden = useMemo(() => (tree ? duplicateRows(tree.nodes) : NO_HIDDEN), [tree]);
-  const running = useAppStore((state) => state.transcript.agentStatus === "running");
+  // A pointer acts on nothing here: its retries stay off.
+  const running = useAppStore(
+    (state) => state.transcript.agentStatus === "running" || Boolean(state.session?.sharedTo),
+  );
   const [retrying, setRetrying] = useState(false);
   const failures = useMemo(() => {
     const out: Failure[] = [];

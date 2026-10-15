@@ -401,6 +401,20 @@ export function registerSessionShareRoutes(ctx: ServerContext): void {
   fastify.patch("/sessions/:id/shared-to", async (request, reply) => {
     if (ctx.sharedServer)
       return reply.status(409).send({ error: "sharedTo is for local sessions only" });
+    // SRV-12c2 Unlink: the pointer becomes a normal local session again, resumed
+    // from its own Pi file (the server copy, if any, is left as it is).
+    if (z.object({ sharedTo: z.null() }).strict().safeParse(request.body).success) {
+      const { id } = request.params as { id: string };
+      const meta = metaOf(id);
+      if (!meta) return reply.status(404).send({ error: "unknown session" });
+      if (!meta.sharedTo) return { session: ctx.withActivity?.([meta])[0] ?? meta };
+      const next: SessionMeta = { ...meta };
+      delete next.sharedTo;
+      index.upsert(next);
+      const decorated = ctx.withActivity?.([next])[0] ?? next;
+      broadcast({ type: "session_meta", session: decorated });
+      return { session: decorated };
+    }
     const parsed = sharedToBody.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const { id } = request.params as { id: string };

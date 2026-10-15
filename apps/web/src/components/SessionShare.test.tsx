@@ -100,6 +100,8 @@ describe("the frozen pointer", () => {
   });
 
   it("replaces the composer with the notice, Open on server and Continue locally", () => {
+    // SRV-12c2: the forwarding composer appears only once the mirror reads the server.
+    request.mockResolvedValue({ status: 0, error: "The shared server could not be reached." });
     render(<SharedSessionPanel session={pointer} />);
     expect(screen.getByText("This session continues on deck.example.test.")).toBeTruthy();
     expect(screen.queryByRole("textbox")).toBeNull();

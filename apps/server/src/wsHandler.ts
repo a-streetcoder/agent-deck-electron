@@ -6,7 +6,7 @@ import type { FastifyInstance } from "fastify";
 import type { DiffGateway } from "./diffGateway.ts";
 import type { EditorLauncher } from "./editorLauncher.ts";
 import type { CheckpointRollbackGateway } from "./checkpointRollback.ts";
-import { setupRpcEndpoint } from "./rpcHandler.ts";
+import { setupRpcEndpoint, type RpcEndpoint } from "./rpcHandler.ts";
 import type { ScriptRunnerGateway } from "./scriptRunnerGateway.ts";
 import type { SessionManager } from "./SessionManager.ts";
 import type { SessionImageStore } from "./sessionImages.ts";
@@ -31,6 +31,8 @@ export interface WebSocketLayer {
   close: () => void;
   /** The upgrade's origin rule, shared with the REST guard in server.ts. */
   isTrustedOrigin: (origin: string | undefined, host: string | undefined) => boolean;
+  /** SRV-12c2: one prompt through the RPC dispatch (POST /sessions/:id/prompt). */
+  prompt: RpcEndpoint["prompt"];
 }
 
 /**
@@ -157,6 +159,7 @@ export function setupWebSocket(deps: {
       rpc.closeAdmission();
     },
     drain: rpc.drain,
+    prompt: rpc.prompt,
     close: () => {
       // `wss.close()` with `noServer: true` does NOT destroy accepted client
       // sockets — it only waits for them to leave. Terminate them so every

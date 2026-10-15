@@ -2,10 +2,11 @@ import { useRef, useState } from "react";
 import { CloudUpload } from "lucide-react";
 import type { SessionMeta } from "@agent-deck/contracts";
 import { Button } from "@/design-system/components/Button";
-import { ControlButton } from "@/design-system/components/NativeControls";
+import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
 import { openExternal, sharedServer, type SharedServerResponse } from "@/lib/native";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { useAppStore } from "../state/store.ts";
+import { useSharedSessionMirror } from "../state/useSharedSessionMirror.ts";
 import { forkSession, switchToSession } from "../state/wsBridge.ts";
 
 /**
@@ -24,31 +25,185 @@ export const hostOf = (origin: string): string => {
   }
 };
 
-/** The pointer's composer: the session continues on the server. */
+/** The forwarded prompt's text at most (the server and Electron main check it too). */
+const MAX_PROMPT_CHARS = 32_000;
+
+/**
+ * The pointer's composer: the session continues on the server. SRV-12c2: it
+ * follows the server session (useSharedSessionMirror) and forwards a text
+ * prompt there; everything else stays refused on this copy.
+ */
 export function SharedSessionPanel({ session }: { session: SessionMeta }) {
+  // One composer per pointer: text typed in one never shows in another, and an
+  // earlier pointer's submission never clears this one's.
+  return <PointerPanel key={session.id} session={session} />;
+}
+
+/** "Returns to this device's copy from <date>": the copy Unlink and Continue locally keep. */
+const copyNote = (sharedAt: string): string => {
+  const at = new Date(sharedAt);
+  const when = Number.isNaN(at.getTime()) ? sharedAt : at.toLocaleString();
+  return `Returns to this device's copy from ${when}; turns run on the server are not brought back.`;
+};
+
+function PointerPanel({ session }: { session: SessionMeta }) {
   const link = session.sharedTo!;
   const host = hostOf(link.serverOrigin);
+  const { mirror, refresh, signIn, send } = useSharedSessionMirror(session);
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const status = mirror?.status ?? "connecting";
+  const owner = mirror?.server?.createdBy;
+  const running = mirror?.server?.activity === "running";
+  const waiting = mirror?.server?.activity === "needsInput";
+  const ready = text.trim() !== "" && text.length <= MAX_PROMPT_CHARS;
+
+  const submit = async (): Promise<void> => {
+    if (!ready || sending || running || waiting) return;
+    setSending(true);
+    setError(null);
+    try {
+      const failure = await send(text);
+      if (failure) setError(failure);
+      else setText("");
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setSending(false);
+    }
+  };
+  const unlink = async (): Promise<void> => {
+    setError(null);
+    try {
+      const response = await post(
+        `/sessions/${encodeURIComponent(session.id)}/shared-to`,
+        { sharedTo: null },
+        "PATCH",
+      );
+      const body = await json(response);
+      if (!response.ok) return setError(String(body.error ?? "Unlink failed."));
+      const next = body.session as SessionMeta;
+      useAppStore.getState().upsertSessionMeta(next);
+      // Open it again as an ordinary session: it resumes from its own Pi file.
+      await switchToSession(next);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    }
+  };
+
+  const banner =
+    status === "unreachable" ? (
+      <>
+        <span className="min-w-0 flex-1">Last local copy; {host} is unreachable.</span>
+        <Button size="sm" variant="ghost" onClick={refresh}>
+          Retry
+        </Button>
+      </>
+    ) : status === "unavailable" ? (
+      <span className="min-w-0 flex-1">Last local copy; this app cannot reach {host}.</span>
+    ) : status === "signIn" ? (
+      <>
+        <span className="min-w-0 flex-1">Last local copy; sign in to follow it on {host}.</span>
+        <Button size="sm" variant="ghost" onClick={() => void signIn()}>
+          Sign in to {host}
+        </Button>
+      </>
+    ) : status === "forbidden" ? (
+      <span className="min-w-0 flex-1">
+        Last local copy; {mirror?.error ?? `${host} refused this account.`}
+      </span>
+    ) : status === "gone" ? (
+      <>
+        <span className="min-w-0 flex-1">This session no longer exists on {host}.</span>
+        <Button size="sm" variant="ghost" onClick={() => void unlink()}>
+          Unlink
+        </Button>
+      </>
+    ) : null;
+
   return (
-    <div
-      className="flex flex-wrap items-center gap-3 border-t border-border-subtle px-6 py-4"
-      data-testid="shared-session-panel"
-    >
-      <p className="min-w-0 flex-1 text-label text-text-secondary">
-        This session continues on {host}.
-      </p>
-      <Button
-        size="sm"
-        onClick={() =>
-          void openExternal(
-            `${link.serverOrigin}/?session=${encodeURIComponent(link.serverSessionId)}`,
-          )
-        }
-      >
-        Open on server
-      </Button>
-      <Button size="sm" variant="ghost" onClick={() => void forkSession(session.id)}>
-        Continue locally
-      </Button>
+    <div className="border-t border-border-subtle px-6 py-4" data-testid="shared-session-panel">
+      {banner ? (
+        <div
+          className="mb-3 flex flex-wrap items-center gap-3 text-label text-text-secondary"
+          role="status"
+          data-testid="shared-mirror-banner"
+        >
+          {banner}
+        </div>
+      ) : null}
+      {status === "live" ? (
+        <form
+          className="mb-3 flex flex-col gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
+          }}
+        >
+          <label className="text-detail text-text-muted" htmlFor={`forward-${session.id}`}>
+            Runs on {host}
+            {owner ? ` as ${owner.name ?? owner.id}` : ""}
+          </label>
+          <ControlTextArea
+            id={`forward-${session.id}`}
+            className="min-h-16 w-full resize-y rounded-md border border-border-subtle bg-surface px-3 py-2 text-label"
+            value={text}
+            maxLength={MAX_PROMPT_CHARS}
+            placeholder={
+              running
+                ? "Waiting for the reply on the server…"
+                : waiting
+                  ? `Answer the open question on ${host} first`
+                  : "Message"
+            }
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                void submit();
+              }
+            }}
+          />
+          <div className="flex items-center justify-end gap-3">
+            {waiting ? (
+              <span className="text-detail text-text-muted" data-testid="forward-needs-input">
+                Answer on {host}: the server session is waiting for a reply.
+              </span>
+            ) : null}
+            <Button size="sm" type="submit" disabled={!ready || sending || running || waiting}>
+              Send
+            </Button>
+          </div>
+        </form>
+      ) : null}
+      {error ? (
+        <p className="mb-3 text-label text-danger" role="alert">
+          {error}
+        </p>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-label text-text-secondary">This session continues on {host}.</p>
+          {/* Unlink and Continue locally keep this device's copy, frozen at the move. */}
+          <p className="text-detail text-text-muted" data-testid="pointer-copy-note">
+            Unlink and Continue locally: {copyNote(link.sharedAt)}
+          </p>
+        </div>
+        <Button
+          size="sm"
+          onClick={() =>
+            void openExternal(
+              `${link.serverOrigin}/?session=${encodeURIComponent(link.serverSessionId)}`,
+            )
+          }
+        >
+          Open on server
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => void forkSession(session.id)}>
+          Continue locally
+        </Button>
+      </div>
     </div>
   );
 }

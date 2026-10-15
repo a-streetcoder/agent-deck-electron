@@ -62,6 +62,7 @@ import {
   revealSubagentArtifacts,
 } from "../lib/native.ts";
 import { ChildTranscriptDialog } from "./ChildTranscriptDialog.tsx";
+import { MirroredQuestion, OnServer, useMirrorReadOnly } from "./MirrorReadOnly.tsx";
 import { SubagentDeltaSummary } from "./SubagentDeltaSummary.tsx";
 import { VerdictChip } from "./VerdictChip.tsx";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
@@ -351,13 +352,16 @@ function ReadOnlyChildCell({ cell }: { cell: TranscriptCell }) {
 }
 
 function SubagentCellView({ cell }: { cell: SubagentCell }) {
-  const parentSessionId = useAppStore((state) => state.session?.id);
+  // SRV-12c2: a mirrored card's run lives on the server, not under this session id.
+  const mirrored = useMirrorReadOnly() !== null;
+  const localSessionId = useAppStore((state) => state.session?.id);
+  const parentSessionId = mirrored ? undefined : localSessionId;
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [revealState, setRevealState] = useState<{
     status: "idle" | "pending" | "success" | "error";
     message?: string;
   }>({ status: "idle" });
-  const revealAvailable = canRevealSubagentArtifacts();
+  const revealAvailable = !mirrored && canRevealSubagentArtifacts();
   const reveal = async (): Promise<void> => {
     if (revealState.status === "pending" || !cell.artifactRootId) return;
     setRevealState({ status: "pending", message: "Revealing artifacts…" });
@@ -459,6 +463,7 @@ function SubagentCellView({ cell }: { cell: SubagentCell }) {
               outputTokens={cell.outputTokens}
               durationMs={cell.durationMs}
             />
+            {mirrored ? <OnServer text={(host) => `Child transcript (on ${host})`} /> : null}
             {parentSessionId ? (
               <ControlButton
                 type="button"
@@ -783,6 +788,7 @@ function UserCellView({
   showImages: boolean;
 }) {
   const sessionId = useAppStore((state) => state.session?.id ?? "");
+  const mirror = useMirrorReadOnly();
   const imageReadToken = useSyncExternalStore(
     subscribeImageReadToken,
     getImageReadToken,
@@ -796,7 +802,8 @@ function UserCellView({
     if (!showImages) setExpanded(null);
   }, [showImages]);
   const items = (cell.images ?? []).map((image, index) => ({
-    src: sessionImageUrl(sessionId, image.id),
+    // SRV-12c2: a mirrored image is on the server; the local backend never has it.
+    src: mirror ? "" : sessionImageUrl(sessionId, image.id),
     name: image.name ?? `Sent image ${index + 1}`,
   }));
   const fileAttachments = (cell.files ?? []).map((file, index) => ({
@@ -825,7 +832,11 @@ function UserCellView({
         return {
           id: `${cell.id}-image-${ref.id}`,
           kind: "image" as const,
-          label: unavailable ? `${item.name} (unavailable)` : item.name,
+          label: mirror
+            ? `${item.name} (on ${mirror.host})`
+            : unavailable
+              ? `${item.name} (unavailable)`
+              : item.name,
           title: unavailable ? "Image preview unavailable" : "Preview sent image",
           ...(unavailable
             ? {}
@@ -905,7 +916,8 @@ function UserCellView({
             <MessageBubble role="user" text={visibleText} attachments={attachments} />
           )
         ) : null}
-        {cell.entryId ? <UserHistoryActions entryId={cell.entryId} /> : null}
+        {cell.entryId && !mirror ? <UserHistoryActions entryId={cell.entryId} /> : null}
+        {mirror && items.length > 0 ? <OnServer text={(host) => `Images (on ${host})`} /> : null}
         {showImages && expanded !== null ? (
           <ExpandedImageDialog
             preview={{ images: items, index: expanded }}
@@ -979,6 +991,13 @@ export function CellView({
   /** Cells of a delegated child run, shown inside the parent's transcript. */
   childTranscript?: boolean;
 }) {
+  const mirror = useMirrorReadOnly();
+  if (
+    mirror &&
+    (cell.kind === "question" || cell.kind === "ask_user" || cell.kind === "supervisor_question")
+  ) {
+    return <MirroredQuestion cell={cell} />;
+  }
   if ("hiddenFromModel" in cell && cell.hiddenFromModel) {
     return (
       <div data-testid="hidden-from-model">

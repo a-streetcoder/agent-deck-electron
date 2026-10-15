@@ -1,7 +1,7 @@
 import { ControlButton } from "@/design-system/components/NativeControls";
 import { planDepths, type PlanItemStatus, type SessionPlanItem } from "@agent-deck/domain";
 import { ProgressRing } from "./ProgressRing.tsx";
-import { useAppStore } from "../state/store.ts";
+import { mirroredTranscript, useAppStore } from "../state/store.ts";
 
 /**
  * The session's activity plan (native activity-sidebar "Plan" card), driven by a
@@ -101,7 +101,8 @@ function PlanSteps({ plan }: { plan: SessionPlanItem[] }) {
 }
 
 export function SessionPlanPanel() {
-  const plan = useAppStore((state) => state.transcript.plan);
+  // SRV-12c2: a mirrored pointer shows its server session's plan.
+  const plan = useAppStore((state) => mirroredTranscript(state).plan);
   if (plan.length === 0) return null;
 
   const done = plan.filter((it) => isComplete(it.status)).length;

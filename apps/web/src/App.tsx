@@ -41,7 +41,7 @@ import { SkillsScreen } from "./screens/SkillsScreen.tsx";
 import { cn } from "@/lib/cn";
 import { hasIntegratedDesktopChrome } from "@/lib/native";
 import { newChat, refreshCheckpoints } from "./state/wsBridge.ts";
-import { useAppStore } from "./state/store.ts";
+import { mirroredTranscript, useAppStore } from "./state/store.ts";
 import { useKeyboardShortcuts } from "./state/useKeyboardShortcuts.ts";
 import { useMenuCommands } from "./state/useMenuCommands.ts";
 import { useDesktopAttention } from "./state/useDesktopAttention.ts";
@@ -59,7 +59,7 @@ const DETAIL_FADE = "opacity 200ms ease-out";
 
 function ChatColumn() {
   const session = useAppStore((state) => state.session);
-  const agentStatus = useAppStore((state) => state.transcript.agentStatus);
+  const agentStatus = useAppStore((state) => mirroredTranscript(state).agentStatus);
   return (
     <div className="flex h-full min-w-0 flex-col">
       <ChatToolbar />
