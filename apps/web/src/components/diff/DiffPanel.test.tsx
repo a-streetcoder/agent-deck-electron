@@ -34,8 +34,7 @@ beforeEach(() => {
   useAppStore.setState({
     session: {
       id: "s1",
-      worktreeBranch: "agent-deck/session-s1",
-      worktreeSourceBranch: "main",
+      workspace: { branch: "agent-deck/session-s1", sourceBranch: "main" },
     } as NonNullable<ReturnType<typeof useAppStore.getState>["session"]>,
     diffRepo: true,
     diffFiles: [entry("a.txt")],
@@ -99,8 +98,7 @@ describe("SRV-12c3: merge on a shared server", () => {
       toasts: [],
       session: {
         id: "s1",
-        worktreeBranch: "agent-deck/session-s1",
-        worktreeSourceBranch: "main",
+        workspace: { branch: "agent-deck/session-s1", sourceBranch: "main" },
         ...extra,
       } as NonNullable<ReturnType<typeof useAppStore.getState>["session"]>,
     });
@@ -132,7 +130,12 @@ describe("SRV-12c3: merge on a shared server", () => {
 
   it("shows the open PR and pushes to it again", async () => {
     withSession(
-      { mergePr: { url: "https://github.com/acme/app/pull/7", number: 7, openedAt: "now" } },
+      {
+        location: {
+          kind: "server",
+          mergePr: { url: "https://github.com/acme/app/pull/7", number: 7, openedAt: "now" },
+        },
+      },
       true,
     );
     vi.mocked(mergeWorktreeSession).mockResolvedValueOnce({
@@ -162,10 +165,8 @@ describe("SRV-12c3: merge on a shared server", () => {
   it("warns before a local merge of work that already has a PR on the server", async () => {
     withSession(
       {
-        returnedFrom: {
-          serverOrigin: "https://deck.example.test",
-          serverSessionId: "srv",
-          returnedAt: "now",
+        location: {
+          kind: "local",
           mergePr: { url: "https://github.com/acme/app/pull/9", number: 9 },
         },
       },

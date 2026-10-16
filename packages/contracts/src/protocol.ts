@@ -480,6 +480,204 @@ export const SessionActivity = Schema.Literal(
 );
 export type SessionActivity = typeof SessionActivity.Type;
 
+// ---------------------------------------------------------------------------
+// The session record v2 (ADR 0006): provenance, location, workspace, launch.
+// ---------------------------------------------------------------------------
+
+export const SESSION_RECORD_VERSION = 2;
+
+/** Where a session is in its life. Only `draft` is persisted; the others are
+ * derived by `sessionLifecycle` (domain) from the record and the hand-off claims. */
+export const SessionLifecycle = Schema.Literal(
+  "draft",
+  "running",
+  "parked",
+  "ended",
+  "pointer",
+  "moving",
+);
+export type SessionLifecycle = typeof SessionLifecycle.Type;
+
+/** Who performed an operation: a person (`{}` on a device without sign-in), an
+ * agent, or the system. */
+export const SessionActorRef = Schema.Union(
+  Schema.mutable(Schema.Struct({ agent: Schema.String })),
+  Schema.mutable(Schema.Struct({ user: Schema.optional(UserIdentity) })),
+  Schema.Literal("system"),
+);
+export type SessionActorRef = typeof SessionActorRef.Type;
+
+export const ProvenanceKind = Schema.Literal(
+  "created",
+  "forked",
+  "moved",
+  "returned",
+  "spawned",
+  "imported",
+  "reviewed",
+);
+export type ProvenanceKind = typeof ProvenanceKind.Type;
+
+export const ProvenanceFrom = Schema.Union(
+  Schema.mutable(
+    Schema.Struct({
+      sessionId: Schema.String,
+      serverOrigin: Schema.optional(Schema.String),
+      /** forked: the source's title and owner when the fork was made. */
+      title: Schema.optional(Schema.String),
+      owner: Schema.optional(UserIdentity),
+      /** forked at a message: the stable Pi entry id. */
+      entryId: Schema.optional(Schema.String),
+    }),
+  ),
+  Schema.mutable(Schema.Struct({ device: Schema.String, localSessionId: Schema.String })),
+  Schema.mutable(Schema.Struct({ runId: Schema.String })),
+);
+export type ProvenanceFrom = typeof ProvenanceFrom.Type;
+
+/** How this record came to be: written once at creation, never rewritten. */
+export const SessionProvenance = Schema.mutable(
+  Schema.Struct({
+    kind: ProvenanceKind,
+    from: Schema.optional(ProvenanceFrom),
+    by: SessionActorRef,
+    at: Schema.String,
+    /** forked at a message: the bounded recap of the inherited conversation. */
+    recap: Schema.optional(
+      Schema.mutable(Schema.Struct({ text: Schema.String, truncated: Schema.Boolean })),
+    ),
+    /** imported: what the move carried. */
+    mode: Schema.optional(Schema.Literal("snapshot", "conversation")),
+  }),
+);
+export type SessionProvenance = typeof SessionProvenance.Type;
+
+/** The copy that continues, when this record is a frozen pointer. */
+export const SessionLiveCopy = Schema.Union(
+  Schema.mutable(
+    Schema.Struct({
+      serverOrigin: Schema.String,
+      sessionId: Schema.String,
+      at: Schema.String,
+      mode: Schema.Literal("snapshot", "conversation"),
+    }),
+  ),
+  Schema.mutable(
+    Schema.Struct({
+      device: Schema.String,
+      sessionId: Schema.String,
+      at: Schema.String,
+      mode: Schema.Literal("snapshot", "conversation"),
+    }),
+  ),
+);
+export type SessionLiveCopy = typeof SessionLiveCopy.Type;
+
+/** Where the record lives and who owns it now. */
+export const SessionLocation = Schema.mutable(
+  Schema.Struct({
+    kind: Schema.Literal("local", "server"),
+    /** The current owner (`createdBy` stays the creator). Absent without sign-in. */
+    owner: Schema.optional(UserIdentity),
+    live: Schema.optional(SessionLiveCopy),
+    /** A hand-off whose last step has not completed (device: a return whose
+     * server copy is not closed yet; the token finishes it). */
+    transfer: Schema.optional(
+      Schema.mutable(
+        Schema.Struct({
+          direction: Schema.Literal("return"),
+          token: Schema.String,
+          serverOrigin: Schema.String,
+          sessionId: Schema.String,
+          ref: Schema.optional(Schema.String),
+          until: Schema.String,
+        }),
+      ),
+    ),
+    /** The pull request this work opened: on the server, by its merge; on a
+     * device, by the server copy it came back from. Outlives the hand-off. */
+    mergePr: Schema.optional(
+      Schema.mutable(
+        Schema.Struct({
+          url: Schema.String,
+          number: Schema.Number,
+          openedAt: Schema.optional(Schema.String),
+        }),
+      ),
+    ),
+  }),
+);
+export type SessionLocation = typeof SessionLocation.Type;
+
+/**
+ * Git worktree isolation (native piAgentSessionsUseWorktree). When the setting
+ * is on and the project is a git repo, the session runs in its own worktree on
+ * branch `agent-deck/session-<id>` (cwd = path) so its work never touches the
+ * main checkout; the Merge action brings it back.
+ */
+export const SessionWorkspace = Schema.mutable(
+  Schema.Struct({
+    path: Schema.optional(Schema.String),
+    /** Native stable identity captured when the isolated checkout was allocated. */
+    identity: Schema.optional(Schema.String),
+    branch: Schema.optional(Schema.String),
+    sourceBranch: Schema.optional(Schema.String),
+    /** Device-local CAS input captured only from an exactly registered, native-
+     * identity-verified worktree before physical removal. It is never sufficient
+     * authority without that exact stale Git registration. */
+    cleanupBranchHead: Schema.optional(Schema.String),
+    /** A history-fork target's durable, non-owning dependency on the source
+     * session's app-owned worktree. Such a target retains cwd but never receives
+     * path/identity/branch deletion authority. */
+    ownerSessionId: Schema.optional(Schema.String),
+  }),
+);
+export type SessionWorkspace = typeof SessionWorkspace.Type;
+
+/** Durable v1 compatibility inputs for recomputing catalog-derived launch
+ * resources without losing request-specific extension/skill overrides. */
+export const LaunchResourceConfig = Schema.mutable(
+  Schema.Struct({
+    version: Schema.Literal(1),
+    providerOverride: Schema.optional(Schema.String),
+    modelOverride: Schema.optional(Schema.String),
+    extensionsOverride: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
+    skillsOverride: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
+    /** SRV-12c1: an imported session keeps the thinking level it ran at. */
+    thinkingOverride: Schema.optional(ThinkingLevel),
+  }),
+);
+export type LaunchResourceConfig = typeof LaunchResourceConfig.Type;
+
+export const SessionLaunch = Schema.mutable(
+  Schema.Struct({
+    /**
+     * The LaunchPlan this session was created with (opaque here — typed in
+     * pi-host). Persisted so resume relaunches with the same shape: agent
+     * system prompt/tools/skills, project assignments, provider/model.
+     */
+    plan: Schema.optional(Schema.Unknown),
+    /** The provider, model, extension, skill and thinking overrides. */
+    resourceConfig: Schema.optional(LaunchResourceConfig),
+    /** Semantic digest of the resolved launch flags and selected resource bytes. */
+    fingerprint: Schema.optional(Schema.String),
+    /** Bounded nonterminal diagnostic. The old/live runtime remains usable. */
+    refreshError: Schema.optional(Schema.String),
+  }),
+);
+export type SessionLaunch = typeof SessionLaunch.Type;
+
+// Durable indexes may hold a future producer's provenance kind or location
+// shape. Keep SessionMeta frames decodable; consumers read them defensively.
+const SessionProvenanceFromSelf: Schema.Schema<SessionProvenance> = Schema.declare(
+  (input: unknown): input is SessionProvenance => typeof input === "object" && input !== null,
+  { identifier: "SessionProvenancePassThrough" },
+);
+const SessionLocationFromSelf: Schema.Schema<SessionLocation> = Schema.declare(
+  (input: unknown): input is SessionLocation => typeof input === "object" && input !== null,
+  { identifier: "SessionLocationPassThrough" },
+);
+
 export const SessionMeta = Schema.mutable(
   Schema.Struct({
     id: Schema.String,
@@ -487,8 +685,18 @@ export const SessionMeta = Schema.mutable(
     createdAt: Schema.String,
     /** The authenticated user who created this session (shared server only). */
     createdBy: Schema.optional(UserIdentity),
-    /** Absent on legacy sessions, which retain their existing resume semantics. */
-    lifecycle: Schema.optional(Schema.Literal("draft", "started")),
+    /** ADR 0006: SESSION_RECORD_VERSION (2) once migrated; absent on a legacy
+     * record (see LegacySessionMeta). A number, so a later version still decodes. */
+    schemaVersion: Schema.optional(Schema.Number),
+    /** Persisted only as `draft`; absent once the first send started the session. */
+    lifecycle: Schema.optional(SessionLifecycle),
+    provenance: Schema.optional(SessionProvenanceFromSelf),
+    location: Schema.optional(SessionLocationFromSelf),
+    workspace: Schema.optional(SessionWorkspace),
+    launch: Schema.optional(SessionLaunch),
+    /** sha256 of the Pi transcript as it was copied at the last move, return or
+     * fork that wrote this record, so a stale copy is detectable. */
+    transcriptSha256: Schema.optional(Schema.String),
     /** Draft launch choices; no checkout or process exists until the first send. */
     draftWorktreeIsolation: Schema.optional(Schema.Boolean),
     draftThinkingLevel: Schema.optional(ThinkingLevel),
@@ -538,12 +746,6 @@ export const SessionMeta = Schema.mutable(
      * recall done — an empty prompt records "ran, found nothing", so a later turn
      * cannot backfill memory the conversation never opened with. Device-local. */
     memoryRecall: Schema.optional(MemoryRecallSnapshot),
-    /**
-     * The LaunchPlan this session was created with (opaque here — typed in
-     * pi-host). Persisted so resume relaunches with the same shape: agent
-     * system prompt/tools/skills, project assignments, provider/model.
-     */
-    launchPlan: Schema.optional(Schema.Unknown),
     /** Pi native MCP server name -> Agent Deck server id, recorded at spawn so
      * the transcript can label `mcp__<server>__<tool>` cells (PI-03e). */
     mcpServerNames: Schema.optional(
@@ -553,25 +755,6 @@ export const SessionMeta = Schema.mutable(
     mcpServerNamesCurrent: Schema.optional(
       Schema.mutable(Schema.Record({ key: Schema.String, value: Schema.String })),
     ),
-    /** Durable v1 compatibility inputs for recomputing catalog-derived launch
-     * resources without losing request-specific extension/skill overrides. */
-    launchResourceConfig: Schema.optional(
-      Schema.mutable(
-        Schema.Struct({
-          version: Schema.Literal(1),
-          providerOverride: Schema.optional(Schema.String),
-          modelOverride: Schema.optional(Schema.String),
-          extensionsOverride: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
-          skillsOverride: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
-          /** SRV-12c1: an imported session keeps the thinking level it ran at. */
-          thinkingOverride: Schema.optional(ThinkingLevel),
-        }),
-      ),
-    ),
-    /** Semantic digest of the resolved launch flags and selected resource bytes. */
-    launchResourceFingerprint: Schema.optional(Schema.String),
-    /** Bounded nonterminal diagnostic. The old/live runtime remains usable. */
-    resourceRefreshError: Schema.optional(Schema.String),
     /**
      * The session's activity plan (set_session_plan / update_session_plan),
      * persisted so a resumed session restores it — the plan is app state, not part
@@ -584,113 +767,101 @@ export const SessionMeta = Schema.mutable(
      * same as false, so an untouched session tracks the setting.
      */
     subagentsEnabled: Schema.optional(Schema.Boolean),
-    /**
-     * Git worktree isolation (native piAgentSessionsUseWorktree). When the setting
-     * is on and the project is a git repo, the session runs in its own worktree on
-     * branch `agent-deck/session-<id>` (cwd = worktreePath) so its work never
-     * touches the main checkout; the Merge action brings it back. Absent when the
-     * session runs in the project root.
-     */
-    worktreePath: Schema.optional(Schema.String),
-    /** Native stable identity captured when the isolated checkout was allocated. */
-    worktreeIdentity: Schema.optional(Schema.String),
-    worktreeBranch: Schema.optional(Schema.String),
-    worktreeSourceBranch: Schema.optional(Schema.String),
-    /** Device-local CAS input captured only from an exactly registered, native-
-     * identity-verified worktree before physical removal. It is never sufficient
-     * authority without that exact stale Git registration. */
-    worktreeCleanupBranchHead: Schema.optional(Schema.String),
-    /** A history-fork target's durable, non-owning dependency on the source
-     * session's app-owned worktree. Such a target retains cwd but never receives
-     * worktreePath/identity/branch deletion authority. */
-    worktreeOwnerSessionId: Schema.optional(Schema.String),
     /** Durable identity of the currently authoritative ordered transcript bus.
      * Absent on legacy sessions until their first same-id rebind. */
     streamGeneration: Schema.optional(Schema.String),
-    /** Internal durable marker for a retained Loop review session. The renderer
-     * may observe this capability flag but cannot choose its diff revision. */
-    loopReviewRunId: Schema.optional(Schema.String),
-    /** Immediate-source evidence for stable-entry forks only. Captured before
-     * publication so it survives restart, source rename, and source deletion. */
-    forkProvenance: Schema.optional(ForkProvenanceFromSelf),
-    /** SRV-15b: the session a plain fork (a full duplicate) was made from, as it
-     * was then: its owner and title, so the fork can say whose session it copies. */
-    forkedFrom: Schema.optional(
-      Schema.mutable(
-        Schema.Struct({
-          sessionId: Schema.String,
-          title: Schema.optional(Schema.String),
-          owner: Schema.optional(UserIdentity),
-        }),
-      ),
-    ),
-    /** SRV-12c1: this session moved and is now a read-only pointer to the copy
-     * that continues. On a device: to the server copy (`serverOrigin`,
-     * `serverSessionId`). SRV-12c3, on the shared server: brought back to a
-     * device (`serverOrigin: null`, `device`, `deviceSessionId`). */
-    sharedTo: Schema.optional(
-      Schema.mutable(
-        Schema.Struct({
-          serverOrigin: Schema.NullOr(Schema.String),
-          serverSessionId: Schema.optional(Schema.String),
-          device: Schema.optional(Schema.String),
-          deviceSessionId: Schema.optional(Schema.String),
-          sharedAt: Schema.String,
-          mode: Schema.Literal("snapshot", "conversation"),
-        }),
-      ),
-    ),
-    /** SRV-12c3, device: this session came back from the shared server copy. */
-    returnedFrom: Schema.optional(
-      Schema.mutable(
-        Schema.Struct({
-          serverOrigin: Schema.String,
-          serverSessionId: Schema.String,
-          returnedAt: Schema.String,
-          /** The pull request the server copy's merge opened, if any. */
-          mergePr: Schema.optional(Schema.Struct({ url: Schema.String, number: Schema.Number })),
-        }),
-      ),
-    ),
-    /** SRV-12c3, device: back here, but the server copy is not closed yet. The
-     * hand-off `token` finishes it (PATCH returned) while the server holds it. */
-    returnPending: Schema.optional(
-      Schema.mutable(
-        Schema.Struct({
-          token: Schema.String,
-          serverOrigin: Schema.String,
-          serverSessionId: Schema.String,
-          ref: Schema.optional(Schema.String),
-          until: Schema.String,
-        }),
-      ),
-    ),
-
-    /** SRV-12c3, shared server: the pull request the session's merge opened. */
-    mergePr: Schema.optional(
-      Schema.mutable(
-        Schema.Struct({ url: Schema.String, number: Schema.Number, openedAt: Schema.String }),
-      ),
-    ),
-    /** SRV-12c1, shared server: this session was imported from a device's session. */
-    sharedFrom: Schema.optional(
-      Schema.mutable(
-        Schema.Struct({
-          device: Schema.String,
-          localSessionId: Schema.String,
-          sharedAt: Schema.String,
-          mode: Schema.Literal("snapshot", "conversation"),
-          /** sha256 of the imported transcript: a retry must send the same export. */
-          exportSha256: Schema.optional(Schema.String),
-        }),
-      ),
-    ),
     /** SRV-15b: computed on GET /sessions and every session_meta push; never
      * persisted (the server decorates copies, not its records). */
     activity: Schema.optional(SessionActivity),
   }),
 );
 export type SessionMeta = typeof SessionMeta.Type;
+
+/**
+ * The fields a record carried before ADR 0006, read only by
+ * `migrateSessionMeta` (domain). Nothing writes this shape any more.
+ */
+export const LegacySessionFields = Schema.Struct({
+  lifecycle: Schema.optional(Schema.Literal("draft", "started")),
+  launchPlan: Schema.optional(Schema.Unknown),
+  launchResourceConfig: Schema.optional(LaunchResourceConfig),
+  launchResourceFingerprint: Schema.optional(Schema.String),
+  resourceRefreshError: Schema.optional(Schema.String),
+  worktreePath: Schema.optional(Schema.String),
+  worktreeIdentity: Schema.optional(Schema.String),
+  worktreeBranch: Schema.optional(Schema.String),
+  worktreeSourceBranch: Schema.optional(Schema.String),
+  worktreeCleanupBranchHead: Schema.optional(Schema.String),
+  worktreeOwnerSessionId: Schema.optional(Schema.String),
+  /** Internal durable marker for a retained Loop review session. */
+  loopReviewRunId: Schema.optional(Schema.String),
+  /** Immediate-source evidence for stable-entry forks only. */
+  forkProvenance: Schema.optional(ForkProvenanceFromSelf),
+  /** SRV-15b: the session a plain fork (a full duplicate) was made from. */
+  forkedFrom: Schema.optional(
+    Schema.Struct({
+      sessionId: Schema.String,
+      title: Schema.optional(Schema.String),
+      owner: Schema.optional(UserIdentity),
+    }),
+  ),
+  /** SRV-12c1/12c3: a read-only pointer to the copy that continues. */
+  sharedTo: Schema.optional(
+    Schema.Struct({
+      serverOrigin: Schema.NullOr(Schema.String),
+      serverSessionId: Schema.optional(Schema.String),
+      device: Schema.optional(Schema.String),
+      deviceSessionId: Schema.optional(Schema.String),
+      sharedAt: Schema.String,
+      mode: Schema.Literal("snapshot", "conversation"),
+    }),
+  ),
+  /** SRV-12c3, device: this session came back from the shared server copy. */
+  returnedFrom: Schema.optional(
+    Schema.Struct({
+      serverOrigin: Schema.String,
+      serverSessionId: Schema.String,
+      returnedAt: Schema.String,
+      mergePr: Schema.optional(Schema.Struct({ url: Schema.String, number: Schema.Number })),
+    }),
+  ),
+  /** SRV-12c3, device: back here, but the server copy is not closed yet. */
+  returnPending: Schema.optional(
+    Schema.Struct({
+      token: Schema.String,
+      serverOrigin: Schema.String,
+      serverSessionId: Schema.String,
+      ref: Schema.optional(Schema.String),
+      until: Schema.String,
+    }),
+  ),
+  /** SRV-12c3, shared server: the pull request the session's merge opened. */
+  mergePr: Schema.optional(
+    Schema.Struct({ url: Schema.String, number: Schema.Number, openedAt: Schema.String }),
+  ),
+  /** SRV-12c1, shared server: this session was imported from a device's session. */
+  sharedFrom: Schema.optional(
+    Schema.Struct({
+      device: Schema.String,
+      localSessionId: Schema.String,
+      sharedAt: Schema.String,
+      mode: Schema.Literal("snapshot", "conversation"),
+      exportSha256: Schema.optional(Schema.String),
+    }),
+  ),
+});
+export type LegacySessionFields = typeof LegacySessionFields.Type;
+
+/** A record as `sessions.json` held it before schemaVersion 2 (plus any field
+ * this version does not know, which the migration keeps). */
+export type LegacySessionMeta = Omit<
+  SessionMeta,
+  "lifecycle" | "schemaVersion" | "provenance" | "location" | "workspace" | "launch"
+> &
+  LegacySessionFields & {
+    schemaVersion?: undefined;
+    [key: string]: unknown;
+  };
 
 // ---------------------------------------------------------------------------
 // Server → client messages (types only today — the client trusts its own

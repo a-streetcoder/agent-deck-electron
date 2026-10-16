@@ -65,9 +65,7 @@ async function patchSettings(body: unknown): Promise<Response> {
 interface SessionResp {
   id: string;
   cwd: string;
-  worktreeIdentity?: string;
-  worktreeBranch?: string;
-  worktreeSourceBranch?: string;
+  workspace?: { identity?: string; branch?: string; sourceBranch?: string };
 }
 
 async function createSessionResponse(projectId: string): Promise<Response> {
@@ -136,9 +134,9 @@ describe("session worktree isolation", () => {
       expect(relativeCwd).not.toBe("");
       expect(relativeCwd === ".." || relativeCwd.startsWith(`..${path.sep}`)).toBe(false);
       expect(path.isAbsolute(relativeCwd)).toBe(false);
-      expect(session.worktreeIdentity).toMatch(/^v1:[0-9a-f]{16}:[0-9a-f]{16}$/);
-      expect(session.worktreeBranch).toMatch(/^agent-deck\/session-/);
-      expect(session.worktreeSourceBranch).toBe("main");
+      expect(session.workspace?.identity).toMatch(/^v1:[0-9a-f]{16}:[0-9a-f]{16}$/);
+      expect(session.workspace?.branch).toMatch(/^agent-deck\/session-/);
+      expect(session.workspace?.sourceBranch).toBe("main");
       expect(existsSync(session.cwd)).toBe(true);
       // It's a real git worktree (the branch checked out there is the session branch).
       const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
@@ -146,7 +144,7 @@ describe("session worktree isolation", () => {
       })
         .toString()
         .trim();
-      expect(branch).toBe(session.worktreeBranch);
+      expect(branch).toBe(session.workspace?.branch);
 
       // pi launched + responded inside the worktree.
       const managed = server.sessions.get(session.id)!;
@@ -225,7 +223,7 @@ describe("session worktree isolation", () => {
 
     const session = await createSession(projectId);
     expect(session.cwd).toBe(repoDir);
-    expect(session.worktreeBranch).toBeUndefined();
+    expect(session.workspace?.branch).toBeUndefined();
   });
 
   async function merge(id: string): Promise<Response> {

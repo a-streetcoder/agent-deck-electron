@@ -160,7 +160,7 @@ describe("durable lazy drafts against real Pi", () => {
     expect(active?.id).toBe(draft.id);
     expect(active?.lifecycle).not.toBe("draft");
     expect(active?.cwd).not.toBe(repo);
-    expect(active?.worktreeBranch).toBeTruthy();
+    expect(active?.workspace?.branch).toBeTruthy();
     expect(server.sessions.get(draft.id)?.isRunning).toBe(true);
     expect((await request(`/sessions/${draft.id}`, "DELETE")).ok).toBe(true);
     expect(worktrees()).toEqual(before);

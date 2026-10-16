@@ -123,7 +123,7 @@ describe("memory: launch-time index injection + APPEND_SYSTEM.md preservation", 
     );
     const original = server.sessions.get(session.id)!.meta;
     const canonicalPiSession = original.piSessionFile;
-    const activeFingerprint = original.launchResourceFingerprint;
+    const activeFingerprint = original.launch?.fingerprint;
 
     const pause = await fetch(settingsUrl, {
       method: "PATCH",
@@ -132,9 +132,7 @@ describe("memory: launch-time index injection + APPEND_SYSTEM.md preservation", 
     });
     expect(pause.status).toBe(200);
     await vi.waitFor(() =>
-      expect(server.sessions.get(session.id)!.meta.launchResourceFingerprint).not.toBe(
-        activeFingerprint,
-      ),
+      expect(server.sessions.get(session.id)!.meta.launch?.fingerprint).not.toBe(activeFingerprint),
     );
 
     const pausedStart = mock.requests.length;
@@ -154,7 +152,7 @@ describe("memory: launch-time index injection + APPEND_SYSTEM.md preservation", 
     expect(JSON.stringify(pausedRequest.tools ?? [])).not.toContain("agent_deck_memory_");
     expect(JSON.stringify(pausedRequest.messages)).toContain("before pause");
     expect(server.sessions.get(session.id)!.meta.piSessionFile).toBe(canonicalPiSession);
-    const pausedFingerprint = server.sessions.get(session.id)!.meta.launchResourceFingerprint;
+    const pausedFingerprint = server.sessions.get(session.id)!.meta.launch?.fingerprint;
 
     // A new paused launch passes no explicit append flags, so pinned Pi's own
     // discovery must still honor the project APPEND_SYSTEM file.
@@ -193,9 +191,7 @@ describe("memory: launch-time index injection + APPEND_SYSTEM.md preservation", 
     });
     expect(resume.status).toBe(200);
     await vi.waitFor(() =>
-      expect(server.sessions.get(session.id)!.meta.launchResourceFingerprint).not.toBe(
-        pausedFingerprint,
-      ),
+      expect(server.sessions.get(session.id)!.meta.launch?.fingerprint).not.toBe(pausedFingerprint),
     );
 
     const resumedStart = mock.requests.length;

@@ -1,3 +1,4 @@
+import { sessionOwner } from "@agent-deck/domain";
 import {
   hasMcpServer,
   isValidHttpMcpUrl,
@@ -476,7 +477,7 @@ export function registerMcpRoutes(ctx: ServerContext): void {
     if (!session) return reply.code(404).send({ error: "unknown session" });
     // The session's Pi writes to its OWNER's agent dir: signing in from someone
     // else's session would put your account in their mcp-auth.json.
-    if (ctx.sharedServer && session.meta.createdBy?.id !== requestUser(request.raw)?.id)
+    if (ctx.sharedServer && sessionOwner(session.meta)?.id !== requestUser(request.raw)?.id)
       return reply.code(403).send({ error: "sign in from one of your own sessions" });
     // Resume a parked session first (getState spawns Pi if needed), so a session
     // that cannot start answers here instead of after the detached prompt, and

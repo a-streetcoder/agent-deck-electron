@@ -407,7 +407,7 @@ export function Composer() {
     session?.lifecycle,
     session?.agentName,
     session?.projectId,
-    session?.launchPlan,
+    session?.launch?.plan,
     session?.draftThinkingLevel,
     refreshPiState,
     refreshModels,

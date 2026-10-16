@@ -58,7 +58,7 @@ describe("durable draft activation", () => {
     expect(gateway.find("draft")).toEqual(original);
     expect(mutationClaims.owner("draft")).toBeUndefined();
     await gateway.setModel("draft", "provider", "model");
-    expect(gateway.find("draft")?.launchResourceConfig).toEqual({
+    expect(gateway.find("draft")?.launch?.resourceConfig).toEqual({
       version: 1,
       providerOverride: "provider",
       modelOverride: "model",

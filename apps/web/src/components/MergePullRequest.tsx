@@ -9,9 +9,10 @@ import { useAppStore } from "../state/store.ts";
  */
 export function useMergeAsPullRequest() {
   const shared = useAppStore((state) => state.me !== null);
-  const pr = useAppStore((state) => state.session?.mergePr ?? null);
-  const returnedPr = useAppStore((state) => state.session?.returnedFrom?.mergePr ?? null);
-  return { shared, pr, returnedPr };
+  // ADR 0006: one record of the pull request, on the location: the server's
+  // copy opened it; a device copy brought it back with the return.
+  const opened = useAppStore((state) => state.session?.location?.mergePr ?? null);
+  return { shared, pr: shared ? opened : null, returnedPr: shared ? null : opened };
 }
 
 export function mergeButtonLabel(

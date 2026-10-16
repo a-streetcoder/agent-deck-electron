@@ -227,9 +227,9 @@ describe("session move with a real Pi", () => {
     expect(resumed.status).toBe(200);
     const remote = b.sessions.get(sessionId)!;
     expect(remote.isRunning).toBe(true);
-    expect((remote.meta.launchPlan as { thinking?: string }).thinking).toBe(ranAt);
+    expect((remote.meta.launch?.plan as { thinking?: string }).thinking).toBe(ranAt);
     const wt = remote.meta.cwd;
-    expect(remote.meta.worktreePath).toBe(wt);
+    expect(remote.meta.workspace?.path).toBe(wt);
     await waitFor(() => remote.snapshot().state.cells.some((cell) => cell.kind === "user"));
     await remote.prompt("second turn on the server");
     await waitFor(() => {
@@ -255,11 +255,11 @@ describe("session move with a real Pi", () => {
     const forked = await post(urlA(`/sessions/${session.id}/fork`), {});
     expect(forked.status).toBe(201);
     const { session: fork } = (await forked.json()) as { session: SessionMeta };
-    expect(fork.sharedTo).toBeUndefined();
+    expect(fork.location?.live).toBeUndefined();
     const { sessions } = (await (await fetch(urlA("/sessions"))).json()) as {
       sessions: SessionMeta[];
     };
-    expect(sessions.find((s) => s.id === session.id)?.sharedTo?.serverSessionId).toBe(sessionId);
+    expect(sessions.find((s) => s.id === session.id)?.location?.live?.sessionId).toBe(sessionId);
 
     // Conversation only: the server copy's next prompt tells the model the edits stayed behind.
     const live = a.sessions.get(fork.id)!;
@@ -308,7 +308,7 @@ describe("session move with a real Pi", () => {
         })
       ).json()) as { session: SessionMeta }
     ).session;
-    expect(isolated.worktreePath).toBeTruthy();
+    expect(isolated.workspace?.path).toBeTruthy();
     const iso = a.sessions.get(isolated.id)!;
     await iso.prompt("isolated turn");
     await waitFor(() => iso.snapshot().state.agentStatus === "idle" && Boolean(iso.piSessionFile));
@@ -342,9 +342,9 @@ describe("session move with a real Pi", () => {
     const isoFork = await post(urlA(`/sessions/${isolated.id}/fork`), {});
     expect(isoFork.status).toBe(201);
     const continued = ((await isoFork.json()) as { session: SessionMeta }).session;
-    expect(continued.sharedTo).toBeUndefined();
-    expect(continued.worktreeOwnerSessionId).toBe(isolated.id);
-    expect(continued.cwd).toBe(isolated.worktreePath);
+    expect(continued.location?.live).toBeUndefined();
+    expect(continued.workspace?.ownerSessionId).toBe(isolated.id);
+    expect(continued.cwd).toBe(isolated.workspace?.path);
     expect(a.sessions.get(continued.id)?.isRunning).toBe(true);
   });
 });

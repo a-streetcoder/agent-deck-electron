@@ -2088,9 +2088,16 @@ describe("setupRpcEndpoint prompt (SRV-12c2 REST prompt)", () => {
 
   it("keeps the pointer refusal: a moved session is not prompted", async () => {
     const { session, ops } = makeSession("s1");
+    const pointer = {
+      ...session.meta,
+      location: {
+        kind: "local",
+        live: { serverOrigin: "https://deck.example", sessionId: "srv", at: "t", mode: "snapshot" },
+      },
+    };
     const drafts = {
       find: () => undefined,
-      sharedPointer: (id: string) => (id === "s1" ? session.meta : undefined),
+      sharedPointer: (id: string) => (id === "s1" ? pointer : undefined),
     } as unknown as SessionDraftGateway;
     const rpc = endpoint(makeManager({ s1: session }), drafts);
     const answer = await rpc.prompt(undefined, "s1", "hello");

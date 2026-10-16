@@ -355,9 +355,9 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
       return deltas;
     };
     const original = {
-      ordinary: server.sessions.get(ordinaryId)!.meta.launchResourceFingerprint,
-      named: server.sessions.get(namedId)!.meta.launchResourceFingerprint,
-      noProject: server.sessions.get(noProjectId)!.meta.launchResourceFingerprint,
+      ordinary: server.sessions.get(ordinaryId)!.meta.launch?.fingerprint,
+      named: server.sessions.get(namedId)!.meta.launch?.fingerprint,
+      noProject: server.sessions.get(noProjectId)!.meta.launch?.fingerprint,
     };
 
     await promptTurn(ordinaryId, "policy-on ordinary echo");
@@ -392,7 +392,7 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
       body: JSON.stringify({ enabled: false }),
     });
     expect(paused.status).toBe(200);
-    expect(active.meta.launchResourceFingerprint).toBe(original.ordinary);
+    expect(active.meta.launch?.fingerprint).toBe(original.ordinary);
     releaseActiveResponse();
     activeResponseReached = undefined;
     await activeIdle;
@@ -403,13 +403,11 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
 
     await vi.waitFor(
       () => {
-        expect(server.sessions.get(ordinaryId)!.meta.launchResourceFingerprint).not.toBe(
+        expect(server.sessions.get(ordinaryId)!.meta.launch?.fingerprint).not.toBe(
           original.ordinary,
         );
-        expect(server.sessions.get(namedId)!.meta.launchResourceFingerprint).not.toBe(
-          original.named,
-        );
-        expect(server.sessions.get(noProjectId)!.meta.launchResourceFingerprint).not.toBe(
+        expect(server.sessions.get(namedId)!.meta.launch?.fingerprint).not.toBe(original.named);
+        expect(server.sessions.get(noProjectId)!.meta.launch?.fingerprint).not.toBe(
           original.noProject,
         );
       },
@@ -447,13 +445,9 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
     expect(enabled.status).toBe(200);
     await vi.waitFor(
       () => {
-        expect(server.sessions.get(ordinaryId)!.meta.launchResourceFingerprint).toBe(
-          original.ordinary,
-        );
-        expect(server.sessions.get(namedId)!.meta.launchResourceFingerprint).toBe(original.named);
-        expect(server.sessions.get(noProjectId)!.meta.launchResourceFingerprint).toBe(
-          original.noProject,
-        );
+        expect(server.sessions.get(ordinaryId)!.meta.launch?.fingerprint).toBe(original.ordinary);
+        expect(server.sessions.get(namedId)!.meta.launch?.fingerprint).toBe(original.named);
+        expect(server.sessions.get(noProjectId)!.meta.launch?.fingerprint).toBe(original.noProject);
       },
       { timeout: 15_000, interval: 25 },
     );
@@ -492,9 +486,9 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
     const ordinary = server.sessions.get(ordinaryId)!;
     const named = server.sessions.get(namedId)!;
     const noProject = server.sessions.get(noProjectId)!;
-    const ordinaryFingerprint = ordinary.meta.launchResourceFingerprint;
-    const namedFingerprint = named.meta.launchResourceFingerprint;
-    const noProjectFingerprint = noProject.meta.launchResourceFingerprint;
+    const ordinaryFingerprint = ordinary.meta.launch?.fingerprint;
+    const namedFingerprint = named.meta.launch?.fingerprint;
+    const noProjectFingerprint = noProject.meta.launch?.fingerprint;
 
     await ordinary.prompt("res12-before ordinary tool");
     await server.receipts.waitFor("idle", ordinaryId);
@@ -512,15 +506,13 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
     expect(removed.status).toBe(200);
     await vi.waitFor(
       () =>
-        expect(server.sessions.get(ordinaryId)?.meta.launchResourceFingerprint).not.toBe(
+        expect(server.sessions.get(ordinaryId)?.meta.launch?.fingerprint).not.toBe(
           ordinaryFingerprint,
         ),
       { timeout: 15_000, interval: 25 },
     );
-    expect(server.sessions.get(namedId)?.meta.launchResourceFingerprint).toBe(namedFingerprint);
-    expect(server.sessions.get(noProjectId)?.meta.launchResourceFingerprint).toBe(
-      noProjectFingerprint,
-    );
+    expect(server.sessions.get(namedId)?.meta.launch?.fingerprint).toBe(namedFingerprint);
+    expect(server.sessions.get(noProjectId)?.meta.launch?.fingerprint).toBe(noProjectFingerprint);
 
     let orderedDeltas = 0;
     let settleIdle!: () => void;

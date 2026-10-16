@@ -2103,6 +2103,62 @@ describe("MCP project picker", () => {
     expect(posts).toHaveLength(1);
   });
 
+  it("on a shared server signs in through a session you own, not one you created", async () => {
+    const alice = { id: "alice@example.com", name: "Alice" };
+    const bob = { id: "bob@example.com", name: "Bob" };
+    useAppStore.setState({
+      session: null,
+      me: { id: alice.id, email: alice.id },
+      projects: [alpha, beta],
+      sessions: [
+        // Created by Alice, owned by Bob now: its Pi keeps Bob's tokens.
+        {
+          id: "created",
+          projectId: "beta",
+          createdAt: "2026-10-15",
+          createdBy: alice,
+          location: { kind: "server", owner: bob },
+        },
+        {
+          id: "owned",
+          projectId: "beta",
+          createdAt: "2026-10-14",
+          createdBy: bob,
+          location: { kind: "server", owner: alice },
+        },
+      ] as never,
+      toasts: [],
+    });
+    const posts: Array<[string, unknown]> = [];
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/mcp") return Promise.resolve(jsonResponse({ servers: [] }));
+      if (url === "/mcp?projectId=beta")
+        return Promise.resolve(
+          jsonResponse({
+            assignedServerIds: ["oauth"],
+            servers: [http("oauth", { oauth: true, needsSignIn: true })],
+          }),
+        );
+      if (url === "/mcp/oauth/native-login" && init?.method === "POST") {
+        posts.push([url, JSON.parse(String(init.body))]);
+        return Promise.resolve(jsonResponse({ ok: true }, 202));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    try {
+      render(<McpScreen />);
+      await screen.findByTestId("mcp-empty");
+      pickProject("beta");
+      fireEvent.click(await screen.findByTestId("mcp-native-login-oauth"));
+      await waitFor(() =>
+        expect(posts).toEqual([["/mcp/oauth/native-login", { sessionId: "owned" }]]),
+      );
+    } finally {
+      act(() => useAppStore.setState({ me: null }));
+    }
+  });
+
   it("drops a reconnect's catalog refresh that completes after switching projects", async () => {
     useAppStore.setState({ session: sessionFor(alpha.id), projects: [alpha, beta] });
     let resolveRefresh!: (response: Response) => void;

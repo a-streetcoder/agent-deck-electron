@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { SessionMeta } from "@agent-deck/contracts";
+import type { ForkProvenance, SessionMeta } from "@agent-deck/contracts";
 import type { DomainEvent } from "@agent-deck/domain";
 import { Effect, Layer, ManagedRuntime, type Scope } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -117,7 +117,7 @@ describe("history action durable store reconstruction", () => {
           original: SessionMeta,
           branchFile: string,
           _env: Record<string, string> | undefined,
-          forkProvenance: SessionMeta["forkProvenance"],
+          forkProvenance: ForkProvenance,
         ) => {
           forkSessionAttachmentStores([images, pastes], original.id, "target");
           const target: SessionMeta = {
@@ -125,7 +125,17 @@ describe("history action durable store reconstruction", () => {
             id: "target",
             createdAt: "later",
             piSessionFile: branchFile,
-            forkProvenance,
+            provenance: {
+              kind: "forked",
+              from: {
+                sessionId: forkProvenance.sourceSessionId,
+                entryId: forkProvenance.sourceEntryId,
+                title: forkProvenance.sourceTitle,
+              },
+              by: {},
+              at: "later",
+              recap: { text: forkProvenance.recap, truncated: forkProvenance.recapTruncated },
+            },
           };
           index.upsert(target);
           return { meta: target };
@@ -166,12 +176,10 @@ describe("history action durable store reconstruction", () => {
     expect(restartedIndex.find((item) => item.id === "source")).toBeUndefined();
     expect(restartedIndex.find((item) => item.id === "target")).toMatchObject({
       piSessionFile: "/tmp/branch.jsonl",
-      forkProvenance: {
-        version: 1,
-        sourceSessionId: "source",
-        sourceEntryId: "chosen",
-        sourceTitle: "Untitled chat",
-        recapTruncated: false,
+      provenance: {
+        kind: "forked",
+        from: { sessionId: "source", entryId: "chosen", title: "Untitled chat" },
+        recap: { truncated: false },
       },
     });
     expect(restartedImages.promptImages("target", "chosen")).toEqual(imagePayloads);
@@ -212,7 +220,7 @@ describe("history action durable store reconstruction", () => {
         PiHostLive,
       ),
     ) as ServerRuntime;
-    const provenance: NonNullable<SessionMeta["forkProvenance"]> = {
+    const provenance: ForkProvenance = {
       version: 1,
       sourceSessionId: "source",
       sourceEntryId: "chosen",
@@ -241,7 +249,11 @@ describe("history action durable store reconstruction", () => {
         id: target.meta.id,
         title: "Current source (fork)",
         piSessionFile: "/tmp/branch.jsonl",
-        forkProvenance: provenance,
+        provenance: {
+          kind: "forked",
+          from: { sessionId: "source", entryId: "chosen", title: "Captured source" },
+          recap: { text: "User:\nEarlier prompt", truncated: false },
+        },
       });
       await manager.destroy(target.meta.id);
     } finally {

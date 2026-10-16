@@ -173,11 +173,15 @@ describe("SRV-15a fork routes on a shared server", () => {
       });
       expect(response.status).toBe(201);
       const { session } = (await response.json()) as {
-        session: { id: string; createdBy?: unknown; forkedFrom?: unknown };
+        session: SessionMeta;
       };
       expect(session.createdBy).toEqual(bob);
+      // The fork is the forker's: its owner, and who made it.
+      expect(session.location?.owner).toEqual(bob);
+      expect(session.provenance?.by).toEqual({ user: bob });
       // SRV-15b: a plain fork records whose session it copies (provenance line).
-      if (route === "fork") expect(session.forkedFrom).toEqual({ sessionId: SOURCE, owner: alice });
+      if (route === "fork")
+        expect(session.provenance?.from).toEqual({ sessionId: SOURCE, owner: alice });
       expect(new SessionIndex(dataDir).find((item) => item.id === session.id)?.createdBy).toEqual(
         bob,
       );
@@ -202,9 +206,14 @@ describe("SRV-15a fork routes on a shared server", () => {
       return ((await response.json()) as { session: SessionMeta }).session;
     };
     const plain = await fork(SOURCE, "fork");
-    expect(plain.forkedFrom?.sessionId).toBe(SOURCE);
+    expect(plain.provenance).toMatchObject({ kind: "forked", from: { sessionId: SOURCE } });
+    expect(plain.provenance?.recap).toBeUndefined();
     const message = await fork(plain.id, "history/fork");
-    expect(message.forkedFrom).toBeUndefined();
-    expect(message.forkProvenance?.sourceSessionId).toBe(plain.id);
+    // The message fork names its own source (the plain fork), never the plain fork's.
+    expect(message.provenance).toMatchObject({
+      kind: "forked",
+      from: { sessionId: plain.id, entryId: "entry-user-1" },
+    });
+    expect(message.provenance?.recap).toBeDefined();
   }, 30_000);
 });

@@ -2327,7 +2327,7 @@ describe("idle Pi parking", () => {
           cwd: process.cwd(),
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-          launchPlan: { kind: "parent" },
+          launch: { plan: { kind: "parent" } },
           piSessionFile: sourceFile,
           parkedAt: "2026-01-01T00:00:00.000Z",
           agentName: "Coder",
@@ -2397,9 +2397,9 @@ describe("idle Pi parking", () => {
           id: randomUUID(),
           cwd: process.cwd(),
           createdAt: new Date().toISOString(),
-          launchPlan: { kind: "parent" },
+          launch: { plan: { kind: "parent" } },
           piSessionFile: branchFile,
-          loopReviewRunId: randomUUID(),
+          provenance: { kind: "reviewed", from: { runId: randomUUID() }, by: {}, at: "then" },
           parkedAt: "2026-01-01T00:00:00.000Z",
         },
         branchFile,
@@ -3137,7 +3137,7 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
         id: randomUUID(),
         cwd: process.cwd(),
         createdAt: new Date().toISOString(),
-        launchPlan: { kind: "parent" },
+        launch: { plan: { kind: "parent" } },
       };
       await expect(sm.resume(meta, { kind: "parent" })).rejects.toThrow();
       // launch() spawned + registered the session; the seed failure must tear it
@@ -3161,11 +3161,13 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
         cwd: process.cwd(),
         createdAt: new Date().toISOString(),
         piSessionFile: "/tmp/source.jsonl",
-        launchPlan: {
-          kind: "agent",
-          systemPrompt: { mode: "replace", text: "persona" },
-          tools: ["read"],
-          model: "model-a",
+        launch: {
+          plan: {
+            kind: "agent",
+            systemPrompt: { mode: "replace", text: "persona" },
+            tools: ["read"],
+            model: "model-a",
+          },
         },
       };
       await expect(sm.rebindHistoryDeferred(source, "/tmp/branch.jsonl")).rejects.toThrow();
@@ -3215,10 +3217,12 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
         cwd: "/private/worktree",
         createdAt: new Date().toISOString(),
         piSessionFile: "/tmp/source.jsonl",
-        worktreePath: "/private/worktree",
-        worktreeIdentity: "owned-token",
-        worktreeBranch: "agent-deck/source",
-        worktreeSourceBranch: "main",
+        workspace: {
+          path: "/private/worktree",
+          identity: "owned-token",
+          branch: "agent-deck/source",
+          sourceBranch: "main",
+        },
         finalSystemPromptAudit: {
           text: "source final prompt",
           capturedAt: "2026-08-01T10:02:03.000Z",
@@ -3241,10 +3245,10 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
       const generic = await sm.fork(source, sourceFile, genericFile);
       expect(generic.meta).toMatchObject({
         cwd: source.cwd,
-        worktreeOwnerSessionId: source.id,
+        workspace: { ownerSessionId: source.id },
         piSessionFile: genericFile,
       });
-      expect(generic.meta).not.toHaveProperty("worktreePath");
+      expect(generic.meta).not.toHaveProperty("workspace.path");
       // A full-file duplicate preserves the same canonical ancestry, prompt
       // evidence, and retry anchors.
       expect(generic.meta.providerRetries).toEqual(source.providerRetries);
@@ -3252,34 +3256,33 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
       const nestedGeneric = await sm.fork(generic.meta, genericFile, nestedGenericFile);
       expect(nestedGeneric.meta).toMatchObject({
         cwd: source.cwd,
-        worktreeOwnerSessionId: source.id,
+        workspace: { ownerSessionId: source.id },
         piSessionFile: nestedGenericFile,
       });
-      expect(nestedGeneric.meta).not.toHaveProperty("worktreePath");
+      expect(nestedGeneric.meta).not.toHaveProperty("workspace.path");
 
       const target = await sm.materializeHistoryFork(source, "/tmp/branch.jsonl");
       expect(captured).toMatchObject({
         cwd: source.cwd,
         piSessionFile: "/tmp/branch.jsonl",
-        worktreeOwnerSessionId: source.id,
+        workspace: { ownerSessionId: source.id },
       });
-      expect(captured).not.toHaveProperty("worktreePath");
-      expect(captured).not.toHaveProperty("worktreeIdentity");
-      expect(captured).not.toHaveProperty("worktreeBranch");
-      expect(captured).not.toHaveProperty("worktreeSourceBranch");
+      expect(captured).not.toHaveProperty("workspace.path");
+      expect(captured).not.toHaveProperty("workspace.identity");
+      expect(captured).not.toHaveProperty("workspace.branch");
+      expect(captured).not.toHaveProperty("workspace.sourceBranch");
       expect(captured).not.toHaveProperty("providerRetries");
       expect(captured).not.toHaveProperty("finalSystemPromptAudit");
       expect(source).toMatchObject({
-        worktreePath: "/private/worktree",
-        worktreeIdentity: "owned-token",
+        workspace: { path: "/private/worktree", identity: "owned-token" },
       });
       const nested = await sm.materializeHistoryFork(target.meta, "/tmp/nested-branch.jsonl");
       expect(nested.meta).toMatchObject({
         cwd: source.cwd,
-        worktreeOwnerSessionId: source.id,
+        workspace: { ownerSessionId: source.id },
         piSessionFile: "/tmp/nested-branch.jsonl",
       });
-      expect(nested.meta).not.toHaveProperty("worktreePath");
+      expect(nested.meta).not.toHaveProperty("workspace.path");
       expect(nested.meta).not.toHaveProperty("providerRetries");
       expect(nested.meta).not.toHaveProperty("finalSystemPromptAudit");
 
@@ -3332,7 +3335,7 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
         id: randomUUID(),
         cwd: process.cwd(),
         createdAt: new Date().toISOString(),
-        launchPlan: { kind: "parent" },
+        launch: { plan: { kind: "parent" } },
         piSessionFile: srcFile,
       };
       await expect(sm.fork(source, srcFile, copyTo)).rejects.toThrow();

@@ -12,20 +12,19 @@ vi.mock("../state/wsBridge.ts", () => ({
 }));
 
 const source: SessionMeta = { id: "source", cwd: "/tmp", createdAt: "now", title: "Renamed later" };
-const target = (
-  overrides: Partial<NonNullable<SessionMeta["forkProvenance"]>> = {},
-): SessionMeta => ({
+const target = (overrides: { text?: string; truncated?: boolean } = {}): SessionMeta => ({
   id: "target",
   cwd: "/tmp",
   createdAt: "later",
-  forkProvenance: {
-    version: 1,
-    sourceSessionId: "source",
-    sourceEntryId: "stable-user-entry",
-    sourceTitle: "Captured source title",
-    recap: "User:\nEarlier prompt\n\nAssistant:\nEarlier answer",
-    recapTruncated: false,
-    ...overrides,
+  provenance: {
+    kind: "forked",
+    from: { sessionId: "source", entryId: "stable-user-entry", title: "Captured source title" },
+    by: {},
+    at: "later",
+    recap: {
+      text: overrides.text ?? "User:\nEarlier prompt\n\nAssistant:\nEarlier answer",
+      truncated: overrides.truncated ?? false,
+    },
   },
 });
 
@@ -57,7 +56,7 @@ describe("ForkProvenanceCard", () => {
   it("opens a trapped accessible long/empty/truncated dialog and restores focus on Escape", async () => {
     const opener = document.createElement("button");
     document.body.append(opener);
-    render(<ForkProvenanceCard session={target({ recap: "", recapTruncated: true })} />);
+    render(<ForkProvenanceCard session={target({ text: "", truncated: true })} />);
     const trigger = screen.getByRole("button", { name: "View recap" });
     trigger.focus();
     fireEvent.click(trigger);
@@ -81,7 +80,7 @@ describe("ForkProvenanceCard", () => {
   it("ignores malformed or unsupported future metadata without crashing", () => {
     const malformed = {
       ...target(),
-      forkProvenance: { version: 2, sourceTitle: 42 },
+      provenance: { kind: "forked", from: { title: 42 }, by: {}, at: "later" },
     } as unknown as SessionMeta;
     const { container } = render(<ForkProvenanceCard session={malformed} />);
     expect(container.childElementCount).toBe(0);
@@ -95,7 +94,12 @@ describe("plain fork provenance (SRV-15b)", () => {
     cwd: "/tmp",
     createdAt: "later",
     createdBy: { id: "bob@example.com" },
-    forkedFrom: { sessionId: "source", title: "Captured", owner: alice },
+    provenance: {
+      kind: "forked",
+      from: { sessionId: "source", title: "Captured", owner: alice },
+      by: { user: { id: "bob@example.com" } },
+      at: "later",
+    },
   };
   afterEach(() => useAppStore.setState({ me: null }));
 
@@ -118,5 +122,26 @@ describe("plain fork provenance (SRV-15b)", () => {
     cleanup();
     render(<ForkProvenanceCard session={target()} />);
     expect(screen.getByText("Forked from Carol's session “Captured source title”")).toBeTruthy();
+  });
+});
+
+describe("imported session origin (ADR 0006 provenance)", () => {
+  it("says which device a moved conversation came from", () => {
+    const imported: SessionMeta = {
+      id: "imported",
+      cwd: "/tmp",
+      createdAt: "later",
+      provenance: {
+        kind: "imported",
+        from: { device: "laptop", localSessionId: "local-1" },
+        by: {},
+        at: "later",
+        mode: "conversation",
+      },
+    };
+    render(<ForkProvenanceCard session={imported} />);
+    expect(screen.getByTestId("shared-from-line").textContent).toBe(
+      "Moved from laptop. Earlier edits from laptop are not in this workspace.",
+    );
   });
 });

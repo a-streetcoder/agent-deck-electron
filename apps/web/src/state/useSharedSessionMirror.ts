@@ -3,6 +3,7 @@ import type { SessionMeta } from "@agent-deck/contracts";
 import {
   createNodeTreeReducer,
   isOpenCell,
+  serverCopy,
   type TranscriptCell,
   type TranscriptState,
 } from "@agent-deck/domain";
@@ -101,9 +102,9 @@ const errorText = (answer: SharedServerResponse): string => {
 };
 
 export function useSharedSessionMirror(session: SessionMeta): SharedSessionMirror {
-  const link = session.sharedTo;
+  const link = serverCopy(session);
   const localId = session.id;
-  const serverId = link?.serverSessionId;
+  const serverId = link?.sessionId;
   const origin = link?.serverOrigin;
   const kick = useRef<() => void>(() => {});
   const mirror = useAppStore((state) =>

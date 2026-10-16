@@ -264,6 +264,10 @@ export function createEventProducers(
 
   return {
     sessionCreated(meta, actor, forkedFrom) {
+      // ADR 0006: the record's provenance triple (kind, from, by), references only.
+      const provenance = meta.provenance;
+      const from = provenance?.from;
+      const ref = (text: string) => clean(text, EVENT_LABEL_MAX_CHARS);
       append({
         kind: "session.created",
         sessionId: meta.id,
@@ -275,6 +279,39 @@ export function createEventProducers(
           ...(meta.title ? { title: label(meta.title) } : {}),
           ...(meta.agentName ? { agentName: clean(meta.agentName, EVENT_LABEL_MAX_CHARS) } : {}),
           ...(meta.createdBy ? { createdBy: userActor(meta.createdBy) } : {}),
+          ...(provenance
+            ? {
+                provenance: {
+                  kind: provenance.kind,
+                  ...(from && "sessionId" in from
+                    ? {
+                        from: {
+                          sessionId: ref(from.sessionId),
+                          ...(from.serverOrigin ? { serverOrigin: ref(from.serverOrigin) } : {}),
+                        },
+                      }
+                    : from && "device" in from
+                      ? {
+                          from: {
+                            device: ref(from.device),
+                            localSessionId: ref(from.localSessionId),
+                          },
+                        }
+                      : from && "runId" in from
+                        ? { from: { runId: ref(from.runId) } }
+                        : {}),
+                  by:
+                    provenance.by === "system"
+                      ? "system"
+                      : "agent" in provenance.by
+                        ? { agent: ref(provenance.by.agent) }
+                        : provenance.by.user
+                          ? { user: userActor(provenance.by.user) }
+                          : {},
+                  at: provenance.at,
+                },
+              }
+            : {}),
         },
       });
     },

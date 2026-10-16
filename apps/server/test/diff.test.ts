@@ -484,9 +484,7 @@ describe("worktree session branch base (ROAD-S20)", () => {
     const meta = {
       id: "s1",
       cwd: worktree,
-      worktreePath: worktree,
-      worktreeBranch: "agent-deck/session-s1",
-      worktreeSourceBranch: "main",
+      workspace: { path: worktree, branch: "agent-deck/session-s1", sourceBranch: "main" },
     } as SessionMeta;
     const diff = makeSessionDiff();
 
@@ -503,7 +501,7 @@ describe("worktree session branch base (ROAD-S20)", () => {
 
   it("refuses the branch base for a session without its own worktree", async () => {
     const repo = makeRepo();
-    const meta = { id: "s2", cwd: repo, worktreeSourceBranch: "main" } as SessionMeta;
+    const meta = { id: "s2", cwd: repo, workspace: { sourceBranch: "main" } } as SessionMeta;
     await expect(sessionDiffBase(meta, "branch")).rejects.toThrow(/worktree sessions/);
   });
 });

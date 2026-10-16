@@ -1,8 +1,22 @@
-import { randomUUID } from "node:crypto";
-import { copyFileSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { copyFileSync, lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
-import type { ForkProvenance, SessionMeta, UserIdentity } from "@agent-deck/contracts";
+import {
+  SESSION_RECORD_VERSION,
+  type ForkProvenance,
+  type SessionMeta,
+  type UserIdentity,
+} from "@agent-deck/contracts";
+import {
+  actorRef,
+  isLoopSession,
+  MOVING_REFUSAL,
+  operationRefusal,
+  POINTER_REFUSAL,
+  sessionOwner,
+  type SessionLocationKind,
+} from "@agent-deck/domain";
 import type {
   AskUserAnswer,
   AskUserCell,
@@ -98,11 +112,38 @@ export class SessionCreationError extends Error {
 export const MAX_DETACHED_SUBAGENTS = 8;
 
 /** SRV-12c1: what every refused action on a pointer says (SRV-12c3: on either side). */
-export const SESSION_SHARED_ERROR =
-  "session_shared: This session continues on another copy (on the shared server, or back on its device). Open it there, or continue from this copy.";
+export const SESSION_SHARED_ERROR = `session_shared: ${POINTER_REFUSAL}`;
 /** SRV-12c1: what a prompt or delegation during a hand-off says (SRV-12c3: either direction). */
-export const SESSION_MOVING_ERROR =
-  "session_moving: This session is moving between a device and the shared server. Wait until the move finishes or is cancelled.";
+export const SESSION_MOVING_ERROR = `session_moving: ${MOVING_REFUSAL}`;
+
+/** sha256 of a transcript as it was copied (ADR 0006: stale copies are detectable).
+ * Evidence only: an unreadable file records nothing rather than failing the copy. */
+export function fileSha256(file: string): string | undefined {
+  try {
+    return createHash("sha256").update(readFileSync(file)).digest("hex");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A fork target's durable, non-owning dependency on the source's app-owned
+ * worktree: it shares the checkout as a portable cwd reference, never the
+ * source's deletion authority, so source deletion or merge cannot remove the
+ * checkout while the target exists.
+ */
+const workspaceDependency = (source: SessionMeta): string | undefined =>
+  source.workspace?.ownerSessionId ?? (source.workspace?.path ? source.id : undefined);
+
+/** The launch block with `patch` applied and the refresh diagnostic cleared. */
+function refreshedLaunch(
+  launch: SessionMeta["launch"],
+  patch: NonNullable<SessionMeta["launch"]>,
+): NonNullable<SessionMeta["launch"]> {
+  const next = { ...launch, ...patch };
+  delete next.refreshError;
+  return next;
+}
 
 /** A4: spawn refused because the parent already runs MAX_DETACHED_SUBAGENTS children. */
 export class SubagentCapError extends Error {
@@ -699,6 +740,9 @@ export class ManagedSession {
 export class SessionManager {
   /** Shared by HTTP mutations and every resume path (including parked wake). */
   readonly mutationClaims = new SessionMutationClaims();
+  /** ADR 0006: the side the records this manager creates live on (`location.kind`);
+   * the composition root sets "server" behind a trusted proxy. */
+  recordSide: SessionLocationKind = "local";
   private readonly sessions = new Map<string, ManagedSession>();
   private idleParkingTimeoutMs: number | null = null;
   private onParkingMetaChange: (meta: SessionMeta) => void = () => {};
@@ -854,11 +898,11 @@ export class SessionManager {
   private configureSessionParking(session: ManagedSession): void {
     // Native applies parking to ordinary top-level chats, including named-agent
     // chats. Only Loop-owned/review parents retain separate runtime ownership.
-    if (session.meta.loopReviewRunId || session.meta.agentName?.startsWith("Loop ·")) {
+    if (isLoopSession(session.meta)) {
       session.configureIdleParking(null, async () => session, this.onParkingMetaChange);
       return;
     }
-    const fallback = (session.meta.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
+    const fallback = (session.meta.launch?.plan as LaunchPlan | undefined) ?? { kind: "parent" };
     session.configureIdleParking(
       this.idleParkingTimeoutMs,
       async () => await this.resume(session.meta, fallback),
@@ -885,7 +929,7 @@ export class SessionManager {
     if (this.shuttingDown) return;
     this.resourceRefreshGeneration += 1;
     for (const session of this.sessions.values()) {
-      if (session.meta.launchResourceConfig) this.resourceRefreshDirty.add(session.meta.id);
+      if (session.meta.launch?.resourceConfig) this.resourceRefreshDirty.add(session.meta.id);
     }
     if (this.resourceRefreshTimer) clearTimeout(this.resourceRefreshTimer);
     const generation = this.resourceRefreshGeneration;
@@ -901,7 +945,7 @@ export class SessionManager {
   }
 
   private setResourceRefreshError(meta: SessionMeta, error: unknown): void {
-    meta.resourceRefreshError = normalizeSessionError(error).slice(0, 500);
+    meta.launch = { ...meta.launch, refreshError: normalizeSessionError(error).slice(0, 500) };
     this.publishResourceMeta(meta);
   }
 
@@ -939,13 +983,7 @@ export class SessionManager {
   private async refreshOne(session: ManagedSession, generation: number): Promise<void> {
     const resolve = this.resolveLaunchResources;
     const meta = session.meta;
-    if (
-      this.shuttingDown ||
-      !resolve ||
-      !meta.launchResourceConfig ||
-      meta.loopReviewRunId ||
-      meta.agentName?.startsWith("Loop ·")
-    ) {
+    if (this.shuttingDown || !resolve || !meta.launch?.resourceConfig || isLoopSession(meta)) {
       this.resourceRefreshDirty.delete(meta.id);
       return;
     }
@@ -957,10 +995,10 @@ export class SessionManager {
       this.resourceRefreshDirty.delete(meta.id);
       return;
     }
-    if (candidate.fingerprint === meta.launchResourceFingerprint) {
+    if (candidate.fingerprint === meta.launch?.fingerprint) {
       this.resourceRefreshDirty.delete(meta.id);
-      if (meta.resourceRefreshError) {
-        delete meta.resourceRefreshError;
+      if (meta.launch.refreshError) {
+        delete meta.launch.refreshError;
         this.publishResourceMeta(meta);
       }
       return;
@@ -971,10 +1009,11 @@ export class SessionManager {
       if (session.isParked) {
         // A parked placeholder owns no process; adopting the current plan is the
         // whole transaction. Wake will resume the same Pi file with these bytes.
-        meta.launchPlan = candidate.plan;
-        meta.launchResourceFingerprint = candidate.fingerprint;
+        meta.launch = refreshedLaunch(meta.launch, {
+          plan: candidate.plan,
+          fingerprint: candidate.fingerprint,
+        });
         delete meta.finalSystemPromptAudit;
-        delete meta.resourceRefreshError;
         this.resourceRefreshDirty.delete(meta.id);
         this.publishResourceMeta(meta);
         return;
@@ -1003,9 +1042,10 @@ export class SessionManager {
       const replacementMeta: SessionMeta = {
         ...session.meta,
         updatedAt: activityTimestamp,
-        launchPlan: candidate.plan,
-        launchResourceFingerprint: candidate.fingerprint,
-        resourceRefreshError: undefined,
+        launch: refreshedLaunch(session.meta.launch, {
+          plan: candidate.plan,
+          fingerprint: candidate.fingerprint,
+        }),
         finalSystemPromptAudit: undefined,
       };
       const replacement = await this.resume(
@@ -1021,8 +1061,8 @@ export class SessionManager {
       const candidatePlan = JSON.stringify(candidate.plan);
       if (
         authoritative !== replacement ||
-        replacement.meta.launchResourceFingerprint !== candidate.fingerprint ||
-        JSON.stringify(replacement.meta.launchPlan) !== candidatePlan
+        replacement.meta.launch?.fingerprint !== candidate.fingerprint ||
+        JSON.stringify(replacement.meta.launch?.plan) !== candidatePlan
       ) {
         if (authoritative) this.armResourceRefresh(authoritative);
         return;
@@ -1056,30 +1096,45 @@ export class SessionManager {
       id: options.draftMeta?.id ?? randomUUID(),
       cwd: options.cwd,
       createdAt: options.draftMeta?.createdAt ?? now,
-      ...(options.draftMeta ? { lifecycle: "started" as const } : {}),
+      schemaVersion: SESSION_RECORD_VERSION,
       updatedAt: now,
       projectId: options.projectId,
       agentName: options.agentName,
-      launchPlan: options.plan,
-      ...(options.launchResourceConfig
-        ? { launchResourceConfig: options.launchResourceConfig }
-        : {}),
-      ...(options.launchResourceFingerprint
-        ? { launchResourceFingerprint: options.launchResourceFingerprint }
-        : {}),
+      // ADR 0006: written once, here (a draft keeps the one it was created with).
+      provenance: options.draftMeta?.provenance ?? {
+        ...(options.loopReviewRunId
+          ? { kind: "reviewed" as const, from: { runId: options.loopReviewRunId } }
+          : { kind: "created" as const }),
+        by: actorRef(options.createdBy),
+        at: options.draftMeta?.createdAt ?? now,
+      },
+      location: options.draftMeta?.location ?? {
+        kind: this.recordSide,
+        ...(options.createdBy ? { owner: options.createdBy } : {}),
+      },
+      launch: {
+        plan: options.plan,
+        ...(options.launchResourceConfig ? { resourceConfig: options.launchResourceConfig } : {}),
+        ...(options.launchResourceFingerprint
+          ? { fingerprint: options.launchResourceFingerprint }
+          : {}),
+      },
       ...(options.worktree
         ? {
-            worktreePath: options.worktree.path,
-            ...(options.worktree.identityToken
-              ? { worktreeIdentity: options.worktree.identityToken }
-              : {}),
-            worktreeBranch: options.worktree.branch,
-            worktreeSourceBranch: options.worktree.sourceBranch,
+            workspace: {
+              path: options.worktree.path,
+              ...(options.worktree.identityToken
+                ? { identity: options.worktree.identityToken }
+                : {}),
+              branch: options.worktree.branch,
+              sourceBranch: options.worktree.sourceBranch,
+            },
           }
         : {}),
-      ...(options.loopReviewRunId ? { loopReviewRunId: options.loopReviewRunId } : {}),
       ...(options.createdBy ? { createdBy: options.createdBy } : {}),
     };
+    // The first send started the draft: only a draft persists its lifecycle.
+    delete meta.lifecycle;
     if (options.environmentOverride !== undefined) {
       this.sessionEnvironmentOverrides.set(meta.id, { ...options.environmentOverride });
     }
@@ -1124,7 +1179,7 @@ export class SessionManager {
       throw new Error("Send the first message to start this draft.");
     }
     // SRV-12c1: a frozen pointer runs no Pi; the session continues on the server.
-    if (meta.sharedTo) throw new Error(SESSION_SHARED_ERROR);
+    if (operationRefusal(meta, "resume")) throw new Error(SESSION_SHARED_ERROR);
     const inFlight = this.resuming.get(meta.id);
     if (inFlight) return await inFlight;
     // History owns a larger transaction that intentionally resumes its source.
@@ -1167,24 +1222,21 @@ export class SessionManager {
     let candidate = preparedCandidate;
     let releaseResumePreflight: (() => Promise<void>) | undefined;
     let resumeMeta = meta;
-    if (
-      meta.launchResourceConfig &&
-      !meta.loopReviewRunId &&
-      !meta.agentName?.startsWith("Loop ·")
-    ) {
+    if (meta.launch?.resourceConfig && !isLoopSession(meta)) {
       try {
         candidate ??= this.resolveLaunchResources?.(meta);
         if (candidate) {
           if (!preparedCandidate) {
             releaseResumePreflight = await this.preflightResourceRefresh?.(meta, candidate);
           }
-          const changed = candidate.fingerprint !== meta.launchResourceFingerprint;
+          const changed = candidate.fingerprint !== meta.launch?.fingerprint;
           resumeMeta = {
             ...meta,
-            launchPlan: candidate.plan,
-            launchResourceFingerprint: candidate.fingerprint,
-            launchResourceConfig: candidate.config,
-            resourceRefreshError: undefined,
+            launch: refreshedLaunch(meta.launch, {
+              plan: candidate.plan,
+              fingerprint: candidate.fingerprint,
+              resourceConfig: candidate.config,
+            }),
             ...(changed ? { finalSystemPromptAudit: undefined } : {}),
           };
         }
@@ -1200,7 +1252,7 @@ export class SessionManager {
       ...this.sessionEnvironmentOverrides.get(meta.id),
     };
     const preservedUpdatedAt = resumeMeta.updatedAt;
-    const original = (resumeMeta.launchPlan as LaunchPlan | undefined) ?? fallbackPlan;
+    const original = (resumeMeta.launch?.plan as LaunchPlan | undefined) ?? fallbackPlan;
     let plan: LaunchPlan;
     if (original.kind === "agent") {
       plan = { ...original, sessionDir: undefined, resumeSessionPath: resumeMeta.piSessionFile };
@@ -1345,14 +1397,17 @@ export class SessionManager {
           // SRV-04: the session OWNER's git identity, fixed at spawn so later
           // prompt authors cannot change it, and re-derived from meta on every
           // resume. Attribution, not authorization: Pi can still override it.
-          ...gitIdentityEnv(meta.createdBy, this.gitIdentities),
+          ...gitIdentityEnv(sessionOwner(meta), this.gitIdentities),
           // SRV-11: the OWNER's credentials (own agent dir), re-derived on every
           // resume. Storage separation, not isolation (userAgentDirs.ts).
-          ...userAgentDirEnv(meta.createdBy, this.userAgentDirs),
+          ...userAgentDirEnv(sessionOwner(meta), this.userAgentDirs),
           // SRV-06: pushes and PRs as the OWNER (GH_TOKEN + a github.com git
           // credential helper); no connection leaves the server default.
           // Pi spawns with process.env under this, so both count for GIT_CONFIG_*.
-          ...githubEnv(meta.createdBy, this.githubConnections, { ...process.env, ...layered }),
+          ...githubEnv(sessionOwner(meta), this.githubConnections, {
+            ...process.env,
+            ...layered,
+          }),
         },
         tempDirs,
         publishMeta,
@@ -1742,7 +1797,9 @@ export class SessionManager {
    * with Pi's default tools (bash included), or a `tools:` list naming bash.
    */
   sessionMayRunShell(sessionId: string): boolean {
-    return planMayRunShell(this.sessions.get(sessionId)?.meta.launchPlan as LaunchPlan | undefined);
+    return planMayRunShell(
+      this.sessions.get(sessionId)?.meta.launch?.plan as LaunchPlan | undefined,
+    );
   }
 
   /** A5: free detached-child slots of a live session (MAX_DETACHED_SUBAGENTS bound). */
@@ -2132,15 +2189,19 @@ export class SessionManager {
     forker?: UserIdentity,
   ): Promise<ManagedSession> {
     copyFileSync(sessionFilePath, copyTo);
-    const owner = forker ?? source.createdBy;
+    const owner = forker ?? sessionOwner(source);
+    const createdAt = new Date().toISOString();
+    const dependency = workspaceDependency(source);
     const meta: SessionMeta = {
       id: randomUUID(),
       cwd: source.cwd,
-      createdAt: new Date().toISOString(),
+      createdAt,
+      schemaVersion: SESSION_RECORD_VERSION,
       projectId: source.projectId,
       agentName: source.agentName,
-      launchPlan: source.launchPlan,
+      ...(source.launch?.plan !== undefined ? { launch: { plan: source.launch.plan } } : {}),
       piSessionFile: copyTo,
+      transcriptSha256: fileSha256(copyTo),
       title: source.title ? `${source.title} (fork)` : undefined,
       plan: source.plan,
       subagentsEnabled: source.subagentsEnabled,
@@ -2157,18 +2218,21 @@ export class SessionManager {
       // without an identity (desktop) it keeps the source owner.
       ...(owner ? { createdBy: owner } : {}),
       // SRV-15b: the provenance line ("forked from Alice's session ...").
-      forkedFrom: {
-        sessionId: source.id,
-        ...(source.title ? { title: source.title } : {}),
-        ...(source.createdBy ? { owner: source.createdBy } : {}),
+      provenance: {
+        kind: "forked",
+        from: {
+          sessionId: source.id,
+          ...(source.title ? { title: source.title } : {}),
+          ...(sessionOwner(source) ? { owner: sessionOwner(source) } : {}),
+        },
+        by: actorRef(forker),
+        at: createdAt,
       },
-      ...(source.worktreeOwnerSessionId
-        ? { worktreeOwnerSessionId: source.worktreeOwnerSessionId }
-        : source.worktreePath
-          ? { worktreeOwnerSessionId: source.id }
-          : {}),
+      // A fork is a new local copy: never a pointer, a hand-off or another's PR.
+      location: { kind: this.recordSide, ...(owner ? { owner } : {}) },
+      ...(dependency ? { workspace: { ownerSessionId: dependency } } : {}),
     };
-    const original = (source.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
+    const original = (source.launch?.plan as LaunchPlan | undefined) ?? { kind: "parent" };
     let plan: LaunchPlan;
     if (original.kind === "agent") {
       plan = { ...original, sessionDir: undefined, resumeSessionPath: copyTo };
@@ -2234,17 +2298,34 @@ export class SessionManager {
       id: randomUUID(),
       createdAt: now,
       updatedAt: now,
+      schemaVersion: SESSION_RECORD_VERSION,
       endedAt: undefined,
       parkedAt: undefined,
       piSessionFile: branchFile,
       title: source.title ? `${source.title} (fork)` : undefined,
-      ...(forkProvenance ? { forkProvenance } : {}),
       ...(forker ? { createdBy: forker } : {}),
+      // A message fork's own origin (never the source's: a message fork of a
+      // plain fork must not claim the plain fork's source).
+      provenance: {
+        kind: "forked",
+        from: forkProvenance
+          ? {
+              sessionId: forkProvenance.sourceSessionId,
+              entryId: forkProvenance.sourceEntryId,
+              title: forkProvenance.sourceTitle,
+            }
+          : { sessionId: source.id, ...(source.title ? { title: source.title } : {}) },
+        by: actorRef(forker),
+        at: now,
+        ...(forkProvenance
+          ? { recap: { text: forkProvenance.recap, truncated: forkProvenance.recapTruncated } }
+          : {}),
+      },
+      transcriptSha256: fileSha256(branchFile),
     };
-    if (!forkProvenance) delete meta.forkProvenance;
-    // SRV-15b: forkedFrom is a plain fork's origin; a message fork's is forkProvenance
-    // (a message fork of a plain fork must not claim the plain fork's source).
-    delete meta.forkedFrom;
+    // A fork is a new local copy: never a pointer, a hand-off or another's PR.
+    const owner = forker ?? source.location?.owner;
+    meta.location = { kind: this.recordSide, ...(owner ? { owner } : {}) };
     // A newly materialized fork is an independent recovery boundary. Retry
     // records are ordinal-anchored to the source's full active ancestry and
     // cannot safely survive a history rewrite.
@@ -2258,19 +2339,10 @@ export class SessionManager {
     // The target shares the checkout as a portable cwd reference, never the
     // source's app-owned worktree deletion authority. Persist the dependency so
     // source deletion/merge cannot remove the checkout while this target exists.
-    if (source.worktreeOwnerSessionId) {
-      meta.worktreeOwnerSessionId = source.worktreeOwnerSessionId;
-    } else if (source.worktreePath) {
-      meta.worktreeOwnerSessionId = source.id;
-    } else {
-      delete meta.worktreeOwnerSessionId;
-    }
-    delete meta.worktreePath;
-    delete meta.worktreeIdentity;
-    delete meta.worktreeBranch;
-    delete meta.worktreeSourceBranch;
-    delete meta.worktreeCleanupBranchHead;
-    const original = (source.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
+    const dependency = workspaceDependency(source);
+    if (dependency) meta.workspace = { ownerSessionId: dependency };
+    else delete meta.workspace;
+    const original = (source.launch?.plan as LaunchPlan | undefined) ?? { kind: "parent" };
     const plan: LaunchPlan =
       original.kind === "agent"
         ? { ...original, sessionDir: undefined, resumeSessionPath: branchFile }
@@ -2329,7 +2401,7 @@ export class SessionManager {
     // and the prompt evidence captured for the previous active ancestry.
     delete meta.providerRetries;
     delete meta.finalSystemPromptAudit;
-    const original = (source.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
+    const original = (source.launch?.plan as LaunchPlan | undefined) ?? { kind: "parent" };
     const plan: LaunchPlan =
       original.kind === "agent"
         ? { ...original, sessionDir: undefined, resumeSessionPath: branchFile }

@@ -1,7 +1,13 @@
 import { statSync } from "node:fs";
 import { hostname } from "node:os";
 import type { ProjectMeta, SessionMeta } from "@agent-deck/contracts";
-import { redactSecrets } from "@agent-deck/domain";
+import {
+  liveCopy,
+  operationRefusal,
+  redactSecrets,
+  sessionLifecycle,
+  withoutLiveCopy,
+} from "@agent-deck/domain";
 import { z } from "zod";
 import type { ServerContext } from "../context.ts";
 import { userActor } from "../eventProducers.ts";
@@ -25,30 +31,19 @@ export interface ShareLiveState {
   liveSubagents: boolean;
 }
 
-const hostOf = (origin: string): string => {
-  try {
-    return new URL(origin).host;
-  } catch {
-    return origin;
-  }
-};
-
 /** The device name as the server accepts it (letters, digits, dot, dash, underscore). */
 export const deviceName = (name: string = hostname()): string =>
   name.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 200) || "device";
 
-/** Why this session cannot move to the shared server now, or undefined when it can. */
+/** Why this session cannot move to the shared server now, or undefined when it can.
+ * The record's part (pointer, draft, Loop) is allowedOperations' "move". */
 export function shareRefusal(
   meta: SessionMeta,
   project: ProjectMeta | undefined,
   live: ShareLiveState,
 ): string | undefined {
-  if (meta.sharedTo)
-    return `This session already continues on ${meta.sharedTo.serverOrigin ? hostOf(meta.sharedTo.serverOrigin) : (meta.sharedTo.device ?? "another device")}.`;
-  if (meta.lifecycle === "draft" || !meta.piSessionFile)
-    return "This session has nothing to move yet: send a first message.";
-  if (meta.loopReviewRunId || meta.agentName?.startsWith("Loop ·"))
-    return "A Loop session cannot move to a server.";
+  const refused = operationRefusal(meta, "move");
+  if (refused) return refused.error;
   if (!project?.sharedTo) return "Make this session's project shared first.";
   if (live.streaming) return "Wait until the session has finished responding.";
   if (live.liveSubagents) return "Wait until this session's subagents have finished.";
@@ -194,7 +189,7 @@ export function registerSessionShareRoutes(ctx: ServerContext): void {
       if ("status" in prepared) return reply.status(prepared.status).send(prepared.body);
       pushed = prepared.pushed;
       // Frozen until the link is written or the move is aborted (or expires).
-      const token = handoffs.start(id, release, pushed);
+      const token = handoffs.start(id, release, pushed, prepared.envelope.transcript);
       kept = true;
       return {
         envelope: prepared.envelope,
@@ -252,9 +247,8 @@ export function registerSessionShareRoutes(ctx: ServerContext): void {
       const { id } = request.params as { id: string };
       const meta = metaOf(id);
       if (!meta) return reply.status(404).send({ error: "unknown session" });
-      if (!meta.sharedTo) return { session: ctx.withActivity?.([meta])[0] ?? meta };
-      const next: SessionMeta = { ...meta };
-      delete next.sharedTo;
+      if (!liveCopy(meta)) return { session: ctx.withActivity?.([meta])[0] ?? meta };
+      const next: SessionMeta = { ...meta, location: withoutLiveCopy(meta.location) };
       index.upsert(next);
       const decorated = ctx.withActivity?.([next])[0] ?? next;
       broadcast({ type: "session_meta", session: decorated });
@@ -276,6 +270,7 @@ export function registerSessionShareRoutes(ctx: ServerContext): void {
       return inProgress(reply, "This session is being linked to the server right now.");
     // Exclusive from here: expiry, abort and a replacing share all give way.
     current.finalizing = true;
+    const carried = current.transcriptSha256;
     const ours = () => handoffs.get(id) === current;
     try {
       return await finalize();
@@ -286,7 +281,7 @@ export function registerSessionShareRoutes(ctx: ServerContext): void {
     async function finalize() {
       const meta = metaOf(id);
       if (!meta) return reply.status(404).send({ error: "unknown session" });
-      if (meta.sharedTo)
+      if (sessionLifecycle(meta) === "pointer")
         return reply
           .status(409)
           .send({ code: "session_shared", error: "This session is already shared." });
@@ -306,7 +301,18 @@ export function registerSessionShareRoutes(ctx: ServerContext): void {
       const latest = index.find((s) => s.id === id) ?? meta;
       const next: SessionMeta = {
         ...latest,
-        sharedTo: { ...link, sharedAt: new Date().toISOString() },
+        location: {
+          ...latest.location,
+          kind: "local",
+          live: {
+            serverOrigin: link.serverOrigin,
+            sessionId: link.serverSessionId,
+            at: new Date().toISOString(),
+            mode: link.mode,
+          },
+        },
+        // The transcript the server copy started from.
+        ...(carried ? { transcriptSha256: carried } : {}),
       };
       // A pointer is idle: not ended, parked, failed or waiting for review.
       delete next.endedAt;

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -267,7 +267,7 @@ beforeAll(async () => {
         sharedFrom: sharedFrom(randomUUID()),
         piSessionFile: piFile(dataB, "loop", serverClone),
       },
-      // No owner (written before the trusted proxy): the local merge, as before.
+      // No owner (written before the trusted proxy): its pull request is refused.
       {
         id: B_LEGACY,
         ...baseB,
@@ -502,7 +502,7 @@ describe("session return: the server side", () => {
     // The fresh worktree holds the server's work, uncommitted on the base.
     const fresh = result.session.cwd;
     expect(fresh).not.toBe(localClone);
-    expect(result.session.worktreePath).toBe(fresh);
+    expect(result.session.workspace?.path).toBe(fresh);
     expect(git(fresh, "rev-parse", "HEAD")).toBe(base);
     const status = execFileSync("git", ["status", "--porcelain"], { cwd: fresh, encoding: "utf8" });
     expect(status.split("\n").filter(Boolean).sort()).toEqual([
@@ -512,13 +512,17 @@ describe("session return: the server side", () => {
     ]);
     // The same local session, live again, its transcript pointing at the new cwd.
     expect(result.session.id).toBe(S_MOVE);
-    expect(result.session.sharedTo).toBeUndefined();
-    expect(result.session.returnedFrom).toMatchObject({
+    expect(result.session.location?.live).toBeUndefined();
+    // Provenance is written once: the return is the hand-off's, not a new origin.
+    expect(result.session.provenance?.kind).not.toBe("returned");
+    expect(result.session.location?.transfer).toMatchObject({
+      direction: "return",
       serverOrigin: ORIGIN,
-      serverSessionId: serverId,
+      sessionId: serverId,
     });
-    expect(result.session.launchResourceConfig?.thinkingOverride).toBe("high");
-    expect(result.session.returnedFrom?.mergePr).toEqual({
+    expect(result.session.transcriptSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.session.launch?.resourceConfig?.thinkingOverride).toBe("high");
+    expect(result.session.location?.mergePr).toEqual({
       url: "https://github.com/acme/app/pull/5",
       number: 5,
     });
@@ -558,11 +562,18 @@ describe("session return: the server side", () => {
       transferRefDeleted: boolean;
     };
     expect(closedBody.transferRefDeleted).toBe(true);
-    expect(closedBody.session.sharedTo).toMatchObject({
-      serverOrigin: null,
+    expect(closedBody.session.location?.live).toMatchObject({
       device: expect.any(String),
-      deviceSessionId: S_MOVE,
+      sessionId: S_MOVE,
     });
+    // The server copy records the transcript its hand-off carried (this test
+    // changed it on the way, so the device records another).
+    expect(closedBody.session.transcriptSha256).toBe(
+      createHash("sha256").update(String(back.envelope.transcript)).digest("hex"),
+    );
+    expect(result.session.transcriptSha256).toBe(
+      createHash("sha256").update(envelope.transcript).digest("hex"),
+    );
     // A lost answer is retried: the same device session gets the pointer again,
     // any other device session is refused.
     const again = await post(
@@ -580,10 +591,10 @@ describe("session return: the server side", () => {
     );
     expect(otherDevice.status).toBe(409);
     // The device records the finished return.
-    expect(result.session.returnPending).toMatchObject({
+    expect(result.session.location?.transfer).toMatchObject({
       token: back.handoff,
       serverOrigin: ORIGIN,
-      serverSessionId: serverId,
+      sessionId: serverId,
       ref: back.envelope.transfer.ref,
     });
     const done = await post(
@@ -592,7 +603,9 @@ describe("session return: the server side", () => {
       {},
       "PATCH",
     );
-    expect(((await done.json()) as { session: SessionMeta }).session.returnPending).toBeUndefined();
+    expect(
+      ((await done.json()) as { session: SessionMeta }).session.location?.transfer,
+    ).toBeUndefined();
 
     // A pointer refuses prompts and a second return.
     const prompt = await post(urlB(`/sessions/${serverId}/prompt`), { text: "hi" }, andrea());
@@ -737,16 +750,20 @@ process.exit(0);
     expect(await readJson(noGithub)).toMatchObject({ code: "merge_github_missing" });
   });
 
-  it("keeps the local merge for folder projects and sessions without an owner", async () => {
-    // Neither is asked for GitHub or an owner: the ordinary merge checks answer
-    // (these sessions have no isolated worktree).
-    for (const [id, headers] of [
-      [B_LEGACY, bea()],
-      [B_FOLDER, bea()],
-    ] as const) {
-      const res = await merge(id, headers);
-      expect(res.status, id).toBe(409);
-      expect(await readJson(res)).toMatchObject({ code: "merge_stale_ownership" });
+  it("keeps the local merge for folder projects", async () => {
+    // Not asked for GitHub or an owner: the ordinary merge checks answer (this
+    // session has no isolated worktree).
+    const res = await merge(B_FOLDER, bea());
+    expect(res.status).toBe(409);
+    expect(await readJson(res)).toMatchObject({ code: "merge_stale_ownership" });
+  });
+
+  it("refuses, never merges into the server checkout, a GitHub session without an owner", async () => {
+    // The operator too: without an owner there is no connection to push with.
+    for (const headers of [bea(), andrea()]) {
+      const res = await merge(B_LEGACY, headers);
+      expect(res.status).toBe(403);
+      expect(await readJson(res)).toMatchObject({ code: "merge_forbidden" });
     }
   });
 
@@ -761,12 +778,12 @@ process.exit(0);
       ok: true,
       code: "merge_pr_opened",
       pr: { url: "https://github.com/acme/app/pull/7", number: 7 },
-      branch: meta.worktreeBranch,
+      branch: meta.workspace?.branch,
       base: "main",
       commits: 1,
     });
     // The branch is on origin, pushed with the owner's token; the server checkout is untouched.
-    expect(git(bare, "rev-parse", `refs/heads/${meta.worktreeBranch}`)).toBe(
+    expect(git(bare, "rev-parse", `refs/heads/${meta.workspace?.branch}`)).toBe(
       git(meta.cwd, "rev-parse", "HEAD"),
     );
     expect(readFileSync(pushLog, "utf8").trim().split("\n").at(-1)).toBe(TOKEN);
@@ -776,16 +793,19 @@ process.exit(0);
     expect(call.argv).toEqual([
       "create",
       "--repo=acme/app",
-      `--head=${meta.worktreeBranch}`,
+      `--head=${meta.workspace?.branch}`,
       "--base=main",
       "--title=Add the docs",
       `--body=- Agent Deck: Add the docs changes\n\nOpened from Agent Deck session ${serverId}`,
     ]);
     // Recorded, and the worktree stays for the PR.
     const after = await serverMeta(serverId);
-    expect(after.mergePr).toMatchObject({ url: "https://github.com/acme/app/pull/7", number: 7 });
+    expect(after.location?.mergePr).toMatchObject({
+      url: "https://github.com/acme/app/pull/7",
+      number: 7,
+    });
     expect(existsSync(after.cwd)).toBe(true);
-    expect(after.worktreePath).toBe(meta.worktreePath);
+    expect(after.workspace?.path).toBe(meta.workspace?.path);
 
     // A re-click while the PR is open commits and pushes again: the same PR, updated.
     writeFileSync(path.join(meta.cwd, "more.md"), "more\n");
@@ -796,7 +816,7 @@ process.exit(0);
       pr: { url: "https://github.com/acme/app/pull/7", number: 7 },
     });
     expect(ghCalls().at(-1)!.argv).toEqual(["view", "7", "--repo=acme/app", "--json=state"]);
-    expect(git(bare, "rev-parse", `refs/heads/${meta.worktreeBranch}`)).toBe(
+    expect(git(bare, "rev-parse", `refs/heads/${meta.workspace?.branch}`)).toBe(
       git(meta.cwd, "rev-parse", "HEAD"),
     );
     // Merged on GitHub: the next merge opens a new PR.
@@ -804,7 +824,7 @@ process.exit(0);
       merge(serverId, andrea()),
     );
     expect(await readJson(reopened)).toMatchObject({ code: "merge_pr_opened", pr: { number: 9 } });
-    expect((await serverMeta(serverId)).mergePr).toMatchObject({ number: 9 });
+    expect((await serverMeta(serverId)).location?.mergePr).toMatchObject({ number: 9 });
 
     // The PR goes back with the session: the return envelope names it.
     const ret = await post(
@@ -835,11 +855,11 @@ process.exit(0);
     const body = await readJson(failed);
     expect(body).toMatchObject({
       code: "merge_pr_failed",
-      branch: meta.worktreeBranch,
+      branch: meta.workspace?.branch,
       pushed: true,
     });
-    expect(String(body.error)).toContain(`Pushed ${meta.worktreeBranch} to origin`);
-    expect((await serverMeta(serverId)).mergePr).toBeUndefined();
+    expect(String(body.error)).toContain(`Pushed ${meta.workspace?.branch} to origin`);
+    expect((await serverMeta(serverId)).location?.mergePr).toBeUndefined();
     const existing = await withGh({ mode: "exists" }, () => merge(serverId, andrea()));
     expect(existing.status, await existing.clone().text()).toBe(200);
     expect(await readJson(existing)).toMatchObject({

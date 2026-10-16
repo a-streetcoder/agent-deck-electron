@@ -111,7 +111,7 @@ describe("onboarding preferences at session launch", () => {
     const id = await createSession({ withProvider: false });
     // launchPlan is persisted structurally (SessionMeta keeps it opaque); read
     // the parent-plan fields we set.
-    const plan = server.sessions.get(id)!.meta.launchPlan as
+    const plan = server.sessions.get(id)!.meta.launch?.plan as
       | { kind?: string; provider?: string; model?: string; thinking?: string }
       | undefined;
     expect(plan?.kind).toBe("parent");

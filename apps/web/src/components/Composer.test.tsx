@@ -298,7 +298,7 @@ describe("composer model chip", () => {
     // the chip and the picker both re-read the running session.
     model = { provider: "mock", id: "mock-model" };
     models = [model];
-    useAppStore.getState().upsertSessionMeta({ ...draft, lifecycle: "started" });
+    useAppStore.getState().upsertSessionMeta({ ...draft, lifecycle: undefined });
     await waitFor(() => expect(label()).toBe("mock-model"));
     fireEvent.click(screen.getByTestId("model-chip"));
     await waitFor(() => expect(screen.getByTestId("model-option-mock-model")).toBeTruthy());
@@ -318,7 +318,7 @@ describe("composer model chip", () => {
     render(<Composer />);
     await waitFor(() => expect(pending.length).toBeGreaterThan(0));
     const drafted = pending.length;
-    useAppStore.getState().upsertSessionMeta({ ...draft, lifecycle: "started" });
+    useAppStore.getState().upsertSessionMeta({ ...draft, lifecycle: undefined });
     await waitFor(() => expect(pending.length).toBe(drafted + 1));
     pending[drafted]!({ provider: "mock", id: "mock-model" });
     await waitFor(() => expect(label()).toBe("mock-model"));

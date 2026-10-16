@@ -5,6 +5,7 @@ import {
   ControlTextArea,
 } from "@/design-system/components/NativeControls";
 import type { DiffFileEntry } from "@agent-deck/contracts";
+import { reviewRunId } from "@agent-deck/domain";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, MessageSquarePlus, Pencil, Trash2 } from "lucide-react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
@@ -410,9 +411,13 @@ export function DiffPanel() {
   // Slice 20: a worktree session is identified by the presence of these meta
   // fields (there is no isWorktree boolean). When set, the panel shows the
   // branch → source toolbar with the primary Merge action.
-  const worktreeBranch = useAppStore((state) => state.session?.worktreeBranch ?? null);
-  const worktreeSourceBranch = useAppStore((state) => state.session?.worktreeSourceBranch ?? null);
-  const loopReviewRunId = useAppStore((state) => state.session?.loopReviewRunId ?? null);
+  const worktreeBranch = useAppStore((state) => state.session?.workspace?.branch ?? null);
+  const worktreeSourceBranch = useAppStore(
+    (state) => state.session?.workspace?.sourceBranch ?? null,
+  );
+  const loopReviewRunId = useAppStore((state) =>
+    state.session ? (reviewRunId(state.session) ?? null) : null,
+  );
   // The gitAutomation setting gates the Merge toolbar, matching the Git screen's
   // Merge banner (one consistent merge gate). `null` until it loads so the
   // toolbar never flashes before the gate is known. Read once on mount (the

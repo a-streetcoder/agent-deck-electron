@@ -8,7 +8,14 @@ import {
 import { Either, Schema } from "effect";
 import { readFile, stat } from "node:fs/promises";
 import type { SessionMeta } from "@agent-deck/contracts";
-import { emptyTranscript, type TranscriptState } from "@agent-deck/domain";
+import {
+  emptyTranscript,
+  LOOP_REVIEW_PROMPT_REFUSAL,
+  operationRefusal,
+  sessionOwner,
+  type SessionOperation,
+  type TranscriptState,
+} from "@agent-deck/domain";
 import { parsePiSessionFile } from "./sessionTools.ts";
 import { transcriptFromEntries } from "./services/sessionManager.ts";
 import type { SessionDraftGateway } from "./sessionDrafts.ts";
@@ -22,7 +29,6 @@ import {
 } from "./terminalLauncher.ts";
 import type { OpenedScript, ScriptRunnerGateway } from "./scriptRunnerGateway.ts";
 import type { ManagedSession, SessionManager } from "./SessionManager.ts";
-import { SESSION_MOVING_ERROR, SESSION_SHARED_ERROR } from "./SessionManager.ts";
 import type { SessionImageStore } from "./sessionImages.ts";
 import type { IncomingMessage } from "node:http";
 import type { SessionPasteStore } from "./sessionPastes.ts";
@@ -90,19 +96,18 @@ export async function readPiTranscript(meta: SessionMeta): Promise<TranscriptSta
 export const pointerTranscriptCacheSize = (): number => pointerTranscripts.size;
 
 /** SRV-12c2: a prompt to a Loop review session. */
-export const LOOP_REVIEW_PROMPT_REFUSAL =
-  "A Loop review session runs from its Loop. Open the run from Loops instead.";
+export { LOOP_REVIEW_PROMPT_REFUSAL };
 
-/** SRV-12c1: requests refused while a session is handed to the shared server. */
-const MOVE_FROZEN = new Set([
-  "prompt",
-  "steer",
-  "follow_up",
-  "compact",
-  "checkpoint_rollback",
-  "set_model",
-  "set_thinking",
-]);
+/** ADR 0006: the session operation each runtime request is (allowedOperations). */
+const RPC_OPERATIONS: Partial<Record<string, SessionOperation>> = {
+  prompt: "prompt",
+  steer: "steer",
+  follow_up: "steer",
+  compact: "compact",
+  checkpoint_rollback: "rollback",
+  set_model: "configure",
+  set_thinking: "configure",
+};
 
 // Terminal push backpressure (Slice 8 hardening): a PTY is a sustained
 // multi-MB/s producer (`yes`, `cat largefile`), and `ws` buffers frames in
@@ -459,7 +464,7 @@ export function createRpcConnection(deps: {
       /^\/mcp(\s|$)/.test(request.message.trimStart())
     ) {
       const meta = sessions.get(request.sessionId)?.meta ?? deps.drafts?.find(request.sessionId);
-      if (meta?.createdBy?.id !== deps.user.id) {
+      if (!meta || sessionOwner(meta)?.id !== deps.user.id) {
         replyError(
           "Only the session owner can run /mcp here: it signs in or out with the owner's MCP tokens.",
         );
@@ -467,22 +472,15 @@ export function createRpcConnection(deps: {
       }
     }
 
-    // SRV-12c2: a Loop review session is driven by its run, never by a person's
-    // prompt (socket or POST /sessions/:id/prompt, which comes through here too).
-    if (
-      (request.type === "prompt" || request.type === "steer" || request.type === "follow_up") &&
-      sessions.get(request.sessionId)?.meta?.loopReviewRunId
-    ) {
-      replyError(LOOP_REVIEW_PROMPT_REFUSAL);
-      return;
-    }
-
-    // SRV-12c1: a session moved to a shared server is a frozen pointer: it shows
-    // as an empty, process-free session and refuses everything else.
-    const pointer =
-      "sessionId" in request ? deps.drafts?.sharedPointer?.(request.sessionId) : undefined;
-    if ("sessionId" in request && pointer) {
-      if (request.type === "subscribe_session") {
+    // ADR 0006: the record's allowed operations decide. SRV-12c2: a Loop review
+    // session is driven by its run, never by a person's prompt (socket or POST
+    // /sessions/:id/prompt, which comes through here too). SRV-12c1: a session
+    // moved to a shared server is a frozen pointer: it shows as an empty,
+    // process-free session and refuses everything else; while a session is
+    // being handed over, nothing that changes it starts.
+    if ("sessionId" in request) {
+      const pointer = deps.drafts?.sharedPointer?.(request.sessionId);
+      if (pointer && request.type === "subscribe_session") {
         cleanups.get(request.sessionId)?.();
         cleanups.delete(request.sessionId);
         push({
@@ -492,19 +490,28 @@ export function createRpcConnection(deps: {
           state: await pointerTranscript(pointer),
         });
         replyOk();
-      } else if (request.type === "abort") replyOk();
-      else replyError(SESSION_SHARED_ERROR);
-      return;
-    }
-    // ...and while it is being handed over, nothing that changes it starts.
-    if (
-      "sessionId" in request &&
-      MOVE_FROZEN.has(request.type) &&
-      // Narrow test doubles may have no claims.
-      sessions.mutationClaims?.owner(request.sessionId) === "share"
-    ) {
-      replyError(SESSION_MOVING_ERROR);
-      return;
+        return;
+      }
+      if (pointer && request.type === "abort") return replyOk();
+      const operation = RPC_OPERATIONS[request.type] ?? (pointer ? "runtime" : undefined);
+      // A session this handler holds no record of can still be mid-move (its
+      // claim): the bare id is enough for that decision.
+      const meta = pointer ??
+        sessions.get(request.sessionId)?.meta ?? {
+          id: request.sessionId,
+          cwd: "",
+          createdAt: "",
+        };
+      const refused = operation
+        ? operationRefusal(meta, operation, undefined, {
+            // Narrow test doubles may have no claims.
+            moving: sessions.mutationClaims?.owner(request.sessionId) === "share",
+          })
+        : undefined;
+      if (refused) {
+        replyError(refused.code ? `${refused.code}: ${refused.error}` : refused.error);
+        return;
+      }
     }
 
     // A draft is durable metadata, not a fake running Pi session. Only a first

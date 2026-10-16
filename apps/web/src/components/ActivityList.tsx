@@ -13,7 +13,7 @@ import { cn } from "@/lib/cn";
 import { userDisplayName } from "@/lib/userIdentity";
 import { useAppStore, type AppView } from "../state/store.ts";
 import { refreshProjectLog, switchToSession } from "../state/wsBridge.ts";
-import { forkOriginText } from "./ForkProvenanceCard.tsx";
+import { forkOriginText, forkSourceOf } from "./ForkProvenanceCard.tsx";
 
 // ponytail: renders the newest rows only; virtualize if the full 2,000 are ever wanted.
 const SHOWN = 100;
@@ -179,13 +179,12 @@ export function ActivityList({ member = null }: { member?: string | null } = {})
                   ? event.parent.id
                   : undefined;
               const forkSource = sessions.find((candidate) => candidate.id === forkParent);
+              const origin = forkSourceOf(link.session);
               const forkedFrom =
                 forkParent !== undefined
                   ? forkOriginText(
-                      link.session?.forkedFrom?.title ??
-                        link.session?.forkProvenance?.sourceTitle ??
-                        forkSource?.title,
-                      link.session?.forkedFrom?.owner ?? forkSource?.createdBy,
+                      origin?.title ?? forkSource?.title,
+                      origin?.owner ?? forkSource?.createdBy,
                       me,
                     )
                   : null;

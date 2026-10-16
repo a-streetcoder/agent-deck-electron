@@ -328,7 +328,9 @@ export class HistoryActionCoordinator {
       if (action === "fork") {
         try {
           const targetSession = await this.sessions.materializeHistoryFork(
-            fork?.launchPlan ? { ...originalMeta, launchPlan: fork.launchPlan } : originalMeta,
+            fork?.launchPlan
+              ? { ...originalMeta, launch: { ...originalMeta.launch, plan: fork.launchPlan } }
+              : originalMeta,
             branchFile,
             this.env(),
             forkProvenance,

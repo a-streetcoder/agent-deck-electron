@@ -69,11 +69,11 @@ async function waitForRebind(sessionId: string, generation?: string): Promise<vo
       `command refresh did not rebind: ${JSON.stringify({
         generation,
         currentGeneration: current?.meta.streamGeneration,
-        fingerprint: current?.meta.launchResourceFingerprint,
-        error: current?.meta.resourceRefreshError,
+        fingerprint: current?.meta.launch?.fingerprint,
+        error: current?.meta.launch?.refreshError,
         status: current?.snapshot().state.agentStatus,
         parked: current?.isParked,
-        hasConfig: Boolean(current?.meta.launchResourceConfig),
+        hasConfig: Boolean(current?.meta.launch?.resourceConfig),
       })}`,
     );
   }

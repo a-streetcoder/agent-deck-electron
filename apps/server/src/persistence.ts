@@ -1,4 +1,22 @@
-import type { ProjectMeta, SessionMeta, UserIdentity } from "@agent-deck/contracts";
+import { copyFileSync, existsSync, renameSync } from "node:fs";
+import path from "node:path";
+import type {
+  ProjectMeta,
+  SessionActorRef,
+  SessionLaunch,
+  SessionLocation,
+  SessionMeta,
+  SessionProvenance,
+  SessionWorkspace,
+  ThinkingLevel,
+  UserIdentity,
+} from "@agent-deck/contracts";
+import {
+  actorRef,
+  isLegacySessionRecord,
+  migrateSessionMeta,
+  type SessionLocationKind,
+} from "@agent-deck/domain";
 import { Effect, Option } from "effect";
 import { migrateProviderId } from "./azureProviderRename.ts";
 import { runSyncUnwrapped } from "./effectRun.ts";
@@ -57,265 +75,303 @@ class JsonArrayStore<T extends { id: string }> {
   remove(id: string): boolean {
     return runSyncUnwrapped(this.handle.remove(id));
   }
+
+  /** Write the loaded (normalized) items back as they are: one atomic flush. */
+  protected rewrite(): void {
+    const first = this.list()[0];
+    if (first) this.upsert(first);
+  }
+}
+
+type Loose = Record<string, unknown>;
+const isObject = (value: unknown): value is Loose =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const SHA256 = /^[0-9a-f]{64}$/;
+const MODES = ["snapshot", "conversation"] as const;
+const isMode = (value: unknown): value is (typeof MODES)[number] =>
+  MODES.includes(value as (typeof MODES)[number]);
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/** A persisted identity, bounded; undefined unless it has the exact shape. */
+function identity(raw: unknown): UserIdentity | undefined {
+  if (
+    !isObject(raw) ||
+    typeof raw.id !== "string" ||
+    !["undefined", "string"].includes(typeof raw.name)
+  ) {
+    return undefined;
+  }
+  return {
+    id: raw.id.slice(0, 320),
+    ...(typeof raw.name === "string" ? { name: raw.name.slice(0, 200) } : {}),
+  };
+}
+
+function provenanceOf(raw: unknown): SessionProvenance | undefined {
+  if (!isObject(raw) || typeof raw.kind !== "string" || typeof raw.at !== "string")
+    return undefined;
+  const by: SessionActorRef | undefined =
+    raw.by === "system"
+      ? "system"
+      : isObject(raw.by) && typeof raw.by.agent === "string"
+        ? { agent: raw.by.agent.slice(0, 200) }
+        : isObject(raw.by)
+          ? actorRef(identity(raw.by.user))
+          : undefined;
+  if (!by) return undefined;
+  const from = raw.from;
+  let source: SessionProvenance["from"];
+  if (isObject(from) && typeof from.sessionId === "string") {
+    const owner = identity(from.owner);
+    source = {
+      sessionId: from.sessionId,
+      ...(typeof from.serverOrigin === "string" ? { serverOrigin: from.serverOrigin } : {}),
+      ...(typeof from.title === "string" ? { title: from.title.slice(0, 200) } : {}),
+      ...(owner ? { owner } : {}),
+      ...(typeof from.entryId === "string" ? { entryId: from.entryId } : {}),
+    };
+  } else if (
+    isObject(from) &&
+    typeof from.device === "string" &&
+    typeof from.localSessionId === "string"
+  ) {
+    source = { device: from.device.slice(0, 200), localSessionId: from.localSessionId };
+  } else if (isObject(from) && typeof from.runId === "string") {
+    source = { runId: from.runId };
+  }
+  const recap = raw.recap;
+  return {
+    kind: raw.kind as SessionProvenance["kind"],
+    ...(source ? { from: source } : {}),
+    by,
+    at: raw.at,
+    ...(isObject(recap) && typeof recap.text === "string" && typeof recap.truncated === "boolean"
+      ? { recap: { text: recap.text, truncated: recap.truncated } }
+      : {}),
+    ...(isMode(raw.mode) ? { mode: raw.mode } : {}),
+  };
+}
+
+function locationOf(raw: unknown, where: SessionLocationKind, creator?: UserIdentity) {
+  const location: SessionLocation = {
+    // Never a stored fact: the side of the process reading the index decides.
+    kind: where,
+  };
+  if (!isObject(raw)) {
+    if (creator) location.owner = creator;
+    return location;
+  }
+  const owner = identity(raw.owner);
+  if (owner) location.owner = owner;
+  // SRV-12c1/12c3: the copy that continues, kept only with its exact shape.
+  const live = raw.live;
+  if (
+    isObject(live) &&
+    typeof live.sessionId === "string" &&
+    typeof live.at === "string" &&
+    isMode(live.mode)
+  ) {
+    if (typeof live.serverOrigin === "string")
+      location.live = {
+        serverOrigin: live.serverOrigin,
+        sessionId: live.sessionId,
+        at: live.at,
+        mode: live.mode,
+      };
+    else if (typeof live.device === "string")
+      location.live = {
+        device: live.device.slice(0, 200),
+        sessionId: live.sessionId,
+        at: live.at,
+        mode: live.mode,
+      };
+  }
+  const transfer = raw.transfer;
+  if (
+    isObject(transfer) &&
+    transfer.direction === "return" &&
+    ["token", "serverOrigin", "sessionId", "until"].every(
+      (key) => typeof transfer[key] === "string",
+    ) &&
+    ["undefined", "string"].includes(typeof transfer.ref)
+  ) {
+    location.transfer = {
+      direction: "return",
+      token: transfer.token as string,
+      serverOrigin: transfer.serverOrigin as string,
+      sessionId: transfer.sessionId as string,
+      ...(typeof transfer.ref === "string" ? { ref: transfer.ref } : {}),
+      until: transfer.until as string,
+    };
+  }
+  const pr = raw.mergePr;
+  if (
+    isObject(pr) &&
+    typeof pr.url === "string" &&
+    /^https:\/\//.test(pr.url) &&
+    Number.isSafeInteger(pr.number) &&
+    ["undefined", "string"].includes(typeof pr.openedAt)
+  ) {
+    location.mergePr = {
+      url: pr.url,
+      number: pr.number as number,
+      ...(typeof pr.openedAt === "string" ? { openedAt: pr.openedAt } : {}),
+    };
+  }
+  return location;
+}
+
+function workspaceOf(raw: unknown): SessionWorkspace | undefined {
+  if (!isObject(raw)) return undefined;
+  const workspace = Object.fromEntries(
+    (["path", "identity", "branch", "sourceBranch", "cleanupBranchHead", "ownerSessionId"] as const)
+      .filter((key) => typeof raw[key] === "string")
+      .map((key) => [key, raw[key]]),
+  ) as SessionWorkspace;
+  return Object.keys(workspace).length > 0 ? workspace : undefined;
+}
+
+const validStringArray = (value: unknown): value is string[] | undefined =>
+  value === undefined ||
+  (Array.isArray(value) &&
+    value.length <= 256 &&
+    value.every((item) => typeof item === "string" && item.length <= 4096));
+
+function launchOf(raw: unknown): SessionLaunch | undefined {
+  if (!isObject(raw)) return undefined;
+  const launch: SessionLaunch = {};
+  const resources = raw.resourceConfig;
+  if (
+    isObject(resources) &&
+    resources.version === 1 &&
+    ["undefined", "string"].includes(typeof resources.providerOverride) &&
+    ["undefined", "string"].includes(typeof resources.modelOverride) &&
+    validStringArray(resources.extensionsOverride) &&
+    validStringArray(resources.skillsOverride) &&
+    (resources.thinkingOverride === undefined ||
+      THINKING_LEVELS.includes(resources.thinkingOverride as string))
+  ) {
+    // Rebuild from the public allowlist instead of retaining unknown fields.
+    // In particular, never surface an envOverride written by a pre-release
+    // build: session metadata is persisted and returned over HTTP/WS.
+    launch.resourceConfig = {
+      version: 1,
+      ...(typeof resources.providerOverride === "string"
+        ? { providerOverride: migrateProviderId(resources.providerOverride) }
+        : {}),
+      ...(typeof resources.modelOverride === "string"
+        ? { modelOverride: resources.modelOverride }
+        : {}),
+      ...(resources.extensionsOverride !== undefined
+        ? { extensionsOverride: [...(resources.extensionsOverride as string[])] }
+        : {}),
+      ...(resources.skillsOverride !== undefined
+        ? { skillsOverride: [...(resources.skillsOverride as string[])] }
+        : {}),
+      ...(resources.thinkingOverride !== undefined
+        ? { thinkingOverride: resources.thinkingOverride as ThinkingLevel }
+        : {}),
+    };
+    // The fingerprint describes those resources: never one without them.
+    if (typeof raw.fingerprint === "string" && SHA256.test(raw.fingerprint))
+      launch.fingerprint = raw.fingerprint;
+  }
+  // Pi 1.0.3 provider rename (azure-openai-responses -> azure), mapped on load.
+  const plan = raw.plan;
+  if (isObject(plan) && typeof plan.provider === "string") {
+    launch.plan = { ...plan, provider: migrateProviderId(plan.provider) };
+  } else if (plan !== undefined) launch.plan = plan;
+  if (typeof raw.refreshError === "string") launch.refreshError = raw.refreshError.slice(0, 500);
+  return Object.keys(launch).length > 0 ? launch : undefined;
+}
+
+/**
+ * One persisted record as the server trusts it: a legacy record is migrated to
+ * the v2 shape first (ADR 0006), then every field is kept only with its exact
+ * shape, so nothing malformed reaches a route or the wire.
+ */
+export function normalizeSession(stored: SessionMeta, where: SessionLocationKind): SessionMeta {
+  const session = migrateSessionMeta(stored, where);
+  const normalized: SessionMeta = {
+    ...session,
+    ...(session.needsAttention === undefined
+      ? {}
+      : { needsAttention: session.needsAttention === true }),
+  };
+  // Only a draft is persisted; every other lifecycle is derived.
+  if (normalized.lifecycle !== "draft") delete normalized.lifecycle;
+  if (typeof normalized.draftWorktreeIsolation !== "boolean") {
+    delete normalized.draftWorktreeIsolation;
+  }
+  if (
+    normalized.draftThinkingLevel !== undefined &&
+    !THINKING_LEVELS.includes(normalized.draftThinkingLevel)
+  ) {
+    delete normalized.draftThinkingLevel;
+  }
+  const audit: unknown = session.finalSystemPromptAudit;
+  if (
+    !isObject(audit) ||
+    typeof audit.text !== "string" ||
+    typeof audit.capturedAt !== "string" ||
+    Number.isNaN(Date.parse(audit.capturedAt))
+  ) {
+    delete normalized.finalSystemPromptAudit;
+  }
+  const creator = identity(session.createdBy);
+  if (creator) normalized.createdBy = creator;
+  else delete normalized.createdBy;
+  normalized.provenance = provenanceOf(session.provenance) ?? {
+    kind: "created",
+    by: actorRef(creator),
+    at: normalized.createdAt,
+  };
+  normalized.location = locationOf(session.location, where, creator);
+  const workspace = workspaceOf(session.workspace);
+  if (workspace) normalized.workspace = workspace;
+  else delete normalized.workspace;
+  const launch = launchOf(session.launch);
+  if (launch) normalized.launch = launch;
+  else delete normalized.launch;
+  if (
+    typeof normalized.transcriptSha256 !== "string" ||
+    !SHA256.test(normalized.transcriptSha256)
+  ) {
+    delete normalized.transcriptSha256;
+  }
+  if (
+    typeof normalized.parkedAt !== "string" ||
+    Number.isNaN(Date.parse(normalized.parkedAt)) ||
+    normalized.endedAt !== undefined
+  ) {
+    delete normalized.parkedAt;
+  }
+  return normalized;
 }
 
 export class SessionIndex extends JsonArrayStore<SessionMeta> {
-  constructor(dataDir: string = defaultDataDir()) {
-    super(dataDir, "sessions.json", (session) => {
-      const rawAudit = (session as SessionMeta & { finalSystemPromptAudit?: unknown })
-        .finalSystemPromptAudit;
-      const validAudit =
-        rawAudit !== null &&
-        typeof rawAudit === "object" &&
-        typeof (rawAudit as Record<string, unknown>).text === "string" &&
-        typeof (rawAudit as Record<string, unknown>).capturedAt === "string" &&
-        !Number.isNaN(Date.parse((rawAudit as Record<string, unknown>).capturedAt as string));
-      const normalized = {
-        ...session,
-        ...(session.needsAttention === undefined
-          ? {}
-          : { needsAttention: session.needsAttention === true }),
-      };
-      if (normalized.lifecycle !== "draft" && normalized.lifecycle !== "started") {
-        delete normalized.lifecycle;
-      }
-      if (typeof normalized.draftWorktreeIsolation !== "boolean") {
-        delete normalized.draftWorktreeIsolation;
-      }
-      if (
-        normalized.draftThinkingLevel !== undefined &&
-        !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
-          normalized.draftThinkingLevel,
-        )
-      ) {
-        delete normalized.draftThinkingLevel;
-      }
-      if (!validAudit) delete normalized.finalSystemPromptAudit;
-      const identity = (raw: unknown): { id: string; name?: string } | undefined => {
-        if (
-          !raw ||
-          typeof raw !== "object" ||
-          typeof (raw as { id?: unknown }).id !== "string" ||
-          !["undefined", "string"].includes(typeof (raw as { name?: unknown }).name)
-        ) {
-          return undefined;
-        }
-        const user = raw as { id: string; name?: string };
-        return {
-          id: user.id.slice(0, 320),
-          ...(user.name !== undefined ? { name: user.name.slice(0, 200) } : {}),
-        };
-      };
-      const creator = identity((session as SessionMeta & { createdBy?: unknown }).createdBy);
-      if (creator) normalized.createdBy = creator;
-      else delete normalized.createdBy;
-      // SRV-15b: a plain fork's origin, the same shape checks as createdBy.
-      const rawFork = (session as SessionMeta & { forkedFrom?: unknown }).forkedFrom as
-        | { sessionId?: unknown; title?: unknown; owner?: unknown }
-        | undefined;
-      if (
-        !rawFork ||
-        typeof rawFork !== "object" ||
-        typeof rawFork.sessionId !== "string" ||
-        !["undefined", "string"].includes(typeof rawFork.title)
-      ) {
-        delete normalized.forkedFrom;
-      } else {
-        const owner = identity(rawFork.owner);
-        normalized.forkedFrom = {
-          sessionId: rawFork.sessionId,
-          ...(typeof rawFork.title === "string" ? { title: rawFork.title.slice(0, 200) } : {}),
-          ...(owner ? { owner } : {}),
-        };
-      }
-      // SRV-12c1: the move links, kept only with their exact shape.
-      const shareLink = (
-        raw: unknown,
-        idKey: "serverSessionId" | "localSessionId" | "deviceSessionId",
-      ) => {
-        const link = raw as Record<string, unknown> | null | undefined;
-        if (
-          !link ||
-          typeof link !== "object" ||
-          typeof link[idKey] !== "string" ||
-          typeof link.sharedAt !== "string" ||
-          (link.mode !== "snapshot" && link.mode !== "conversation")
-        ) {
-          return undefined;
-        }
-        return link;
-      };
-      const sharedTo = shareLink(normalized.sharedTo, "serverSessionId");
-      // SRV-12c3: a server copy brought back to a device points at that device.
-      const returned = shareLink(normalized.sharedTo, "deviceSessionId");
-      if (sharedTo && typeof sharedTo.serverOrigin === "string") {
-        normalized.sharedTo = {
-          serverOrigin: sharedTo.serverOrigin,
-          serverSessionId: sharedTo.serverSessionId as string,
-          sharedAt: sharedTo.sharedAt as string,
-          mode: sharedTo.mode as "snapshot" | "conversation",
-        };
-      } else if (
-        returned &&
-        returned.serverOrigin === null &&
-        typeof returned.device === "string"
-      ) {
-        normalized.sharedTo = {
-          serverOrigin: null,
-          device: returned.device.slice(0, 200),
-          deviceSessionId: returned.deviceSessionId as string,
-          sharedAt: returned.sharedAt as string,
-          mode: returned.mode as "snapshot" | "conversation",
-        };
-      } else delete normalized.sharedTo;
-      const back = normalized.returnedFrom as Record<string, unknown> | undefined;
-      if (
-        back &&
-        typeof back === "object" &&
-        typeof back.serverOrigin === "string" &&
-        typeof back.serverSessionId === "string" &&
-        typeof back.returnedAt === "string"
-      ) {
-        const pr = back.mergePr as { url?: unknown; number?: unknown } | undefined;
-        normalized.returnedFrom = {
-          serverOrigin: back.serverOrigin,
-          serverSessionId: back.serverSessionId,
-          returnedAt: back.returnedAt,
-          ...(pr &&
-          typeof pr.url === "string" &&
-          /^https:\/\//.test(pr.url) &&
-          Number.isSafeInteger(pr.number)
-            ? { mergePr: { url: pr.url, number: pr.number as number } }
-            : {}),
-        };
-      } else delete normalized.returnedFrom;
-      const pending = normalized.returnPending as Record<string, unknown> | undefined;
-      if (
-        pending &&
-        typeof pending === "object" &&
-        ["token", "serverOrigin", "serverSessionId", "until"].every(
-          (key) => typeof pending[key] === "string",
-        ) &&
-        ["undefined", "string"].includes(typeof pending.ref)
-      ) {
-        normalized.returnPending = {
-          token: pending.token as string,
-          serverOrigin: pending.serverOrigin as string,
-          serverSessionId: pending.serverSessionId as string,
-          until: pending.until as string,
-          ...(typeof pending.ref === "string" ? { ref: pending.ref } : {}),
-        };
-      } else delete normalized.returnPending;
-
-      const pr = normalized.mergePr as Record<string, unknown> | undefined;
-      if (
-        pr &&
-        typeof pr === "object" &&
-        typeof pr.url === "string" &&
-        /^https:\/\//.test(pr.url) &&
-        Number.isSafeInteger(pr.number) &&
-        typeof pr.openedAt === "string"
-      ) {
-        normalized.mergePr = {
-          url: pr.url,
-          number: pr.number as number,
-          openedAt: pr.openedAt,
-        };
-      } else delete normalized.mergePr;
-      const sharedFrom = shareLink(normalized.sharedFrom, "localSessionId");
-      if (sharedFrom && typeof sharedFrom.device === "string") {
-        normalized.sharedFrom = {
-          device: sharedFrom.device.slice(0, 200),
-          localSessionId: sharedFrom.localSessionId as string,
-          sharedAt: sharedFrom.sharedAt as string,
-          mode: sharedFrom.mode as "snapshot" | "conversation",
-          ...(typeof sharedFrom.exportSha256 === "string" &&
-          /^[0-9a-f]{64}$/.test(sharedFrom.exportSha256)
-            ? { exportSha256: sharedFrom.exportSha256 }
-            : {}),
-        };
-      } else delete normalized.sharedFrom;
-      const rawResources = (session as SessionMeta & { launchResourceConfig?: unknown })
-        .launchResourceConfig;
-      const validStringArray = (value: unknown): value is string[] | undefined =>
-        value === undefined ||
-        (Array.isArray(value) &&
-          value.length <= 256 &&
-          value.every((item) => typeof item === "string" && item.length <= 4096));
-      if (
-        !rawResources ||
-        typeof rawResources !== "object" ||
-        (rawResources as { version?: unknown }).version !== 1 ||
-        !["undefined", "string"].includes(
-          typeof (rawResources as { providerOverride?: unknown }).providerOverride,
-        ) ||
-        !["undefined", "string"].includes(
-          typeof (rawResources as { modelOverride?: unknown }).modelOverride,
-        ) ||
-        !validStringArray((rawResources as { extensionsOverride?: unknown }).extensionsOverride) ||
-        !validStringArray((rawResources as { skillsOverride?: unknown }).skillsOverride) ||
-        ![undefined, "off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
-          (rawResources as { thinkingOverride?: string }).thinkingOverride,
-        )
-      ) {
-        delete normalized.launchResourceConfig;
-        delete normalized.launchResourceFingerprint;
-      } else {
-        // Rebuild from the public allowlist instead of retaining unknown fields.
-        // In particular, never surface an envOverride written by a pre-release
-        // build: session metadata is persisted and returned over HTTP/WS.
-        const resources = rawResources as {
-          providerOverride?: string;
-          modelOverride?: string;
-          extensionsOverride?: string[];
-          skillsOverride?: string[];
-          thinkingOverride?: NonNullable<SessionMeta["draftThinkingLevel"]>;
-        };
-        normalized.launchResourceConfig = {
-          version: 1,
-          ...(resources.providerOverride !== undefined
-            ? { providerOverride: migrateProviderId(resources.providerOverride) }
-            : {}),
-          ...(resources.modelOverride !== undefined
-            ? { modelOverride: resources.modelOverride }
-            : {}),
-          ...(resources.extensionsOverride !== undefined
-            ? { extensionsOverride: [...resources.extensionsOverride] }
-            : {}),
-          ...(resources.skillsOverride !== undefined
-            ? { skillsOverride: [...resources.skillsOverride] }
-            : {}),
-          ...(resources.thinkingOverride !== undefined
-            ? { thinkingOverride: resources.thinkingOverride }
-            : {}),
-        };
-      }
-      // Pi 1.0.3 provider rename (azure-openai-responses -> azure), mapped on load.
-      const plan = normalized.launchPlan as { provider?: unknown } | null | undefined;
-      if (plan && typeof plan === "object" && typeof plan.provider === "string") {
-        const provider = migrateProviderId(plan.provider);
-        if (provider !== plan.provider) normalized.launchPlan = { ...plan, provider };
-      }
-      if (
-        typeof normalized.launchResourceFingerprint !== "string" ||
-        !/^[0-9a-f]{64}$/.test(normalized.launchResourceFingerprint)
-      ) {
-        delete normalized.launchResourceFingerprint;
-      }
-      if (typeof normalized.resourceRefreshError !== "string") {
-        delete normalized.resourceRefreshError;
-      } else {
-        normalized.resourceRefreshError = normalized.resourceRefreshError.slice(0, 500);
-      }
-      if (
-        typeof normalized.parkedAt !== "string" ||
-        Number.isNaN(Date.parse(normalized.parkedAt)) ||
-        normalized.endedAt !== undefined
-      ) {
-        delete normalized.parkedAt;
-      }
-      return normalized;
+  /** `where`: the side this index lives on, every record's `location.kind`. */
+  constructor(dataDir: string = defaultDataDir(), where: SessionLocationKind = "local") {
+    let legacy = false;
+    super(dataDir, "sessions.json", (stored) => {
+      // Unversioned, or a legacy key an older build wrote beside a migrated record.
+      if (isLegacySessionRecord(stored)) legacy = true;
+      return normalizeSession(stored, where);
     });
+    // ADR 0006: a legacy index is written back in the v2 shape. The file as it
+    // was the first time is kept beside it (sessions.v1.bak.json) for one
+    // release: written to a temporary file and renamed, so an interrupted copy
+    // never leaves a partial backup, and never replaced by a later one.
+    if (legacy) {
+      const file = path.join(dataDir, "sessions.json");
+      const backup = path.join(dataDir, "sessions.v1.bak.json");
+      if (!existsSync(backup)) {
+        const temporary = `${backup}.tmp`;
+        copyFileSync(file, temporary);
+        renameSync(temporary, backup);
+      }
+      this.rewrite();
+    }
   }
 }
 

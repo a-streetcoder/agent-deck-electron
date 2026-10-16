@@ -1,28 +1,36 @@
 import { ControlButton } from "@/design-system/components/NativeControls";
 import { Eye, GitFork, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { ForkProvenance, SessionMeta, UserIdentity } from "@agent-deck/contracts";
+import type { ProvenanceFrom, SessionMeta, UserIdentity } from "@agent-deck/contracts";
+import { lineage } from "@agent-deck/domain";
 import { userDisplayName } from "@/lib/userIdentity";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { useAppStore } from "../state/store.ts";
 import { switchToSession } from "../state/wsBridge.ts";
 
-function validProvenance(value: unknown): ForkProvenance | null {
-  if (!value || typeof value !== "object") return null;
-  const item = value as Record<string, unknown>;
-  if (
-    item.version !== 1 ||
-    typeof item.sourceSessionId !== "string" ||
-    !item.sourceSessionId ||
-    typeof item.sourceEntryId !== "string" ||
-    !item.sourceEntryId ||
-    typeof item.sourceTitle !== "string" ||
-    typeof item.recap !== "string" ||
-    typeof item.recapTruncated !== "boolean"
-  ) {
-    return null;
-  }
-  return item as unknown as ForkProvenance;
+type ForkSource = Extract<ProvenanceFrom, { sessionId: string }>;
+type Recap = { text: string; truncated: boolean };
+
+/** ADR 0006: the session a fork was made from, from its provenance (a future or
+ * malformed record shows no origin rather than a wrong one). */
+export function forkSourceOf(session: SessionMeta | undefined): ForkSource | undefined {
+  const provenance = session?.provenance;
+  if (!provenance || provenance.kind !== "forked") return undefined;
+  const from = provenance.from as Partial<ForkSource> | undefined;
+  return from && typeof from.sessionId === "string" && from.sessionId
+    ? (from as ForkSource)
+    : undefined;
+}
+
+/** The inherited-conversation recap of a fork made at a message. */
+function messageForkRecap(session: SessionMeta, from: ForkSource): Recap | null {
+  const recap = session.provenance?.recap as Partial<Recap> | undefined;
+  return typeof from.entryId === "string" &&
+    from.entryId &&
+    typeof recap?.text === "string" &&
+    typeof recap.truncated === "boolean"
+    ? { text: recap.text, truncated: recap.truncated }
+    : null;
 }
 
 /** SRV-15b: "Forked from Alice's session “Title”" (whose, when the server knows). */
@@ -37,7 +45,15 @@ export function forkOriginText(
   return `Forked from ${whose} session ${quoted}`;
 }
 
-function RecapDialog({ provenance, onClose }: { provenance: ForkProvenance; onClose: () => void }) {
+function RecapDialog({
+  title,
+  recap,
+  onClose,
+}: {
+  title: string | undefined;
+  recap: Recap;
+  onClose: () => void;
+}) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useFocusTrap<HTMLDivElement>(true, closeRef);
   useEffect(() => {
@@ -66,7 +82,7 @@ function RecapDialog({ provenance, onClose }: { provenance: ForkProvenance; onCl
             <h2 id="fork-recap-title" className="font-medium text-text-primary">
               Inherited conversation recap
             </h2>
-            <p className="text-caption text-text-muted">Forked from “{provenance.sourceTitle}”</p>
+            <p className="text-caption text-text-muted">Forked from “{title ?? ""}”</p>
           </div>
           <ControlButton
             ref={closeRef}
@@ -79,14 +95,14 @@ function RecapDialog({ provenance, onClose }: { provenance: ForkProvenance; onCl
           </ControlButton>
         </header>
         <div className="min-h-32 flex-1 overflow-y-auto p-4" data-testid="fork-recap-content">
-          {provenance.recapTruncated ? (
+          {recap.truncated ? (
             <p className="mb-3 rounded-lg border border-border px-3 py-2 text-body text-text-muted">
               Earlier conversation was omitted to keep this recap bounded.
             </p>
           ) : null}
-          {provenance.recap ? (
+          {recap.text ? (
             <pre className="whitespace-pre-wrap break-words font-sans text-body text-text-secondary">
-              {provenance.recap}
+              {recap.text}
             </pre>
           ) : (
             <p className="text-body text-text-muted">No earlier conversation was inherited.</p>
@@ -98,17 +114,28 @@ function RecapDialog({ provenance, onClose }: { provenance: ForkProvenance; onCl
 }
 
 export function ForkProvenanceCard({ session }: { session: SessionMeta }) {
-  const provenance = validProvenance(
-    (session as SessionMeta & { forkProvenance?: unknown }).forkProvenance,
+  // ADR 0006: the source record, when this side holds it (lineage over provenance).
+  const source = useAppStore(
+    (state) =>
+      lineage([...state.sessions.filter((item) => item.id !== session.id), session], session.id)
+        .ancestors[0],
   );
-  const sessions = useAppStore((state) => state.sessions);
   const me = useAppStore((state) => state.me);
   const [recapOpen, setRecapOpen] = useState(false);
-  if (!provenance) {
-    // SRV-15b: a plain fork (a full duplicate) has no recap, only its origin.
-    const from = session.forkedFrom;
+  const from = forkSourceOf(session);
+  const recap = from ? messageForkRecap(session, from) : null;
+  if (!from || !recap) {
     // SRV-12c1: a session moved here from a member's device.
-    const moved = session.sharedFrom;
+    const provenance = session.provenance;
+    // Read defensively: a future or malformed origin shows nothing.
+    const origin = (provenance?.kind === "imported" ? provenance.from : undefined) as
+      | { device?: unknown }
+      | null
+      | undefined;
+    const moved =
+      typeof origin === "object" && origin !== null && typeof origin.device === "string"
+        ? origin.device
+        : undefined;
     if (!from && moved) {
       return (
         <section
@@ -117,16 +144,16 @@ export function ForkProvenanceCard({ session }: { session: SessionMeta }) {
           data-testid="shared-from-line"
         >
           <span className="min-w-0 truncate">
-            Moved from {moved.device}.
-            {moved.mode === "conversation"
-              ? ` Earlier edits from ${moved.device} are not in this workspace.`
+            Moved from {moved}.
+            {provenance?.mode === "conversation"
+              ? ` Earlier edits from ${moved} are not in this workspace.`
               : ""}
           </span>
         </section>
       );
     }
+    // SRV-15b: a plain fork (a full duplicate) has no recap, only its origin.
     if (!from) return null;
-    const source = sessions.find((candidate) => candidate.id === from.sessionId);
     return (
       <section
         className="flex items-center gap-2 px-1 text-caption text-text-muted"
@@ -147,7 +174,6 @@ export function ForkProvenanceCard({ session }: { session: SessionMeta }) {
       </section>
     );
   }
-  const source = sessions.find((candidate) => candidate.id === provenance.sourceSessionId);
 
   return (
     <>
@@ -159,7 +185,7 @@ export function ForkProvenanceCard({ session }: { session: SessionMeta }) {
         <GitFork size={18} className="shrink-0 text-accent" aria-hidden />
         <div className="min-w-0 flex-1">
           <p className="truncate text-label font-medium text-text-primary">
-            {forkOriginText(provenance.sourceTitle, source?.createdBy, me)}
+            {forkOriginText(from.title, source?.createdBy, me)}
           </p>
           <p className="text-caption text-text-muted">
             {source ? "Source chat is available." : "Source chat is no longer available."}
@@ -183,7 +209,7 @@ export function ForkProvenanceCard({ session }: { session: SessionMeta }) {
         </ControlButton>
       </section>
       {recapOpen ? (
-        <RecapDialog provenance={provenance} onClose={() => setRecapOpen(false)} />
+        <RecapDialog title={from.title} recap={recap} onClose={() => setRecapOpen(false)} />
       ) : null}
     </>
   );

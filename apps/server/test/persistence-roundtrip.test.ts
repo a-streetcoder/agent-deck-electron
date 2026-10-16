@@ -1,4 +1,4 @@
-import { copyFileSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -110,7 +110,7 @@ describe("persistence service — existing-data-dir round-trip", () => {
     expect(loaded.find((row) => row.id === "ended-parked")?.parkedAt).toBeUndefined();
   });
 
-  it("SRV-15b: keeps a well-formed forkedFrom and drops a malformed one", () => {
+  it("ADR 0006: migrates a legacy forkedFrom into provenance, keeping only its exact shape", () => {
     const dir = freshCopy();
     const file = path.join(dir, "sessions.json");
     const rows = JSON.parse(readFileSync(file, "utf8")) as unknown[];
@@ -127,10 +127,182 @@ describe("persistence service — existing-data-dir round-trip", () => {
     );
     writeFileSync(file, JSON.stringify(rows));
     const loaded = new SessionIndex(dir).list();
-    const of = (id: string) => loaded.find((row) => row.id === id)?.forkedFrom;
-    expect(of("fork")).toEqual({ sessionId: "src", title: "T", owner: { id: "a@x", name: "A" } });
-    expect(of("bad-owner")).toEqual({ sessionId: "src" });
-    expect(of("bad")).toBeUndefined();
+    const of = (id: string) => loaded.find((row) => row.id === id)?.provenance;
+    expect(of("fork")).toEqual({
+      kind: "forked",
+      from: { sessionId: "src", title: "T", owner: { id: "a@x", name: "A" } },
+      by: {},
+      at,
+    });
+    expect(of("bad-owner")).toEqual({ kind: "forked", from: { sessionId: "src" }, by: {}, at });
+    expect(of("bad")).toEqual({ kind: "created", by: {}, at });
+  });
+
+  it("ADR 0006: a legacy index with every old block migrates once and is written back once", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "persist-v1-"));
+    const legacy = readFixture("sessions.v1.json");
+    writeFileSync(path.join(dir, "sessions.json"), legacy);
+    const file = path.join(dir, "sessions.json");
+    const loaded = new SessionIndex(dir).list();
+    const row = (id: string) => loaded.find((item) => item.id === id)!;
+
+    // Written back in the v2 shape, the legacy file kept beside it.
+    const written = JSON.parse(readFileSync(file, "utf8")) as Array<Record<string, unknown>>;
+    expect(written.every((item) => item.schemaVersion === 2)).toBe(true);
+    for (const old of [
+      "sharedTo",
+      "sharedFrom",
+      "returnedFrom",
+      "returnPending",
+      "mergePr",
+      "forkedFrom",
+      "forkProvenance",
+      "loopReviewRunId",
+      "launchPlan",
+      "launchResourceConfig",
+      "launchResourceFingerprint",
+      "resourceRefreshError",
+      "worktreePath",
+      "worktreeIdentity",
+      "worktreeBranch",
+      "worktreeSourceBranch",
+      "worktreeCleanupBranchHead",
+      "worktreeOwnerSessionId",
+    ])
+      expect(written.some((item) => old in item)).toBe(false);
+    expect(readFileSync(path.join(dir, "sessions.v1.bak.json"), "utf8")).toBe(legacy);
+
+    expect(row("device-returned")).toMatchObject({
+      createdBy: { id: "ale@example.com", name: "Ale" },
+      provenance: {
+        kind: "forked",
+        from: { sessionId: "device-source", title: "Source", owner: { id: "bob@example.com" } },
+        by: { user: { id: "ale@example.com", name: "Ale" } },
+        at: "2026-09-01T10:00:00.000Z",
+      },
+      location: {
+        kind: "local",
+        owner: { id: "ale@example.com", name: "Ale" },
+        transfer: {
+          direction: "return",
+          token: "handoff-token",
+          serverOrigin: "https://deck.example.com",
+          sessionId: "server-copy",
+          ref: "refs/heads/agent-deck/transfer/device-returned",
+          until: "2026-09-03T10:15:00.000Z",
+        },
+        mergePr: { url: "https://github.com/acme/app/pull/9", number: 9 },
+      },
+      workspace: {
+        path: "/home/dev/wt/device-returned",
+        identity: "identity-token",
+        branch: "agent-deck/session-device-returned",
+        sourceBranch: "main",
+        cleanupBranchHead: "b".repeat(40),
+      },
+      launch: {
+        // The Pi 1.0.3 provider rename still applies on load.
+        plan: { kind: "parent", provider: "azure", model: "gpt-5" },
+        resourceConfig: { version: 1, providerOverride: "openai", skillsOverride: ["tdd"] },
+        fingerprint: "a".repeat(64),
+        refreshError: "catalog changed",
+      },
+      futureField: { kept: true },
+    });
+    expect(row("device-returned").lifecycle).toBeUndefined();
+    expect(row("device-pointer")).toMatchObject({
+      provenance: {
+        kind: "forked",
+        from: { sessionId: "device-returned", entryId: "entry-7" },
+        recap: { text: "User:\nhello", truncated: false },
+      },
+      location: {
+        kind: "local",
+        live: {
+          serverOrigin: "https://deck.example.com",
+          sessionId: "server-pointer-copy",
+          at: "2026-09-02T10:00:00.000Z",
+          mode: "conversation",
+        },
+      },
+      workspace: { ownerSessionId: "device-returned" },
+    });
+    expect(row("server-imported")).toMatchObject({
+      provenance: {
+        kind: "imported",
+        from: { device: "laptop", localSessionId: "device-pointer" },
+        mode: "snapshot",
+      },
+      location: {
+        owner: { id: "ale@example.com", name: "Ale" },
+        mergePr: { number: 7, openedAt: "2026-09-02T13:00:00.000Z" },
+      },
+      transcriptSha256: "c".repeat(64),
+    });
+    expect(row("server-pointer").location?.live).toEqual({
+      device: "laptop",
+      sessionId: "device-returned",
+      at: "2026-09-03T10:00:00.000Z",
+      mode: "snapshot",
+    });
+    expect(row("loop-review").provenance).toMatchObject({
+      kind: "reviewed",
+      from: { runId: "6f0c1b2a-3d4e-4f50-8a61-b2c3d4e5f607" },
+    });
+    expect(row("draft")).toMatchObject({ lifecycle: "draft", draftWorktreeIsolation: true });
+
+    // Once: a v2 index is never rewritten on load (a compact file stays compact),
+    // and the backup of the legacy file is never replaced.
+    const compact = JSON.stringify(written);
+    writeFileSync(file, compact);
+    expect(new SessionIndex(dir).list()).toEqual(loaded);
+    expect(readFileSync(file, "utf8")).toBe(compact);
+    expect(readFileSync(path.join(dir, "sessions.v1.bak.json"), "utf8")).toBe(legacy);
+  });
+
+  it("ADR 0006: a server's index records its side in location.kind", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "persist-v1-server-"));
+    writeFileSync(path.join(dir, "sessions.json"), readFixture("sessions.v1.json"));
+    const loaded = new SessionIndex(dir, "server").list();
+    expect(loaded.every((item) => item.location?.kind === "server")).toBe(true);
+    // Never a stored fact: the same file read by a process without the trusted
+    // proxy (a maintenance run) says "local", and the server says "server" again.
+    expect(new SessionIndex(dir, "local").list().every((i) => i.location?.kind === "local")).toBe(
+      true,
+    );
+    expect(new SessionIndex(dir, "server").list().every((i) => i.location?.kind === "server")).toBe(
+      true,
+    );
+  });
+
+  it("ADR 0006: legacy keys an older build wrote beside a migrated record win, and go", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "persist-rollback-"));
+    const legacy = readFixture("sessions.v1.json");
+    const file = path.join(dir, "sessions.json");
+    writeFileSync(file, legacy);
+    new SessionIndex(dir);
+    expect(existsSync(path.join(dir, "sessions.v1.bak.json.tmp"))).toBe(false);
+    // An older build (a rollback) moves a session out: it writes the old
+    // block beside the v2 fields it does not know.
+    const rows = JSON.parse(readFileSync(file, "utf8")) as Array<Record<string, unknown>>;
+    const row = rows.find((item) => item.id === "server-imported")!;
+    row.sharedTo = {
+      serverOrigin: "https://deck.example.com",
+      serverSessionId: "after-rollback",
+      sharedAt: "2026-10-01T00:00:00.000Z",
+      mode: "conversation",
+    };
+    row.launchPlan = { kind: "parent", provider: "openai", model: "gpt-5" };
+    writeFileSync(file, JSON.stringify(rows));
+    const loaded = new SessionIndex(dir).find((item) => item.id === "server-imported")!;
+    expect(loaded.location?.live).toMatchObject({ sessionId: "after-rollback" });
+    expect(loaded.launch?.plan).toEqual({ kind: "parent", provider: "openai", model: "gpt-5" });
+    const rewritten = JSON.parse(readFileSync(file, "utf8")) as Array<Record<string, unknown>>;
+    const stored = rewritten.find((item) => item.id === "server-imported")!;
+    expect(stored.sharedTo).toBeUndefined();
+    expect(stored.launchPlan).toBeUndefined();
+    // The first backup is kept, never replaced by a later write-back.
+    expect(readFileSync(path.join(dir, "sessions.v1.bak.json"), "utf8")).toBe(legacy);
   });
 
   it("never exposes environment values from persisted launch-resource metadata", () => {
@@ -139,24 +311,28 @@ describe("persistence service — existing-data-dir round-trip", () => {
     const original = sessions.list()[0]!;
     sessions.upsert({
       ...original,
-      launchResourceConfig: {
-        version: 1,
-        providerOverride: "custom",
+      launch: {
+        resourceConfig: {
+          version: 1,
+          providerOverride: "custom",
+        },
+        fingerprint: "a".repeat(64),
       },
-      launchResourceFingerprint: "a".repeat(64),
     });
 
     // A pre-release checkout may have written this field. Loading rebuilds the
     // public config from its allowlist rather than returning unknown secret data.
     const file = path.join(dir, "sessions.json");
     const rows = JSON.parse(readFileSync(file, "utf8")) as Array<Record<string, unknown>>;
-    (rows[0]!.launchResourceConfig as Record<string, unknown>).envOverride = {
+    (
+      (rows[0]!.launch as Record<string, unknown>).resourceConfig as Record<string, unknown>
+    ).envOverride = {
       API_TOKEN: "deck-secret-value",
     };
     writeFileSync(file, JSON.stringify(rows));
     const loaded = new SessionIndex(dir).list()[0]!;
-    expect(loaded.launchResourceConfig).toEqual({ version: 1, providerOverride: "custom" });
-    expect(loaded.launchResourceFingerprint).toBe("a".repeat(64));
+    expect(loaded.launch?.resourceConfig).toEqual({ version: 1, providerOverride: "custom" });
+    expect(loaded.launch?.fingerprint).toBe("a".repeat(64));
     expect(JSON.stringify(loaded)).not.toContain("deck-secret-value");
     expect(JSON.stringify(loaded)).not.toContain("envOverride");
   });
@@ -242,11 +418,11 @@ describe("persistence service — existing-data-dir round-trip", () => {
     const original = sessions.list()[0]!;
     sessions.upsert({
       ...original,
-      worktreeOwnerSessionId: "original-owner",
+      workspace: { ownerSessionId: "original-owner" },
       streamGeneration: "generation-2",
     });
     expect(new SessionIndex(dir).find((session) => session.id === original.id)).toMatchObject({
-      worktreeOwnerSessionId: "original-owner",
+      workspace: { ownerSessionId: "original-owner" },
       streamGeneration: "generation-2",
     });
   });

@@ -188,7 +188,7 @@ describe("SessionRow fork action (SRV-15a)", () => {
       id: "wt",
       cwd: "/wt",
       createdAt: at,
-      worktreePath: "/wt",
+      workspace: { path: "/wt" },
       piSessionFile: "/w.jsonl",
       createdBy: alice,
     };
@@ -196,7 +196,7 @@ describe("SessionRow fork action (SRV-15a)", () => {
       id: "fork",
       cwd: "/wt",
       createdAt: at,
-      worktreeOwnerSessionId: "wt",
+      workspace: { ownerSessionId: "wt" },
       piSessionFile: "/f.jsonl",
     };
     const plain = { id: "plain", cwd: "/tmp", createdAt: at, piSessionFile: "/p.jsonl" };
@@ -246,7 +246,13 @@ describe("SessionRow fork action on Loop sessions (SRV-15a)", () => {
   it("disables the fork with the server's refusal reason", () => {
     const at = "2026-01-01T00:00:00.000Z";
     const sessions = [
-      { id: "review", cwd: "/r", createdAt: at, piSessionFile: "/r.jsonl", loopReviewRunId: "run" },
+      {
+        id: "review",
+        cwd: "/r",
+        createdAt: at,
+        piSessionFile: "/r.jsonl",
+        provenance: { kind: "reviewed" as const, from: { runId: "run" }, by: {}, at },
+      },
       { id: "parent", cwd: "/p", createdAt: at, piSessionFile: "/p.jsonl", agentName: "Loop · x" },
     ];
     for (const session of sessions) {
