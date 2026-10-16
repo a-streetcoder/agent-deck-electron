@@ -27,3 +27,11 @@ A project with old records opens, migrates once and is written back once (test w
 **2026-10-15T23:39:29Z**
 
 2026-10-16 owner approved (exact word) ADR 0006 + this ticket. Started; worktree E:\agent-deck-wt\ade-os47 (wt/ade-os47).
+
+**2026-10-16T00:38:23Z**
+
+2026-10-16 implemented on wt/ade-os47 as 6313253..4372e87 (4 commits, 75 files): contracts v2 + LegacySessionFields, migrateSessionMeta/sessionLifecycle/allowedOperations(21 ops)/lineage in packages/domain, sessionOperations.ts adapter for every refusal, sessions.json migrated on load with sessions.v1.bak.json backup, web consumers switched, docs. Declared deviations: session-authors.json kept (event log lacks prompt hashes), no PATCH 400, launch has one resourceConfig, location.mergePr on location, transfer carries serverOrigin+sessionId, by={} without sign-in, provenance kept on return. Typecheck/lint/format/design-system/3 required real-Pi suites green. Contrarian + GPT (review60) running.
+
+**2026-10-16T00:49:10Z**
+
+2026-10-16 reviews: GPT (review60) BLOCKED: write-back without lock (downgraded: the store rewrites the whole file on every upsert already), fork winning over sharedFrom/returnedFrom in the migration (downgraded: only old fork-spread data), non-atomic backup, no version refusal (declined, both sides deploy together), location.kind trusted from the file, 'in' on a non-object provenance.from throws, authors store kept, spawned unimplemented. Contrarian: no security regression, refusal parity and missed readers verified; B1 ADR drift (amended in main), B2 legacy keys written by an old build onto a v2 record are ignored; should-fix: persisted location.kind, two owner sources (createdBy vs location.owner), transcriptSha256 means envelope at transfer and file at fork, round trip lineage lives in the event log, bare-id mid-move check lost on rename/plan-retry. Fix round 1 sent (8 items).

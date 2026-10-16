@@ -111,3 +111,39 @@ moving`, derived today from `lifecycle`, `status`, `parkedAt`, `endedAt`, `share
   lifecycle table; `remote-server-poc.md` transfer sections reference `location` instead of the
   old blocks.
 - Future operations (ACP nodes, scheduled runs) add a `provenance.kind` value, not a new block.
+
+## Amendments (2026-10-16, from the SES-01 implementation and its reviews)
+
+The implementation deviates from the text above in six places. Each is recorded here so the
+ADR stays the source of truth; none changes the direction.
+
+1. **`session-authors.json` stays, for now.** Attribution matches a stored hash of each prompt
+   to the Pi entry that echoes it; the event log (`turn.prompted`) carries neither the hash nor
+   the entry id, so the projection in decision 4 cannot be built from it yet. The store remains
+   the single source of authorship until the log carries what the projection needs; retiring it
+   is a follow-up, not part of SES-01.
+2. **`launch` has one `resourceConfig` and no `overrides` object.** The per-session overrides
+   were always inside the pinned resource config; a second object would duplicate them. Shape:
+   `launch { plan, resourceConfig, fingerprint, refreshError }`.
+3. **`location.transfer` is `{ direction, token, serverOrigin, sessionId, ref?, until }`** and
+   `mergePr` sits on `location`, not inside `transfer`: on a device the pull request outlives
+   the hand-off, or the merge warning would disappear when the return completes. Finishing the
+   return needs the server origin and the server session id.
+4. **Provenance is kept on return.** A session that comes back keeps the provenance it was
+   created with (write-once holds). The server copy it came back from is recorded in
+   `location.transfer` while the hand-off is open and, durably, in the `session.shared` event.
+   A device→server→device round trip is therefore a query over the log, not a walk over
+   `provenance.from`; `lineage()` covers forks and reviews. `kind: "returned"` appears only on
+   migrated legacy records.
+5. **`spawned` has no producer yet.** Spawned children have no session record of their own
+   (they live in the run store), so there is nothing to stamp; the kind stays reserved.
+6. **`by` is `{}` for a person on a device without sign-in.** There is no identity to record;
+   `lineage()` does not read `by`.
+
+Two rules the reviews added: `location.kind` is set from the running process on every load,
+never trusted from the file (a data directory opened once on the wrong side must not stamp
+its records for good); and legacy keys found on an already-versioned record (written by an
+older build sharing the data directory) are mapped and win, then removed. Rollback to an older
+build means restoring `sessions.v1.bak.json` over `sessions.json` first. `transcriptSha256` is
+the hash of the transcript as the creating operation carried it: the export envelope at move
+and return (what the import duplicate check compares), the file as written at fork.
