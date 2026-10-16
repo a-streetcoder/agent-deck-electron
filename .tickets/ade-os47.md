@@ -1,6 +1,6 @@
 ---
 id: ade-os47
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-15T23:38:56Z
@@ -35,3 +35,11 @@ A project with old records opens, migrates once and is written back once (test w
 **2026-10-16T00:49:10Z**
 
 2026-10-16 reviews: GPT (review60) BLOCKED: write-back without lock (downgraded: the store rewrites the whole file on every upsert already), fork winning over sharedFrom/returnedFrom in the migration (downgraded: only old fork-spread data), non-atomic backup, no version refusal (declined, both sides deploy together), location.kind trusted from the file, 'in' on a non-object provenance.from throws, authors store kept, spawned unimplemented. Contrarian: no security regression, refusal parity and missed readers verified; B1 ADR drift (amended in main), B2 legacy keys written by an old build onto a v2 record are ignored; should-fix: persisted location.kind, two owner sources (createdBy vs location.owner), transcriptSha256 means envelope at transfer and file at fork, round trip lineage lives in the event log, bare-id mid-move check lost on rename/plan-retry. Fix round 1 sent (8 items).
+
+**2026-10-16T01:06:00Z**
+
+2026-10-16 fix round 1 landed (1ff3c7e): legacy keys win per group and are removed, location.kind from the reading side, sessionOwner() at every owner read (ownerless GitHub-project session on the shared server refused a merge instead of merged locally), bare-id mid-move check restored, object guards on provenance, atomic backup, docs (transcriptSha256, rollback). GPT re-review (review61) BLOCKED: location rule wiped live/transfer when an old build wrote only mergePr; MCP sign-in selection still by creator; operator override on an ownerless merge gives 409 instead of 403. Fix round 2 sent (last round).
+
+**2026-10-16T01:17:36Z**
+
+2026-10-16 fix round 2 landed (158fabd); GPT review62 READY TO MERGE. Squashed as 2168fac, merged 22a5a67. Gates in main: typecheck, format:check, lint (after b1cbde2 added Buffer/Headers/Response/setImmediate to the desktop globals for the SRV-16 files), design-system, domain sessionRecord 60, persistence-roundtrip 20, sessionReturn 15, sessionMove 19, rpcHandler 84, forkRoutes 3, real-Pi sessionMove/sessionReturn/session-worktree 1/1/9. Deployed to the VM: health 200, sessions.json migrated (6 records v2), sessions.v1.bak.json kept. ADR 0006 amended (ed6d28f). Worktree pruned.
