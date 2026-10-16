@@ -64,10 +64,7 @@ async function fixture(
     id,
     cwd: parent,
     projectId: "project",
-    worktreePath: parent,
-    worktreeIdentity: identity,
-    worktreeBranch: branch,
-    worktreeSourceBranch: "main",
+    workspace: { path: parent, identity: identity, branch: branch, sourceBranch: "main" },
     ...extra.meta,
   } as SessionMeta);
   const children: { id: string; cwd: string }[] = [];
@@ -378,7 +375,7 @@ describe("merge cleanup with children rooted at a linked session checkout", () =
         cleanup: { status: "failed", code: "runtime_shutdown_failed" },
       });
       expect(existsSync(f.parent)).toBe(true);
-      expect(f.rows.get(f.id)?.worktreePath).toBe(f.parent);
+      expect(f.rows.get(f.id)?.workspace?.path).toBe(f.parent);
     } finally {
       await f.close();
     }
@@ -568,10 +565,7 @@ describe("failed deletion allocation-claim recovery", () => {
       const f = await fixture();
       // A non-isolated parent retains its cwd while only its children are removed.
       const meta = f.rows.get(f.id)!;
-      delete meta.worktreePath;
-      delete meta.worktreeIdentity;
-      delete meta.worktreeBranch;
-      delete meta.worktreeSourceBranch;
+      delete meta.workspace;
       const spy = vi.spyOn(f.index, "remove").mockImplementation((id) => {
         if (committed) f.rows.delete(id);
         throw new Error("fixture index persistence failure");

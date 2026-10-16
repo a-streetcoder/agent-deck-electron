@@ -132,7 +132,7 @@ test("an isolated session runs in a worktree", async ({ page }) => {
   const secondWorktree = (await page.getByTestId("session-cwd").textContent())!;
   const isolated = (await projectSessions()).find(
     (session) => (session as { cwd?: string }).cwd === secondWorktree,
-  ) as { id: string; worktreeBranch: string };
+  ) as { id: string; workspace: { branch: string } };
 
   await openNav(page, "git");
   await expect(page.getByTestId("app-view-title")).toHaveText("Git");
@@ -157,11 +157,11 @@ test("an isolated session runs in a worktree", async ({ page }) => {
   ).toBe(true);
   expect(existsSync(secondWorktree)).toBe(true);
   expect(
-    execFileSync("git", ["branch", "--list", isolated.worktreeBranch], {
+    execFileSync("git", ["branch", "--list", isolated.workspace.branch], {
       cwd: repo,
       encoding: "utf8",
     }),
-  ).toContain(isolated.worktreeBranch);
+  ).toContain(isolated.workspace.branch);
 
   const acceptedMessage = new Promise<string>((resolve) => {
     page.once("dialog", async (dialog) => {
@@ -178,7 +178,7 @@ test("an isolated session runs in a worktree", async ({ page }) => {
     .toBe(false);
   expect(existsSync(secondWorktree)).toBe(false);
   expect(
-    execFileSync("git", ["branch", "--list", isolated.worktreeBranch], {
+    execFileSync("git", ["branch", "--list", isolated.workspace.branch], {
       cwd: repo,
       encoding: "utf8",
     }).trim(),

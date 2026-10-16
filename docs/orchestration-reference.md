@@ -330,6 +330,80 @@ the assistant stop-reason inference stays as the fallback.
 
 ## Runtime state
 
+### Session record
+
+[ADR 0006](adr/0006-session-record-and-provenance.md) (SES-01). `SessionMeta` in
+`packages/contracts` carries `schemaVersion: 2` and four grouped objects in place of the loose
+fields it grew:
+
+| Object             | Shape                                                                                                                                                                                                         | Replaces                                                                                                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provenance`       | `{ kind, from?, by, at, recap?, mode? }`; `kind` one of `created`, `forked`, `moved`, `returned`, `spawned`, `imported`, `reviewed`; `from` `{ sessionId, … }`, `{ device, localSessionId }` or `{ runId }`   | `forkProvenance` (as `from.entryId` and `recap`), `forkedFrom` (`from.title`, `from.owner`), `sharedFrom`, `loopReviewRunId` (`reviewed` from `{ runId }`)                   |
+| `location`         | `{ kind: local \| server, owner?, live?, transfer?, mergePr? }`                                                                                                                                               | `sharedTo` (`live`: `{ serverOrigin, sessionId, at, mode }` on a device pointer, `{ device, sessionId, at, mode }` on a server one), `returnPending` (`transfer`), `mergePr` |
+| `workspace`        | `{ path, identity, branch, sourceBranch, cleanupBranchHead, ownerSessionId }`                                                                                                                                 | the six `worktree*` fields                                                                                                                                                   |
+| `launch`           | `{ plan, resourceConfig, fingerprint, refreshError }`                                                                                                                                                         | `launchPlan`, `launchResourceConfig` (the overrides stay inside it), `launchResourceFingerprint`, `resourceRefreshError`                                                     |
+| `transcriptSha256` | sha256 of the transcript as carried by the operation that created this copy: the export envelope at a move or a return (on both sides; the import duplicate check compares it), the file as written at a fork | `sharedFrom.exportSha256` (the import retry check reads it)                                                                                                                  |
+
+`provenance` is written once, at creation (a draft keeps the one it was created with), and
+never rewritten: a session that comes back from the server keeps its own, and the server copy it
+came from is the hand-off's (`location.transfer`) and the log's (`session.shared`). It is also
+appended as the `session.created` payload's `provenance` (kind, the ids of `from`, by, at; never
+a title, recap or path). `createdBy` stays the creator; the owner is `sessionOwner(record)`
+(`location.owner`, else `createdBy`), the one source for every owner check and every use of the
+owner's identity (credentials, git identity, `/mcp`, the import duplicate check). On the shared
+server a GitHub session without any owner is refused a merge (`403 merge_forbidden`), never
+merged into the server's checkout. `location.kind` is not a stored fact: every load sets it to
+the side of the process reading the index. A fork is a new local copy: its location never inherits a
+pointer, a hand-off or another copy's pull request.
+
+**Lifecycle.** Only `draft` is persisted; `sessionLifecycle(record, { moving })` derives the
+rest, and `allowedOperations(record, actor, { moving })` (both in `packages/domain`) is the one
+table every route, the RPC dispatch and the renderer ask. Runtime facts (a running turn, live
+subagents, LFS, the project's link) stay in the route that has them.
+
+| Lifecycle | Derived from                                                           | Refuses                                                                                                                                                                                                                                                                                           |
+| --------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `draft`   | `lifecycle: "draft"`                                                   | move (`share_refused`), return (`return_refused`); resume opens it without Pi                                                                                                                                                                                                                     |
+| `running` | none of the others                                                     | nothing by lifecycle                                                                                                                                                                                                                                                                              |
+| `parked`  | `parkedAt`                                                             | nothing by lifecycle                                                                                                                                                                                                                                                                              |
+| `ended`   | `endedAt`                                                              | nothing by lifecycle (resume relaunches it)                                                                                                                                                                                                                                                       |
+| `pointer` | `location.live`                                                        | prompt, steer, rollback, compact, model and thinking, every other runtime request, resume, rename, plan retry, delegation, message fork, merge (`409 session_shared`); composer draft (`session_shared`); move (`share_refused`); return (`return_refused`). Plain fork, delete and pin stay open |
+| `moving`  | the session's `share` hand-off claim (a return: its prepared hand-off) | prompt, steer, rollback, compact, model and thinking, delegation, rename, plan retry, composer draft (`409 session_moving`); a second return (`return_in_progress`)                                                                                                                               |
+
+Independent of the lifecycle: a Loop session (`reviewed` provenance, or a `Loop ·` agent) refuses
+a fork (`history_fork_refused` for a message fork) and a move or return; a Loop review session
+also refuses a person's prompt and a merge (`loop_review_read_only`). On the shared server only
+the owner starts or finishes a return (`403 return_forbidden`; the operator may cancel one), and
+only the owner or the operator opens a merge's pull request (`403 merge_forbidden`). A device
+refuses a return and the server refuses a move by `location.kind`.
+
+**Migration.** `migrateSessionMeta` (pure, idempotent, in `packages/domain`) maps every record
+when `sessions.json` is loaded: every legacy block moves to its new home and is removed, and
+unknown fields stay. Per group (provenance, location, workspace, launch) a legacy key wins over
+the grouped object, also on a record that already has `schemaVersion`: only an older build
+writes those keys (a rollback, another checkout's backend), and its view is the newer one. A
+group without legacy keys keeps its object; a Loop review marker wins over any other origin. A
+file holding an unversioned record, a legacy key or the old `started` lifecycle is written back
+in the v2 shape. The file as it was the first time is kept as `sessions.v1.bak.json` (for one
+release), written to a temporary file and renamed, and never replaced. The persistence
+normaliser then keeps every object only with its exact shape.
+
+**Rollback.** Do not run an older build against a migrated data dir without first restoring
+`sessions.v1.bak.json` over `sessions.json`: the older build does not read the grouped objects.
+If one has run, the new build reads the legacy keys it wrote back on the next load, but a block
+it removed (a pointer it unlinked) stays as the grouped object last had it. The backup is written
+once, on the first migration, so turns and sessions made since are not in it.
+
+**Lineage** is `lineage(records, id)` in `packages/domain`: it walks `provenance.from.sessionId`
+both ways over the records this side holds, with no store of its own. It feeds the fork line
+(its "Open source") and the pointer banner ("Continued here as …" for the copy a pointer was
+continued in).
+
+**Authors** stay in `session-authors.json` for now (SES-01 deviation): per-message attribution
+binds a staged message signature to the Pi entry that echoes it, and the event log holds neither
+the signature nor the entry ids, so projecting authors from it needs a log index that does not
+exist yet.
+
 ### Session merge cleanup
 
 On a shared server, for a session with an owner in a GitHub-backed project, the merge is a

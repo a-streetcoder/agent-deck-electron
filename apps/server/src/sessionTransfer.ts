@@ -5,7 +5,7 @@
 // SRV-12c3: the same envelope, export and import code carry a session back
 // (direction "return"): the server exports, the device imports and validates
 // just as strictly.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import nodePath from "node:path";
 import type { SessionMeta, UserIdentity } from "@agent-deck/contracts";
@@ -337,10 +337,10 @@ export async function resolveTransferLaunch(
     droppedAgent = true;
     resolved = resolve(choice);
   }
-  let launch = {
-    launchPlan: resolved.plan as SessionMeta["launchPlan"],
-    launchResourceConfig: resolved.config,
-    launchResourceFingerprint: resolved.fingerprint,
+  let launch: NonNullable<SessionMeta["launch"]> = {
+    plan: resolved.plan,
+    resourceConfig: resolved.config,
+    fingerprint: resolved.fingerprint,
   };
   const gate = ctx.sessionModelGate;
   if (gate) {
@@ -349,7 +349,7 @@ export async function resolveTransferLaunch(
       cwd: where.cwd,
       createdAt: new Date().toISOString(),
       ...(where.sessionFile ? { piSessionFile: where.sessionFile } : {}),
-      ...launch,
+      launch,
     } as SessionMeta;
     let pinned: SessionMeta;
     try {
@@ -359,19 +359,19 @@ export async function resolveTransferLaunch(
     }
     const refusal = await gate.refusal(pinned, owner, options.localCatalog === true);
     if (refusal) throw new TransferModelError(refusal);
-    const plan = pinned.launchPlan as LaunchPlan;
-    const before = launch.launchPlan as LaunchPlan;
+    const plan = pinned.launch?.plan as LaunchPlan;
+    const before = launch.plan as LaunchPlan;
     if (plan.provider !== before.provider || plan.model !== before.model) {
       // A refused model moved to its twin: record it like a launch override.
       const repinned = resolve({ provider: plan.provider, model: plan.model }, agentName);
       launch = {
-        launchPlan: repinned.plan as SessionMeta["launchPlan"],
-        launchResourceConfig: repinned.config,
-        launchResourceFingerprint: repinned.fingerprint,
+        plan: repinned.plan,
+        resourceConfig: repinned.config,
+        fingerprint: repinned.fingerprint,
       };
     }
   }
-  return { ...launch, ...(agentName ? { agentName } : {}), droppedAgent };
+  return { launch, ...(agentName ? { agentName } : {}), droppedAgent };
 }
 
 /**
@@ -476,7 +476,7 @@ export async function prepareSessionExport(
         : `This session's transcript cannot move: ${(error as Error).message}.`,
     );
   }
-  const plan = meta.launchPlan as LaunchPlan | undefined;
+  const plan = meta.launch?.plan as LaunchPlan | undefined;
   const model = plan && plan.kind !== "helper" ? plan : undefined;
   let stored;
   try {
@@ -506,8 +506,8 @@ export async function prepareSessionExport(
         ? { plan: meta.plan.map(({ runId: _runId, note: _note, ...item }) => item) }
         : {}),
       // SRV-12c3: the device shows the server's open pull request after a return.
-      ...(options.returnTo && meta.mergePr
-        ? { mergePr: { url: meta.mergePr.url, number: meta.mergePr.number } }
+      ...(options.returnTo && meta.location?.mergePr
+        ? { mergePr: { url: meta.location.mergePr.url, number: meta.location.mergePr.number } }
         : {}),
     },
     transcript,
@@ -595,12 +595,19 @@ export async function prepareSessionExport(
   }
 }
 
+/** sha256 of a transcript as a move or return carried it (ADR 0006). */
+export const transcriptSha256 = (transcript: string): string =>
+  createHash("sha256").update(transcript).digest("hex");
+
 /** One prepared move per session: the claim that freezes it, its token and the pushed ref. */
 export interface Handoff {
   token: string;
   release: () => void;
   timer: NodeJS.Timeout;
   pushed?: PushedTransfer;
+  /** ADR 0006: sha256 of the transcript the envelope carried; the side that
+   * becomes a pointer records it, as the side that receives it does. */
+  transcriptSha256?: string;
   /** The receiving side's answer is being recorded: nothing may end or replace it now. */
   finalizing?: boolean;
 }
@@ -656,11 +663,12 @@ export function createHandoffs(
 
     /** Claim the session for a new hand-off; null while another mutation holds it. */
     claim: (id: string) => claims.tryClaim(id, "share"),
-    start(id: string, release: () => void, pushed?: PushedTransfer): string {
+    start(id: string, release: () => void, pushed?: PushedTransfer, transcript?: string): string {
       const token = randomUUID();
       map.set(id, {
         token,
         release,
+        ...(transcript !== undefined ? { transcriptSha256: transcriptSha256(transcript) } : {}),
         timer: setTimeout(() => {
           if (!map.get(id)?.finalizing) end(id, token, true);
         }, HANDOFF_TTL_MS).unref(),

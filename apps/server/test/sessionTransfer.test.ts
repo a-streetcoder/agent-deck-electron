@@ -221,7 +221,13 @@ describe("share preflight refusals", () => {
   it("refuses while streaming, with live subagents, for Loop sessions, drafts and unshared projects", () => {
     expect(shareRefusal(meta, project, { ...idle, streaming: true })).toMatch(/responding/);
     expect(shareRefusal(meta, project, { ...idle, liveSubagents: true })).toMatch(/subagents/);
-    expect(shareRefusal({ ...meta, loopReviewRunId: "r" }, project, idle)).toMatch(/Loop/);
+    expect(
+      shareRefusal(
+        { ...meta, provenance: { kind: "reviewed", from: { runId: "r" }, by: {}, at: "t" } },
+        project,
+        idle,
+      ),
+    ).toMatch(/Loop/);
     expect(shareRefusal({ ...meta, agentName: "Loop · nightly" }, project, idle)).toMatch(/Loop/);
     expect(shareRefusal({ ...meta, lifecycle: "draft" }, project, idle)).toMatch(/nothing/);
     expect(shareRefusal({ ...meta, piSessionFile: undefined }, project, idle)).toMatch(/nothing/);
@@ -230,11 +236,14 @@ describe("share preflight refusals", () => {
       shareRefusal(
         {
           ...meta,
-          sharedTo: {
-            serverOrigin: "https://deck.example",
-            serverSessionId: SESSION,
-            sharedAt: "t",
-            mode: "snapshot",
+          location: {
+            kind: "local",
+            live: {
+              serverOrigin: "https://deck.example",
+              sessionId: SESSION,
+              at: "t",
+              mode: "snapshot",
+            },
           },
         },
         project,

@@ -18,6 +18,7 @@ import type { HistoryDraft } from "@agent-deck/contracts";
 import { z } from "zod";
 import type { ServerContext } from "./context.ts";
 import { syncDirectoryStrict } from "./sessionImages.ts";
+import { sendRefusal, sessionRefusal } from "./sessionOperations.ts";
 
 export const MAX_COMPOSER_DRAFT_BYTES = 32 * 1024 * 1024;
 const draftPath = z.object({
@@ -158,22 +159,18 @@ export function registerComposerDraftRoutes(ctx: ServerContext, store: ComposerD
     { bodyLimit: MAX_COMPOSER_DRAFT_BYTES },
     async (request, reply) => {
       const { id } = request.params as { id: string };
-      if (!ctx.index.find((session) => session.id === id))
-        return reply.status(404).send({ error: "unknown session" });
+      const meta = ctx.index.find((session) => session.id === id);
+      if (!meta) return reply.status(404).send({ error: "unknown session" });
       if (ctx.sessions.mutationClaims.owner(id) === "delete")
         return reply.status(409).send({ error: "Session deletion is in progress." });
-      // SRV-12c1: the unsent message travels with a move: frozen during the hand-off.
-      if (ctx.sessions.mutationClaims.owner(id) === "share")
-        return reply.status(409).send({
-          code: "session_moving",
-          error: "This session is moving between a device and the shared server.",
-        });
-      // SRV-12c1: a pointer has no composer; its unsent message moved with it.
-      if (ctx.index.find((session) => session.id === id)?.sharedTo)
-        return reply.status(409).send({
-          code: "session_shared",
-          error: "This session continues on another copy.",
-        });
+      // SRV-12c1: the unsent message travels with a move: frozen during the
+      // hand-off; a pointer has no composer (its unsent message moved with it).
+      const refused = sessionRefusal(
+        { claims: ctx.sessions.mutationClaims },
+        meta,
+        "composerDraft",
+      );
+      if (refused) return sendRefusal(reply, refused);
       const parsed = z.object({ draft: composerDraftSchema.nullable() }).safeParse(request.body);
       if (!parsed.success)
         return reply.status(400).send({ error: "Invalid or oversized composer draft." });

@@ -3,6 +3,7 @@ import {
   isPendingQuestionNavigationCell,
   isQuestionNavigationCell,
   questionNavigationTarget,
+  serverCopy,
   type QuestionNavigationCell,
 } from "@agent-deck/domain";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -61,10 +62,10 @@ export function Transcript() {
       ? state.sharedMirror
       : null,
   );
-  const link = session?.sharedTo;
+  const link = session ? serverCopy(session) : undefined;
   const readOnly = useMemo<MirrorReadOnly | null>(() => {
     const origin = link?.serverOrigin;
-    const serverId = link?.serverSessionId;
+    const serverId = link?.sessionId;
     return mirror && origin && serverId
       ? {
           host: hostOf(origin),

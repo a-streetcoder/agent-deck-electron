@@ -52,9 +52,9 @@ describe("azure provider rename (Pi 1.0.3)", () => {
       ]),
     );
     const [s1, s2] = new SessionIndex(dataDir).list();
-    expect(s1!.launchPlan).toEqual({ kind: "parent", provider: "azure", model: "gpt-5.4" });
-    expect(s1!.launchResourceConfig).toEqual({ version: 1, providerOverride: "azure" });
-    expect(s2!.launchPlan).toEqual({ kind: "parent", provider: "anthropic" });
+    expect(s1!.launch?.plan).toEqual({ kind: "parent", provider: "azure", model: "gpt-5.4" });
+    expect(s1!.launch?.resourceConfig).toEqual({ version: 1, providerOverride: "azure" });
+    expect(s2!.launch?.plan).toEqual({ kind: "parent", provider: "anthropic" });
   });
 
   it("renames the key in the shared and every per-user auth.json, idempotently", () => {

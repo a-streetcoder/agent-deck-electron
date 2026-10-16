@@ -227,12 +227,11 @@ describe("persisted session worktree deletion boundary", () => {
         readFileSync(path.join(dataDir, "sessions.json"), "utf8"),
       ) as Array<{
         id: string;
-        worktreeIdentity?: string;
-        worktreeCleanupBranchHead?: string;
+        workspace?: { identity?: string; cleanupBranchHead?: string };
       }>;
       const persisted = adopted.find(({ id }) => id === "retry-session");
-      expect(persisted?.worktreeIdentity).toMatch(/^v1:[0-9a-f]{16}:[0-9a-f]{16}$/);
-      expect(persisted?.worktreeCleanupBranchHead).toMatch(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
+      expect(persisted?.workspace?.identity).toMatch(/^v1:[0-9a-f]{16}:[0-9a-f]{16}$/);
+      expect(persisted?.workspace?.cleanupBranchHead).toMatch(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
 
       await server.close();
       server = undefined;
@@ -250,7 +249,7 @@ describe("persisted session worktree deletion boundary", () => {
           "update-ref",
           "-d",
           "refs/heads/agent-deck/session-facefeed",
-          persisted!.worktreeCleanupBranchHead!,
+          persisted!.workspace!.cleanupBranchHead!,
         ],
         { cwd: project },
       );

@@ -4,6 +4,7 @@ import type {
   ThinkingLevel,
   UserIdentity,
 } from "@agent-deck/contracts";
+import { liveCopy, sessionOwner } from "@agent-deck/domain";
 import type { LaunchPlan } from "@agent-deck/pi-host";
 import type { SessionIndex } from "./persistence.ts";
 import type { ManagedSession, SessionManager } from "./SessionManager.ts";
@@ -40,7 +41,7 @@ export function createSessionDraftGateway(deps: {
   };
   return {
     find,
-    sharedPointer: (id) => deps.index.find((row) => row.id === id && row.sharedTo !== undefined),
+    sharedPointer: (id) => deps.index.find((row) => row.id === id && liveCopy(row) !== undefined),
     start(id) {
       const existing = pending.get(id);
       if (existing) return existing;
@@ -70,15 +71,25 @@ export function createSessionDraftGateway(deps: {
       return operation;
     },
     async setModel(id, provider, modelId) {
-      await deps.validateModel?.(provider, modelId, find(id)?.createdBy);
+      await deps.validateModel?.(
+        provider,
+        modelId,
+        (() => {
+          const draft = find(id);
+          return draft ? sessionOwner(draft) : undefined;
+        })(),
+      );
       update(id, (draft) => ({
         ...draft,
-        launchPlan: { ...(draft.launchPlan as LaunchPlan), provider, model: modelId },
-        launchResourceConfig: {
-          ...draft.launchResourceConfig,
-          version: 1,
-          providerOverride: provider,
-          modelOverride: modelId,
+        launch: {
+          ...draft.launch,
+          plan: { ...(draft.launch?.plan as LaunchPlan), provider, model: modelId },
+          resourceConfig: {
+            ...draft.launch?.resourceConfig,
+            version: 1,
+            providerOverride: provider,
+            modelOverride: modelId,
+          },
         },
       }));
     },

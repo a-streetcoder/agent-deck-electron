@@ -33,11 +33,14 @@ const session: SessionMeta = {
 };
 const pointer: SessionMeta = {
   ...session,
-  sharedTo: {
-    serverOrigin: SERVER,
-    serverSessionId: SERVER_SESSION,
-    sharedAt: "2026-10-15T01:00:00.000Z",
-    mode: "snapshot",
+  location: {
+    kind: "local",
+    live: {
+      serverOrigin: SERVER,
+      sessionId: SERVER_SESSION,
+      at: "2026-10-15T01:00:00.000Z",
+      mode: "snapshot",
+    },
   },
 };
 const project: ProjectMeta = {
@@ -196,7 +199,7 @@ describe("Share to server", () => {
       },
     ]);
     await waitFor(() => expect(switchToSession).toHaveBeenCalledWith(pointer));
-    expect(useAppStore.getState().session?.sharedTo?.serverSessionId).toBe(SERVER_SESSION);
+    expect(useAppStore.getState().session?.location?.live?.sessionId).toBe(SERVER_SESSION);
     shareAnswers = [];
   });
 
@@ -397,9 +400,10 @@ describe("Bring back (SRV-12c3)", () => {
       return { status: 0, error: "The shared server could not be reached." };
     });
   const pending = {
+    direction: "return" as const,
     token: "h-1",
     serverOrigin: SERVER,
-    serverSessionId: SERVER_SESSION,
+    sessionId: SERVER_SESSION,
     ref: `refs/agent-deck/transfer/${SERVER_SESSION}`,
     until: new Date(Date.now() + 15 * 60_000).toISOString(),
   };
@@ -410,11 +414,8 @@ describe("Bring back (SRV-12c3)", () => {
 
   it("lists the untracked files, brings the session back and closes the server copy", async () => {
     server();
-    const done = {
-      ...session,
-      returnedFrom: { serverOrigin: SERVER, serverSessionId: SERVER_SESSION, returnedAt: "now" },
-    };
-    const back = { ...done, returnPending: pending };
+    const done: SessionMeta = { ...session, location: { kind: "local" } };
+    const back: SessionMeta = { ...done, location: { kind: "local", transfer: pending } };
     routes = {
       "POST /sessions/s1/import-return": () =>
         Response.json({
@@ -432,7 +433,7 @@ describe("Bring back (SRV-12c3)", () => {
       expect(screen.getByTestId("bring-back-untracked").textContent).toContain("server.md"),
     );
     fireEvent.click(screen.getAllByRole("button", { name: "Bring back" }).at(-1)!);
-    // The server copy closed, so returnPending is cleared before the session opens.
+    // The server copy closed, so the hand-off is cleared before the session opens.
     await waitFor(() => expect(switchToSession).toHaveBeenCalledWith(done));
     expect(serverCalls()).toEqual([
       { method: "POST", path: `/sessions/${SERVER_SESSION}/return`, body: {} },
@@ -519,7 +520,7 @@ describe("Bring back (SRV-12c3)", () => {
     server({
       [`PATCH /sessions/${SERVER_SESSION}/returned`]: { status: 0, error: "unreachable" },
     });
-    const back = { ...session, returnPending: pending };
+    const back: SessionMeta = { ...session, location: { kind: "local", transfer: pending } };
     routes = {
       "POST /sessions/s1/import-return": () =>
         Response.json({ session: back, restored: "worktree", transferRefDeleted: false }),
@@ -556,7 +557,7 @@ describe("Bring back (SRV-12c3)", () => {
         body: { code: "return_stale", error: "This return is no longer prepared." },
       },
     });
-    const back = { ...session, returnPending: pending };
+    const back: SessionMeta = { ...session, location: { kind: "local", transfer: pending } };
     routes = { "PATCH /sessions/s1/return-pending": () => Response.json({ session }) };
     render(<ReturnPendingBanner session={back} />);
     fireEvent.click(screen.getByRole("button", { name: "Finish the return on deck.example.test" }));
@@ -577,12 +578,14 @@ describe("Bring back (SRV-12c3)", () => {
   it("on the shared server a returned copy is read-only and says where it continues", () => {
     const returned: SessionMeta = {
       ...session,
-      sharedTo: {
-        serverOrigin: null,
-        device: "laptop",
-        deviceSessionId: "s0",
-        sharedAt: "2026-10-15T02:00:00.000Z",
-        mode: "snapshot",
+      location: {
+        kind: "server",
+        live: {
+          device: "laptop",
+          sessionId: "s0",
+          at: "2026-10-15T02:00:00.000Z",
+          mode: "snapshot",
+        },
       },
     };
     render(<SharedSessionPanel session={returned} />);
@@ -592,5 +595,35 @@ describe("Bring back (SRV-12c3)", () => {
     expect(request).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Continue here" }));
     expect(forkSession).toHaveBeenCalledWith("s1");
+  });
+
+  it("ADR 0006: the pointer banner names the copy it already continued in (lineage)", () => {
+    const returned: SessionMeta = {
+      ...session,
+      location: {
+        kind: "server",
+        live: {
+          device: "laptop",
+          sessionId: "s0",
+          at: "2026-10-15T02:00:00.000Z",
+          mode: "snapshot",
+        },
+      },
+    };
+    const continued: SessionMeta = {
+      ...session,
+      id: "s1-fork",
+      title: "Fix the bug (fork)",
+      provenance: { kind: "forked", from: { sessionId: "s1" }, by: {}, at: "now" },
+      location: { kind: "server" },
+    };
+    useAppStore.setState({ sessions: [returned, continued] });
+    render(<SharedSessionPanel session={returned} />);
+    expect(screen.getByTestId("pointer-continued").textContent).toContain(
+      "Continued here as “Fix the bug (fork)”.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open it" }));
+    expect(switchToSession).toHaveBeenCalledWith(continued);
+    useAppStore.setState({ sessions: [] });
   });
 });

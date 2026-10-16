@@ -291,7 +291,7 @@ describe("extension discovery", () => {
     await managed.parkForResourceRefresh(() => {});
     expect(managed.isParked).toBe(true);
     const generation = managed.meta.streamGeneration;
-    const previousFingerprint = managed.meta.launchResourceFingerprint;
+    const previousFingerprint = managed.meta.launch?.fingerprint;
     writeFileSync(
       extPath,
       `export default function (pi) {
@@ -300,9 +300,7 @@ describe("extension discovery", () => {
 `,
     );
     server.sessions.queueResourceRefresh();
-    await vi.waitFor(() =>
-      expect(managed.meta.launchResourceFingerprint).not.toBe(previousFingerprint),
-    );
+    await vi.waitFor(() => expect(managed.meta.launch?.fingerprint).not.toBe(previousFingerprint));
     expect(managed.meta.streamGeneration).toBe(generation);
     expect(managed.isParked).toBe(true);
 

@@ -253,8 +253,13 @@ describe("POST /sessions/:id/prompt through the socket's dispatch", () => {
   async function setup() {
     const now = new Date().toISOString();
     const metas: SessionMeta[] = [
-      { id: SID, cwd: dataDir, createdAt: now, lifecycle: "started", piSessionFile: "x.jsonl" },
-      { id: LOOP, cwd: dataDir, createdAt: now, loopReviewRunId: "run-1" },
+      { id: SID, cwd: dataDir, createdAt: now, piSessionFile: "x.jsonl" },
+      {
+        id: LOOP,
+        cwd: dataDir,
+        createdAt: now,
+        provenance: { kind: "reviewed", from: { runId: "run-1" }, by: {}, at: now },
+      },
     ];
     const prompt = vi.fn(async () => {});
     const running = new Map<string, unknown>();
@@ -499,7 +504,7 @@ describe("mirror routes", () => {
     const res = await send(`/sessions/${S_POINTER}/shared-to`, { sharedTo: null }, "PATCH");
     expect(res.status).toBe(200);
     const { session } = (await res.json()) as { session: SessionMeta };
-    expect(session.sharedTo).toBeUndefined();
+    expect(session.location?.live).toBeUndefined();
     expect(session.piSessionFile).toBe(pointerFile);
     expect(existsSync(pointerFile)).toBe(true);
     // Nothing answers session_shared any more: the session is ordinary again.
@@ -512,7 +517,7 @@ describe("mirror routes", () => {
     const listed = (await (await fetch(url(`/sessions/${S_POINTER}`))).json()) as {
       session: SessionMeta;
     };
-    expect(listed.session.sharedTo).toBeUndefined();
+    expect(listed.session.location?.live).toBeUndefined();
     // A second Unlink is a no-op.
     const again = await send(`/sessions/${S_POINTER}/shared-to`, { sharedTo: null }, "PATCH");
     expect(again.status).toBe(200);

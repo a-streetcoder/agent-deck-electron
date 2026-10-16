@@ -35,17 +35,28 @@ const pointer: SessionMeta = {
   createdAt: "2026-10-15T00:00:00.000Z",
   title: "Fix the bug",
   piSessionFile: "C:\\pi\\s1.jsonl",
-  sharedTo: {
-    serverOrigin: SERVER,
-    serverSessionId: SID,
-    sharedAt: "2026-10-15T09:30:00.000Z",
-    mode: "snapshot",
+  location: {
+    kind: "local",
+    live: {
+      serverOrigin: SERVER,
+      sessionId: SID,
+      at: "2026-10-15T09:30:00.000Z",
+      mode: "snapshot",
+    },
   },
 };
 const other: SessionMeta = {
   ...pointer,
   id: "s2",
-  sharedTo: { ...pointer.sharedTo!, serverSessionId: "1f1d2c3b-4a5e-4f60-8a71-b2c3d4e5f601" },
+  location: {
+    kind: "local",
+    live: {
+      serverOrigin: SERVER,
+      sessionId: "1f1d2c3b-4a5e-4f60-8a71-b2c3d4e5f601",
+      at: "2026-10-15T09:30:00.000Z",
+      mode: "snapshot",
+    },
+  },
 };
 const localCopy = {
   ...emptyTranscript(),
@@ -294,7 +305,7 @@ describe("the live mirror", () => {
 
   it("offers Unlink only for the server's unknown_session, explains the copy, and reopens it", async () => {
     server.meta = { status: 404, body: { code: "unknown_session", error: "unknown session" } };
-    const unlinked = { ...pointer, sharedTo: undefined };
+    const unlinked: SessionMeta = { ...pointer, location: { kind: "local" } };
     const fetchMock = vi.fn(async () => Response.json({ session: unlinked }));
     vi.stubGlobal("fetch", fetchMock);
     render(<SharedSessionPanel session={pointer} />);

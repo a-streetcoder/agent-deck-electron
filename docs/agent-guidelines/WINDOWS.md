@@ -18,7 +18,7 @@ They share no app data and no ports, so both can run at once. They do share Pi's
 
 1. **Work in the stable app.** Open this repository as a project and run agent sessions there, preferably with session-worktree isolation so edits land on their own branch and folder.
 2. **Test in the dev instance.** Check the branch out in the main checkout and start `win\Agent Deck Dev.cmd`. Renderer edits hot-reload; backend edits restart the server under `node --watch`; main-process and preload edits restart Electron.
-3. **Promote deliberately.** Close the dev instance, run `pnpm pack:win`, run `node scripts/smoke-packaged-loop-catalog.mjs release`, then copy `release\win-unpacked` over the stable install folder (for example `%LOCALAPPDATA%\Programs\Agent Deck`). Keep the previous folder as a rollback.
+3. **Promote deliberately.** Close the dev instance, run `pnpm pack:win`, run `node scripts/smoke-packaged-loop-catalog.mjs release`, then copy `release\win-unpacked` over the stable install folder (for example `%LOCALAPPDATA%\Programs\Agent Deck`). Keep the previous folder as a rollback; before running a build older than the session record v2 against the same data dir, copy `sessions.v1.bak.json` over `sessions.json` in the folder that holds them (ADR 0006, [Session record](../orchestration-reference.md#session-record)).
 
 ## Rules that prevent real breakage
 

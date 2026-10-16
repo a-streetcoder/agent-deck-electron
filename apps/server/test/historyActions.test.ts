@@ -35,23 +35,24 @@ function harness(
         endedAt: "then",
         piSessionFile: "/tmp/source.jsonl",
         agentName: "reviewer",
-        launchPlan: {
-          kind: "agent",
-          agentName: "reviewer",
-          systemPrompt: { mode: "replace", text: "preserved persona" },
-          tools: ["read", "grep"],
-          model: "provider/model-a",
+        launch: {
+          plan: {
+            kind: "agent",
+            agentName: "reviewer",
+            systemPrompt: { mode: "replace", text: "preserved persona" },
+            tools: ["read", "grep"],
+            model: "provider/model-a",
+          },
         },
       }
     : meta();
   if (options.priorProvenance) {
-    sourceMeta.forkProvenance = {
-      version: 1,
-      sourceSessionId: "grandparent",
-      sourceEntryId: "old-entry",
-      sourceTitle: "Grandparent",
-      recap: "old recap",
-      recapTruncated: false,
+    sourceMeta.provenance = {
+      kind: "forked",
+      from: { sessionId: "grandparent", entryId: "old-entry", title: "Grandparent" },
+      by: {},
+      at: "then",
+      recap: { text: "old recap", truncated: false },
     };
     sourceMeta.title = "Immediate parent";
   }
@@ -333,19 +334,21 @@ describe("HistoryActionCoordinator", () => {
     expect(manager.resume).toHaveBeenCalledWith(
       expect.objectContaining({
         agentName: "reviewer",
-        launchPlan: expect.objectContaining({
-          kind: "agent",
-          systemPrompt: { mode: "replace", text: "preserved persona" },
-          tools: ["read", "grep"],
-          model: "provider/model-a",
-        }),
+        launch: {
+          plan: expect.objectContaining({
+            kind: "agent",
+            systemPrompt: { mode: "replace", text: "preserved persona" },
+            tools: ["read", "grep"],
+            model: "provider/model-a",
+          }),
+        },
       }),
       { kind: "parent", resumeSessionPath: "/tmp/source.jsonl" },
       undefined,
     );
     expect(manager.materializeHistoryFork).toHaveBeenCalledWith(
       expect.objectContaining({
-        launchPlan: expect.objectContaining({ agentName: "reviewer" }),
+        launch: { plan: expect.objectContaining({ agentName: "reviewer" }) },
       }),
       "/tmp/branch.jsonl",
       undefined,
@@ -364,7 +367,7 @@ describe("HistoryActionCoordinator", () => {
     const launchPlan = { kind: "parent", provider: "claude-bridge", model: "claude-x" };
     await coordinator.run("source", "chosen", "fork", undefined, { owner: bob, launchPlan });
     expect(manager.materializeHistoryFork).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "source", launchPlan }),
+      expect.objectContaining({ id: "source", launch: { plan: launchPlan } }),
       "/tmp/branch.jsonl",
       undefined,
       expect.objectContaining({ sourceSessionId: "source" }),
@@ -379,7 +382,9 @@ describe("HistoryActionCoordinator", () => {
     expect(manager.materializeHistoryFork).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "source",
-        forkProvenance: expect.objectContaining({ sourceSessionId: "grandparent" }),
+        provenance: expect.objectContaining({
+          from: expect.objectContaining({ sessionId: "grandparent" }),
+        }),
       }),
       "/tmp/branch.jsonl",
       undefined,
@@ -438,13 +443,15 @@ describe("HistoryActionCoordinator", () => {
     await expect(coordinator.run("source", "chosen", "rerun")).resolves.toMatchObject({
       outcome: "rerun",
       session: {
-        forkProvenance: { sourceSessionId: "grandparent", sourceEntryId: "old-entry" },
+        provenance: { from: { sessionId: "grandparent", entryId: "old-entry" } },
       },
     });
     expect(manager.materializeHistoryFork).not.toHaveBeenCalled();
     expect(manager.rebindHistoryDeferred).toHaveBeenCalledWith(
       expect.objectContaining({
-        forkProvenance: expect.objectContaining({ sourceSessionId: "grandparent" }),
+        provenance: expect.objectContaining({
+          from: expect.objectContaining({ sessionId: "grandparent" }),
+        }),
       }),
       "/tmp/branch.jsonl",
       undefined,

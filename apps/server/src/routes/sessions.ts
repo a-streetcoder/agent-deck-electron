@@ -2,11 +2,12 @@ import { randomUUID } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import nodePath from "node:path";
-import type {
-  ProjectMeta,
-  SessionModelInfo,
-  SessionMeta,
-  UserIdentity,
+import {
+  SESSION_RECORD_VERSION,
+  type ProjectMeta,
+  type SessionModelInfo,
+  type SessionMeta,
+  type UserIdentity,
 } from "@agent-deck/contracts";
 import { SubagentArtifactCapabilityError } from "@agent-deck/loop-catalog-native";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
@@ -61,8 +62,6 @@ import {
   type GitWorktree,
 } from "../git.ts";
 import {
-  SESSION_MOVING_ERROR,
-  SESSION_SHARED_ERROR,
   SessionCreationError,
   SubagentTranscriptEvidenceError,
   type SessionAnnounce,
@@ -72,22 +71,24 @@ import { HistoryActionCoordinator, HistoryActionError } from "../historyActions.
 import { LaunchResourceResolutionError, resolveLaunchResources } from "../launchResources.ts";
 import { assembleSlashUniverseForSession } from "../slashUniverse.ts";
 import { MAX_OPEN_IDS, mirrorTranscript, sessionTranscriptSource } from "../sessionMirror.ts";
-import { emptyTranscript } from "@agent-deck/domain";
+import {
+  actorRef,
+  emptyTranscript,
+  reviewRunId,
+  sessionLifecycle,
+  sessionOwner,
+} from "@agent-deck/domain";
+import { refusalBody, sendRefusal, sessionRefusal } from "../sessionOperations.ts";
 import { launchModelProps } from "../analytics.ts";
 
 const mergeLocks = new Set<string>();
 
-// SRV-15a: a Loop session's fork would be a writable session inside its read-only
-// review worktree (plain fork) or break the diff gateway (history fork).
-const loopSession = (meta: SessionMeta): boolean =>
-  Boolean(meta.loopReviewRunId || meta.agentName?.startsWith("Loop ·"));
-const LOOP_FORK_REFUSED = "A Loop session cannot be forked. Open its run from Loops instead.";
-// SRV-12c1: a frozen pointer is read-only. Every session mutation refuses it except
-// a plain fork (Continue locally), delete (removes only this copy), pin and attention.
-export const refuseShared = (reply: { status(code: number): { send(body: unknown): unknown } }) =>
-  reply
-    .status(409)
-    .send({ code: "session_shared", error: SESSION_SHARED_ERROR.replace(/^session_shared: /, "") });
+// ADR 0006: every refusal keyed on the record (pointer, hand-off, Loop, owner)
+// is allowedOperations' (domain). SRV-12c1: a frozen pointer is read-only; every
+// session mutation refuses it except a plain fork (Continue locally), delete
+// (removes only this copy), pin and attention. SRV-15a: a Loop session's fork
+// would be a writable session inside its read-only review worktree (plain fork)
+// or break the diff gateway (history fork).
 
 /** SRV-12c2: a mirroring device tells a deleted session from any other 404 by this code. */
 const unknownSession = (reply: { status(code: number): { send(body: unknown): unknown } }) =>
@@ -153,6 +154,10 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     abandoned: (meta) => ctx.events.sessionRemoved(meta, { type: "system" }),
   });
   const sessionMutations = sessions.mutationClaims;
+  const operations = {
+    claims: sessionMutations,
+    isOperator: (user: UserIdentity) => ctx.userAgentDirs?.isOperator(user) === true,
+  };
   const historyActions = new HistoryActionCoordinator(
     sessions,
     index,
@@ -272,9 +277,9 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const { id } = request.params as { id: string };
     const draft = ctx.sessionDrafts?.find(id);
     if (draft) {
-      const plan = draft.launchPlan as LaunchPlan;
-      const models = await draftModels(draft.createdBy);
-      const preview = await previewLaunchModel(ctx, draft.createdBy, plan, draft, models);
+      const plan = draft.launch?.plan as LaunchPlan;
+      const models = await draftModels(sessionOwner(draft));
+      const preview = await previewLaunchModel(ctx, sessionOwner(draft), plan, draft, models);
       return {
         state: {
           model:
@@ -341,7 +346,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   // PRV-01: a live set_model to a refused anthropic model switches to its
   // claude-bridge twin, or is refused (rpcHandler).
   sessions.modelChoice = async (meta, provider, modelId, available) => {
-    const transport = await ownerTransport(ctx, await ownerRuntime(ctx, meta.createdBy));
+    const transport = await ownerTransport(ctx, await ownerRuntime(ctx, sessionOwner(meta)));
     return claudeChoice(provider, modelId, transport.refused, liveUsable(available, transport));
   };
 
@@ -374,7 +379,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     entryId?: string,
     localCatalog = false,
   ) {
-    const plan = (meta.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
+    const plan = (meta.launch?.plan as LaunchPlan | undefined) ?? { kind: "parent" };
     if ((!forker && !localCatalog) || plan.kind === "helper") return undefined;
     try {
       // ctx.discoveredModels is in memory: list claude-bridge again after a restart.
@@ -403,14 +408,14 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     owner: UserIdentity | undefined,
     entryId?: string,
   ): Promise<SessionMeta> {
-    const plan = (meta.launchPlan as LaunchPlan | undefined) ?? { kind: "parent" };
+    const plan = (meta.launch?.plan as LaunchPlan | undefined) ?? { kind: "parent" };
     if (plan.kind === "helper") return meta;
     const pinned = await claudeLaunchModel(ctx, owner, plan, {
       cwd: meta.cwd,
       sessionFile: meta.piSessionFile,
       entryId,
     });
-    return pinned ? { ...meta, launchPlan: { ...plan, ...pinned } } : meta;
+    return pinned ? { ...meta, launch: { ...meta.launch, plan: { ...plan, ...pinned } } } : meta;
   }
 
   ctx.sessionModelGate = {
@@ -422,11 +427,14 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   fastify.get("/sessions/:id/models", async (request, reply) => {
     const { id } = request.params as { id: string };
     const draft = ctx.sessionDrafts?.find(id);
-    if (draft) return { models: await draftModels(draft.createdBy) };
+    if (draft) return { models: await draftModels(sessionOwner(draft)) };
     const session = sessions.get(id);
     if (!session) return reply.status(404).send({ error: "unknown session" });
     try {
-      const transport = await ownerTransport(ctx, await ownerRuntime(ctx, session.meta.createdBy));
+      const transport = await ownerTransport(
+        ctx,
+        await ownerRuntime(ctx, sessionOwner(session.meta)),
+      );
       const models = liveUsable(await session.getAvailableModels(), transport);
       // Mark models the user hid from the picker (app-level, native "Disabled").
       const disabled = new Set(settings.get().disabledModels);
@@ -593,7 +601,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     if (!meta) return reply.status(404).send({ error: "unknown session" });
     if (meta.lifecycle === "draft") return { session: meta };
     // SRV-12c1: a pointer opens without Pi; it continues on the shared server.
-    if (meta.sharedTo) return { session: decorated(meta) };
+    if (sessionLifecycle(meta) === "pointer") return { session: decorated(meta) };
     try {
       const session = await relaunch(meta);
       return { session: session.meta };
@@ -675,7 +683,9 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const draft = ctx.sessionDrafts?.find(id);
     const meta = draft ?? sessions.get(id)?.meta ?? index.find((s) => s.id === id);
     if (!meta || !ctx.promptSession) return unknownSession(reply);
-    if (meta.sharedTo) return refuseShared(reply);
+    // The pointer only here: the hand-off and Loop refusals answer in the dispatch.
+    const refused = sessionRefusal(operations, meta, "prompt", undefined, false);
+    if (refused) return sendRefusal(reply, refused);
     // Not running (ended, or not in the manager at all): open it as the resume route does.
     if (!draft && !sessions.get(id)?.isRunning) {
       const mutation = sessionMutations.owner(id);
@@ -723,13 +733,11 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       })
       .safeParse(request.body ?? {});
     if (!seen.success) return reply.status(400).send({ error: seen.error.message });
-    if (index.find((s) => s.id === id)?.sharedTo) return refuseShared(reply);
-    // SRV-12c1: no delegation starts while the session is handed to the server.
-    if (sessionMutations.owner(id) === "share")
-      return reply.status(409).send({
-        code: "session_moving",
-        error: SESSION_MOVING_ERROR.replace(/^session_moving: /, ""),
-      });
+    // SRV-12c1: no delegation starts on a pointer, or while the session is handed over.
+    // The bare id when the index has no row: a claim alone still freezes it.
+    const record = index.find((s) => s.id === id) ?? { id, cwd: "", createdAt: "" };
+    const frozen = sessionRefusal(operations, record, "planRetry");
+    if (frozen) return sendRefusal(reply, frozen);
     const session = sessions.get(id);
     const dispatcher = ctx.planDispatcher;
     if (!session || !dispatcher) return reply.status(404).send({ error: "unknown session" });
@@ -770,12 +778,10 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const parsed = z.object({ title: z.string().trim().min(1).max(200) }).safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const { id } = request.params as { id: string };
-    if (index.find((s) => s.id === id)?.sharedTo) return refuseShared(reply);
-    if (sessionMutations.owner(id) === "share")
-      return reply.status(409).send({
-        code: "session_moving",
-        error: SESSION_MOVING_ERROR.replace(/^session_moving: /, ""),
-      });
+    // The bare id when the index has no row: a claim alone still freezes it.
+    const record = index.find((s) => s.id === id) ?? { id, cwd: "", createdAt: "" };
+    const refused = sessionRefusal(operations, record, "rename");
+    if (refused) return sendRefusal(reply, refused);
     const live = sessions.get(id);
     if (live) {
       await live.rename(parsed.data.title);
@@ -890,7 +896,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         | undefined;
       const worktreeDependent = index
         .list()
-        .find((candidate) => candidate.id !== id && candidate.worktreeOwnerSessionId === id);
+        .find((candidate) => candidate.id !== id && candidate.workspace?.ownerSessionId === id);
       if (worktreeDependent) {
         return reply.status(409).send({
           code: "session_worktree_in_use",
@@ -901,15 +907,15 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       // Retained Loop review evidence is explicitly outside this boundary. Before
       // stopping an ordinary session, prove no other session record owns the same
       // normalized path. Persisted metadata is untrusted and may be duplicated.
-      if (meta.worktreePath && !meta.loopReviewRunId) {
-        const targetKey = await canonicalWorktreePath(meta.worktreePath);
+      if (meta.workspace?.path && !reviewRunId(meta)) {
+        const targetKey = await canonicalWorktreePath(meta.workspace.path);
         const live = sessions.list();
         const otherRecords = [
           ...live,
           ...index.list().filter((candidate) => !live.some((item) => item.id === candidate.id)),
-        ].filter((candidate) => candidate.id !== id && candidate.worktreePath);
+        ].filter((candidate) => candidate.id !== id && candidate.workspace?.path);
         for (const candidate of otherRecords) {
-          if ((await canonicalWorktreePath(candidate.worktreePath!)) === targetKey) {
+          if ((await canonicalWorktreePath(candidate.workspace!.path!)) === targetKey) {
             return reply.status(409).send({
               code: "session_worktree_cleanup_failed",
               error:
@@ -918,8 +924,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
           }
         }
         const projectId = meta.projectId;
-        const worktreePath = meta.worktreePath;
-        const worktreeBranch = meta.worktreeBranch;
+        const worktreePath = meta.workspace.path;
+        const worktreeBranch = meta.workspace.branch;
         const project = projectId
           ? projects.find((candidate) => candidate.id === projectId)
           : undefined;
@@ -950,13 +956,20 @@ export function registerSessionRoutes(ctx: ServerContext): void {
                 "Git does not register this isolated worktree to the session's expected branch. Session metadata was retained.",
             });
           }
-          if (!meta.worktreeIdentity) {
+          if (!meta.workspace?.identity) {
             try {
               const worktreeIdentity = sessionWorktreeStore.captureWorktreeIdentity(worktreePath);
-              const adopted = { ...meta, worktreeIdentity };
+              const adopted = {
+                ...meta,
+                workspace: { ...meta.workspace, identity: worktreeIdentity },
+              };
               index.upsert(adopted);
               const liveSession = sessions.get(id);
-              if (liveSession) liveSession.meta.worktreeIdentity = worktreeIdentity;
+              if (liveSession)
+                liveSession.meta.workspace = {
+                  ...liveSession.meta.workspace,
+                  identity: worktreeIdentity,
+                };
               meta = adopted;
             } catch {
               return reply.status(409).send({
@@ -966,7 +979,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
               });
             }
           }
-          const worktreeIdentity = meta.worktreeIdentity;
+          const worktreeIdentity = meta.workspace?.identity;
           let expectedOid: string | undefined;
           try {
             if (
@@ -987,10 +1000,17 @@ export function registerSessionRoutes(ctx: ServerContext): void {
             });
           }
           try {
-            const prepared = { ...meta, worktreeCleanupBranchHead: expectedOid };
+            const prepared = {
+              ...meta,
+              workspace: { ...meta.workspace, cleanupBranchHead: expectedOid },
+            };
             index.upsert(prepared);
             const liveSession = sessions.get(id);
-            if (liveSession) liveSession.meta.worktreeCleanupBranchHead = expectedOid;
+            if (liveSession)
+              liveSession.meta.workspace = {
+                ...liveSession.meta.workspace,
+                cleanupBranchHead: expectedOid,
+              };
             meta = prepared;
           } catch {
             return reply.status(409).send({
@@ -1004,14 +1024,14 @@ export function registerSessionRoutes(ctx: ServerContext): void {
             worktreePath,
             worktreeIdentity,
             worktreeBranch,
-            sourceBranch: meta.worktreeSourceBranch ?? "",
+            sourceBranch: meta.workspace?.sourceBranch ?? "",
             expectedOid,
           };
         } else if (registration) {
-          const expectedOid = meta.worktreeCleanupBranchHead;
+          const expectedOid = meta.workspace?.cleanupBranchHead;
           if (
             registration.branch !== worktreeBranch ||
-            !meta.worktreeIdentity ||
+            !meta.workspace?.identity ||
             !expectedOid ||
             !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(expectedOid)
           ) {
@@ -1024,9 +1044,9 @@ export function registerSessionRoutes(ctx: ServerContext): void {
           isolatedCleanup = {
             projectPath: project.path,
             worktreePath,
-            worktreeIdentity: meta.worktreeIdentity,
+            worktreeIdentity: meta.workspace.identity,
             worktreeBranch,
-            sourceBranch: meta.worktreeSourceBranch ?? "",
+            sourceBranch: meta.workspace.sourceBranch ?? "",
             expectedOid,
           };
         } else {
@@ -1193,7 +1213,9 @@ export function registerSessionRoutes(ctx: ServerContext): void {
   // every non-mutating preflight complete before auto-commit or checkout.
   fastify.post("/sessions/:id/merge", async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (index.find((s) => s.id === id)?.sharedTo) return refuseShared(reply);
+    const record = index.find((s) => s.id === id);
+    const pointer = record && sessionRefusal(operations, record, "merge", undefined, false);
+    if (pointer?.code === "session_shared") return sendRefusal(reply, pointer);
     const releaseMutation = sessionMutations.tryClaim(id, "merge");
     if (!releaseMutation) {
       return reply.status(409).send({
@@ -1214,11 +1236,11 @@ export function registerSessionRoutes(ctx: ServerContext): void {
           worktreeCommitted: false,
         });
       // This must remain before native identity and all Git calls.
-      if (meta.loopReviewRunId) {
-        return reply.status(409).send({
-          code: "loop_review_read_only",
-          outcome: "read_only",
-          error: "Loop review sessions are read-only. Merge and apply are unavailable.",
+      const refused = sessionRefusal(operations, meta, "merge", undefined, false);
+      if (refused) {
+        return reply.status(refused.status).send({
+          ...refusalBody(refused),
+          outcome: refused.code === "loop_review_read_only" ? "read_only" : "failed",
           worktreeCommitted: false,
         });
       }
@@ -1227,27 +1249,29 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       // owner (or the operator) starts it. Folder projects, other hosts and
       // sessions without an owner keep the local merge below.
       const prProject = meta.projectId ? projects.find((p) => p.id === meta.projectId) : undefined;
+      // A record without an owner is refused here (mergePullRequest), never
+      // merged into the server's own checkout.
+      const owner = sessionOwner(meta);
       const asPullRequest =
         ctx.sharedServer === true &&
-        meta.createdBy !== undefined &&
         prProject?.origin !== undefined &&
         parseGitHubRepo(prProject.origin) !== undefined;
       let ownerGithubEnv: Record<string, string> = {};
       if (asPullRequest) {
-        const user = requestUser(request.raw);
-        const permitted =
-          !!user &&
-          ((meta.createdBy !== undefined && user.id === meta.createdBy.id) ||
-            ctx.userAgentDirs?.isOperator(user) === true);
-        if (!permitted)
-          return reply.status(403).send({
-            code: "merge_forbidden",
+        const forbidden = sessionRefusal(
+          operations,
+          meta,
+          "mergePullRequest",
+          requestUser(request.raw),
+          false,
+        );
+        if (forbidden)
+          return reply.status(forbidden.status).send({
+            ...refusalBody(forbidden),
             outcome: "failed",
-            error:
-              "Only the person who owns this session, or the operator, can open its pull request.",
             worktreeCommitted: false,
           });
-        ownerGithubEnv = githubEnv(meta.createdBy, ctx.githubConnections);
+        ownerGithubEnv = githubEnv(owner, ctx.githubConnections);
         if (!ownerGithubEnv.GH_TOKEN)
           return reply.status(409).send({
             code: "merge_github_missing",
@@ -1260,7 +1284,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
 
       const worktreeDependent = index
         .list()
-        .find((candidate) => candidate.id !== id && candidate.worktreeOwnerSessionId === id);
+        .find((candidate) => candidate.id !== id && candidate.workspace?.ownerSessionId === id);
       if (worktreeDependent) {
         return reply.status(409).send({
           code: "merge_worktree_in_use",
@@ -1278,20 +1302,19 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         error: string,
         worktreeCommitted = false,
       ) => reply.status(status).send({ code, outcome, error, worktreeCommitted });
+      const { cwd, projectId } = meta;
       const {
-        cwd,
-        worktreePath,
-        worktreeIdentity,
-        worktreeBranch,
-        worktreeSourceBranch,
-        projectId,
-      } = meta;
+        path: worktreePath,
+        identity: worktreeIdentity,
+        branch: worktreeBranch,
+        sourceBranch: worktreeSourceBranch,
+      } = meta.workspace ?? {};
       // SRV-04: both app-composed commits carry the session owner's identity and
       // credit the other prompt authors. Attribution only, not authorization
       // (gitIdentity.ts). No owner (no trusted proxy) leaves git config in charge.
-      const ownerEnv = gitIdentityEnv(meta.createdBy, ctx.gitIdentities);
+      const ownerEnv = gitIdentityEnv(sessionOwner(meta), ctx.gitIdentities);
       const coAuthors = coAuthorTrailers(
-        meta.createdBy,
+        sessionOwner(meta),
         ctx.sessionAuthors?.authors(id) ?? [],
         ctx.gitIdentities,
       );
@@ -1372,8 +1395,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       try {
         for (const owner of owners) {
           if (
-            owner.worktreePath &&
-            (await canonicalWorktreePath(owner.worktreePath)) === worktreeKey
+            owner.workspace?.path &&
+            (await canonicalWorktreePath(owner.workspace.path)) === worktreeKey
           )
             ownerIds.add(owner.id);
         }
@@ -1456,10 +1479,9 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         }
         if (asPullRequest) {
           // Never a merge into the server's checkout; the worktree stays for the PR.
+          const opened = meta.location?.mergePr;
           const result = await openSessionPullRequest({
-            ...(meta.mergePr
-              ? { existing: { url: meta.mergePr.url, number: meta.mergePr.number } }
-              : {}),
+            ...(opened ? { existing: { url: opened.url, number: opened.number } } : {}),
             sessionId: id,
             title: meta.title,
             worktreePath,
@@ -1472,13 +1494,18 @@ export function registerSessionRoutes(ctx: ServerContext): void {
             githubEnv: ownerGithubEnv,
           });
           if (result.worktreeCommitted) dropDiffCache(id);
-          if (result.pr && result.pr.number !== meta.mergePr?.number) {
+          if (result.pr && result.pr.number !== opened?.number) {
             // A new PR (the first, or the earlier one was merged or closed).
             const mergePr = { ...result.pr, openedAt: new Date().toISOString() };
             const live = sessions.get(id);
-            if (live) live.meta.mergePr = mergePr;
+            const located = (located: SessionMeta) => ({
+              ...located.location,
+              kind: located.location?.kind ?? ("server" as const),
+              mergePr,
+            });
+            if (live) live.meta.location = located(live.meta);
             const latest = live?.meta ?? index.find((s) => s.id === id) ?? meta;
-            const next = { ...latest, mergePr };
+            const next = { ...latest, location: located(latest) };
             index.upsert(next);
             broadcast({ type: "session_meta", session: decorated(next) });
           }
@@ -1803,11 +1830,14 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         // Physical removal succeeded, so returning cwd to the registered project
         // is now mandatory before publishing metadata. Keep branch metadata until
         // its conclusively-owned ref has also been deleted.
-        const withoutWorktree = { ...meta, cwd: project.path };
-        delete withoutWorktree.worktreePath;
-        delete withoutWorktree.worktreeIdentity;
-        delete withoutWorktree.worktreeSourceBranch;
-        delete withoutWorktree.worktreeCleanupBranchHead;
+        const {
+          path: _path,
+          identity: _identity,
+          sourceBranch: _sourceBranch,
+          cleanupBranchHead: _cleanupBranchHead,
+          ...kept
+        } = meta.workspace ?? {};
+        const withoutWorktree: SessionMeta = { ...meta, cwd: project.path, workspace: kept };
         index.upsert(withoutWorktree);
         broadcast({ type: "session_meta", session: withoutWorktree });
 
@@ -1832,8 +1862,9 @@ export function registerSessionRoutes(ctx: ServerContext): void {
           };
         }
 
-        const cleaned = { ...withoutWorktree };
-        delete cleaned.worktreeBranch;
+        const { branch: _branch, ...rest } = kept;
+        const cleaned: SessionMeta = { ...withoutWorktree, workspace: rest };
+        if (Object.keys(rest).length === 0) delete cleaned.workspace;
         index.upsert(cleaned);
         broadcast({ type: "session_meta", session: cleaned });
         return {
@@ -1862,14 +1893,16 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       const forker = sessionCreator(request.raw);
       let fork: { owner?: UserIdentity; launchPlan?: unknown } | undefined;
       const source = sessions.get(id)?.meta ?? index.find((s) => s.id === id);
-      if (source?.sharedTo) return refuseShared(reply);
+      // A pointer refuses both actions; a Loop session refuses a fork.
+      const refused = source && sessionRefusal(operations, source, "historyFork", undefined, false);
+      if (refused?.code === "session_shared" || (refused && action === "fork"))
+        return sendRefusal(reply, refused);
       if (action === "fork" && source) {
         const refuse = (error: string) =>
           reply.status(409).send({ code: "history_fork_refused", error });
-        if (loopSession(source)) return refuse(LOOP_FORK_REFUSED);
         let pinned: SessionMeta;
         try {
-          pinned = await pinForkModel(source, forker ?? source.createdBy, parsed.data.entryId);
+          pinned = await pinForkModel(source, forker ?? sessionOwner(source), parsed.data.entryId);
         } catch (error) {
           return refuse((error as Error).message);
         }
@@ -1877,7 +1910,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         if (refusal) return refuse(refusal);
         fork = {
           ...(forker ? { owner: forker } : {}),
-          ...(pinned !== source ? { launchPlan: pinned.launchPlan } : {}),
+          ...(pinned !== source ? { launchPlan: pinned.launch?.plan } : {}),
         };
       }
       try {
@@ -1911,7 +1944,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const live = sessions.get(id);
     const meta = live?.meta ?? index.find((s) => s.id === id);
     if (!meta) return reply.status(404).send({ error: "unknown session" });
-    if (loopSession(meta)) return reply.status(409).send({ error: LOOP_FORK_REFUSED });
+    const refused = sessionRefusal(operations, meta, "fork", undefined, false);
+    if (refused) return sendRefusal(reply, refused);
     if (!meta.piSessionFile || !existsSync(meta.piSessionFile)) {
       return reply.status(409).send({ error: "session has no history to fork yet" });
     }
@@ -1940,7 +1974,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     const forker = sessionCreator(request.raw);
     let source: SessionMeta;
     try {
-      source = await pinForkModel(meta, forker ?? meta.createdBy);
+      source = await pinForkModel(meta, forker ?? sessionOwner(meta));
     } catch (error) {
       return reply.status(409).send({ error: (error as Error).message });
     }
@@ -1981,7 +2015,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       },
     };
     // Draft start and immediate start: refuse before any worktree or spawn.
-    await ownerModels(draft?.createdBy ?? createdBy);
+    await ownerModels(draft ? sessionOwner(draft) : createdBy);
     const defaults = envDefaults();
     let cwd = body.cwd ?? defaults.cwd ?? process.cwd();
     let project: ProjectMeta | undefined;
@@ -2031,7 +2065,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     if (resolvedLaunch.plan.kind !== "helper") {
       const pinned = await claudeLaunchModel(
         ctx,
-        draft?.createdBy ?? createdBy,
+        draft ? sessionOwner(draft) : createdBy,
         resolvedLaunch.plan,
         {
           cwd,
@@ -2260,7 +2294,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       }
     },
     launch: (draft) => {
-      const config = draft.launchResourceConfig;
+      const config = draft.launch?.resourceConfig;
       return launchSession(
         {
           cwd: draft.cwd,
@@ -2311,9 +2345,13 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       updatedAt: new Date().toISOString(),
     };
     try {
-      const resolved = resolveLaunchResources(ctx, next, envDefaults(), next.launchResourceConfig);
-      next.launchPlan = resolved.plan;
-      next.launchResourceFingerprint = resolved.fingerprint;
+      const resolved = resolveLaunchResources(
+        ctx,
+        next,
+        envDefaults(),
+        next.launch?.resourceConfig,
+      );
+      next.launch = { ...next.launch, plan: resolved.plan, fingerprint: resolved.fingerprint };
       index.upsert(next);
       broadcast({ type: "session_meta", session: next });
       return { session: decorated(next) };
@@ -2346,14 +2384,23 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         cwd,
         createdAt: now,
         updatedAt: now,
+        schemaVersion: SESSION_RECORD_VERSION,
         lifecycle: "draft",
         ...(createdBy ? { createdBy } : {}),
+        // ADR 0006: written once, here; the first send keeps it.
+        provenance: { kind: "created", by: actorRef(createdBy), at: now },
+        location: {
+          kind: ctx.sharedServer ? "server" : "local",
+          ...(createdBy ? { owner: createdBy } : {}),
+        },
         projectId: body.projectId,
         agentName: body.agentName,
         draftWorktreeIsolation: settings.get().worktreeIsolation,
-        launchPlan: resolved.plan,
-        launchResourceConfig: resolved.config,
-        launchResourceFingerprint: resolved.fingerprint,
+        launch: {
+          plan: resolved.plan,
+          resourceConfig: resolved.config,
+          fingerprint: resolved.fingerprint,
+        },
       };
       index.upsert(draft);
       ctx.events.sessionCreated(draft, userActor(createdBy));

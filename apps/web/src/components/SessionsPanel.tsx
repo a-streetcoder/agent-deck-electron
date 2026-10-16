@@ -12,7 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 import type { SessionActivity, SessionMeta } from "@agent-deck/contracts";
-import { sessionActivity } from "@agent-deck/domain";
+import { isLoopSession, liveCopy, reviewRunId, sessionActivity } from "@agent-deck/domain";
 import { AppCopyButton } from "@/design-system/components/AppCopyButton";
 import { cn } from "@/lib/cn";
 import { sortSessionsByActivity, sortSessionsWithPins } from "@/lib/sessionOrdering";
@@ -116,12 +116,14 @@ export function SessionRow({
   // SRV-15a: a fork shares the checkout's worktree and blocks its merge while it
   // exists; say so when that checkout belongs to another member.
   const checkoutOwner = useAppStore((state) => {
-    const ownerId = session.worktreeOwnerSessionId ?? (session.worktreePath ? session.id : null);
+    const ownerId =
+      session.workspace?.ownerSessionId ?? (session.workspace?.path ? session.id : null);
     const owner = state.sessions.find((item) => item.id === ownerId)?.createdBy;
     return owner && state.me && owner.id !== state.me.id ? userDisplayName(owner) : null;
   });
   // The server refuses these forks (SRV-15a); say why instead of offering it.
-  const loopSession = Boolean(session.loopReviewRunId || session.agentName?.startsWith("Loop ·"));
+  const loopSession = isLoopSession(session);
+  const live = liveCopy(session);
   const forkTitle = loopSession
     ? "A Loop session cannot be forked. Open its run from Loops instead."
     : !session.piSessionFile
@@ -227,16 +229,13 @@ export function SessionRow({
         <span className="truncate text-label font-medium" data-testid="chat-title">
           {displayTitle}
         </span>
-        {session.sharedTo ? (
+        {live ? (
           // SRV-12c1: the same row, now a link to the copy on the shared server.
           <span
             className="mt-0.5 truncate text-detail text-text-muted"
             data-testid={`chat-shared-${session.id}`}
           >
-            on{" "}
-            {session.sharedTo.serverOrigin
-              ? hostOf(session.sharedTo.serverOrigin)
-              : (session.sharedTo.device ?? "a device")}
+            on {"serverOrigin" in live ? hostOf(live.serverOrigin) : live.device}
           </span>
         ) : null}
         {session.status === "failed" ? (
@@ -359,8 +358,8 @@ export function SessionRow({
           onClick={(event) => {
             event.stopPropagation();
             if (
-              session.worktreePath &&
-              !session.loopReviewRunId &&
+              session.workspace?.path &&
+              !reviewRunId(session) &&
               !window.confirm(
                 "Delete this isolated session? Its worktree and app-owned branch, including any unmerged commits, will be permanently removed.",
               )

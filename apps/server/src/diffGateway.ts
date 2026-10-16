@@ -1,4 +1,5 @@
 import type { DiffBase, DiffScope, SessionMeta } from "@agent-deck/contracts";
+import { reviewRunId } from "@agent-deck/domain";
 import { Effect } from "effect";
 import { runPromiseUnwrapped } from "./effectRun.ts";
 import { gitFullyQualifiedBranchRef, gitMergeBase } from "./git.ts";
@@ -42,33 +43,33 @@ export async function sessionDiffBase(
   meta: SessionMeta,
   requested: DiffBase = "head",
 ): Promise<string | undefined> {
-  if (!meta.loopReviewRunId) {
+  const runId = reviewRunId(meta);
+  const workspace = meta.workspace;
+  if (!runId) {
     if (requested === "head") return undefined;
     if (
-      !meta.worktreePath ||
-      meta.cwd !== meta.worktreePath ||
-      !meta.worktreeBranch ||
-      !meta.worktreeSourceBranch
+      !workspace?.path ||
+      meta.cwd !== workspace.path ||
+      !workspace.branch ||
+      !workspace.sourceBranch
     ) {
       throw new Error("branch diff is only available for worktree sessions");
     }
     // sourceBranch...HEAD: the merge base, so source-branch commits made after
     // the worktree forked never show up as reverted worktree changes.
-    const sourceRef = await gitFullyQualifiedBranchRef(meta.cwd, meta.worktreeSourceBranch);
+    const sourceRef = await gitFullyQualifiedBranchRef(meta.cwd, workspace.sourceBranch);
     return gitMergeBase(meta.cwd, sourceRef, "HEAD");
   }
   if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      meta.loopReviewRunId,
-    ) ||
-    !meta.worktreePath ||
-    meta.cwd !== meta.worktreePath ||
-    !meta.worktreeBranch ||
-    !meta.worktreeSourceBranch
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId) ||
+    !workspace?.path ||
+    meta.cwd !== workspace.path ||
+    !workspace.branch ||
+    !workspace.sourceBranch
   ) {
     throw new Error("Loop review metadata is unavailable");
   }
-  return gitFullyQualifiedBranchRef(meta.cwd, meta.worktreeSourceBranch);
+  return gitFullyQualifiedBranchRef(meta.cwd, workspace.sourceBranch);
 }
 
 export function createDiffGateway(runtime: ServerRuntime): DiffGateway {

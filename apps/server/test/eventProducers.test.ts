@@ -118,6 +118,48 @@ describe("A1b1 producers", () => {
     expect(removed).toMatchObject({ kind: "session.removed", actor: { type: "user" } });
   });
 
+  it("ADR 0006: session.created carries the provenance triple, references only", () => {
+    const h = harness();
+    h.events.sessionCreated(
+      meta({
+        provenance: {
+          kind: "forked",
+          from: { sessionId: "source", title: "Secret title", entryId: "e1" },
+          by: { user: { id: "a@b.c", name: "A" } },
+          at: "2026-10-15T10:00:00.000Z",
+          recap: { text: "User:\nsecret recap", truncated: false },
+        },
+      }),
+      userActor({ id: "a@b.c" }),
+      "source",
+    );
+    h.events.sessionCreated(
+      meta({
+        id: "s2",
+        provenance: {
+          kind: "imported",
+          from: { device: "laptop", localSessionId: "local-1" },
+          by: { user: { id: "a@b.c" } },
+          at: "2026-10-15T10:00:00.000Z",
+        },
+      }),
+      userActor({ id: "a@b.c" }),
+    );
+    const [forked, imported] = h.all();
+    expect(forked!.payload).toMatchObject({
+      provenance: {
+        kind: "forked",
+        from: { sessionId: "source" },
+        by: { user: { type: "user", id: "a@b.c", name: "A" } },
+        at: "2026-10-15T10:00:00.000Z",
+      },
+    });
+    expect(JSON.stringify(forked!.payload)).not.toContain("secret");
+    expect(imported!.payload).toMatchObject({
+      provenance: { kind: "imported", from: { device: "laptop", localSessionId: "local-1" } },
+    });
+  });
+
   it("turn.prompted opens the turn; plan, completion and checkpoint name it as cause", () => {
     const h = harness();
     const hooks = h.events.turnHooks(meta());

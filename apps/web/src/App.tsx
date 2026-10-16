@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { MessageSquarePlus } from "lucide-react";
+import { sessionLifecycle } from "@agent-deck/domain";
 import {
   coerceTranscriptVisibility,
   DEFAULT_TRANSCRIPT_VISIBILITY,
@@ -74,12 +75,12 @@ function ChatColumn() {
                 message={agentStatus === "running" ? "Pi is working…" : null}
                 className="px-6"
               />
-              {session.sharedTo ? (
+              {sessionLifecycle(session) === "pointer" ? (
                 <SharedSessionPanel session={session} />
               ) : (
                 <>
                   {/* SRV-12c3: back here, the server copy not closed yet. */}
-                  {session.returnPending ? <ReturnPendingBanner session={session} /> : null}
+                  {session.location?.transfer ? <ReturnPendingBanner session={session} /> : null}
                   <Composer />
                 </>
               )}

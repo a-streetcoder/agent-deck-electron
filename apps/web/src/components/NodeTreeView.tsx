@@ -9,6 +9,8 @@ import {
   openHumanNodes,
   projectNodeTree,
   PROMPT_LABEL_MAX_CHARS,
+  serverCopy,
+  sessionLifecycle,
   type AffectedRegion,
   type AssistantCell,
   type EventEnvelope,
@@ -500,7 +502,9 @@ function useSessionEvents(sessionId: string | null): EventEnvelope[] {
 
 export function NodeTreeView() {
   // SRV-12c2: a pointer's tree is its server session's, from the mirror's events.
-  const pointer = useAppStore((state) => state.session?.sharedTo?.serverSessionId ?? null);
+  const pointer = useAppStore((state) =>
+    state.session ? (serverCopy(state.session)?.sessionId ?? null) : null,
+  );
   const localId = useAppStore((state) => state.session?.id ?? null);
   const sessionId = pointer ?? localId;
   const mcpServerNames = useAppStore((state) => state.session?.mcpServerNames);
@@ -529,7 +533,9 @@ export function NodeTreeView() {
   const hidden = useMemo(() => (tree ? duplicateRows(tree.nodes) : NO_HIDDEN), [tree]);
   // A pointer acts on nothing here: its retries stay off.
   const running = useAppStore(
-    (state) => state.transcript.agentStatus === "running" || Boolean(state.session?.sharedTo),
+    (state) =>
+      state.transcript.agentStatus === "running" ||
+      (state.session ? sessionLifecycle(state.session) === "pointer" : false),
   );
   const [retrying, setRetrying] = useState(false);
   const failures = useMemo(() => {

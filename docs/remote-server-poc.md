@@ -155,7 +155,11 @@ docker compose pull && docker compose up -d
 ```
 
 To roll back, set `AGENT_DECK_IMAGE_TAG` in `.env` to the previous version and run
-`docker compose up -d` again (restore the backup if the newer version changed the data). Pin
+`docker compose up -d` again (restore the backup if the newer version changed the data). A
+version with the session record v2 (ADR 0006) migrates `sessions.json` on first start and keeps
+the file as it was in `sessions.v1.bak.json` beside it, written once: before an older version
+runs against the data dir, copy `sessions.v1.bak.json` over `sessions.json` (sessions created
+since are not in it). Pin
 `AGENT_DECK_IMAGE_TAG` rather than running `latest`, so you always know which version to go back
 to. If `cloudflared` ever loses the server (Cloudflare 502 while `agent-deck` is healthy), recreate
 the stack: `docker compose up -d --force-recreate`.
@@ -628,7 +632,8 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
   (they resume and replace the source runtime on its owner's credentials); another member's
   session offers the plain fork. This is the UI only: `/history/fork` and `/history/rerun`
   still accept any member (ADR 0003: attribution, not isolation). A plain fork records
-  `forkedFrom` (source id, title and owner at fork time) and the persistence normaliser checks
+  `provenance { kind: "forked", from { sessionId, title, owner } }` (the source id, title and
+  owner at fork time; ADR 0006) and the persistence normaliser checks
   its shape like `createdBy`: the source owner and the fork-time title are not derivable on the
   client (the source may be renamed or deleted, and its `session.created` is usually outside
   the client's event window), so the session record keeps them. The session shows "Forked from
@@ -924,24 +929,27 @@ the user: the local row stays, with the same title, and becomes a read-only poin
   any agent level. The model the session ran on must be one the
   requester's providers offer (as for a fork), else `409 model_unavailable`. Every message
   author becomes the requester. The new session belongs to the requester, records
-  `sharedFrom { device, localSessionId }`, and resumes Pi from the imported transcript when
+  `provenance { kind: "imported", from { device, localSessionId } }`, and resumes Pi from the imported transcript when
   opened. The same session from the same member again (also two posts at once) answers
   `409 session_already_imported` with the existing `sessionId` (the dialog then links that copy),
   or with `pending: true` while the first attempt still runs (retry later). An earlier copy whose
-  transcript differs (`sharedFrom.exportSha256`) answers `409 export_changed` and is never
+  transcript differs (its `transcriptSha256`) answers `409 export_changed` and is never
   linked; cancel the move. The answer says `transferRefDeleted`; the device deletes the ref again after
   recording the link, since the server may lack push rights (a public repository without a
   GitHub connection). If neither side can, the dialog shows the `git push origin --delete`
   command.
 - **When the server does not answer** (no connection, 502, 504, 524) nothing is undone: the
   server may still be importing. Try again; a retry links the copy if it arrived.
-- **The pointer** (`sharedTo { serverOrigin, serverSessionId, sharedAt, mode }` in the local
-  `sessions.json`): its Pi is stopped and its failure or attention state cleared; it opens without
+- **The pointer** (`location.live { serverOrigin, sessionId, at, mode }` in the local
+  `sessions.json`, with the `transcriptSha256` the hand-off carried): its Pi is stopped and its failure or attention state cleared; it opens without
   Pi, showing its last local transcript read-only, "on <host>" in the list and, instead of the
   composer, "This session continues on <host>." with **Open on server**
   (`<server>/?session=<id>`) and **Continue locally**, a plain fork that has no link. Prompts,
   rollback, re-run, message fork, rename, merge, plan retry and composer drafts answer
-  `409 session_shared`; delete removes only the local copy.
+  `409 session_shared` (`allowedOperations` in the domain package decides every one of these
+  refusals from the record's lifecycle and location; see
+  [orchestration-reference.md](orchestration-reference.md#session-record)); delete removes only
+  the local copy.
 - **Live mirror** (SRV-12c2): while a pointer is the open session, the page reads its server
   session through Electron main (the same allow-listed client, never the local backend):
   `GET /sessions/<id>` (meta with its activity and owner), `GET /events?sessionId=<id>` from a
@@ -994,7 +1002,7 @@ A pointer has **Bring back** next to Continue locally (SRV-12c3). The session's 
 to the device it left and continues there as the same local session; the server copy becomes the
 pointer. Only the session's **owner** can do it (the envelope and its completion are theirs; the
 operator can only cancel a return), and only for a server session that came from a device
-(`sharedFrom`). The renderer drives it through Electron main, which allows exactly
+(`provenance.kind` `imported`, from a device). The renderer drives it through Electron main, which allows exactly
 `POST /sessions/<id>/return` (`{}` or `{ confirmedUntracked: [file names] }`),
 `POST /sessions/<id>/return/abort` (`{ handoff? }`) and `PATCH /sessions/<id>/returned`
 (`{ deviceSessionId, handoff }`).
@@ -1038,16 +1046,18 @@ session id>` (the branch form only when the namespace is refused). Every server 
   transcript (header cwd rewritten, the device's own `parentSession` kept) replaces the pointer's
   Pi file under the same local session id; the old file stays as `<file>.pre-return` (one
   generation). Pastes and the composer draft come with it, the server's message authors stay as
-  attribution labels, `sharedTo` is removed, `returnedFrom { serverOrigin, serverSessionId,
-returnedAt, mergePr? }` and `returnPending { token, serverOrigin, serverSessionId, ref, until }`
-  are recorded, and the device deletes the ref. Any failure before the transcript write leaves the
+  attribution labels, `location.live` is removed, the hand-off
+  `location.transfer { direction: "return", token, serverOrigin, sessionId, ref, until }`, the
+  server's pull request (`location.mergePr`) and the carried `transcriptSha256` are recorded
+  (the provenance stays as it was written at creation), and the device deletes the ref. Any failure before the transcript write leaves the
   pointer as it was; the renderer then aborts the return on the server, whose copy stays live.
 - **The server copy** then becomes the pointer (`PATCH /sessions/:id/returned`, owner only, the
   hand-off token and the device session it came from; a stale token answers `409 return_stale`, a
   running turn is refused): its Pi ends and it records
-  `sharedTo { serverOrigin: null, device, deviceSessionId, sharedAt, mode }`. Repeating the call
+  `location.live { device, sessionId, at, mode }` with the `transcriptSha256` its hand-off carried. Repeating the call
   for the same device session answers the pointer again (a lost answer is retried); any other
-  device session is refused. The device then clears `returnPending`. While it is set the session
+  device session is refused. The device then clears `location.transfer`
+  (`PATCH /sessions/:id/return-pending { returnPending: null }`). While it is set the session
   shows "Finish the return on <host>" (Retry, valid for the 15-minute hand-off); after that, or
   without a connection to the server, it explains that the server copy stays open, with **Close
   server copy** (open it on the server and delete it) and Dismiss. On the shared server a pointer
@@ -1069,17 +1079,18 @@ branch to `origin` under the same name with the **session owner's** GitHub conne
 as above), and opens a pull request as the owner with `gh pr create --repo=<owner/name>
 --head=<branch> --base=<project default branch> --title=<session title> --body=<commit subjects +
 "Opened from Agent Deck session <id>">` (argv, never a shell string). The PR is recorded as
-`mergePr { url, number, openedAt }` and returned as `{ pr: { url, number } }`; the worktree stays.
+`location.mergePr { url, number, openedAt }` and returned as `{ pr: { url, number } }`; the worktree stays.
 A **re-click** commits and pushes again (the open PR gets the new commits) and answers
 `merge_pr_updated` with the same URL; when `gh pr view <number> --json state` says MERGED or
 CLOSED, it opens a new PR instead. Refusals: `403` for anyone but the owner or the operator,
 `409 merge_github_missing` without the owner's connection. An open PR for the branch that gh
 reports is returned as the PR. A gh failure after the push answers `502 merge_pr_failed` naming
 the pushed branch. The web Merge control reads "Push and open PR" there, then "Push to PR" with
-the PR link. Folder projects, other hosts and sessions without an owner keep the local merge
-exactly as before, as does the desktop. A session brought back to a device carries the PR in
-`returnedFrom.mergePr`: its local merge shows the link and warns that merging there lands the
-work twice.
+the PR link. Folder projects and other hosts keep the local merge exactly as before, as does
+the desktop; a GitHub session with no owner at all (neither `location.owner` nor `createdBy`) is
+refused (`403 merge_forbidden`), never merged into the server's checkout. A session brought back to a device
+carries the PR in its own `location.mergePr`: its local merge shows the link and warns that
+merging there lands the work twice.
 
 ## Container image
 

@@ -17,7 +17,7 @@ import { FolderOpen, LogIn, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react
 import { cn } from "@/lib/cn";
 import { responseErrorMessage } from "@/lib/responseError";
 import { revealResourceFile } from "@/lib/native";
-import { derivedMcpServerName, parseMcpConfigPaste } from "@agent-deck/domain";
+import { derivedMcpServerName, parseMcpConfigPaste, sessionOwner } from "@agent-deck/domain";
 import { useAppStore } from "../state/store.ts";
 import { McpImportPanel } from "./McpImportPanel.tsx";
 import { switchToSession, updateProject } from "../state/wsBridge.ts";
@@ -976,7 +976,7 @@ export function McpScreen() {
         session.projectId === currentProjectId &&
         session.lifecycle !== "draft" &&
         !session.endedAt &&
-        (!me || session.createdBy?.id === me.id),
+        (!me || sessionOwner(session)?.id === me.id),
     );
     return (
       live.find((session) => session.id === activeSessionId) ??

@@ -274,8 +274,8 @@ describe("session return with a real Pi", () => {
     };
     expect(result.restored).toBe("worktree");
     expect(result.transferRefDeleted).toBe(true);
-    expect(result.session.sharedTo).toBeUndefined();
-    expect(result.session.returnedFrom?.serverSessionId).toBe(sessionId);
+    expect(result.session.location?.live).toBeUndefined();
+    expect(result.session.location?.transfer?.sessionId).toBe(sessionId);
     expect(git(bare, "for-each-ref", "refs/agent-deck")).toBe("");
     const closed = await post(
       urlB(`/sessions/${sessionId}/returned`),
@@ -285,7 +285,8 @@ describe("session return with a real Pi", () => {
     );
     expect(closed.status, await closed.clone().text()).toBe(200);
     const pointer = ((await closed.json()) as { session: SessionMeta }).session;
-    expect(pointer.sharedTo).toMatchObject({ serverOrigin: null, deviceSessionId: session.id });
+    expect(pointer.location?.live).toMatchObject({ sessionId: session.id });
+    expect(pointer.location?.live && "device" in pointer.location.live).toBe(true);
     expect(pointer.activity).toBe("idle");
     expect(b.sessions.get(sessionId)).toBeUndefined();
     const refused = await post(urlB(`/sessions/${sessionId}/prompt`), { text: "hi" }, as());

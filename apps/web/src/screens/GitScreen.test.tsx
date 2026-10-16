@@ -120,8 +120,7 @@ it("defaults to the active session project but keeps explicit selection and scop
     session: {
       id: "session",
       projectId: "a",
-      worktreeBranch: "work",
-      worktreeSourceBranch: "main",
+      workspace: { branch: "work", sourceBranch: "main" },
     } as NonNullable<ReturnType<typeof useAppStore.getState>["session"]>,
   });
   render(<GitScreen />);

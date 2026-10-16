@@ -15,7 +15,7 @@ import {
   isKeybindingCommand,
   isValidChord,
 } from "@agent-deck/contracts";
-import { PI_THINKING_LEVELS, type ThinkingLevel } from "@agent-deck/domain";
+import { migrateSessionMeta, PI_THINKING_LEVELS, type ThinkingLevel } from "@agent-deck/domain";
 import type { CodexPluginSkillRef } from "@agent-deck/resources";
 import { Context, Effect, Layer, Option } from "effect";
 import { migrateModelKey } from "../azureProviderRename.ts";
@@ -1008,7 +1008,9 @@ export class Persistence extends Context.Tag("agent-deck/server/services/Persist
 
 export const PersistenceLive = Layer.succeed(Persistence, {
   openSessionIndex: (dataDir = defaultDataDir()) =>
-    makeJsonArrayStoreHandle<SessionMeta>(dataDir, "sessions.json", (session) => {
+    makeJsonArrayStoreHandle<SessionMeta>(dataDir, "sessions.json", (stored) => {
+      // ADR 0006: the v2 shape (the class facade also validates and writes back).
+      const session = migrateSessionMeta(stored, "local");
       const normalized = {
         ...session,
         ...(session.needsAttention === undefined

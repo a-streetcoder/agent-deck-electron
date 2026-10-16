@@ -13,6 +13,7 @@ import {
   messageText,
   PROMPT_LABEL_MAX_CHARS,
   redactSecrets,
+  sessionOwner,
   type EventActor,
   type OpenHumanRequest,
 } from "@agent-deck/domain";
@@ -103,8 +104,8 @@ export function resolveMember(metas: readonly SessionMeta[], member: string): Me
   const wanted = member.trim().toLowerCase();
   const owners = new Map<string, string | undefined>();
   for (const meta of metas) {
-    if (meta.createdBy)
-      owners.set(meta.createdBy.id, meta.createdBy.name ?? owners.get(meta.createdBy.id));
+    const owner = sessionOwner(meta);
+    if (owner) owners.set(owner.id, owner.name ?? owners.get(owner.id));
   }
   const byId = [...owners.keys()].find((id) => id.toLowerCase() === wanted);
   if (byId) return { ok: true, id: byId };
@@ -153,7 +154,7 @@ export function renderSessionList(
       `- session: ${meta.id}`,
       `  title: ${quoted(meta.title ?? "", PROMPT_LABEL_MAX_CHARS)}`,
       `  project: ${meta.projectId ? `${quoted(projectName ?? "", NAME_CHARS)} (${clean(meta.projectId, NAME_CHARS)})` : "none"}`,
-      `  owner: ${ownerText(meta.createdBy)}`,
+      `  owner: ${ownerText(sessionOwner(meta))}`,
       `  status: ${meta.activity ?? "idle"}; updated ${updatedOf(meta)}; turns: ${turns}`,
     ];
     if (log?.lastLabel) {
@@ -348,7 +349,7 @@ export function renderSessionRead(view: SessionReadView): string {
   const add = (line: string) => out.add(line, TRAILER_CHARS);
   add(`Session ${meta.id}. ${DATA_NOTE}`);
   add(`title: ${quoted(meta.title ?? "", PROMPT_LABEL_MAX_CHARS)}`);
-  add(`owner: ${ownerText(meta.createdBy)}`);
+  add(`owner: ${ownerText(sessionOwner(meta))}`);
   add(
     `project: ${meta.projectId ? `${quoted(view.projectName ?? "", NAME_CHARS)} (${clean(meta.projectId, NAME_CHARS)})` : "none"}`,
   );
@@ -574,7 +575,7 @@ export function registerSessionTools(bridge: BridgeRegistry, deps: SessionToolDe
       if (member) {
         const match = resolveMember(all, member);
         if (!match.ok) return { content: match.error, isError: true };
-        metas = metas.filter((meta) => meta.createdBy?.id === match.id);
+        metas = metas.filter((meta) => sessionOwner(meta)?.id === match.id);
       }
       if (since) {
         const from = Date.parse(since);

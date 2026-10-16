@@ -15,9 +15,7 @@ function harness(metaPatch: Partial<SessionMeta> = {}) {
     cwd: "/worktree",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-02T00:00:00.000Z",
-    launchPlan: plan("old"),
-    launchResourceConfig: { version: 1 },
-    launchResourceFingerprint: "old",
+    launch: { plan: plan("old"), resourceConfig: { version: 1 }, fingerprint: "old" },
     finalSystemPromptAudit: { text: "old audit", capturedAt: "2026-01-02T00:00:00.000Z" },
     ...metaPatch,
   };
@@ -105,8 +103,8 @@ describe("session launch-resource replacement coordination", () => {
     await settle(h);
     expect(resume).not.toHaveBeenCalled();
     expect(h.preflight).not.toHaveBeenCalled();
-    expect(h.meta.launchResourceFingerprint).toBe("new");
-    expect(h.meta.launchPlan).toEqual(plan("new"));
+    expect(h.meta.launch?.fingerprint).toBe("new");
+    expect(h.meta.launch?.plan).toEqual(plan("new"));
     expect(h.meta.finalSystemPromptAudit).toBeUndefined();
     expect(h.meta.updatedAt).toBe("2026-01-02T00:00:00.000Z");
   });
@@ -136,8 +134,7 @@ describe("session launch-resource replacement coordination", () => {
   it("applies a verified live candidate without activity or stale prompt-audit mutation", async () => {
     const h = harness();
     vi.spyOn(h.manager, "resume").mockImplementation(async (replacementMeta) => {
-      h.meta.launchPlan = replacementMeta.launchPlan;
-      h.meta.launchResourceFingerprint = replacementMeta.launchResourceFingerprint;
+      h.meta.launch = replacementMeta.launch;
       h.meta.finalSystemPromptAudit = replacementMeta.finalSystemPromptAudit;
       h.setParked(false);
       return h.session as never;
@@ -146,7 +143,7 @@ describe("session launch-resource replacement coordination", () => {
     h.internals.startRefresh(h.session, 1);
     await settle(h);
     expect(h.preflight).toHaveBeenCalledTimes(1);
-    expect(h.meta.launchResourceFingerprint).toBe("new");
+    expect(h.meta.launch?.fingerprint).toBe("new");
     expect(h.meta.finalSystemPromptAudit).toBeUndefined();
     expect(h.meta.updatedAt).toBe("2026-01-02T00:00:00.000Z");
     expect(h.internals.resourceRefreshDirty.has(h.meta.id)).toBe(false);
@@ -190,7 +187,7 @@ describe("session launch-resource replacement coordination", () => {
       systemPrompt: { text: "new" },
       resumeSessionPath: "/tmp/session.jsonl",
     });
-    expect(launchedMeta?.launchResourceFingerprint).toBe("new");
+    expect(launchedMeta?.launch?.fingerprint).toBe("new");
     expect(launchedEnv).toMatchObject({
       API_TOKEN: "deck-secret-value",
       CURRENT_DEFAULT: "current",
@@ -198,7 +195,7 @@ describe("session launch-resource replacement coordination", () => {
     expect(JSON.stringify(launchedMeta)).not.toContain("deck-secret-value");
     expect(JSON.stringify(launchedMeta)).not.toContain("envOverride");
     expect(resumed).toBe(h.session);
-    expect(h.meta.launchResourceFingerprint).toBe("new");
+    expect(h.meta.launch?.fingerprint).toBe("new");
   });
 
   it("parked wake preflight failure retains owner and never spawns", async () => {
@@ -224,7 +221,7 @@ describe("session launch-resource replacement coordination", () => {
     expect(launch).not.toHaveBeenCalled();
     expect(h.internals.sessions.get(h.meta.id)).toBe(h.session);
     expect(h.session.isParked).toBe(true);
-    expect(h.meta.resourceRefreshError).toContain("MCP server");
+    expect(h.meta.launch?.refreshError).toContain("MCP server");
   });
 
   it("clears process-local environment overrides on destroy and shutdown", async () => {
@@ -254,7 +251,7 @@ describe("session launch-resource replacement coordination", () => {
     h.internals.resourceRefreshDirty.add(h.meta.id);
     h.internals.startRefresh(h.session, 1);
     await settle(h);
-    expect(oldOwner.meta.launchResourceFingerprint).toBe("old");
+    expect(oldOwner.meta.launch?.fingerprint).toBe("old");
     expect(h.internals.resourceRefreshDirty.has(h.meta.id)).toBe(true);
     expect(oldOwner.bus.subscribe).toHaveBeenCalledTimes(1);
   });

@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { CloudUpload } from "lucide-react";
 import type { SessionMeta } from "@agent-deck/contracts";
+import { lineage, liveCopy, operationRefusal, serverCopy } from "@agent-deck/domain";
 import { Button } from "@/design-system/components/Button";
 import { ControlButton, ControlTextArea } from "@/design-system/components/NativeControls";
 import {
@@ -42,7 +43,7 @@ const MAX_PROMPT_CHARS = 32_000;
  */
 export function SharedSessionPanel({ session }: { session: SessionMeta }) {
   // SRV-12c3: on the shared server, a copy that went back to its device.
-  if (!session.sharedTo?.serverOrigin) return <ReturnedPanel session={session} />;
+  if (!serverCopy(session)) return <ReturnedPanel session={session} />;
   // One composer per pointer: text typed in one never shows in another, and an
   // earlier pointer's submission never clears this one's.
   return <PointerPanel key={session.id} session={session} />;
@@ -50,9 +51,9 @@ export function SharedSessionPanel({ session }: { session: SessionMeta }) {
 
 /** SRV-12c3, shared server: read-only; the device is not reachable from here. */
 function ReturnedPanel({ session }: { session: SessionMeta }) {
-  const link = session.sharedTo!;
-  const at = new Date(link.sharedAt);
-  const when = Number.isNaN(at.getTime()) ? link.sharedAt : at.toLocaleString();
+  const link = liveCopy(session)!;
+  const at = new Date(link.at);
+  const when = Number.isNaN(at.getTime()) ? link.at : at.toLocaleString();
   return (
     <div
       className="flex flex-wrap items-center gap-3 border-t border-border-subtle px-6 py-4"
@@ -60,16 +61,37 @@ function ReturnedPanel({ session }: { session: SessionMeta }) {
     >
       <div className="min-w-0 flex-1">
         <p className="text-label text-text-secondary">
-          This session continues on {link.device ?? "its device"}.
+          This session continues on {"device" in link ? link.device : "its device"}.
         </p>
         <p className="text-detail text-text-muted">
           It went back there on {when}; this copy is read-only and does not follow it.
         </p>
+        <ContinuedCopy session={session} />
       </div>
       <Button size="sm" variant="ghost" onClick={() => void forkSession(session.id)}>
         Continue here
       </Button>
     </div>
+  );
+}
+
+/** ADR 0006: the copy this pointer already continued in on this side (lineage), if any. */
+function ContinuedCopy({ session }: { session: SessionMeta }) {
+  const continued = useAppStore((state) =>
+    lineage(state.sessions, session.id).descendants.find((item) => !liveCopy(item)),
+  );
+  if (!continued) return null;
+  return (
+    <p className="text-detail text-text-muted" data-testid="pointer-continued">
+      Continued here as “{continued.title?.trim() || "Untitled session"}”.{" "}
+      <ControlButton
+        type="button"
+        onClick={() => void switchToSession(continued)}
+        className="text-accent hover:underline focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        Open it
+      </ControlButton>
+    </p>
   );
 }
 
@@ -82,10 +104,7 @@ const copyNote = (sharedAt: string): string => {
 
 function PointerPanel({ session }: { session: SessionMeta }) {
   // A device pointer (SharedSessionPanel routes the server's own pointers away).
-  const link = session.sharedTo as NonNullable<SessionMeta["sharedTo"]> & {
-    serverOrigin: string;
-    serverSessionId: string;
-  };
+  const link = serverCopy(session)!;
   const host = hostOf(link.serverOrigin);
   const { mirror, refresh, signIn, send } = useSharedSessionMirror(session);
   const [text, setText] = useState("");
@@ -225,15 +244,14 @@ function PointerPanel({ session }: { session: SessionMeta }) {
           <p className="text-label text-text-secondary">This session continues on {host}.</p>
           {/* Unlink and Continue locally keep this device's copy, frozen at the move. */}
           <p className="text-detail text-text-muted" data-testid="pointer-copy-note">
-            Unlink and Continue locally: {copyNote(link.sharedAt)}
+            Unlink and Continue locally: {copyNote(link.at)}
           </p>
+          <ContinuedCopy session={session} />
         </div>
         <Button
           size="sm"
           onClick={() =>
-            void openExternal(
-              `${link.serverOrigin}/?session=${encodeURIComponent(link.serverSessionId)}`,
-            )
+            void openExternal(`${link.serverOrigin}/?session=${encodeURIComponent(link.sessionId)}`)
           }
         >
           Open on server
@@ -253,17 +271,17 @@ type FinishResult =
 
 /**
  * SRV-12c3: close the server copy of a session that came back (PATCH returned
- * with the hand-off token), then clear returnPending here. Repeating it is safe:
+ * with the hand-off token), then clear the hand-off here. Repeating it is safe:
  * the server answers the same pointer again for this device session.
  */
 export async function finishReturn(
   session: SessionMeta,
   server: SharedServerBridge,
 ): Promise<FinishResult> {
-  const pending = session.returnPending;
+  const pending = session.location?.transfer;
   if (!pending) return { ok: true, session, serverRefDeleted: true };
   const answer = await server
-    .request("PATCH", `/sessions/${pending.serverSessionId}/returned`, {
+    .request("PATCH", `/sessions/${pending.sessionId}/returned`, {
       deviceSessionId: session.id,
       handoff: pending.token,
     })
@@ -294,7 +312,7 @@ export async function finishReturn(
 
 /** SRV-12c3: a session that came back while its server copy is still open. */
 export function ReturnPendingBanner({ session }: { session: SessionMeta }) {
-  const pending = session.returnPending!;
+  const pending = session.location!.transfer!;
   const host = hostOf(pending.serverOrigin);
   const server = sharedServer();
   const [busy, setBusy] = useState(false);
@@ -344,7 +362,7 @@ export function ReturnPendingBanner({ session }: { session: SessionMeta }) {
             variant="ghost"
             onClick={() =>
               void openExternal(
-                `${pending.serverOrigin}/?session=${encodeURIComponent(pending.serverSessionId)}`,
+                `${pending.serverOrigin}/?session=${encodeURIComponent(pending.sessionId)}`,
               )
             }
           >
@@ -396,11 +414,11 @@ function BringBack({ session, host }: { session: SessionMeta; host: string }) {
   // SRV-16b: Save stays refused while this dialog is open (also when it waits for a sign-in).
   useTransferHold(step !== null);
   const server = sharedServer();
-  const link = session.sharedTo;
-  if (!server || !link?.serverOrigin || !link.serverSessionId) return null;
+  const link = serverCopy(session);
+  if (!server || !link) return null;
   if (server.origin !== link.serverOrigin) return null;
   const id = session.id;
-  const remote: `/sessions/${string}` = `/sessions/${link.serverSessionId}`;
+  const remote: `/sessions/${string}` = `/sessions/${link.sessionId}`;
   const call = (method: "POST" | "PATCH", path: `/sessions/${string}`, body: object) =>
     server
       .request(method, path, body)
@@ -480,7 +498,7 @@ function BringBack({ session, host }: { session: SessionMeta; host: string }) {
         message: `The session is back on this device.${typeof localBody.notice === "string" ? ` ${localBody.notice}` : ""}`,
       });
       // Close the server copy; until that answers, the session keeps
-      // returnPending and offers "Finish the return" (ReturnPendingBanner).
+      // its hand-off (location.transfer) and offers "Finish the return" (ReturnPendingBanner).
       const finished = await finishReturn(back, server);
       if (!finished.ok)
         store.setError(
@@ -660,11 +678,8 @@ export function ShareSessionButton() {
   const server = sharedServer();
   const link = projects.find((project) => project.id === session?.projectId)?.sharedTo;
   if (!server || !session || !link) return null;
-  const eligible =
-    !session.sharedTo &&
-    Boolean(session.piSessionFile) &&
-    !session.loopReviewRunId &&
-    !session.agentName?.startsWith("Loop ·");
+  // The record's part of the server's own refusal (pointer, draft, Loop).
+  const eligible = !operationRefusal(session, "move");
   // The dialog outlives the button: a finished move turns this session into a pointer.
   if (!eligible && !step) return null;
   const id = session.id;

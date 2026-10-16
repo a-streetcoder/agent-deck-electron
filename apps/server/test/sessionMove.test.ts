@@ -521,13 +521,18 @@ describe("session move: server import and the frozen pointer", () => {
       title: "Fix it",
       projectId: PROJECT_B,
       createdBy: { id: EMAIL },
-      sharedFrom: { localSessionId: S_OK, mode: "snapshot" },
+      provenance: { kind: "imported", from: { localSessionId: S_OK }, mode: "snapshot" },
       activity: "idle",
-      launchPlan: { provider: "openai", model: "gpt-4o-mini" },
+      launch: { plan: { provider: "openai", model: "gpt-4o-mini" } },
     });
-    expect((imported.launchPlan as { thinking?: string }).thinking).toBeUndefined();
-    expect(imported.forkedFrom).toBeUndefined();
-    const wt = imported.worktreePath!;
+    expect((imported.launch?.plan as { thinking?: string }).thinking).toBeUndefined();
+    expect(imported.provenance).toMatchObject({
+      kind: "imported",
+      from: { localSessionId: S_OK },
+      by: { user: { id: expect.any(String) } },
+    });
+    expect(imported.transcriptSha256).toMatch(/^[0-9a-f]{64}$/);
+    const wt = imported.workspace!.path!;
     expect(imported.cwd).toBe(wt);
     expect(git(wt, "log", "-1", "--format=%H")).toBe(envelope.transfer.baseHead);
     // Unstaged edits (" M", not "M "): the reset is --mixed.
@@ -662,7 +667,12 @@ describe("session move: server import and the frozen pointer", () => {
     );
     expect(res.status).toBe(200);
     const { session } = (await res.json()) as { session: SessionMeta };
-    expect(session.sharedTo).toMatchObject({ serverOrigin: ORIGIN, serverSessionId });
+    expect(session.location?.live).toMatchObject({
+      serverOrigin: ORIGIN,
+      sessionId: serverSessionId,
+    });
+    // ADR 0006: the transcript this hand-off carried, recorded on the pointer.
+    expect(session.transcriptSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(session).toMatchObject({ title: "Fix it", activity: "idle" });
     expect(session.status).toBeUndefined();
     expect(session.needsAttention).toBeUndefined();
@@ -735,8 +745,8 @@ describe("session move: server import and the frozen pointer", () => {
     };
     const imported = sessions.find((s) => s.id === sessionId)!;
     // Durable: the configuration every later resolution (resume, refresh) reads.
-    expect(imported.launchResourceConfig).toMatchObject({ thinkingOverride: "high" });
-    expect((imported.launchPlan as { thinking?: string }).thinking).toBe("high");
+    expect(imported.launch?.resourceConfig).toMatchObject({ thinkingOverride: "high" });
+    expect((imported.launch?.plan as { thinking?: string }).thinking).toBe("high");
     await post(urlA(`/sessions/${S_GOOGLE}/share/abort`), { handoff });
   });
 
@@ -756,7 +766,7 @@ describe("session move: server import and the frozen pointer", () => {
       (await (await fetch(urlA("/sessions"))).json()) as { sessions: SessionMeta[] }
     ).sessions.find((s) => s.id === S_GOOGLE)!;
     // A pointer exactly when the link won.
-    expect(Boolean(meta.sharedTo)).toBe(linked.status === 200);
+    expect(Boolean(meta.location?.live)).toBe(linked.status === 200);
     if (replaced.status === 200) {
       const { handoff: next } = (await replaced.json()) as { handoff: string };
       await post(urlA(`/sessions/${S_GOOGLE}/share/abort`), { handoff: next });

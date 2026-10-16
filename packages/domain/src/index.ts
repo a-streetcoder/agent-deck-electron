@@ -21,6 +21,7 @@ export * from "./nodeTree.ts";
 export * from "./affectedRegion.ts";
 export * from "./humanNode.ts";
 export * from "./sessionActivity.ts";
+export * from "./sessionRecord.ts";
 export * from "./eventDiffs.ts";
 export * from "./capabilityProfiles.ts";
 export * from "./planScheduler.ts";

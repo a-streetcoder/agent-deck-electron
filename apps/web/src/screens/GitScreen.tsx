@@ -13,6 +13,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { Sparkles, Tag } from "lucide-react";
+import { reviewRunId } from "@agent-deck/domain";
 import { useAppStore } from "../state/store.ts";
 import { mergeWorktreeSession } from "../state/wsBridge.ts";
 import { useGitHubStatus } from "../components/GitHubConnectionCard.tsx";
@@ -377,9 +378,9 @@ function GitProjectScreen({
       gitActions !== true ||
       !session?.id ||
       useAppStore.getState().session?.id !== session.id ||
-      session.loopReviewRunId ||
-      !session.worktreeBranch ||
-      !session.worktreeSourceBranch ||
+      reviewRunId(session) ||
+      !session.workspace?.branch ||
+      !session.workspace?.sourceBranch ||
       agentRunning ||
       merging
     )
@@ -647,12 +648,12 @@ function GitProjectScreen({
         }
         break;
       case "mergeWorktree":
-        if (session?.loopReviewRunId) {
+        if (session && reviewRunId(session)) {
           pushToast({
             kind: "info",
             message: "Loop review sessions are read-only and cannot be merged.",
           });
-        } else if (!session?.worktreeBranch || !session.worktreeSourceBranch) {
+        } else if (!session?.workspace?.branch || !session.workspace?.sourceBranch) {
           pushToast({
             kind: "info",
             message: "The current session is not using an isolated worktree.",
@@ -942,7 +943,7 @@ function GitProjectScreen({
         )}
       </section>
 
-      {session?.loopReviewRunId ? (
+      {session && reviewRunId(session) ? (
         <div
           data-testid="git-loop-review-banner"
           className="mb-3 mt-1 rounded-lg border border-border-subtle bg-surface px-3 py-2.5 text-detail text-text-secondary"
@@ -954,18 +955,18 @@ function GitProjectScreen({
 
       {gitActions === true &&
       statusReady &&
-      !session?.loopReviewRunId &&
-      session?.worktreeBranch &&
-      session.worktreeSourceBranch ? (
+      !(session && reviewRunId(session)) &&
+      session?.workspace?.branch &&
+      session.workspace?.sourceBranch ? (
         <div
           data-testid="git-worktree-banner"
           className="mb-3 mt-1 flex items-center justify-between gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-2.5"
         >
           <div className="min-w-0 text-detail text-text-secondary">
             This session is isolated on{" "}
-            <span className="font-mono text-text-primary">{session.worktreeBranch}</span>. Merge
+            <span className="font-mono text-text-primary">{session.workspace?.branch}</span>. Merge
             brings its commits back into{" "}
-            <span className="font-mono text-text-primary">{session.worktreeSourceBranch}</span>.
+            <span className="font-mono text-text-primary">{session.workspace?.sourceBranch}</span>.
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {mergePr ? <PullRequestLink pr={mergePr} /> : null}
@@ -978,7 +979,7 @@ function GitProjectScreen({
               title={agentRunning ? "Wait for the current turn to finish" : undefined}
               onClick={() => void merge()}
             >
-              {mergeButtonLabel(sharedServer, mergePr, merging, session.worktreeSourceBranch)}
+              {mergeButtonLabel(sharedServer, mergePr, merging, session.workspace?.sourceBranch)}
             </Button>
           </div>
         </div>

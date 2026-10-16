@@ -356,7 +356,10 @@ async function initServer(
       ),
   });
   const receipts = new ReceiptBus(process.env.AGENT_DECK_TEST === "1");
-  const index = new SessionIndex(dataDir);
+  // Remote-server POC (docs/remote-server-poc.md): behind cloudflared + Access,
+  // every request carries a verified identity; sessions and prompts record it.
+  const trustedProxy = trustedProxyConfigFromEnv();
+  const index = new SessionIndex(dataDir, trustedProxy ? "server" : "local");
   // The live session first: a fork or a deferred launch emits before its index row exists.
   projectOfSession = (sessionId) =>
     sessions.get(sessionId)?.meta.projectId ??
@@ -370,9 +373,6 @@ async function initServer(
   const agentAvatars = new FileAgentAvatarStore(dataDir);
   const projectImages = new ProjectImageStore(agentAvatars);
   const sessionPastes = new SessionPasteStore(dataDir);
-  // Remote-server POC (docs/remote-server-poc.md): behind cloudflared + Access,
-  // every request carries a verified identity; sessions and prompts record it.
-  const trustedProxy = trustedProxyConfigFromEnv();
   const accessVerifier = trustedProxy ? new CloudflareAccessVerifier(trustedProxy) : undefined;
   const sessionAuthors = trustedProxy
     ? new SessionAuthorStore(new SessionAuthorIndex(dataDir))
@@ -780,7 +780,7 @@ async function initServer(
     async (meta, label, turn) => {
       const record = await checkpoints.capture({
         sessionId: meta.id,
-        cwd: meta.worktreePath ?? meta.cwd,
+        cwd: meta.workspace?.path ?? meta.cwd,
         sessionFile: meta.piSessionFile,
         label,
       });
@@ -1783,6 +1783,8 @@ async function initServer(
     dropDiffCache: (sessionId) => diffs.drop(sessionId),
   };
 
+  // ADR 0006: the records this server creates say which side they live on.
+  sessions.recordSide = trustedProxy ? "server" : "local";
   sessions.configureResourceRefresh(
     (meta) => {
       const defaults = envDefaults();
@@ -1794,7 +1796,7 @@ async function initServer(
           model: defaults.model,
           extensions: defaults.extensions,
         },
-        meta.launchResourceConfig,
+        meta.launch?.resourceConfig,
       );
     },
     () => envDefaults().env,

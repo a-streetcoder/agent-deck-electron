@@ -227,10 +227,15 @@ it("SRV-15b: a fork's session.created row says who forked whose session", () => 
         cwd: "/tmp",
         createdAt: "now",
         title: "Fix the build (fork)",
-        forkedFrom: {
-          sessionId: "s1",
-          title: "Fix the build",
-          owner: { id: "ale@example.com", name: "Ale" },
+        provenance: {
+          kind: "forked",
+          from: {
+            sessionId: "s1",
+            title: "Fix the build",
+            owner: { id: "ale@example.com", name: "Ale" },
+          },
+          by: { user: { id: "bob@example.com", name: "Bob" } },
+          at: "now",
         },
       },
     ],

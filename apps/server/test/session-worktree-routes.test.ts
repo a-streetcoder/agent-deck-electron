@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import type { ServerResponse } from "node:http";
+import type { SessionMeta } from "@agent-deck/contracts";
 import Fastify from "fastify";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerContext } from "../src/context.ts";
@@ -97,13 +98,8 @@ interface Meta {
   cwd: string;
   projectId?: string;
   agentName?: string;
-  worktreePath?: string;
-  worktreeIdentity?: string;
-  worktreeBranch?: string;
-  worktreeSourceBranch?: string;
-  worktreeCleanupBranchHead?: string;
-  worktreeOwnerSessionId?: string;
-  loopReviewRunId?: string;
+  workspace?: SessionMeta["workspace"];
+  provenance?: SessionMeta["provenance"];
 }
 
 function makeRoute(
@@ -144,8 +140,10 @@ function makeRoute(
         agentName: options.agentName as string | undefined,
         ...(worktree
           ? {
-              worktreePath: worktree.path,
-              worktreeIdentity: worktree.identityToken as string | undefined,
+              workspace: {
+                path: worktree.path,
+                identity: worktree.identityToken as string | undefined,
+              },
             }
           : {}),
       };
@@ -294,6 +292,32 @@ beforeEach(() => {
     sourceBranch: "main",
     identityToken: "v1:0000000000000001:0000000000000002",
     branchOwned: true,
+  });
+});
+
+describe("hand-off claim on a session the index does not hold (ADR 0006)", () => {
+  it("rename and plan retry answer session_moving on the bare id", async () => {
+    const { fastify, sessions } = makeRoute();
+    const release = sessions.mutationClaims.tryClaim("ghost", "share")!;
+    try {
+      const rename = await fastify.inject({
+        method: "PATCH",
+        url: "/sessions/ghost",
+        payload: { title: "x" },
+      });
+      expect(rename.statusCode).toBe(409);
+      expect(rename.json()).toMatchObject({ code: "session_moving" });
+      const retry = await fastify.inject({
+        method: "POST",
+        url: "/sessions/ghost/plan/items/i1/retry",
+        payload: {},
+      });
+      expect(retry.statusCode).toBe(409);
+      expect(retry.json()).toMatchObject({ code: "session_moving" });
+    } finally {
+      release();
+      await fastify.close();
+    }
   });
 });
 
@@ -629,7 +653,7 @@ describe("POST /sessions worktree transaction", () => {
     );
     expect(state.captureWorktreeIdentity).not.toHaveBeenCalled();
     expect(response.json()).toMatchObject({
-      session: { worktreeIdentity: "v1:0000000000000001:0000000000000002" },
+      session: { workspace: { identity: "v1:0000000000000001:0000000000000002" } },
     });
     const createOptions = sessions.create.mock.calls[0]![0] as {
       plan: Parameters<typeof fingerprintLaunchResources>[0];
@@ -840,7 +864,7 @@ describe("POST /sessions worktree transaction", () => {
       id: "persisted-unsafe",
       cwd: external,
       projectId: "project-1",
-      worktreePath: external,
+      workspace: { path: external },
     });
     state.deleteWorktree.mockRejectedValue(
       Object.assign(new Error("refused"), { code: "SESSION_WORKTREE_INVALID_PATH" }),
@@ -869,22 +893,21 @@ describe("POST /sessions worktree transaction", () => {
       id: "live-legacy",
       cwd: present,
       projectId: "project-1",
-      worktreePath: present,
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      workspace: { path: present, branch: "agent-deck/session-a1b2c3d4" },
     };
     state.live.set(legacy.id, legacy);
     state.index.set(legacy.id, legacy);
     gitMocks.gitWorktreeRegistrationAtPath.mockResolvedValue({
       path: present,
-      branch: legacy.worktreeBranch,
+      branch: legacy.workspace?.branch,
     });
 
     const response = await fastify.inject({ method: "DELETE", url: "/sessions/live-legacy" });
 
     expect(response.statusCode, response.body).toBe(200);
-    expect(legacy.worktreeIdentity).toBe("v1:0000000000000001:0000000000000002");
+    expect(legacy.workspace?.identity).toBe("v1:0000000000000001:0000000000000002");
     const adoptedCall = index.upsert.mock.calls.find(([record]) => record.id === legacy.id);
-    expect(adoptedCall?.[0].worktreeIdentity).toBe("v1:0000000000000001:0000000000000002");
+    expect(adoptedCall?.[0].workspace?.identity).toBe("v1:0000000000000001:0000000000000002");
     expect(index.upsert.mock.invocationCallOrder[0]).toBeLessThan(
       sessions.destroy.mock.invocationCallOrder[0]!,
     );
@@ -906,10 +929,12 @@ describe("POST /sessions worktree transaction", () => {
       id: "isolated-delete",
       cwd: present,
       projectId: "project-1",
-      worktreePath: present,
-      worktreeIdentity: "v1:0000000000000001:0000000000000002",
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
-      worktreeSourceBranch: "main",
+      workspace: {
+        path: present,
+        identity: "v1:0000000000000001:0000000000000002",
+        branch: "agent-deck/session-a1b2c3d4",
+        sourceBranch: "main",
+      },
     });
     state.index.set("isolated-delete", state.live.get("isolated-delete")!);
 
@@ -953,10 +978,12 @@ describe("POST /sessions worktree transaction", () => {
       id: "branch-retry",
       cwd: present,
       projectId: "project-1",
-      worktreePath: present,
-      worktreeIdentity: "v1:0000000000000001:0000000000000002",
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
-      worktreeSourceBranch: "main",
+      workspace: {
+        path: present,
+        identity: "v1:0000000000000001:0000000000000002",
+        branch: "agent-deck/session-a1b2c3d4",
+        sourceBranch: "main",
+      },
     });
     gitMocks.gitWorktreeRegistrationAtPath.mockResolvedValue({
       path: present,
@@ -974,7 +1001,7 @@ describe("POST /sessions worktree transaction", () => {
       code: "session_worktree_branch_cleanup_failed",
     });
     expect(failed.json().error).toContain("resolve the Git issue and retry deletion");
-    expect(state.index.get("branch-retry")?.worktreeCleanupBranchHead).toBe("a".repeat(40));
+    expect(state.index.get("branch-retry")?.workspace?.cleanupBranchHead).toBe("a".repeat(40));
     expect(gitMocks.gitWorktreePrune).not.toHaveBeenCalled();
     expect(state.index.has("branch-retry")).toBe(true);
     expect(index.remove).not.toHaveBeenCalledWith("branch-retry");
@@ -997,11 +1024,13 @@ describe("POST /sessions worktree transaction", () => {
       id: "cas-before-prune",
       cwd: missing,
       projectId: "project-1",
-      worktreePath: missing,
-      worktreeIdentity: "v1:0000000000000001:0000000000000002",
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
-      worktreeSourceBranch: "main",
-      worktreeCleanupBranchHead: "a".repeat(40),
+      workspace: {
+        path: missing,
+        identity: "v1:0000000000000001:0000000000000002",
+        branch: "agent-deck/session-a1b2c3d4",
+        sourceBranch: "main",
+        cleanupBranchHead: "a".repeat(40),
+      },
     });
     gitMocks.gitWorktreeRegistrationAtPath.mockResolvedValue({
       path: missing,
@@ -1035,11 +1064,13 @@ describe("POST /sessions worktree transaction", () => {
       id: "fully-cleaned",
       cwd: missing,
       projectId: "project-1",
-      worktreePath: missing,
-      worktreeIdentity: "v1:0000000000000001:0000000000000002",
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
-      worktreeSourceBranch: "main",
-      worktreeCleanupBranchHead: "forged-but-non-authoritative",
+      workspace: {
+        path: missing,
+        identity: "v1:0000000000000001:0000000000000002",
+        branch: "agent-deck/session-a1b2c3d4",
+        sourceBranch: "main",
+        cleanupBranchHead: "forged-but-non-authoritative",
+      },
     });
     gitMocks.gitWorktreeRegistrationAtPath.mockResolvedValue(undefined);
     gitMocks.gitOwnedWorktreeBranchOid.mockResolvedValue(undefined);
@@ -1061,11 +1092,13 @@ describe("POST /sessions worktree transaction", () => {
       id: "forged-missing",
       cwd: missing,
       projectId: "project-1",
-      worktreePath: missing,
-      worktreeIdentity: "v1:0000000000000001:0000000000000002",
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
-      worktreeSourceBranch: "main",
-      worktreeCleanupBranchHead: "a".repeat(40),
+      workspace: {
+        path: missing,
+        identity: "v1:0000000000000001:0000000000000002",
+        branch: "agent-deck/session-a1b2c3d4",
+        sourceBranch: "main",
+        cleanupBranchHead: "a".repeat(40),
+      },
     });
     gitMocks.gitWorktreeRegistrationAtPath.mockResolvedValue(undefined);
 
@@ -1089,9 +1122,11 @@ describe("POST /sessions worktree transaction", () => {
       id: "missing-mismatch",
       cwd: missing,
       projectId: "project-1",
-      worktreePath: missing,
-      worktreeIdentity: "v1:0000000000000001:0000000000000002",
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      workspace: {
+        path: missing,
+        identity: "v1:0000000000000001:0000000000000002",
+        branch: "agent-deck/session-a1b2c3d4",
+      },
     });
     gitMocks.gitWorktreeRegistrationAtPath.mockResolvedValue({
       path: missing,
@@ -1120,9 +1155,11 @@ describe("POST /sessions worktree transaction", () => {
       id: "branch-mismatch",
       cwd: present,
       projectId: "project-1",
-      worktreePath: present,
-      worktreeIdentity: "v1:0000000000000001:0000000000000002",
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      workspace: {
+        path: present,
+        identity: "v1:0000000000000001:0000000000000002",
+        branch: "agent-deck/session-a1b2c3d4",
+      },
     });
     gitMocks.gitWorktreeRegistrationAtPath.mockResolvedValue({
       path: present,
@@ -1149,14 +1186,16 @@ describe("POST /sessions worktree transaction", () => {
       id: "source",
       cwd: WORKTREE_PATH,
       projectId: "project-1",
-      worktreePath: WORKTREE_PATH,
-      worktreeIdentity: "v1:0000000000000001:0000000000000002",
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      workspace: {
+        path: WORKTREE_PATH,
+        identity: "v1:0000000000000001:0000000000000002",
+        branch: "agent-deck/session-a1b2c3d4",
+      },
     });
     state.index.set("target", {
       id: "target",
       cwd: WORKTREE_PATH,
-      worktreeOwnerSessionId: "source",
+      workspace: { ownerSessionId: "source" },
     });
     const response = await fastify.inject({ method: "DELETE", url: "/sessions/source" });
     expect(response.statusCode).toBe(409);
@@ -1173,14 +1212,16 @@ describe("POST /sessions worktree transaction", () => {
       id: "source",
       cwd: WORKTREE_PATH,
       projectId: "project-1",
-      worktreePath: WORKTREE_PATH,
-      worktreeIdentity: "v1:0000000000000001:0000000000000002",
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      workspace: {
+        path: WORKTREE_PATH,
+        identity: "v1:0000000000000001:0000000000000002",
+        branch: "agent-deck/session-a1b2c3d4",
+      },
     });
     state.index.set("target", {
       id: "target",
       cwd: WORKTREE_PATH,
-      worktreeOwnerSessionId: "source",
+      workspace: { ownerSessionId: "source" },
     });
     const response = await fastify.inject({ method: "DELETE", url: "/sessions/target" });
     expect(response.statusCode, response.body).toBe(200);
@@ -1197,19 +1238,21 @@ describe("POST /sessions worktree transaction", () => {
       id: "original",
       cwd: WORKTREE_PATH,
       projectId: "project-1",
-      worktreePath: WORKTREE_PATH,
-      worktreeIdentity: "v1:0000000000000001:0000000000000002",
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      workspace: {
+        path: WORKTREE_PATH,
+        identity: "v1:0000000000000001:0000000000000002",
+        branch: "agent-deck/session-a1b2c3d4",
+      },
     });
     state.index.set("child", {
       id: "child",
       cwd: WORKTREE_PATH,
-      worktreeOwnerSessionId: "original",
+      workspace: { ownerSessionId: "original" },
     });
     state.index.set("grandchild", {
       id: "grandchild",
       cwd: WORKTREE_PATH,
-      worktreeOwnerSessionId: "original",
+      workspace: { ownerSessionId: "original" },
     });
 
     const blocked = await fastify.inject({ method: "DELETE", url: "/sessions/original" });
@@ -1234,9 +1277,11 @@ describe("POST /sessions worktree transaction", () => {
         id,
         cwd: WORKTREE_PATH,
         projectId: "project-1",
-        worktreePath: WORKTREE_PATH,
-        worktreeIdentity: "v1:0000000000000001:0000000000000002",
-        worktreeBranch: "agent-deck/session-a1b2c3d4",
+        workspace: {
+          path: WORKTREE_PATH,
+          identity: "v1:0000000000000001:0000000000000002",
+          branch: "agent-deck/session-a1b2c3d4",
+        },
       });
     }
 
@@ -1259,15 +1304,17 @@ describe("POST /sessions worktree transaction", () => {
       id: "source",
       cwd: WORKTREE_PATH,
       projectId: "project-1",
-      worktreePath: WORKTREE_PATH,
-      worktreeIdentity: "v1:0000000000000001:0000000000000002",
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
-      worktreeSourceBranch: "main",
+      workspace: {
+        path: WORKTREE_PATH,
+        identity: "v1:0000000000000001:0000000000000002",
+        branch: "agent-deck/session-a1b2c3d4",
+        sourceBranch: "main",
+      },
     });
     state.index.set("target", {
       id: "target",
       cwd: WORKTREE_PATH,
-      worktreeOwnerSessionId: "source",
+      workspace: { ownerSessionId: "source" },
     });
     const response = await fastify.inject({ method: "POST", url: "/sessions/source/merge" });
     expect(response.statusCode).toBe(409);
@@ -1286,10 +1333,12 @@ describe("POST /sessions worktree transaction", () => {
         id: "merge-session",
         cwd: WORKTREE_PATH,
         projectId: "project-1",
-        worktreePath: WORKTREE_PATH,
-        worktreeIdentity: "v1:0000000000000001:0000000000000002",
-        worktreeBranch: "agent-deck/session-a1b2c3d4",
-        worktreeSourceBranch: "main",
+        workspace: {
+          path: WORKTREE_PATH,
+          identity: "v1:0000000000000001:0000000000000002",
+          branch: "agent-deck/session-a1b2c3d4",
+          sourceBranch: "main",
+        },
       });
     };
 
@@ -1429,10 +1478,12 @@ describe("POST /sessions worktree transaction", () => {
       id: "merge-session",
       cwd: WORKTREE_PATH,
       projectId: "project-1",
-      worktreePath: WORKTREE_PATH,
-      worktreeIdentity: "v1:0000000000000001:0000000000000002",
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
-      worktreeSourceBranch: "main",
+      workspace: {
+        path: WORKTREE_PATH,
+        identity: "v1:0000000000000001:0000000000000002",
+        branch: "agent-deck/session-a1b2c3d4",
+        sourceBranch: "main",
+      },
     };
     state.live.set(meta.id, meta);
     state.index.set(meta.id, meta);
@@ -1457,10 +1508,12 @@ describe("POST /sessions worktree transaction", () => {
       id: "merge-session",
       cwd: WORKTREE_PATH,
       projectId: "project-1",
-      worktreePath: WORKTREE_PATH,
-      worktreeIdentity: "v1:0000000000000001:0000000000000002",
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
-      worktreeSourceBranch: "main",
+      workspace: {
+        path: WORKTREE_PATH,
+        identity: "v1:0000000000000001:0000000000000002",
+        branch: "agent-deck/session-a1b2c3d4",
+        sourceBranch: "main",
+      },
     });
 
     const response = await fastify.inject({
@@ -1486,8 +1539,8 @@ describe("POST /sessions worktree transaction", () => {
     );
     const persisted = state.index.get("merge-session");
     expect(persisted).toMatchObject({ cwd: PROJECT_PATH });
-    expect(persisted).not.toHaveProperty("worktreePath");
-    expect(persisted).not.toHaveProperty("worktreeBranch");
+    expect(persisted).not.toHaveProperty("workspace.path");
+    expect(persisted).not.toHaveProperty("workspace.branch");
     expect(index.upsert).toHaveBeenCalled();
     expect(state.broadcasts).toContainEqual({ type: "session_meta", session: persisted });
     await fastify.close();
@@ -1499,10 +1552,12 @@ describe("POST /sessions worktree transaction", () => {
       id: "merge-session",
       cwd: WORKTREE_PATH,
       projectId: "project-1",
-      worktreePath: WORKTREE_PATH,
-      worktreeIdentity: "v1:0000000000000001:0000000000000002",
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
-      worktreeSourceBranch: "main",
+      workspace: {
+        path: WORKTREE_PATH,
+        identity: "v1:0000000000000001:0000000000000002",
+        branch: "agent-deck/session-a1b2c3d4",
+        sourceBranch: "main",
+      },
     };
     state.live.set(meta.id, meta);
     state.index.set(meta.id, meta);
@@ -1534,10 +1589,12 @@ describe("POST /sessions worktree transaction", () => {
       id: "merge-session",
       cwd: WORKTREE_PATH,
       projectId: "project-1",
-      worktreePath: WORKTREE_PATH,
-      worktreeIdentity: "v1:0000000000000001:0000000000000002",
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
-      worktreeSourceBranch: "main",
+      workspace: {
+        path: WORKTREE_PATH,
+        identity: "v1:0000000000000001:0000000000000002",
+        branch: "agent-deck/session-a1b2c3d4",
+        sourceBranch: "main",
+      },
     };
     state.index.set(meta.id, meta);
     // Credible Windows lock behavior: the hardened native deletion rejects and
@@ -1574,10 +1631,12 @@ describe("POST /sessions worktree transaction", () => {
       id: "merge-session",
       cwd: WORKTREE_PATH,
       projectId: "project-1",
-      worktreePath: WORKTREE_PATH,
-      worktreeIdentity: "v1:0000000000000001:0000000000000002",
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
-      worktreeSourceBranch: "main",
+      workspace: {
+        path: WORKTREE_PATH,
+        identity: "v1:0000000000000001:0000000000000002",
+        branch: "agent-deck/session-a1b2c3d4",
+        sourceBranch: "main",
+      },
     });
     gitMocks.gitDeleteOwnedWorktreeBranch.mockRejectedValueOnce(new Error("branch locked"));
 
@@ -1598,10 +1657,10 @@ describe("POST /sessions worktree transaction", () => {
     expect(response.json().cleanup.error).toContain("delete it manually");
     expect(state.index.get("merge-session")).toMatchObject({
       cwd: PROJECT_PATH,
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
+      workspace: { branch: "agent-deck/session-a1b2c3d4" },
     });
-    expect(state.index.get("merge-session")).not.toHaveProperty("worktreePath");
-    expect(state.index.get("merge-session")).not.toHaveProperty("worktreeSourceBranch");
+    expect(state.index.get("merge-session")).not.toHaveProperty("workspace.path");
+    expect(state.index.get("merge-session")).not.toHaveProperty("workspace.sourceBranch");
     await fastify.close();
   });
 
@@ -1612,10 +1671,12 @@ describe("POST /sessions worktree transaction", () => {
         id: "merge-session",
         cwd: WORKTREE_PATH,
         projectId: "project-1",
-        worktreePath: WORKTREE_PATH,
-        worktreeIdentity: "v1:0000000000000001:0000000000000002",
-        worktreeBranch: "agent-deck/session-a1b2c3d4",
-        worktreeSourceBranch: "main",
+        workspace: {
+          path: WORKTREE_PATH,
+          identity: "v1:0000000000000001:0000000000000002",
+          branch: "agent-deck/session-a1b2c3d4",
+          sourceBranch: "main",
+        },
       });
       return route;
     };
@@ -1685,10 +1746,12 @@ describe("POST /sessions worktree transaction", () => {
         id: "merge-session",
         cwd: WORKTREE_PATH,
         projectId: "project-1",
-        worktreePath: WORKTREE_PATH,
-        worktreeIdentity: "v1:0000000000000001:0000000000000002",
-        worktreeBranch: "agent-deck/session-a1b2c3d4",
-        worktreeSourceBranch: "main",
+        workspace: {
+          path: WORKTREE_PATH,
+          identity: "v1:0000000000000001:0000000000000002",
+          branch: "agent-deck/session-a1b2c3d4",
+          sourceBranch: "main",
+        },
       });
       return route;
     };
@@ -1753,10 +1816,12 @@ describe("POST /sessions worktree transaction", () => {
       id: "merge-session",
       cwd: WORKTREE_PATH,
       projectId: "project-1",
-      worktreePath: WORKTREE_PATH,
-      worktreeIdentity: "v1:0000000000000001:0000000000000002",
-      worktreeBranch: "agent-deck/session-a1b2c3d4",
-      worktreeSourceBranch: "main",
+      workspace: {
+        path: WORKTREE_PATH,
+        identity: "v1:0000000000000001:0000000000000002",
+        branch: "agent-deck/session-a1b2c3d4",
+        sourceBranch: "main",
+      },
     });
     let release!: () => void;
     const held = new Promise<boolean>((resolve) => {
@@ -1783,10 +1848,13 @@ describe("POST /sessions worktree transaction", () => {
       id: "loop-review-session",
       cwd: WORKTREE_PATH,
       projectId: "project-1",
-      worktreePath: WORKTREE_PATH,
-      worktreeBranch: "agent-deck/loop-review",
-      worktreeSourceBranch: "main",
-      loopReviewRunId: "12345678-1234-4123-8123-123456789abc",
+      workspace: { path: WORKTREE_PATH, branch: "agent-deck/loop-review", sourceBranch: "main" },
+      provenance: {
+        kind: "reviewed",
+        from: { runId: "12345678-1234-4123-8123-123456789abc" },
+        by: {},
+        at: "then",
+      },
     });
 
     const response = await fastify.inject({

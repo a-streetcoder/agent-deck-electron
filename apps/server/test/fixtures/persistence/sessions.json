@@ -18,7 +18,16 @@
         "text": "add the service",
         "status": "in_progress"
       }
-    ]
+    ],
+    "schemaVersion": 2,
+    "provenance": {
+      "kind": "created",
+      "by": {},
+      "at": "2026-07-01T10:00:00.000Z"
+    },
+    "location": {
+      "kind": "local"
+    }
   },
   {
     "id": "sess-22222222",
@@ -27,6 +36,15 @@
     "projectId": "proj-bbbb",
     "createdAt": "2026-07-02T09:00:00.000Z",
     "updatedAt": "2026-07-02T09:15:00.000Z",
-    "endedAt": "2026-07-02T09:45:00.000Z"
+    "endedAt": "2026-07-02T09:45:00.000Z",
+    "schemaVersion": 2,
+    "provenance": {
+      "kind": "created",
+      "by": {},
+      "at": "2026-07-02T09:00:00.000Z"
+    },
+    "location": {
+      "kind": "local"
+    }
   }
 ]

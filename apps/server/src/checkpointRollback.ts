@@ -120,7 +120,7 @@ export function makeCheckpointRollback(deps: CheckpointRollbackDeps): Checkpoint
       if (session.detachedSubagents > 0) {
         throw new Error("Subagents are still running for this session; roll back once they end.");
       }
-      const cwd = meta.worktreePath ?? meta.cwd;
+      const cwd = meta.workspace?.path ?? meta.cwd;
       const sessionFile = meta.piSessionFile;
 
       // The metadata step (1) AND the physical restore (2-6) run as ONE

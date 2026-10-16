@@ -1,8 +1,8 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import nodePath from "node:path";
-import type { SessionMeta } from "@agent-deck/contracts";
-import { redactSecrets } from "@agent-deck/domain";
+import { SESSION_RECORD_VERSION, type SessionMeta } from "@agent-deck/contracts";
+import { actorRef, liveCopy, redactSecrets, sessionOwner } from "@agent-deck/domain";
 import { z } from "zod";
 import type { ServerContext } from "../context.ts";
 import { userActor } from "../eventProducers.ts";
@@ -16,6 +16,7 @@ import {
   fetchTransferSnapshot,
   MAX_TRANSFER_BYTES,
   rewriteTranscriptCwd,
+  transcriptSha256,
   TransferFetchError,
   resolveTransferLaunch,
   TransferModelError,
@@ -88,16 +89,18 @@ export function registerSessionImportRoutes(ctx: ServerContext): void {
       const key = `${user.id}\u0000${envelope.localSessionId}`;
       // SRV-12c3: a copy that went back to the device is not the session any more;
       // moving it here again makes a new copy.
-      const earlier = index
-        .list()
-        .find(
-          (s) =>
-            s.sharedFrom?.localSessionId === envelope.localSessionId &&
-            s.createdBy?.id === user.id &&
-            !s.sharedTo,
+      const earlier = index.list().find((s) => {
+        const from = s.provenance?.kind === "imported" ? s.provenance.from : undefined;
+        return (
+          !!from &&
+          "localSessionId" in from &&
+          from.localSessionId === envelope.localSessionId &&
+          sessionOwner(s)?.id === user.id &&
+          !liveCopy(s)
         );
+      });
       // The export's identity: a retry of the same move sends the same transcript.
-      const exportSha256 = createHash("sha256").update(envelope.transcript).digest("hex");
+      const exportSha256 = transcriptSha256(envelope.transcript);
       if (importing.has(key))
         return reply.status(409).send({
           code: "session_already_imported",
@@ -105,7 +108,7 @@ export function registerSessionImportRoutes(ctx: ServerContext): void {
           pending: true,
         });
       if (earlier) {
-        const known = earlier.sharedFrom?.exportSha256;
+        const known = earlier.transcriptSha256;
         if (known !== undefined && known !== exportSha256)
           return reply.status(409).send({
             code: "export_changed",
@@ -201,7 +204,7 @@ export function registerSessionImportRoutes(ctx: ServerContext): void {
             cwd: target,
             createdAt: now,
             updatedAt: now,
-            lifecycle: "started",
+            schemaVersion: SESSION_RECORD_VERSION,
             createdBy: owner,
             projectId: project!.id,
             ...(agentName ? { agentName } : {}),
@@ -212,20 +215,23 @@ export function registerSessionImportRoutes(ctx: ServerContext): void {
             ...(envelope.meta.subagentsEnabled !== undefined
               ? { subagentsEnabled: envelope.meta.subagentsEnabled }
               : {}),
-            launchPlan: launch.launchPlan,
-            launchResourceConfig: launch.launchResourceConfig,
-            launchResourceFingerprint: launch.launchResourceFingerprint,
-            worktreePath: worktree.path,
-            ...(worktree.identityToken ? { worktreeIdentity: worktree.identityToken } : {}),
-            worktreeBranch: worktree.branch,
-            worktreeSourceBranch: worktree.sourceBranch,
-            sharedFrom: {
-              device: envelope.device,
-              localSessionId: envelope.localSessionId,
-              sharedAt: now,
-              mode: transfer.mode,
-              exportSha256,
+            launch: launch.launch,
+            workspace: {
+              path: worktree.path,
+              ...(worktree.identityToken ? { identity: worktree.identityToken } : {}),
+              branch: worktree.branch,
+              sourceBranch: worktree.sourceBranch,
             },
+            provenance: {
+              kind: "imported",
+              from: { device: envelope.device, localSessionId: envelope.localSessionId },
+              by: actorRef(owner),
+              at: now,
+              mode: transfer.mode,
+            },
+            location: { kind: "server", owner },
+            // The export's identity: a retry must send the same transcript.
+            transcriptSha256: exportSha256,
           };
           // Re-keyed under the new id; the paste store re-checks every turn.
           try {

@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { copyFileSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import type { SessionMeta, UserIdentity } from "@agent-deck/contracts";
-import { redactSecrets } from "@agent-deck/domain";
+import {
+  liveCopy,
+  redactSecrets,
+  sessionOwner,
+  withoutLiveCopy,
+  withoutTransfer,
+} from "@agent-deck/domain";
 import { z } from "zod";
 import type { ServerContext } from "../context.ts";
 import { userActor } from "../eventProducers.ts";
@@ -31,13 +37,23 @@ import {
   TransferFetchError,
   TransferModelError,
   transcriptParentSession,
+  transcriptSha256,
   transferEnvelopeSchema,
   type PushedTransfer,
 } from "../sessionTransfer.ts";
+import { sendRefusal, sessionRefusal } from "../sessionOperations.ts";
 import { requestUser } from "../trustedProxy.ts";
 import { deviceName, liveState } from "./sessionShare.ts";
 
 type Reply = { status(code: number): { send(body: unknown): unknown } };
+
+/** The device session a server copy came from (its provenance). Called only once
+ * allowedOperations' "return" has proved there is one. */
+function originDevice(meta: SessionMeta): { device: string; localSessionId: string } {
+  const from = meta.provenance?.from;
+  if (!from || !("device" in from)) throw new Error("This session did not come from a device.");
+  return { device: from.device, localSessionId: from.localSessionId };
+}
 
 const returnBody = z
   .object({
@@ -70,6 +86,20 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
   const decorate = (meta: SessionMeta) => ctx.withActivity?.([meta])[0] ?? meta;
   const refuse = (reply: Reply, error: string) =>
     reply.status(409).send({ code: "return_refused", error });
+  const refusal = (
+    meta: SessionMeta,
+    operation: "return" | "returnFinish" | "returnCancel",
+    user?: UserIdentity,
+  ) =>
+    sessionRefusal(
+      { isOperator: (who) => ctx.userAgentDirs?.isOperator(who) === true },
+      meta,
+      operation,
+      user,
+      // A return is in progress once its hand-off is prepared (the claim alone is
+      // held while the export is built).
+      handoffs.get(meta.id) !== undefined,
+    );
   const stale = (reply: Reply) =>
     reply.status(409).send({
       code: "return_stale",
@@ -83,12 +113,12 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
   /**
    * The server session and its requester, or the answer that refuses them. Only
    * the owner takes a session back (the envelope and its completion are theirs);
-   * the operator may only cancel a return (`operator`).
+   * the operator may only cancel a return (`returnCancel`).
    */
   const serverSession = (
     request: { params: unknown; raw: Parameters<typeof requestUser>[0] },
     reply: Reply,
-    operator = false,
+    operation: "returnFinish" | "returnCancel" = "returnFinish",
   ): { meta: SessionMeta; user: UserIdentity } | undefined => {
     if (!ctx.sharedServer) {
       reply.status(409).send({ error: "A session goes back to a device from a shared server." });
@@ -101,28 +131,26 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
       return undefined;
     }
     const user = requestUser(request.raw);
-    const owner = !!user && meta.createdBy !== undefined && user.id === meta.createdBy.id;
-    if (!owner && !(operator && !!user && ctx.userAgentDirs?.isOperator(user) === true)) {
-      reply.status(403).send({
-        code: "return_forbidden",
-        error: operator
-          ? "Only the person who owns this session, or the operator, can cancel its return."
-          : "Only the person who owns this session can bring it back.",
-      });
+    const refused = refusal(meta, operation, user);
+    if (refused) {
+      sendRefusal(reply, refused);
       return undefined;
     }
     return { meta, user: user! };
   };
 
-  const returnRefusal = async (meta: SessionMeta): Promise<string | undefined> => {
-    if (meta.sharedTo)
-      return `This session already continues on ${meta.sharedTo.device ?? "a device"}.`;
-    if (!meta.sharedFrom)
-      return "This session did not come from a device: there is nothing to bring back.";
-    if (meta.lifecycle === "draft" || !meta.piSessionFile)
-      return "This session has nothing to bring back yet.";
-    if (meta.loopReviewRunId || meta.agentName?.startsWith("Loop ·"))
-      return "A Loop session cannot move to a device.";
+  /** allowedOperations' "return" (pointer, origin, draft, Loop, a prepared return),
+   * then what only the runtime knows: a running turn, live subagents, LFS. */
+  const returnRefusal = async (
+    meta: SessionMeta,
+    user: UserIdentity,
+  ): Promise<{ code: string; error: string } | undefined> => {
+    const refused = refusal(meta, "return", user);
+    if (refused) return { code: refused.code ?? "return_refused", error: refused.error };
+    const runtime = await runtimeRefusal(meta);
+    return runtime ? { code: "return_refused", error: runtime } : undefined;
+  };
+  const runtimeRefusal = async (meta: SessionMeta): Promise<string | undefined> => {
     const live = await liveState(sessions, meta.id);
     if (live.streaming) return "Wait until the session has finished responding.";
     if (live.liveSubagents) return "Wait until this session's subagents have finished.";
@@ -139,21 +167,18 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const found = serverSession(request, reply);
     if (!found) return reply;
-    const { meta } = found;
+    const { meta, user } = found;
     const id = meta.id;
     // One return at a time: a pending one is finished or cancelled first, so a
     // second device or tab can never take over the hand-off of the first.
-    if (handoffs.get(id))
-      return inProgress(
-        reply,
-        "A return of this session is already prepared. Finish it, or cancel it first.",
-      );
+    const pending = refusal(meta, "return", user);
+    if (pending?.code === "return_in_progress") return inProgress(reply, pending.error);
     await handoffs.retryLeftover(id);
-    const before = await returnRefusal(meta);
-    if (before) return refuse(reply, before);
+    const before = await returnRefusal(meta, user);
+    if (before) return reply.status(409).send(before);
     // The OWNER's connection pushes; without one there is no push at all, never
     // the server's own credentials.
-    const ownerEnv = githubEnv(meta.createdBy, ctx.githubConnections);
+    const ownerEnv = githubEnv(sessionOwner(meta), ctx.githubConnections);
     const token = ownerEnv.GH_TOKEN;
     if (!token)
       return reply.status(409).send({
@@ -174,7 +199,7 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
             dirtySubmodules: plan.dirtySubmodules,
             localCommits: plan.localCommits,
             sizeBytes: statSync(meta.piSessionFile!).size,
-            device: meta.sharedFrom!.device,
+            device: originDevice(meta).device,
           },
         };
       } catch (error) {
@@ -194,24 +219,21 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
       const current = metaOf(id);
       if (!current)
         return reply.status(404).send({ code: "unknown_session", error: "unknown session" });
-      const refusal = await returnRefusal(current);
-      if (refusal) return refuse(reply, refusal);
+      const refused = await returnRefusal(current, user);
+      if (refused) return reply.status(409).send(refused);
       const prepared = await prepareSessionExport(ctx, current, {
         mode: "snapshot",
         untracked: parsed.data.confirmedUntracked,
         device: deviceName(),
         pushEnv: ownerEnv,
-        returnTo: {
-          device: current.sharedFrom!.device,
-          localSessionId: current.sharedFrom!.localSessionId,
-        },
+        returnTo: originDevice(current),
         redact,
       });
       if ("status" in prepared) return reply.status(prepared.status).send(prepared.body);
       pushed = prepared.pushed;
       // Frozen (prompts, the live mirror's forwarded ones too, answer
       // session_moving) until the device confirms, the return is aborted, or 15 minutes.
-      const handoff = handoffs.start(id, release, pushed);
+      const handoff = handoffs.start(id, release, pushed, prepared.envelope.transcript);
       kept = true;
       return { envelope: prepared.envelope, handoff };
     } finally {
@@ -229,7 +251,7 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
   fastify.post("/sessions/:id/return/abort", async (request, reply) => {
     const parsed = abortBody.safeParse(request.body ?? {});
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
-    const found = serverSession(request, reply, true);
+    const found = serverSession(request, reply, "returnCancel");
     if (!found) return reply;
     const id = found.meta.id;
     const handoff = handoffs.get(id);
@@ -252,8 +274,9 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
     if (!found) return reply;
     const { meta, user } = found;
     const id = meta.id;
-    if (meta.sharedTo && meta.sharedTo.serverOrigin === null) {
-      if (meta.sharedTo.deviceSessionId !== parsed.data.deviceSessionId)
+    const live = liveCopy(meta);
+    if (live && "device" in live) {
+      if (live.sessionId !== parsed.data.deviceSessionId)
         return refuse(reply, "This session already went back to another device session.");
       return {
         session: decorate(meta),
@@ -263,7 +286,12 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
     const current = handoffs.get(id);
     if (current?.token !== parsed.data.handoff) return stale(reply);
     if (current.finalizing) return inProgress(reply);
-    if (meta.sharedFrom?.localSessionId !== parsed.data.deviceSessionId)
+    const origin = meta.provenance?.kind === "imported" ? meta.provenance.from : undefined;
+    if (
+      !origin ||
+      !("localSessionId" in origin) ||
+      origin.localSessionId !== parsed.data.deviceSessionId
+    )
       return refuse(reply, "That is not the device session this copy came from.");
     current.finalizing = true;
     const ours = () => handoffs.get(id) === current;
@@ -278,13 +306,18 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
       const latest = index.find((s) => s.id === id) ?? meta;
       const next: SessionMeta = {
         ...latest,
-        sharedTo: {
-          serverOrigin: null,
-          device: meta.sharedFrom.device,
-          deviceSessionId: parsed.data.deviceSessionId,
-          sharedAt: new Date().toISOString(),
-          mode: "snapshot",
+        location: {
+          ...latest.location,
+          kind: "server",
+          live: {
+            device: origin.device,
+            sessionId: parsed.data.deviceSessionId,
+            at: new Date().toISOString(),
+            mode: "snapshot",
+          },
         },
+        // The transcript the device continues from.
+        ...(current.transcriptSha256 ? { transcriptSha256: current.transcriptSha256 } : {}),
       };
       // A pointer is idle: not ended, parked, failed or waiting for review.
       delete next.endedAt;
@@ -301,7 +334,7 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
         direction: "return",
         mode: "snapshot",
         localSessionId: parsed.data.deviceSessionId,
-        device: meta.sharedFrom.device,
+        device: origin.device,
       });
       const decorated = decorate(next);
       broadcast({ type: "session_meta", session: decorated });
@@ -322,9 +355,10 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
       const { id } = request.params as { id: string };
       const meta = metaOf(id);
       if (!meta) return reply.status(404).send({ error: "unknown session" });
-      const link = meta.sharedTo;
-      if (!link?.serverOrigin || !link.serverSessionId || !meta.piSessionFile)
+      const live = liveCopy(meta);
+      if (!live || !("serverOrigin" in live) || !meta.piSessionFile)
         return refuse(reply, "This session is not a link to a session on the shared server.");
+      const link = { serverOrigin: live.serverOrigin, serverSessionId: live.sessionId };
       const invalid = (error: string) =>
         reply.status(400).send({ code: "invalid_envelope", error });
       const body = importReturnBody.safeParse(request.body);
@@ -485,36 +519,36 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
       ...(envelope.meta.subagentsEnabled !== undefined
         ? { subagentsEnabled: envelope.meta.subagentsEnabled }
         : {}),
-      launchPlan: launch.launchPlan,
-      launchResourceConfig: launch.launchResourceConfig,
-      launchResourceFingerprint: launch.launchResourceFingerprint,
-      returnedFrom: {
-        serverOrigin: link.serverOrigin,
-        serverSessionId: link.serverSessionId,
-        returnedAt: now.toISOString(),
+      launch: launch.launch,
+      // The pointer continues here again. Provenance stays as it was written;
+      // the server copy it came back from is the hand-off's (and the log's
+      // session.shared), and its pull request stays with this copy.
+      location: {
+        ...withoutLiveCopy(latest.location),
+        kind: "local",
+        // Until the server copy is closed (PATCH returned), and while it can be.
+        transfer: {
+          direction: "return",
+          token: handoff,
+          serverOrigin: link.serverOrigin,
+          sessionId: link.serverSessionId,
+          ref: transfer.ref,
+          until: new Date(now.getTime() + HANDOFF_TTL_MS).toISOString(),
+        },
         ...(envelope.meta.mergePr ? { mergePr: envelope.meta.mergePr } : {}),
       },
-      // Until the server copy is closed (PATCH returned), and while it can be.
-      returnPending: {
-        token: handoff,
-        serverOrigin: link.serverOrigin,
-        serverSessionId: link.serverSessionId,
-        ref: transfer.ref,
-        until: new Date(now.getTime() + HANDOFF_TTL_MS).toISOString(),
-      },
+      transcriptSha256: transcriptSha256(envelope.transcript),
     };
-    delete next.sharedTo;
     if (launch.agentName) next.agentName = launch.agentName;
     else delete next.agentName;
     if (fresh) {
       const { worktree } = fresh;
-      next.worktreePath = worktree.path;
-      if (worktree.identityToken) next.worktreeIdentity = worktree.identityToken;
-      else delete next.worktreeIdentity;
-      next.worktreeBranch = worktree.branch;
-      next.worktreeSourceBranch = worktree.sourceBranch;
-      delete next.worktreeOwnerSessionId;
-      delete next.worktreeCleanupBranchHead;
+      next.workspace = {
+        path: worktree.path,
+        ...(worktree.identityToken ? { identity: worktree.identityToken } : {}),
+        branch: worktree.branch,
+        sourceBranch: worktree.sourceBranch,
+      };
     }
     index.upsert(next);
     if (envelope.draft) {
@@ -559,11 +593,11 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
     const { id } = request.params as { id: string };
     const meta = metaOf(id);
     if (!meta) return reply.status(404).send({ error: "unknown session" });
-    if (!meta.returnPending) return { session: decorate(meta) };
+    if (!meta.location?.transfer) return { session: decorate(meta) };
     const live = sessions.get(id);
-    if (live) delete live.meta.returnPending;
-    const next: SessionMeta = { ...(index.find((s) => s.id === id) ?? meta) };
-    delete next.returnPending;
+    if (live?.meta.location) delete live.meta.location.transfer;
+    const latest = index.find((s) => s.id === id) ?? meta;
+    const next: SessionMeta = { ...latest, location: withoutTransfer(latest.location) };
     index.upsert(next);
     const decorated = decorate(next);
     broadcast({ type: "session_meta", session: decorated });

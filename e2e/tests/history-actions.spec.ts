@@ -62,8 +62,7 @@ test("Fork creates and selects an editable target draft and focuses its composer
       id: string;
       piSessionFile?: string;
       endedAt?: string;
-      worktreePath?: string;
-      worktreeIdentity?: string;
+      workspace?: { path?: string; identity?: string };
     }>;
   };
   const sourceAfter = after.sessions.find((item) => item.id === sourceBefore.id)!;
@@ -71,8 +70,8 @@ test("Fork creates and selects an editable target draft and focuses its composer
   expect(sourceAfter.piSessionFile).toBe(sourceBefore.piSessionFile);
   expect(sourceAfter.endedAt).toBeTruthy();
   expect(targetAfter.piSessionFile).not.toBe(sourceBefore.piSessionFile);
-  expect(targetAfter.worktreePath).toBeUndefined();
-  expect(targetAfter.worktreeIdentity).toBeUndefined();
+  expect(targetAfter.workspace?.path).toBeUndefined();
+  expect(targetAfter.workspace?.identity).toBeUndefined();
 
   // Provenance is published with the target and remains usable across reload.
   const card = page.getByTestId("fork-provenance-card");
