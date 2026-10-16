@@ -200,84 +200,44 @@ docker compose logs -f cloudflared    # "Registered tunnel connection" lines = h
 docker compose exec agent-deck node -e "fetch('http://127.0.0.1:4200/health').then(r=>r.text()).then(console.log)"
 ```
 
-## Legacy: source checkout on the VM
+## The VM (deck.moretti.cc)
 
-How the VM ran before the container package; 17c (ade-siqi) retires it.
+Since 2026-10-16 the VM runs the container package (SRV-17c, ade-siqi): the Compose stack from
+[Install on a server](#install-on-a-server) in `~/agent-deck` (`compose.yaml` and `.env`), with
+the data in the `agent-deck_agent-deck-data` volume. The source-checkout deploy that preceded it
+is gone: the user units `agent-deck-server` and `cloudflared-agent-deck` are disabled, the host
+port 4200 is free, and the old data directory `~/.local/share/agent-deck-electron` is kept only
+as a reference (test sessions; it was not migrated, the volume started empty).
 
-Checkout and dependencies as in the development guide (`pnpm install`, `pnpm build:native`,
-`pnpm build:web` so the server serves the UI). Then two **user** services.
-
-`~/.config/systemd/user/agent-deck-server.service`:
-
-```ini
-[Unit]
-Description=Agent Deck server (shared, behind Cloudflare Access)
-After=network-online.target
-
-[Service]
-WorkingDirectory=%h/AI Playground/a-streetcoding/agent-deck-electron
-Environment=PORT=4200
-Environment=AGENT_DECK_TRUSTED_PROXY=cloudflare
-Environment=AGENT_DECK_CF_ACCESS_TEAM_DOMAIN=streetcoding-collective.cloudflareaccess.com
-Environment=AGENT_DECK_CF_ACCESS_AUD=<aud tag from the Access application>
-Environment=AGENT_DECK_PUBLIC_ORIGIN=https://deck.moretti.cc
-ExecStart=/usr/bin/env pnpm --filter @agent-deck/server dev
-Restart=on-failure
-RestartSec=3
-
-[Install]
-WantedBy=default.target
-```
-
-`~/.cloudflared/config.yml` (tunnel created with `cloudflared tunnel create agent-deck` and
-routed with `cloudflared tunnel route dns agent-deck deck.moretti.cc`):
-
-```yaml
-tunnel: <tunnel id>
-credentials-file: /home/<user>/.cloudflared/<tunnel id>.json
-ingress:
-  - hostname: deck.moretti.cc
-    service: http://127.0.0.1:4200
-  - service: http_status:404
-```
-
-`~/.config/systemd/user/cloudflared.service`:
-
-```ini
-[Unit]
-Description=cloudflared tunnel for Agent Deck
-After=network-online.target
-
-[Service]
-ExecStart=/usr/local/bin/cloudflared tunnel run agent-deck
-Restart=on-failure
-RestartSec=3
-
-[Install]
-WantedBy=default.target
-```
+Until a `v*` tag publishes the image to GHCR, the VM builds it from a shallow clone of the
+branch in `~/agent-deck-build` and runs it as the tag `local` (`AGENT_DECK_IMAGE_TAG=local` in
+`.env`; `docker compose pull` therefore fails for the server image and is skipped):
 
 ```sh
-loginctl enable-linger "$USER"          # services survive logout
-systemctl --user daemon-reload
-systemctl --user enable --now agent-deck-server cloudflared
-systemctl --user status agent-deck-server cloudflared
-journalctl --user -u agent-deck-server -f
+ssh dev 'cd ~/agent-deck-build && git pull -q && docker build -t ghcr.io/a-streetcoder/agent-deck-server:local --build-arg APP_VERSION=poc-$(git rev-parse --short HEAD) . && cd ~/agent-deck && docker compose up -d && sleep 20 && docker compose ps'
 ```
 
-Cloudflare Zero Trust: add GitHub as a login method; create a self-hosted application for
-`deck.moretti.cc` with a policy allowing the two emails; copy its **Application Audience (AUD)
-tag** into `AGENT_DECK_CF_ACCESS_AUD`. Session duration is the Access setting (the Electron
-shell keeps the cookie in its persistent session).
+Once an image is published, set `AGENT_DECK_IMAGE_TAG` to its version and upgrade with
+`docker compose pull && docker compose up -d` as the install section says.
 
-Check from the VM (bypasses cloudflared, so expect 401 without an assertion):
+`.env` holds the values the old unit carried (`AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`,
+`AGENT_DECK_CF_ACCESS_AUD`, `AGENT_DECK_PUBLIC_ORIGIN=https://deck.moretti.cc`,
+`AGENT_DECK_OPERATOR_EMAIL`), `AGENT_DECK_PROJECT_ROOT=/data/projects`, and the token of the
+existing tunnel (the same tunnel and public hostname as before; only the connector moved into
+the `cloudflared` container). `AGENT_DECK_DESKTOP_RECOVERY_TOKEN` is not set any more. The
+operator's `~/.pi/agent` (credentials, models, settings, MCP, agents, skills, extensions,
+prompts, themes; not `sessions`, `bin` or `npm`) was copied into the volume at
+`/data/home/.pi/agent`, owned by uid 1000, so the operator's sessions keep the shared agent dir.
+
+Checks:
 
 ```sh
-curl -s http://127.0.0.1:4200/health          # {"ok":true}
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4200/me   # 401
+ssh dev 'cd ~/agent-deck && docker compose ps && docker compose logs --since 10m cloudflared | grep -c "Registered tunnel connection"'
+curl -s -o /dev/null -w '%{http_code}\n' https://deck.moretti.cc/health   # 302 to Access when signed out
 ```
 
-and from a signed-in browser: `https://deck.moretti.cc/me` shows your identity.
+Cloudflare Zero Trust is unchanged: GitHub as login method, a self-hosted application for
+`deck.moretti.cc` whose **Application Audience (AUD) tag** is `AGENT_DECK_CF_ACCESS_AUD`.
 
 ## Clients
 
@@ -346,53 +306,19 @@ generic setup above in two places: the checkout is `~/ai-playground/a-streetcodi
 
 ### Dev loop and deploy
 
-A server installed from the image upgrades as in [Install on a server](#upgrade-and-rollback);
-what follows is the legacy source-checkout loop.
+The VM runs the image; deploying a change is the build-and-up line in
+[The VM](#the-vm-deckmoretticc) (or, once images publish, `docker compose pull && docker compose up -d`).
+A server change needs the image rebuilt; a web change too (the image serves `apps/web/dist`);
+desktop changes are PC-side only. The build takes about 90 s with a warm cache, 10 to 15 min
+cold (the Rust addon).
 
-Syncthing mirrors saves from the PC checkout to the VM checkout in about 5–15 s; `.git` metadata
-lags by minutes, so never run git on the VM copy. `node_modules` are not synced.
+Syncthing still mirrors the PC checkout to `~/ai-playground/a-streetcoding/agent-deck-electron`
+on the VM, but nothing serves from that copy any more; the share can be removed. While it
+exists: never run git in the VM copy (its `.git` lags by minutes), and never commit
+`.sync-conflict-*` files.
 
-The service runs `pnpm --filter @agent-deck/server dev`, which is tsx **without** watch:
-
-- Changes in `apps/server`, `packages/contracts`, `packages/domain` or `packages/pi-host` need
-  `systemctl --user restart agent-deck-server`.
-- Web changes need `pnpm build:web` on the VM (the server serves `apps/web/dist`); no restart,
-  hard-reload the browser.
-- Desktop changes are PC-side only.
-
-Deploy one-liner from the PC:
-
-```sh
-ssh dev 'cd ~/ai-playground/a-streetcoding/agent-deck-electron && pnpm build:web && export XDG_RUNTIME_DIR=/run/user/$(id -u) && systemctl --user restart agent-deck-server && sleep 8 && curl -s 127.0.0.1:4200/health'
-```
-
-The Syncthing ignore file (`E:\AI Playground\.stignore`, kept identical on PC and VM, not synced
-itself) excludes the machine-local native folders `packages/loop-catalog-native/native/` and
-`packages/skill-engine-native/native/` and, since 2026-10-14, the agent-deck-electron `dist/`,
-`release/`, `build/pi-runtime` and `apps/web/dist`, so PC builds no longer overwrite what the VM
-serves.
-
-The skill engine addon (vendored Rust, ADR 0005) is built on the VM, not synced. After a change
-under `packages/skill-engine-native`, or on first setup, build it before restarting the unit:
-
-```sh
-PATH=$HOME/.cargo/bin:$PATH pnpm --filter @agent-deck/skill-engine-native build
-```
-
-`PATH` is set because a non-interactive `ssh dev` shell does not load cargo's profile. Not the full
-`pnpm build:native`: it also rebuilds `loop-catalog-native`, whose prebuild empties its `native/`
-folder under the running service although that addon has not changed.
-
-Must not:
-
-- Switch branches, `git checkout` or `git stash` in the PC checkout while the VM depends on the
-  tree.
-- Expect `packages/loop-catalog-native/native/` or `packages/skill-engine-native/native/` to sync:
-  each OS builds its own and the PC prebuild wipes them.
-- Change `pnpm-lock.yaml` without re-running `pnpm install --frozen-lockfile` on the VM (no token
-  needed any more).
-- Commit `.sync-conflict-*` files.
-- Run `pnpm install` or builds on the VM while a session is executing.
+Do not run `docker build` on the VM while a session is executing a heavy task: the build takes
+the CPUs the server is limited to.
 
 ### Observability
 
@@ -569,17 +495,14 @@ ever rendered inside Electron, and the Access token stays in Electron main.
   with many children.
 - Nothing on the branch is pushed; the VM tree is the only other copy.
 
-### Live systemd units
+### Live services
 
-`~/.config/systemd/user/agent-deck-server.service`: `WorkingDirectory` the synced checkout,
-`PORT=4200`, `ExecStart` `pnpm --filter @agent-deck/server dev`, `Restart=on-failure`,
-`KillMode=control-group`. The drop-in `agent-deck-server.service.d/remote.conf` sets
-`AGENT_DECK_TRUSTED_PROXY=cloudflare`, `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`,
-`AGENT_DECK_CF_ACCESS_AUD`, `AGENT_DECK_PUBLIC_ORIGIN=https://deck.moretti.cc` and
-`AGENT_DECK_PROJECT_ROOT=/srv/streetcoding` (and, once the GitHub OAuth App exists,
-`AGENT_DECK_GITHUB_CLIENT_ID`). The tunnel runs as `cloudflared-agent-deck.service`.
-The drop-in still sets `AGENT_DECK_DESKTOP_RECOVERY_TOKEN` (ade-gloc, for the removed remote
-attach); the operator should unset it at the 17c cutover.
+Three containers in the Compose project `agent-deck` (`~/agent-deck` on the VM): `net` (the
+shared network namespace), `agent-deck` (the server, `127.0.0.1:4200` inside the namespace,
+`/data` volume, read-only root, no capabilities, 4 GB and 2 CPUs) and `cloudflared` (the
+tunnel connector, same namespace). Nothing is published on the host. `docker compose ps`,
+`docker compose logs -f agent-deck`. The former user units are disabled and their drop-in
+(with `AGENT_DECK_DESKTOP_RECOVERY_TOKEN`) is no longer read.
 
 ## Origins
 
