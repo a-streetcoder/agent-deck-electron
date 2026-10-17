@@ -7,6 +7,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { serializeJsonLine } from "./jsonl.ts";
 import { PiProcess, type PiProcessExit } from "./PiProcess.ts";
+import type { PiSandbox } from "./sandbox.ts";
 import {
   classifyPiLine,
   COMPACT_TIMEOUT_MS,
@@ -63,6 +64,8 @@ export interface PiSessionOptions {
   args: string[];
   cwd: string;
   env?: Record<string, string | undefined>;
+  /** ADR 0007: sandbox provider and policy for the spawn (default: none). */
+  sandbox?: PiSandbox;
   /** Default timeout for request/response commands. `prompt`/`steer`/`follow_up` ack fast. */
   requestTimeoutMs?: number;
 }
@@ -93,6 +96,7 @@ export class PiSession extends EventEmitter<PiSessionEvents> {
       args: options.args,
       cwd: options.cwd,
       env: options.env,
+      sandbox: options.sandbox,
     });
     this.process.on("line", (line) => this.handleLine(line));
     this.process.on("exit", (exit) => {

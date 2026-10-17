@@ -1,4 +1,5 @@
 import { PiProcess, type PiProcessEvents, type PiProcessOptions } from "./PiProcess.ts";
+import type { PiSandbox } from "./sandbox.ts";
 
 const HEADER = ["provider", "model", "context", "max-out", "thinking", "images"] as const;
 const DEFAULT_TIMEOUT_MS = 12_000;
@@ -56,6 +57,8 @@ export interface DiscoverModelCatalogOptions {
   extensions?: readonly string[];
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** ADR 0007: sandbox provider and policy for the spawn (default: none). */
+  sandbox?: PiSandbox;
   /** Test seam; production always uses PiProcess/cross-spawn. */
   processFactory?: ProcessFactory;
 }
@@ -151,6 +154,7 @@ export async function discoverModelCatalog(
     args: catalogArgs(options.extensions ?? []),
     cwd: options.cwd,
     env: options.env,
+    sandbox: options.sandbox,
   });
   const lines: string[] = [];
   let bytes = 0;
