@@ -18,3 +18,9 @@ On the VM, from a git-archive copy in a scratch dir (never the replica): build a
 
 Ticket note with: the two profile files, the exact docker run flags, pass/fail per check for srt and Zerobox, the three-stack smoke results, the overhead table, a recommendation (container with profiles, or host unit) and any config the runtime needs (allowNestedUserNamespaces etc.). No change to the running stack.
 
+
+## Notes
+
+**2026-10-17T01:46:00Z**
+
+Spike done (commit 66d2732, record in docs/archive/sbx-01-spike-2026-10-17.md). Recommendation: container with deploy/seccomp.json + apparmor=agent-deck-sandbox + systempaths=unconfined (needed: bwrap cannot mount a fresh /proc under Docker's masked paths; the AppArmor profile re-denies keys, timer_list, acpi etc.). srt 0.0.80 passes a-e fully sandboxed (no enableWeakerNestedSandbox, no allowNestedUserNamespaces, no bwrapPath/socatPath) and refuses nested userns; Zerobox 0.3.3 passes b-e but allows nested unshare. Overhead: nothing measurable inside the sandbox, ~50 ms proxy hop on a git clone, ~200 ms per srt wrap (130 ms Zerobox). Smoke: pnpm and uv pass; Rust fails at cargo build (no cc in the image, same outside the sandbox: SBX-04 builder layer). SBX-02 must: write a complete settings file (deniedDomains required), mkdir /tmp/claude before the wrap, set NODE_USE_ENV_PROXY=1 for Node children (corepack fetch ignores HTTPS_PROXY otherwise; check Pi's provider calls). Host path not measured (not needed). AppArmor profile agent-deck-sandbox left loaded on the VM.

@@ -1,0 +1,62 @@
+# AppArmor profile for the Agent Deck server container (ADR 0007, SBX-01).
+#
+# Docker 26's docker-default (moby v26.1.5 profiles/apparmor/template.go, DaemonProfile
+# unconfined) plus what bubblewrap needs inside the container:
+#   - userns: create unprivileged user namespaces (docker-default is refused userns_create);
+#   - mount, remount, pivot_root: bwrap builds the sandbox's mount tree in its own mount
+#     namespace (docker-default has `deny mount`).
+# Every other rule is docker-default's, unchanged. Load on the host (it does not touch
+# docker-default):
+#   sudo apparmor_parser -r -W deploy/apparmor-agent-deck
+# and run the container with --security-opt apparmor=agent-deck-sandbox.
+
+#include <tunables/global>
+
+profile agent-deck-sandbox flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  network,
+  capability,
+  file,
+  umount,
+  # Host (privileged) processes may send signals to container processes.
+  signal (receive) peer=unconfined,
+  # runc may send signals to container processes (for "docker stop").
+  signal (receive) peer=runc,
+  # crun may send signals to container processes (for "docker stop" when used with crun OCI runtime).
+  signal (receive) peer=crun,
+  # Container processes may send signals amongst themselves.
+  signal (send,receive) peer=agent-deck-sandbox,
+
+  # Added for the sandbox: user namespaces and the mounts bwrap makes inside them.
+  userns,
+  mount,
+  remount,
+  pivot_root,
+
+  deny @{PROC}/* w,   # deny write for all files directly in /proc (not in a subdir)
+  # deny write to files not in /proc/<number>/** or /proc/sys/**
+  deny @{PROC}/{[^1-9],[^1-9][^0-9],[^1-9s][^0-9y][^0-9s],[^1-9][^0-9][^0-9][^0-9/]*}/** w,
+  deny @{PROC}/sys/[^k]** w,  # deny /proc/sys except /proc/sys/k* (effectively /proc/sys/kernel)
+  deny @{PROC}/sys/kernel/{?,??,[^s][^h][^m]**} w,  # deny everything except shm* in /proc/sys/kernel/
+  deny @{PROC}/sysrq-trigger rwklx,
+  deny @{PROC}/kcore rwklx,
+  # Added: bwrap mounts a fresh /proc, which the kernel allows only when the container's
+  # /proc is not masked, so the container runs with systempaths=unconfined. These rules
+  # stand in for Docker's masked paths (they also apply inside the sandbox's /proc).
+  deny @{PROC}/{keys,timer_list,sched_debug,timer_stats,latency_stats} rwklx,
+  deny @{PROC}/{acpi,asound,scsi}/** rwklx,
+  deny @{PROC}/{bus,fs,irq}/** wklx,
+
+  deny /sys/[^f]*/** wklx,
+  deny /sys/f[^s]*/** wklx,
+  deny /sys/fs/[^c]*/** wklx,
+  deny /sys/fs/c[^g]*/** wklx,
+  deny /sys/fs/cg[^r]*/** wklx,
+  deny /sys/firmware/** rwklx,
+  deny /sys/devices/virtual/powercap/** rwklx,
+  deny /sys/kernel/security/** rwklx,
+
+  # suppress ptrace denials when using 'docker ps' or using 'ps' inside a container
+  ptrace (trace,read,tracedby,readby) peer=agent-deck-sandbox,
+}

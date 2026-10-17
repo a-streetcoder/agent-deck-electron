@@ -73,9 +73,16 @@ FROM node:22.23.3-bookworm-slim
 # ripgrep and fd-find: Pi uses the system rg/fdfind instead of downloading them on
 # first use. The home is inside the data volume so Pi's agent dir, skills, gh and
 # git config survive a container replace (the server creates it when missing).
+# bubblewrap, socat and sandbox-runtime (srt): the per-session process sandbox (ADR 0007);
+# they need deploy/seccomp.json, the agent-deck-sandbox AppArmor profile and
+# systempaths=unconfined at run time (docs/archive/sbx-01-spike-2026-10-17.md). curl for sessions.
+ARG SANDBOX_RUNTIME_VERSION=0.0.80
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates git openssh-client tini ripgrep fd-find \
+      bubblewrap socat curl \
  && rm -rf /var/lib/apt/lists/* \
+ && npm install -g --no-fund --no-audit "@anthropic-ai/sandbox-runtime@${SANDBOX_RUNTIME_VERSION}" \
+ && npm cache clean --force \
  && userdel --remove node \
  && mkdir -p /data \
  && useradd --home-dir /data/home --create-home --uid 1000 --shell /bin/bash agentdeck \
