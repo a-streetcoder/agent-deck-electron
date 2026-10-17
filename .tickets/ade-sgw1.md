@@ -1,6 +1,6 @@
 ---
 id: ade-sgw1
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-10-17T20:32:13Z
@@ -17,3 +17,8 @@ Browser MCP run 2026-10-17: checking the cloudflare-docs HTTP MCP server logged 
 
 Upgrade the server's @modelcontextprotocol/sdk to the workspace's 1.30.0 (or configure Ajv2020), re-run the cloudflare-docs check without the warning; MCP tests green.
 
+
+## Outcome (2026-10-17)
+@modelcontextprotocol/sdk 1.12.1 -> 1.30.0 in packages/mcp and packages/testkit (lockfile
+simplified: the Pi runtime already resolved 1.30.0). Deployed; the cloudflare-docs check now
+reports connected with two tools and the server log no longer carries the output-schema warning.

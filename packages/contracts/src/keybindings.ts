@@ -59,6 +59,7 @@ export const KEYBINDING_COMMANDS = [
   "view.prompts",
   "view.memory",
   "view.performance",
+  "view.themes",
   "view.team-server",
   "view.models",
   "view.providers",

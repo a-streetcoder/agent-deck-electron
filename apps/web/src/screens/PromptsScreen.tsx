@@ -706,7 +706,9 @@ export function PromptsScreen() {
                           placeholder="review"
                           value={draft.name}
                           disabled={draft.original !== undefined}
-                          onChange={(name) => setDraft({ ...draft, name })}
+                          onChange={(name) =>
+                            setDraft((current) => (current ? { ...current, name } : current))
+                          }
                         />
                       </label>
                       <label className="block text-caption font-medium text-text-secondary">
@@ -716,7 +718,11 @@ export function PromptsScreen() {
                           className="mt-1.5 font-mono"
                           placeholder="<pr-number>"
                           value={draft.argumentHint}
-                          onChange={(argumentHint) => setDraft({ ...draft, argumentHint })}
+                          onChange={(argumentHint) =>
+                            setDraft((current) =>
+                              current ? { ...current, argumentHint } : current,
+                            )
+                          }
                         />
                       </label>
                     </div>
@@ -727,7 +733,9 @@ export function PromptsScreen() {
                         className="mt-1.5"
                         placeholder="What this prompt helps with"
                         value={draft.description}
-                        onChange={(description) => setDraft({ ...draft, description })}
+                        onChange={(description) =>
+                          setDraft((current) => (current ? { ...current, description } : current))
+                        }
                       />
                     </label>
                   </Card>
@@ -740,7 +748,11 @@ export function PromptsScreen() {
                         placeholder="Write the reusable prompt instructions…"
                         spellCheck={false}
                         value={draft.body}
-                        onChange={(e) => setDraft({ ...draft, body: e.target.value })}
+                        onChange={(e) =>
+                          setDraft((current) =>
+                            current ? { ...current, body: e.target.value } : current,
+                          )
+                        }
                       />
                     </label>
                   </Card>

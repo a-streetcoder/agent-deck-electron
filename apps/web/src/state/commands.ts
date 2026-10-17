@@ -37,6 +37,7 @@ const NAV_VIEWS: ReadonlyArray<{ view: AppView; label: string; keywords: readonl
   { view: "prompts", label: "Prompts", keywords: ["templates"] },
   { view: "memory", label: "Memory", keywords: ["notes"] },
   { view: "performance", label: "Performance", keywords: ["parking", "idle", "processes"] },
+  { view: "themes", label: "Themes", keywords: ["theme", "colors", "appearance"] },
   { view: "team-server", label: "Team server", keywords: ["shared", "server", "sign in"] },
   { view: "models", label: "Models", keywords: ["llm", "picker"] },
   { view: "providers", label: "Providers", keywords: ["auth", "login", "api key"] },

@@ -1884,7 +1884,9 @@ export function LoopsScreen() {
                 className={inputClass}
                 value={draft.name}
                 disabled={draft.original !== null}
-                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                onChange={(e) =>
+                  setDraft((current) => (current ? { ...current, name: e.target.value } : current))
+                }
               />
             </label>
             <label className="block text-caption font-medium text-text-muted">
@@ -1892,7 +1894,11 @@ export function LoopsScreen() {
               <ControlInput
                 className={inputClass}
                 value={draft.description}
-                onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+                onChange={(e) =>
+                  setDraft((current) =>
+                    current ? { ...current, description: e.target.value } : current,
+                  )
+                }
               />
             </label>
             <label className="block text-caption font-medium text-text-muted">
@@ -1924,7 +1930,11 @@ export function LoopsScreen() {
                 data-testid="loop-launch-context"
                 className={`${inputClass} min-h-[76px] text-body`}
                 value={draft.launchContext}
-                onChange={(event) => setDraft({ ...draft, launchContext: event.target.value })}
+                onChange={(event) =>
+                  setDraft((current) =>
+                    current ? { ...current, launchContext: event.target.value } : current,
+                  )
+                }
               />
               <span className="mt-1 block text-detail">
                 Optional background or constraints kept separate from the Loop goal.
@@ -1959,7 +1969,11 @@ export function LoopsScreen() {
                   name="loop-availability"
                   value="allProjects"
                   checked={draft.availability === "allProjects"}
-                  onChange={() => setDraft({ ...draft, availability: "allProjects" })}
+                  onChange={() =>
+                    setDraft((current) =>
+                      current ? { ...current, availability: "allProjects" } : current,
+                    )
+                  }
                 />
                 All projects
               </label>
@@ -2093,7 +2107,11 @@ export function LoopsScreen() {
                     className={inputClass}
                     value={draft.agentName}
                     aria-invalid={!availableAgentNames.has(draft.agentName)}
-                    onChange={(e) => setDraft({ ...draft, agentName: e.target.value })}
+                    onChange={(e) =>
+                      setDraft((current) =>
+                        current ? { ...current, agentName: e.target.value } : current,
+                      )
+                    }
                   >
                     {renderAgentOptions(draft.agentName)}
                   </ControlSelect>
@@ -2110,7 +2128,11 @@ export function LoopsScreen() {
                       className={inputClass}
                       value={draft.makerName}
                       aria-invalid={!availableAgentNames.has(draft.makerName)}
-                      onChange={(e) => setDraft({ ...draft, makerName: e.target.value })}
+                      onChange={(e) =>
+                        setDraft((current) =>
+                          current ? { ...current, makerName: e.target.value } : current,
+                        )
+                      }
                     >
                       {renderAgentOptions(draft.makerName)}
                     </ControlSelect>
@@ -2122,7 +2144,11 @@ export function LoopsScreen() {
                       className={inputClass}
                       value={draft.checkerName}
                       aria-invalid={!availableAgentNames.has(draft.checkerName)}
-                      onChange={(e) => setDraft({ ...draft, checkerName: e.target.value })}
+                      onChange={(e) =>
+                        setDraft((current) =>
+                          current ? { ...current, checkerName: e.target.value } : current,
+                        )
+                      }
                     >
                       {renderAgentOptions(draft.checkerName)}
                     </ControlSelect>
@@ -2134,7 +2160,11 @@ export function LoopsScreen() {
                     data-testid="loop-checker-rubric"
                     className={`${inputClass} min-h-[80px]`}
                     value={draft.checkerRubric}
-                    onChange={(e) => setDraft({ ...draft, checkerRubric: e.target.value })}
+                    onChange={(e) =>
+                      setDraft((current) =>
+                        current ? { ...current, checkerRubric: e.target.value } : current,
+                      )
+                    }
                   />
                 </label>
               </div>
@@ -2169,7 +2199,7 @@ export function LoopsScreen() {
                       onChange={(event) => {
                         const pipelineStages = [...draft.pipelineStages];
                         pipelineStages[index] = event.target.value;
-                        setDraft({ ...draft, pipelineStages });
+                        setDraft((current) => (current ? { ...current, pipelineStages } : current));
                       }}
                     >
                       {renderAgentOptions(stage)}
@@ -2187,7 +2217,7 @@ export function LoopsScreen() {
                           pipelineStages[index]!,
                           pipelineStages[index - 1]!,
                         ];
-                        setDraft({ ...draft, pipelineStages });
+                        setDraft((current) => (current ? { ...current, pipelineStages } : current));
                       }}
                     />
                     <IconButton
@@ -2203,7 +2233,7 @@ export function LoopsScreen() {
                           pipelineStages[index + 1]!,
                           pipelineStages[index]!,
                         ];
-                        setDraft({ ...draft, pipelineStages });
+                        setDraft((current) => (current ? { ...current, pipelineStages } : current));
                       }}
                     />
                     <IconButton
@@ -2232,7 +2262,11 @@ export function LoopsScreen() {
                   leadingIcon={<Plus size={12} aria-hidden />}
                   disabled={saving}
                   onClick={() =>
-                    setDraft({ ...draft, pipelineStages: [...draft.pipelineStages, ""] })
+                    setDraft((current) =>
+                      current
+                        ? { ...current, pipelineStages: [...draft.pipelineStages, ""] }
+                        : current,
+                    )
                   }
                 >
                   Add stage
@@ -2273,7 +2307,9 @@ export function LoopsScreen() {
                       onChange={(event) => {
                         const parallelBranches = [...draft.parallelBranches];
                         parallelBranches[index] = event.target.value;
-                        setDraft({ ...draft, parallelBranches });
+                        setDraft((current) =>
+                          current ? { ...current, parallelBranches } : current,
+                        );
                       }}
                     >
                       {renderAgentOptions(branch)}
@@ -2291,7 +2327,9 @@ export function LoopsScreen() {
                           parallelBranches[index]!,
                           parallelBranches[index - 1]!,
                         ];
-                        setDraft({ ...draft, parallelBranches });
+                        setDraft((current) =>
+                          current ? { ...current, parallelBranches } : current,
+                        );
                       }}
                     />
                     <IconButton
@@ -2307,7 +2345,9 @@ export function LoopsScreen() {
                           parallelBranches[index + 1]!,
                           parallelBranches[index]!,
                         ];
-                        setDraft({ ...draft, parallelBranches });
+                        setDraft((current) =>
+                          current ? { ...current, parallelBranches } : current,
+                        );
                       }}
                     />
                     <IconButton
@@ -2368,7 +2408,11 @@ export function LoopsScreen() {
                     className={inputClass}
                     value={draft.triageAgent}
                     aria-invalid={!availableAgentNames.has(draft.triageAgent)}
-                    onChange={(event) => setDraft({ ...draft, triageAgent: event.target.value })}
+                    onChange={(event) =>
+                      setDraft((current) =>
+                        current ? { ...current, triageAgent: event.target.value } : current,
+                      )
+                    }
                   >
                     {renderAgentOptions(draft.triageAgent)}
                   </ControlSelect>
@@ -2380,7 +2424,11 @@ export function LoopsScreen() {
                     className={`${inputClass} min-h-[100px]`}
                     value={draft.classificationPrompt}
                     onChange={(event) =>
-                      setDraft({ ...draft, classificationPrompt: event.target.value })
+                      setDraft((current) =>
+                        current
+                          ? { ...current, classificationPrompt: event.target.value }
+                          : current,
+                      )
                     }
                     onBlur={() => {
                       if (!draft.classificationPrompt.trim()) {
@@ -2416,11 +2464,17 @@ export function LoopsScreen() {
                     className={`${inputClass} min-h-[100px]`}
                     value={draft.checkpointPrompt}
                     onChange={(event) =>
-                      setDraft({ ...draft, checkpointPrompt: event.target.value })
+                      setDraft((current) =>
+                        current ? { ...current, checkpointPrompt: event.target.value } : current,
+                      )
                     }
                     onBlur={() => {
                       if (!draft.checkpointPrompt.trim()) {
-                        setDraft({ ...draft, checkpointPrompt: LOOP_DEFAULT_CHECKPOINT_PROMPT });
+                        setDraft((current) =>
+                          current
+                            ? { ...current, checkpointPrompt: LOOP_DEFAULT_CHECKPOINT_PROMPT }
+                            : current,
+                        );
                       }
                     }}
                   />
@@ -2561,7 +2615,9 @@ export function LoopsScreen() {
                     const [evaluatorProvider, evaluatorModel] = parseEvaluatorModelValue(
                       event.target.value,
                     );
-                    setDraft({ ...draft, evaluatorProvider, evaluatorModel });
+                    setDraft((current) =>
+                      current ? { ...current, evaluatorProvider, evaluatorModel } : current,
+                    );
                   }}
                 >
                   {renderEvaluatorModelOptions(draft.evaluatorProvider, draft.evaluatorModel)}
@@ -2574,7 +2630,11 @@ export function LoopsScreen() {
                   className={inputClass}
                   value={draft.evaluatorThinkingLevel}
                   onChange={(event) =>
-                    setDraft({ ...draft, evaluatorThinkingLevel: event.target.value })
+                    setDraft((current) =>
+                      current
+                        ? { ...current, evaluatorThinkingLevel: event.target.value }
+                        : current,
+                    )
                   }
                 >
                   <option value="">Default</option>
@@ -2601,7 +2661,11 @@ export function LoopsScreen() {
                 className={`${inputClass} font-mono text-code`}
                 placeholder="pnpm test"
                 value={draft.validationCommand}
-                onChange={(e) => setDraft({ ...draft, validationCommand: e.target.value })}
+                onChange={(e) =>
+                  setDraft((current) =>
+                    current ? { ...current, validationCommand: e.target.value } : current,
+                  )
+                }
               />
             </label>
             {draftError && !saveError ? (

@@ -625,11 +625,20 @@ export function ProjectsScreen() {
                           role="menuitem"
                           data-testid={`project-hide-${project.name}`}
                           disabled={current}
-                          title={current ? "Can't hide the current project" : undefined}
+                          title={
+                            current
+                              ? "Can't hide the current project"
+                              : useAppStore.getState().profile === "shared-server"
+                                ? "Unregisters the project for everyone; its clone folder stays on the server"
+                                : undefined
+                          }
                           className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-label text-text-secondary hover:bg-hover hover:text-danger disabled:opacity-40"
                           onClick={() => void hide(project)}
                         >
-                          <EyeOff size={14} /> Hide
+                          <EyeOff size={14} />{" "}
+                          {useAppStore.getState().profile === "shared-server"
+                            ? "Remove from server"
+                            : "Hide"}
                         </ControlButton>
                       </div>
                     ) : null}
