@@ -128,3 +128,32 @@ do not interfere.
    installed under `/etc/apparmor.d` so it survives a reboot, and seccomp refuses
    `NETLINK_NETFILTER` sockets. Measured: user namespaces cannot be scoped to bubblewrap alone
    under `no-new-privileges`, so wrapping every spawn (item 1) is the control.
+
+## Amendments (2026-10-17, from the SBX-03 implementation and its reviews)
+
+6. **The project's allow-list is server state; `sandbox.json` proposes.** Decision 2 and amendment 4
+   had the policy read `.agent-deck/sandbox.json` from git. A worktree session can write the
+   common `refs` and `objects` (it commits), so `git replace`, a planted pack or a moved branch
+   change what git returns for the recorded base commit; sessions without a worktree can move
+   `HEAD`. The hosts a project may reach are therefore kept by the server
+   (`<dataDir>/sandbox-hosts.json`, keyed by project id, changed only through the owner or
+   operator routes `POST`/`DELETE /sessions/:id/sandbox/allowed-hosts`). The repository file is
+   still read at the base commit, with replacement objects disabled, but only to propose: a listed
+   host that is not granted appears in the transcript with the same Allow action. The server never
+   writes the repository file (an uncommitted file blocked merges as a dirty parent).
+7. **Server git hardening is scoped to sandboxed servers.** With `none` there is no fence to
+   protect and the hardened environment would drop a desktop user's global identity and
+   credential helper. Under `srt` every server git call runs with no global or system config,
+   `core.fsmonitor=false`, `core.pager=cat`, `core.sshCommand=ssh` (`GIT_SSH_COMMAND` in the
+   environment still wins) and `GIT_NO_REPLACE_OBJECTS=1`; hooks stay disabled per call.
+8. **Bridge interception and its limit.** Bridge calls are taken out of the Pi event stream in
+   the one place every spawn goes through (`spawnPiProcess`), bound to the session and the launch
+   generation that spawned the process; a call from a process of an earlier launch is refused.
+   Any process inside the same sandbox can write to Pi's stdout and forge a call for that same
+   session; this is accepted (it is no wider than the token file was) and it never crosses
+   sessions. Files the server writes for a launch (prompts, extensions) live under
+   `<dataDir>/sandbox/<id>/launch/`, read-only to the session.
+9. **Write roots are contained.** The policy refuses a write root that equals or contains the
+   data directory or the Pi agent directory, and a sandboxed server refuses a session whose
+   working folder is outside a registered project or one of its worktrees. One-shot helpers run
+   under a per-run policy with their own scratch folder and emit no violation events.
