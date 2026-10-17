@@ -157,14 +157,25 @@ Facts the design rests on (verified 2026-10-17/18):
 ## Amendments
 
 1. **2026-10-18, from CRB-01 (ade-w2zc).** The spike ran curl, Node fetch and Claude Code inside srt
-   against a broker on the container address, not a sandboxed Pi: Pi itself runs outside srt and
-   dials the broker directly; only its tool commands and Claude Code sit inside the sandbox. All
-   checks passed (header, query and bearer placeholders swapped; 2 MB up and 20 MB down streamed;
-   SSE unbatched; direct provider host refused; +0.2 ms per request for the broker). Three facts
-   bind the implementation: srt denies a hostname that resolves to the container's own address
-   unless `<ip>:<port>` is itself in `allowedDomains` (that literal is the carve-out, not
-   `deniedResolvedAddresses` as the decision's point 6 and CRB-03 said); inside srt every host goes
-   through srt's proxy, so the sandbox env clears `NO_PROXY` and Node clients get
-   `NODE_USE_ENV_PROXY=1`; srt drops single quotes from a wrapped one-liner, so the spawn path hands
-   it a script or argv. The real Codex turn moves to the first brokered turn on the deployed CRB-02
-   server, with the owner's go.
+   against a broker on the container address. All checks passed (header, query and bearer
+   placeholders swapped; 2 MB up and 20 MB down streamed; SSE unbatched; direct provider host
+   refused; +0.2 ms per request for the broker). Three facts bind the implementation: srt denies a
+   hostname that resolves to the container's own address unless `<ip>:<port>` is itself in
+   `allowedDomains` (that literal is the carve-out, not `deniedResolvedAddresses` as the decision's
+   point 6 and CRB-03 said); inside srt every host goes through srt's proxy, so the launch env
+   clears `NO_PROXY` and Node clients get `NODE_USE_ENV_PROXY=1` (Pi's own launch already has it);
+   srt drops single quotes from a wrapped one-liner, so the spawn path hands it a script or argv.
+   Pi itself runs inside srt (ADR 0007), so the broker allow is a precondition of the first
+   brokered turn and moves into CRB-02; CRB-03 keeps the removal of the provider hosts. The real
+   Codex turn is the first brokered turn on the deployed CRB-02 server.
+2. **2026-10-18, sequencing of decision 7.** Secret Environment variables through the broker split
+   off into CRB-04: a subscription rides a base URL the session's Pi honours, an arbitrary tool
+   command talking to an arbitrary host does not, so that path needs the broker on the sandbox's
+   outbound route (srt `parentProxy` with MITM for the marked hosts, or an explicit broker URL per
+   host), decided in CRB-04's design pass. The decision stands; only the order changes.
+3. **2026-10-18, from the CRB-02 design.** Pi 1.2 derives the Codex account id from the access
+   token's own claim (`extractAccountId`), so the session placeholder is JWT-shaped with a
+   placeholder claim the broker also swaps; the Codex API opens a WebSocket first and falls back to
+   SSE, so the broker passes upgrades through (the "cannot cover WebSockets" consequence above is
+   narrowed to protocols the broker does not pipe). OAuth refresh is pi-ai's own, run by
+   `ModelRuntime.getAuth()` under the credential-store lock in the server; the broker adds none.

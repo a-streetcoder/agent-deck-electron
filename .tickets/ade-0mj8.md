@@ -1,7 +1,7 @@
 ---
 id: ade-0mj8
 status: open
-deps: [ade-w2zc]
+deps: [ade-w2zc, ade-nobk]
 links: []
 created: 2026-10-17T22:05:04Z
 type: task
