@@ -268,6 +268,21 @@ function launchChoice(
   return { provider, model };
 }
 
+/** The app's default model (`provider:id` or a bare id, Settings) when the
+ * owner's catalog offers it: what a pinned launch should land on before the
+ * first offered entry, which may be one the owner's account cannot use. */
+export function preferredPin(
+  ctx: Pick<Ctx, "settings">,
+  available: readonly { provider: string; id: string }[],
+): { provider: string; id: string } | undefined {
+  const raw = ctx.settings.get().defaultModel;
+  if (!raw) return undefined;
+  const separator = raw.indexOf(":");
+  const provider = separator > 0 ? raw.slice(0, separator) : undefined;
+  const id = separator > 0 ? raw.slice(separator + 1) : raw;
+  return available.find((entry) => entry.id === id && (!provider || entry.provider === provider));
+}
+
 /** The model to run among `available` (the owner's catalog), or undefined when
  * it is not resolvable here; throws the 409 when a refused model has no twin. */
 function pinLaunchModel(
@@ -275,14 +290,16 @@ function pinLaunchModel(
   model: string | undefined,
   refused: ReadonlySet<string>,
   available: readonly { provider: string; id: string }[],
+  preferred?: { provider: string; id: string },
 ): { provider: string; id: string } | undefined {
   if (!model) {
     // Pi's own fallback, unless it would land on a refused sign-in.
     if (refused.size === 0) return undefined;
-    // ponytail: Pi's own fallback ranks anthropic early, so pin the first Claude
-    // (else the first offered) model rather than replicate Pi's private ranking.
-    // With nothing offered Pi would fall back to the sign-in itself: refuse.
-    const pin = available.find((entry) => entry.provider === BRIDGE) ?? available[0];
+    // ponytail: Pi's own fallback ranks anthropic early, so pin the app default,
+    // else the first Claude (else the first offered) model rather than replicate
+    // Pi's private ranking. With nothing offered Pi would fall back to the
+    // sign-in itself: refuse.
+    const pin = preferred ?? available.find((entry) => entry.provider === BRIDGE) ?? available[0];
     if (!pin) throw refusal();
     return { provider: pin.provider, id: pin.id };
   }
@@ -321,11 +338,13 @@ export async function claudeLaunchModel(
   await ensureBridgeCatalog(ctx);
   // The twin is looked up by id; the thinking choice stays on the pinned model.
   const parts = model === undefined || bridgeless ? undefined : modelParts(provider, model);
+  const available = await ownerCatalog(ctx, owner);
   const pinned = pinLaunchModel(
     bridgeless ? undefined : provider,
     parts?.id,
     refused,
-    await ownerCatalog(ctx, owner),
+    available,
+    preferredPin(ctx, available),
   );
   const thinking = parts?.thinking ? `:${parts.thinking}` : "";
   return pinned && { provider: pinned.provider, model: `${pinned.id}${thinking}` };

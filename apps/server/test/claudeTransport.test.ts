@@ -8,6 +8,7 @@ import {
   claudeChoice,
   claudeLaunchModel,
   discoveredUsable,
+  preferredPin,
   unofferedLaunchModel,
 } from "../src/claudeTransport.ts";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
@@ -284,6 +285,20 @@ describe("PRV-01 launch and set_model choices", () => {
     await discover([]);
     expect(await draftModel()).toBeNull();
     writeAuth(API_KEY);
+  });
+});
+
+describe("PRV-02 the app default model wins a pinned launch", () => {
+  const ctx = (defaultModel?: string) => ({ settings: { get: () => ({ defaultModel }) } }) as never;
+  const catalog = [
+    { provider: "openai-codex", id: "gpt-5.3-codex-spark" },
+    { provider: "openai-codex", id: "gpt-6-luna" },
+  ];
+  it("resolves provider:id, a bare id, and nothing when unset or absent", () => {
+    expect(preferredPin(ctx("openai-codex:gpt-6-luna"), catalog)).toEqual(catalog[1]);
+    expect(preferredPin(ctx("gpt-6-luna"), catalog)).toEqual(catalog[1]);
+    expect(preferredPin(ctx(undefined), catalog)).toBeUndefined();
+    expect(preferredPin(ctx("anthropic:claude-x"), catalog)).toBeUndefined();
   });
 });
 
