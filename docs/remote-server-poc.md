@@ -1456,12 +1456,13 @@ that folder at the end) and a `--data-dir` other than `AGENT_DECK_DATA_DIR`.
 - MCP servers assigned to a project are reachable from its sessions without an Allow click: the
   server grants their hosts with the allow-list at launch (ADR 0007 amendment 20). A server
   assigned after a session started needs that session's Pi restarted, like an Allow.
-- Pi packages declared in the shared `settings.json` (`packages: ["npm:..."]`) are not
-  supported under the sandbox (SBX-09, ade-91rh): Pi resolves them at every launch and installs
-  a missing one into `agent/npm`, which sessions cannot write, so the launch dies with EROFS
-  before responding. The server logs the stderr (`[sessions] session start failed: ...`).
-  Remove the entry (the Claude bridge is bundled and passed as an explicit `--extension`) until
-  the server installs declared packages itself outside the sandbox.
+- Pi packages declared in the shared `settings.json` (`packages: ["npm:..."]`) cannot be
+  installed under the sandbox (SBX-09): Pi would install a missing one into `agent/npm`, which
+  sessions cannot write. When the settings declare packages, sandboxed sessions launch with
+  `PI_OFFLINE=1`: Pi skips the install (and its version check and catalog refresh) and keeps
+  the packages already present; Doctor lists the declared names. Install a package into the
+  shared agent dir yourself, or remove the entry (the Claude bridge is bundled and passed as an
+  explicit `--extension`).
 - Per-user credentials: under `srt` a session reads only its own user's `auth.json`; without a
   sandbox every user's agent can read every `auth.json`. Sessions without an owner cannot read
   the operator's under `srt` (they run without model sign-ins); without a sandbox they, Doctor

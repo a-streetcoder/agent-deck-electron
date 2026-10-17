@@ -57,6 +57,7 @@ import type { ServerRuntime } from "./runtime.ts";
 import type { SessionLaunchSandbox, SessionSandboxLaunch } from "./sandbox.ts";
 import { SessionMutationClaims } from "./sessionMutationClaims.ts";
 import { gitIdentityEnv, type GitIdentityMap } from "./gitIdentity.ts";
+import { declaredPiPackages } from "./piPackages.ts";
 import { userAgentDirEnv, type UserAgentDirs } from "./userAgentDirs.ts";
 import { withoutServerOnlyEnv } from "./sessionEnv.ts";
 import { githubEnv, type GitHubConnections } from "./githubConnections.ts";
@@ -1776,15 +1777,31 @@ export class SessionManager {
     launch = false,
   ): Record<string, string | undefined> {
     const layered = withoutServerOnlyEnv({ ...this.envFileLayer(meta.projectId), ...env });
+    const agentDirEnv = userAgentDirEnv(
+      sessionOwner(meta),
+      this.userAgentDirs,
+      launch ? meta.id : undefined,
+    );
     return {
       ...layered,
+      // SBX-09: under the sandbox Pi cannot install the packages settings.json
+      // declares (the agent dir's npm folder is read-only), and trying kills
+      // the launch. Offline mode makes Pi skip the install and keep what is
+      // already there; Doctor lists the declared packages.
+      ...(this.spawnHooks?.sandboxed &&
+      declaredPiPackages(
+        agentDirEnv.PI_CODING_AGENT_DIR ??
+          join(layered.HOME ?? process.env.HOME ?? homedir(), ".pi", "agent"),
+      ).length > 0
+        ? { PI_OFFLINE: "1" }
+        : {}),
       // SRV-04: the session OWNER's git identity, fixed at spawn so later
       // prompt authors cannot change it, and re-derived from meta on every
       // resume. Attribution, not authorization: Pi can still override it.
       ...gitIdentityEnv(sessionOwner(meta), this.gitIdentities),
       // SRV-11: the OWNER's credentials (own agent dir), re-derived on every
       // resume. Storage separation, not isolation (userAgentDirs.ts).
-      ...userAgentDirEnv(sessionOwner(meta), this.userAgentDirs, launch ? meta.id : undefined),
+      ...agentDirEnv,
       // SRV-06: pushes and PRs as the OWNER (GH_TOKEN + a github.com git
       // credential helper); no connection leaves the server default.
       // Pi spawns with process.env under this, so both count for GIT_CONFIG_*.

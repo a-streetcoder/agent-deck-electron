@@ -51,6 +51,7 @@ import {
 } from "../configurationWarnings.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
 import { bridgeAvailable } from "../claudeTransport.ts";
+import { declaredPiPackages } from "../piPackages.ts";
 import { requestUser, SHARED_SERVER_REFUSAL, trustedProxyConfigFromEnv } from "../trustedProxy.ts";
 import { userRoots } from "../userAgentDirs.ts";
 import {
@@ -255,6 +256,15 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
           ? "Sessions run without a sandbox on this server (AGENT_DECK_SANDBOX=none)"
           : `Every session runs under ${sandbox} (probe passed at startup)`,
     });
+    const packages = declaredPiPackages(nodePath.join(rootsFor().home, ".pi", "agent"));
+    if (sandbox !== "none" && packages.length > 0) {
+      checks.push({
+        id: "server-pi-packages",
+        label: "Pi packages in settings.json",
+        status: "warn",
+        detail: `${packages.join(", ")}: sessions cannot install packages under the sandbox, so they launch offline and skip them (SBX-09). Remove the entry or install the package into the shared agent dir.`,
+      });
+    }
     const bridge = await bridgeAvailable(ctx);
     checks.push({
       id: "server-claude-code",
@@ -516,7 +526,9 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     ...value,
     defaultMcpServers: [...mcpAssignments.defaultServerNames()],
     // ANA-01: the shared server sends nothing, so it has nothing to switch or announce.
-    ...(ctx.profile === "shared-server" ? { analyticsEnabled: false, analyticsNoticeSeen: true } : {}),
+    ...(ctx.profile === "shared-server"
+      ? { analyticsEnabled: false, analyticsNoticeSeen: true }
+      : {}),
   });
 
   const capabilities = () => ({

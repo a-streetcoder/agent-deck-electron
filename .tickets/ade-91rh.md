@@ -1,6 +1,6 @@
 ---
 id: ade-91rh
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-10-17T17:31:44Z
@@ -17,3 +17,10 @@ Found 2026-10-17 in the browser on deck.moretti.cc: every session launch failed 
 
 Decide and implement one of: (a) the server installs the packages declared in the shared settings.json itself, outside the sandbox, at startup and when settings change (operator-managed packages, the model ADR 0007 implies), or (b) the server strips/ignores settings packages at launch on a sandboxed server and the runbook says packages are not supported; either way a launch must never die on EROFS under agent/npm, and the startup probe or launch path must surface the cause in the server log (done). Add the case to docs/remote-server-poc.md Known gaps until fixed.
 
+
+## Outcome (2026-10-17)
+Option (b) with a floor: when the shared settings declare packages, sandboxed sessions launch
+with PI_OFFLINE=1 (Pi skips installing missing packages, keeps installed ones; version check and
+catalog refresh are skipped too) and Doctor adds "Pi packages in settings.json" listing the
+names. `apps/server/src/piPackages.ts` + test. Runbook Known gaps updated. Installing packages
+server-side (option a) stays a follow-up if the owner wants package tools on the server.
