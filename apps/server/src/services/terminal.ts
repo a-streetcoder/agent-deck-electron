@@ -1,4 +1,7 @@
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
+import { isAbsolute } from "node:path";
+import type { PiSandbox } from "@agent-deck/pi-host";
 import { TERMINAL_MAX_OUTPUT_CHUNK, TERMINAL_MAX_SCROLLBACK_CHARS } from "@agent-deck/contracts";
 import { Context, Data, Deferred, Duration, Effect, Layer, Option, type Scope } from "effect";
 import { sanitizeTerminalHistoryChunk } from "./terminalScrollback.ts";
@@ -209,6 +212,8 @@ export interface TerminalSpawnOptions {
   readonly shellCandidates?: readonly ShellCandidate[];
   /** Scrollback cap in characters (tests); defaults to the wire-contract cap. */
   readonly maxScrollbackChars?: number;
+  /** ADR 0007: the owning session's sandbox (absent: none). */
+  readonly sandbox?: PiSandbox;
 }
 
 // ---------------------------------------------------------------------------
@@ -393,10 +398,39 @@ export const spawnTerminal = (
         const cols = options.cols ?? DEFAULT_TERMINAL_COLS;
         const rows = options.rows ?? DEFAULT_TERMINAL_ROWS;
         const maxScrollbackChars = options.maxScrollbackChars ?? TERMINAL_MAX_SCROLLBACK_CHARS;
-        const env = buildSpawnEnv(options.env ?? process.env);
-        const candidates =
+        const baseEnv = buildSpawnEnv(options.env ?? process.env);
+        const chain =
           options.shellCandidates ??
           defaultShellCandidates(process.platform, options.env ?? process.env);
+        // ADR 0007: in a sandbox the shell cannot fail over (it starts inside
+        // the wrap), so take the first one that exists on the host.
+        const sandbox = options.sandbox;
+        const shellCandidate = sandbox
+          ? (chain.find(
+              (candidate) => isAbsolute(candidate.shell) && existsSync(candidate.shell),
+            ) ?? chain[0])
+          : undefined;
+        const wrapped =
+          sandbox && shellCandidate
+            ? yield* Effect.tryPromise({
+                try: () =>
+                  sandbox.provider.wrap(
+                    {
+                      command: shellCandidate.shell,
+                      args: [...(shellCandidate.args ?? [])],
+                      env: baseEnv,
+                      cwd: options.cwd,
+                    },
+                    sandbox.policy,
+                  ),
+                catch: (cause) =>
+                  new TerminalSpawnFailed({ attempted: [shellCandidate.shell], cause }),
+              })
+            : undefined;
+        const env = wrapped ? buildSpawnEnv(wrapped.env) : baseEnv;
+        const candidates: readonly ShellCandidate[] = wrapped
+          ? [{ shell: wrapped.command, args: wrapped.args }]
+          : chain;
 
         // Donor fallback chain: try each candidate; the last throw is the cause.
         const spawned = yield* Effect.try({
@@ -419,10 +453,14 @@ export const spawnTerminal = (
             }
             throw lastError ?? new Error("no shell candidates");
           },
-          catch: (cause) =>
-            new TerminalSpawnFailed({ attempted: candidates.map((c) => c.shell), cause }),
+          catch: (cause) => {
+            wrapped?.release?.();
+            return new TerminalSpawnFailed({ attempted: candidates.map((c) => c.shell), cause });
+          },
         });
-        const { proc, shell } = spawned;
+        const { proc } = spawned;
+        // The shell the user gets, not the sandbox runtime that starts it.
+        const shell = shellCandidate?.shell ?? spawned.shell;
 
         const exitDeferred = yield* Deferred.make<TerminalExit>();
 
@@ -531,6 +569,7 @@ export const spawnTerminal = (
           cleanup: () => {
             disposeData();
             disposeExit();
+            wrapped?.release?.();
           },
         };
       }),

@@ -1,5 +1,6 @@
 import { Effect, Either, Exit, Option, Scope } from "effect";
 import { describe, expect, it } from "vitest";
+import type { PiSandbox, SandboxCommand } from "@agent-deck/pi-host";
 import { makeServerRuntime } from "../src/runtime.ts";
 import {
   defaultShellCandidates,
@@ -106,6 +107,57 @@ async function expectProcessGone(pid: number): Promise<void> {
 }
 
 describe("TerminalHost scoped PTY service (fake adapter)", () => {
+  it("ADR 0007: a sandboxed terminal spawns its first existing shell through the session's wrap", async () => {
+    const { adapter, spawns, ptys } = fakeAdapter();
+    const wraps: Array<{ command: SandboxCommand; policy: unknown }> = [];
+    let released = 0;
+    const policy = { allowWrite: [process.cwd()] } as PiSandbox["policy"];
+    const sandbox: PiSandbox = {
+      provider: {
+        name: "srt",
+        wrap: async (command, given) => {
+          wraps.push({ command, policy: given });
+          return {
+            command: "/bin/bash",
+            args: ["-c", "wrapped"],
+            env: { ...command.env, WRAPPED: "1" },
+            cwd: command.cwd,
+            release: () => void released++,
+          };
+        },
+      },
+      policy,
+    };
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const handle = yield* spawnTerminal(adapter, {
+            cwd: process.cwd(),
+            shellCandidates: [
+              { shell: "/no/such/shell" },
+              { shell: process.execPath, args: ["-i"] },
+            ],
+            sandbox,
+          });
+          expect(wraps).toHaveLength(1);
+          expect(wraps[0]!.policy).toBe(policy);
+          expect(wraps[0]!.command).toMatchObject({
+            command: process.execPath,
+            args: ["-i"],
+            cwd: process.cwd(),
+          });
+          expect(spawns).toHaveLength(1);
+          expect(spawns[0]).toMatchObject({ shell: "/bin/bash", args: ["-c", "wrapped"] });
+          expect(spawns[0]!.env.WRAPPED).toBe("1");
+          // The user sees their shell, not the sandbox runtime.
+          expect(handle.shell).toBe(process.execPath);
+          ptys[0]!.emitExit({ exitCode: 0, signal: null });
+        }),
+      ),
+    );
+    expect(released).toBe(1);
+  });
+
   it("open → input → output roundtrip, and output reaches attached listeners", async () => {
     const { adapter, spawns, ptys } = fakeAdapter();
     await Effect.runPromise(

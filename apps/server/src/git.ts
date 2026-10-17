@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, copyFile, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -16,7 +16,92 @@ import { withTrailers } from "./gitIdentity.ts";
  * the binary for tests, matching AGENT_DECK_GH_BIN.
  */
 
-const execFileAsync = promisify(execFile);
+const execFileRaw = promisify(execFile);
+
+/** ADR 0007: whether this server's own git calls run hardened (set at
+ * startup when sessions run in a sandbox). */
+let hardenServer = false;
+export function hardenServerGit(on: boolean): void {
+  hardenServer = on;
+}
+/** The env of one of this module's git calls: as given, or hardened. */
+const gitCallEnv = (env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv | undefined =>
+  hardenServer ? hardenedGitEnv(env ?? process.env) : env;
+
+/** Every git process of this module goes through here (or runGitInput). */
+const execFileAsync = ((
+  file: string,
+  args: readonly string[],
+  options: { env?: NodeJS.ProcessEnv },
+) =>
+  execFileRaw(file, args, {
+    ...options,
+    env: gitCallEnv(options.env),
+  })) as unknown as typeof execFileRaw;
+
+/**
+ * ADR 0007: the environment of a server-side git call that must not run code
+ * a session could have planted (checkerShell's rules): no global or system
+ * config, no replace objects, no fsmonitor, no pager, plain ssh. Hooks are disabled per call where git would
+ * run them (`hooksPathArgs`). The config pins ride in GIT_CONFIG_COUNT (the
+ * same level as `-c`) after any pins the environment already carries.
+ */
+export function hardenedGitEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...base,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    // A session can write objects and refs: refs/replace must not change a read.
+    GIT_NO_REPLACE_OBJECTS: "1",
+  };
+  const count = Number.parseInt(base.GIT_CONFIG_COUNT ?? "0", 10) || 0;
+  // GIT_SSH_COMMAND in the environment still wins over core.sshCommand.
+  const pins: Array<[string, string]> = [
+    ["core.fsmonitor", "false"],
+    ["core.pager", "cat"],
+    ["core.sshCommand", "ssh"],
+  ];
+  pins.forEach(([key, value], index) => {
+    env[`GIT_CONFIG_KEY_${count + index}`] = key;
+    env[`GIT_CONFIG_VALUE_${count + index}`] = value;
+  });
+  env.GIT_CONFIG_COUNT = String(count + pins.length);
+  return env;
+}
+
+/** A synchronous git call of the server (Loop evidence), with this module's
+ * binary and environment rules. Throws as execFileSync does. */
+export function gitSync(cwd: string, args: string[], maxBuffer = 2_000_000): string {
+  return execFileSync(gitBin(), args, {
+    cwd,
+    env: gitCallEnv(process.env),
+    encoding: "utf8",
+    maxBuffer,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+}
+
+/**
+ * `<rev>:<path>` from the repository at `cwd` with {@link hardenedGitEnv}, or
+ * undefined when git cannot read it (no repository, no such commit or file).
+ * Synchronous: a session's policy is derived inside its synchronous launch.
+ */
+export function gitShowFileSync(cwd: string, rev: string, repoPath: string): string | undefined {
+  if (rev !== "HEAD") validateGitObjectId(rev);
+  validateGitBlobPath(repoPath);
+  try {
+    return execFileSync(gitBin(), ["cat-file", "blob", `${rev}:${repoPath}`], {
+      cwd,
+      env: hardenedGitEnv(),
+      encoding: "utf8",
+      timeout: 15_000,
+      maxBuffer: 1_000_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return undefined;
+  }
+}
 
 export interface GitFileChange {
   /** The 2-char porcelain status (e.g. " M", "??", "A ", "MM"). */
@@ -144,7 +229,7 @@ async function runGitInput(cwd: string, args: string[], input: string | Buffer):
     // exact bytes a loop worktree patch is meant to reproduce.
     const child = spawn(gitBin(), [...GIT_EOL_ARGS, ...args], {
       cwd,
-      env: process.env,
+      env: gitCallEnv(process.env),
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -839,6 +924,9 @@ export async function createSessionWorktree(
     branchOwned: true,
   };
   try {
+    // ADR 0007: the immutable base, read off the branch this attempt created
+    // (a failure here is cleaned up as a failed add: the branch is ours).
+    worktree.baseCommit = await gitCommitOid(projectDir, `refs/heads/${branch}`);
     await gitWorktreeAdd(projectDir, targetPath, branch, hooks);
   } catch (error) {
     // Preserve proof that this attempt owns the branch. The route must first use

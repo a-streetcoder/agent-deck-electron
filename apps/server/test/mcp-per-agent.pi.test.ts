@@ -11,22 +11,7 @@ import {
   type MockProviderServer,
 } from "@agent-deck/testkit";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type * as PiHost from "@agent-deck/pi-host";
 import { startServer, type AgentDeckServer } from "../src/index.ts";
-
-// The latest bridge token per session, taken from the generated extension's
-// inputs, so a test can ask __mcp_authorize__ what the live policy says.
-const bridgeTokens = vi.hoisted(() => new Map<string, string>());
-vi.mock("@agent-deck/pi-host", async (importOriginal) => {
-  const original = await importOriginal<typeof PiHost>();
-  return {
-    ...original,
-    writeBridgeExtension: (options: Parameters<typeof original.writeBridgeExtension>[0]) => {
-      bridgeTokens.set(options.sessionId, options.token);
-      return original.writeBridgeExtension(options);
-    },
-  };
-});
 
 /**
  * Per-session MCP scoping (native explicit-assignment model): an agent that
@@ -213,19 +198,17 @@ describe("per-session MCP scoping by an agent's declared mcpServers", () => {
   };
   // What the extension's policy hook would hear for mcp__mock__echo right now.
   const authorize = async (sessionId: string) => {
-    const response = await fetch(`http://127.0.0.1:${server.port}/bridge`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        sessionId,
-        token: bridgeTokens.get(sessionId),
+    const reply = await server.bridgeCall(
+      sessionId,
+      {
         tool: "__mcp_authorize__",
         toolCallId: "live-check",
         params: { serverId: "mock", server: "mock", toolName: "mcp__mock__echo" },
-      }),
-    });
-    expect(response.status).toBe(200);
-    return (await response.json()) as { allow: boolean; reason?: string };
+      },
+      new AbortController().signal,
+    );
+    expect(reply.status).toBe(200);
+    return reply.body as { allow: boolean; reason?: string };
   };
 
   it("refuses a named parent's MCP call once its agent is disabled mid-session", async () => {

@@ -1,6 +1,7 @@
 // ADR 0007: the process-sandbox policy of one session, derived from its record
 // (ADR 0006) and where it runs. Pure; pi-host's SandboxProvider applies it.
 import type { ProjectSandboxConfig, SessionMeta, UserIdentity } from "@agent-deck/contracts";
+import type { SandboxViolation } from "./transcript.ts";
 import { sessionOwner } from "./sessionRecord.ts";
 
 /** Hosts every sandboxed session may reach: the model providers (and their
@@ -129,6 +130,9 @@ export const DEFAULT_SANDBOX_DENIED_ADDRESSES: readonly string[] = [
 export type SandboxSide = "local" | "server";
 
 export interface SandboxPolicyInput {
+  /** Compare paths without case (default: on darwin and win32, whose usual
+   * filesystems fold case). The server passes on-disk paths. */
+  caseInsensitivePaths?: boolean;
   dataDir: string;
   projectPath: string;
   /** The operator's shared Pi agent dir (holds the operator's auth files). */
@@ -206,6 +210,81 @@ function normalize(file: string): string {
   return `/${out.join("/")}`;
 }
 
+/** `file` is `root` or lies beneath it (lexically, `..` resolved,
+ * trailing separators ignored, case folded when asked). */
+function isWithin(root: string, file: string, caseInsensitive = false): boolean {
+  const fold = (value: string): string => (caseInsensitive ? value.toLowerCase() : value);
+  const base = fold(normalize(root));
+  const target = fold(normalize(file));
+  return target === base || target.startsWith(`${base === "/" ? "" : base}/`);
+}
+
+/** Whether this process's platform usually folds path case (darwin, win32). */
+const platformFoldsCase = (): boolean => {
+  const platform = (globalThis as { process?: { platform?: string } }).process?.platform;
+  return platform === "darwin" || platform === "win32";
+};
+
+/** Folders of the server's data dir that hold its own or every user's state;
+ * no write root may be, hold or lie inside one (a worktree may lie inside
+ * `session-worktrees`, the folder the server allocates them in). */
+export const SANDBOX_RESERVED_DATA_DIRS: readonly string[] = [
+  "users",
+  "sandbox",
+  "home",
+  "imported-sessions",
+  "events",
+  "session-worktrees",
+  "Subagent Runs",
+  "checkpoints",
+  "loop-artifacts",
+  "memory",
+  "session-images",
+  "session-pastes",
+  "composer-drafts",
+  "agent-avatars",
+  "injected-commands",
+  "openai-fast",
+  "plan-events",
+];
+
+/**
+ * Why `root` cannot be a sandbox write root (or a session's project folder),
+ * or undefined when it can: it must not be, hold or lie inside the data dir's
+ * reserved folders, the operator's agent dir or the session's agent dir, and
+ * must not hold the data dir. A worktree root strictly inside the server's
+ * `session-worktrees` folder is legitimate. Paths are compared as given:
+ * the caller canonicalises them (real, on-disk paths) first.
+ */
+export function sandboxWriteRootProblem(
+  root: string,
+  dirs: {
+    dataDir: string;
+    piAgentDir: string;
+    agentDir?: string;
+    worktree?: boolean;
+    caseInsensitive?: boolean;
+  },
+): string | undefined {
+  const fold = dirs.caseInsensitive ?? platformFoldsCase();
+  const within = (outer: string, inner: string): boolean => isWithin(outer, inner, fold);
+  if (within(root, dirs.dataDir)) return `sandbox write root ${root} contains ${dirs.dataDir}`;
+  for (const agent of [dirs.piAgentDir, dirs.agentDir]) {
+    if (agent && (within(root, agent) || within(agent, root))) {
+      return `sandbox write root ${root} overlaps the agent dir ${agent}`;
+    }
+  }
+  const worktrees = join(dirs.dataDir, "session-worktrees");
+  if (dirs.worktree && within(worktrees, root) && !within(root, worktrees)) return undefined;
+  for (const entry of SANDBOX_RESERVED_DATA_DIRS) {
+    const reserved = join(dirs.dataDir, entry);
+    if (within(root, reserved) || within(reserved, root)) {
+      return `sandbox write root ${root} overlaps the server's ${reserved}`;
+    }
+  }
+  return undefined;
+}
+
 function assertWithin(root: string, paths: readonly string[]): void {
   const base = normalize(root);
   for (const file of paths) {
@@ -269,6 +348,22 @@ export function sandboxPolicy(
   const worktree = record.workspace?.path ? trimEnd(record.workspace.path) : undefined;
   const writeRoot = worktree ?? projectPath;
   const gitDir = join(projectPath, ".git");
+  // A write root must not hand the session the server's or other users'
+  // state: see sandboxWriteRootProblem.
+  const fold = input.caseInsensitivePaths ?? platformFoldsCase();
+  for (const [root, isWorktree] of [
+    [writeRoot, worktree !== undefined],
+    [projectPath, false],
+  ] as const) {
+    const problem = sandboxWriteRootProblem(root, {
+      dataDir: input.dataDir,
+      piAgentDir: input.piAgentDir,
+      agentDir: input.agentDir,
+      worktree: isWorktree,
+      caseInsensitive: fold,
+    });
+    if (problem) throw new SandboxPolicyError(problem);
+  }
 
   // The transcript file itself, never its folder: an imported session's file
   // sits in a folder every imported session of every user shares.
@@ -300,6 +395,9 @@ export function sandboxPolicy(
   } else {
     denyWrite.push(dir(gitDir));
   }
+  // The server's launch files (bridge extension, prompts, a child's checker
+  // shell) sit in the scratch folder, but only the server writes them.
+  denyWrite.push(dir(join(scratch, "launch")));
   for (const entry of SANDBOX_AGENT_PROTECTED_ENTRIES) {
     const path = join(agentDir, entry);
     denyWrite.push(entry.endsWith(".json") ? file(path) : dir(path));
@@ -358,4 +456,127 @@ export function sandboxPolicy(
       ...(input.extraDeniedAddresses ?? []),
     ]),
   };
+}
+
+/**
+ * One of srt's violation lines as a violation, or undefined for a line of
+ * another shape. srt writes `deny network-outbound <host>:<port> (<reason>)`
+ * for a refused connection (its proxy), `deny <syscall> <path>` for a refused
+ * write on Linux (its seccomp observer) and the Seatbelt rule with its path on
+ * macOS (`file-write-create /path`, `file-read-data /path`).
+ */
+export function sandboxViolationOf(line: string): SandboxViolation | undefined {
+  const network = /^deny network-outbound (\S+?)(?::(\d+))? \((.*)\)$/.exec(line.trim());
+  if (network) {
+    const host = network[1]!.replace(/^\[(.*)\]$/, "$1");
+    return { kind: "network", target: host, operation: "network-outbound" };
+  }
+  const seatbelt = /(file-(read|write)[\w-]*)\s+(\/.*)$/.exec(line.trim());
+  if (seatbelt) {
+    return {
+      kind: seatbelt[2] === "read" ? "read" : "write",
+      target: seatbelt[3]!,
+      operation: seatbelt[1]!,
+    };
+  }
+  const seccomp = /^deny (\w+) (\/.*)$/.exec(line.trim());
+  if (seccomp) return { kind: "write", target: seccomp[2]!, operation: seccomp[1]! };
+  return undefined;
+}
+
+/**
+ * Whether `policy` lets the session write `file`: inside an `allowWrite` root
+ * and no `denyWrite` entry. srt's Linux observer reports every write outside
+ * the roots it knew at its start; this drops the ones the session's own wrap
+ * allowed.
+ */
+export function sandboxAllowsWrite(
+  policy: Pick<SandboxPolicy, "allowWrite" | "denyWrite">,
+  file: string,
+  /** srt's rules differ per platform (srtDeniesInWorkingFolder). */
+  platform?: string,
+): boolean {
+  const target = normalize(file);
+  const covers = (root: string): boolean => {
+    const base = normalize(root);
+    return target === base || target.startsWith(`${base === "/" ? "" : base}/`);
+  };
+  if (!policy.allowWrite.some(covers) || policy.denyWrite.some((entry) => covers(entry.path))) {
+    return false;
+  }
+  // srt's own denies inside the working folder (the first write root).
+  const root = policy.allowWrite[0];
+  return !root || !srtDeniesInWorkingFolder(root, file, platform);
+}
+
+/** srt's DANGEROUS_FILES (sandbox-utils.js; sandboxPolicy.srt test pins the copy). */
+export const SRT_DANGEROUS_FILES: readonly string[] = [
+  ".gitconfig",
+  ".gitmodules",
+  ".bashrc",
+  ".bash_profile",
+  ".zshrc",
+  ".zprofile",
+  ".profile",
+  ".ripgreprc",
+  ".mcp.json",
+];
+/** srt's getDangerousDirectories() (same source, same pin). */
+export const SRT_DANGEROUS_DIRECTORIES: readonly string[] = [
+  ".vscode",
+  ".idea",
+  ".claude/commands",
+  ".claude/agents",
+];
+/** srt's ripgrep depth for the nested matches (DEFAULT_MANDATORY_DENY_SEARCH_DEPTH). */
+const SRT_DENY_SEARCH_DEPTH = 3;
+
+/**
+ * Whether srt itself refuses a write to `file` in the working folder `cwd`,
+ * whatever the policy: its dangerous files and directories at the top of the
+ * folder, and found by its scan down to three levels (a file's depth), plus
+ * nested repositories' `.git/hooks` and `.git/config`. Matched without
+ * case, as srt does.
+ */
+export function srtDeniesInWorkingFolder(
+  cwd: string,
+  file: string,
+  platform: string | undefined = (globalThis as { process?: { platform?: string } }).process
+    ?.platform,
+): boolean {
+  const base = normalize(cwd).toLowerCase();
+  const target = normalize(file).toLowerCase();
+  if (!target.startsWith(`${base === "/" ? "" : base}/`)) return false;
+  const parts = target.slice(base.length).split("/").filter(Boolean);
+  const name = parts.at(-1) ?? "";
+  // macOS: Seatbelt rules match the names at any depth; Linux: srt's scan
+  // finds what lies within its depth (a file's depth, as ripgrep counts).
+  const unlimited = platform === "darwin";
+  const dirs = SRT_DANGEROUS_DIRECTORIES.map((dir) => dir.split("/"));
+  const startsAt = (index: number, segments: readonly string[]): boolean =>
+    segments.every((segment, offset) => parts[index + offset] === segment);
+  if (SRT_DANGEROUS_FILES.includes(name)) {
+    if (parts.length === 1 || unlimited || parts.length <= SRT_DENY_SEARCH_DEPTH) return true;
+  }
+  // A protected directory is denied whole: itself and anything below it. srt
+  // denies one at the top always, a nested one its scan reaches (a file in
+  // it within the depth: the directory at most one level above that).
+  const protectedDirs = [...dirs, [".git", "hooks"]];
+  for (let index = 0; index < parts.length; index++) {
+    for (const segments of protectedDirs) {
+      if (!startsAt(index, segments)) continue;
+      const depth = index + segments.length;
+      const reached =
+        unlimited ||
+        index === 0 ||
+        depth <= SRT_DENY_SEARCH_DEPTH - 1 ||
+        // .git/hooks: srt looks one level further for hooks.
+        (segments[0] === ".git" && depth <= SRT_DENY_SEARCH_DEPTH);
+      if (reached) return true;
+    }
+    if (parts[index] === ".git" && parts[index + 1] === "config" && parts.length === index + 2) {
+      if (unlimited || parts.length <= SRT_DENY_SEARCH_DEPTH) return true;
+    }
+  }
+  return false;
 }

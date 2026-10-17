@@ -420,7 +420,9 @@ export type SessionOperation =
   /** Shared server: cancel a prepared return. */
   | "returnCancel"
   | "delete"
-  | "pin";
+  | "pin"
+  /** ADR 0007: add a refused host to the project's sandbox allow-list. */
+  | "sandboxAllowHost";
 
 export const SESSION_OPERATIONS: readonly SessionOperation[] = [
   "prompt",
@@ -444,6 +446,7 @@ export const SESSION_OPERATIONS: readonly SessionOperation[] = [
   "returnCancel",
   "delete",
   "pin",
+  "sandboxAllowHost",
 ];
 
 /** Why an operation is refused: the HTTP status, the wire code and the message. */
@@ -633,6 +636,18 @@ function refusalFor(
             code: "merge_forbidden",
             error:
               "Only the person who owns this session, or the operator, can open its pull request.",
+          };
+    case "sandboxAllowHost":
+      // A desktop has one person; on the server the project is shared, so
+      // only the owner (or the operator for them) widens its allow-list.
+      if (location !== "server") return undefined;
+      return isOwner || (!!actor?.user && actor.operator === true)
+        ? undefined
+        : {
+            status: 403,
+            code: "sandbox_allow_forbidden",
+            error:
+              "Only the person who owns this session, or the operator, can allow a host for its project.",
           };
     default:
       return undefined;

@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Chunk, Deferred, Effect, Either, Exit, Fiber, Option, Scope, Stream } from "effect";
 import { describe, expect, it } from "vitest";
+import type { PiSandbox, SandboxProvider } from "@agent-deck/pi-host";
 import { makeServerRuntime } from "../src/runtime.ts";
 import {
   PiHost,
@@ -50,6 +51,29 @@ const isAgentEndItem = (item: PiStreamItem): boolean =>
   item._tag === "PiEvent" && (item.event as { type?: string }).type === "agent_end";
 
 describe("PiHost scoped subprocess service", () => {
+  it("ADR 0007: pid waits for a sandboxed spawn, which follows the asynchronous wrap", async () => {
+    // A provider whose wrap resolves later: PiProcess spawns only then.
+    const provider: SandboxProvider = {
+      name: "srt",
+      wrap: async (command) => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        return command;
+      },
+    };
+    const sandbox = { provider, policy: {} as PiSandbox["policy"] };
+    const pid = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const handle = yield* spawnPiProcess({ ...opts(), sandbox });
+          const pid = yield* handle.pid;
+          expect(yield* handle.getState).toMatchObject({ sessionId: "fake-session" });
+          return pid;
+        }),
+      ),
+    );
+    expect(Option.isSome(pid)).toBe(true);
+  });
+
   it("scope close kills the child and settles everything pending", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {

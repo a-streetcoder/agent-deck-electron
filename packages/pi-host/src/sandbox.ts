@@ -6,7 +6,11 @@ import {
   DEFAULT_SANDBOX_DOMAINS,
   type SandboxPolicy,
 } from "@agent-deck/domain";
-import type { SandboxManager, SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
+import type {
+  SandboxManager,
+  SandboxRuntimeConfig,
+  SandboxViolationStore,
+} from "@anthropic-ai/sandbox-runtime";
 
 /**
  * The process sandbox around a spawn (ADR 0007). A provider turns a command
@@ -46,7 +50,8 @@ import type { SandboxManager, SandboxRuntimeConfig } from "@anthropic-ai/sandbox
  * ## Host-side effects of srt
  *
  * - `initialize` registers `SIGINT`, `SIGTERM` and `exit` handlers in this
- *   (the server's) process that reset srt; SBX-03 orders shutdown around them.
+ *   (the server's) process that reset srt; the provider removes the two signal
+ *   handlers again, so the host disposes the provider last in its own shutdown.
  * - For a deny path that does not exist, srt creates an empty placeholder
  *   file on the host to mount over, of whatever type it guesses. An absent
  *   deny path under a writable root is also one the session could create
@@ -82,6 +87,16 @@ export interface SandboxProvider {
   readonly name: "none" | "srt";
   wrap(command: SandboxCommand, policy: SandboxPolicy): Promise<SandboxedCommand>;
   dispose?(): Promise<void>;
+  /** Each violation the sandbox records for a live wrap, with the policy that
+   * wrap was given (the caller maps it to its session). Returns the
+   * unsubscribe. */
+  onViolation?(listener: (violation: SandboxViolationLine) => void): () => void;
+}
+
+/** One violation line of srt, attributed to the policy of its wrap. */
+export interface SandboxViolationLine {
+  policy: SandboxPolicy;
+  line: string;
 }
 
 /** What to spawn: an argv, its env and its working directory. */
@@ -129,7 +144,12 @@ type SrtManager = Pick<
   | "unregisterCommandNetworkLists"
   | "cleanupAfterCommand"
   | "reset"
->;
+> & {
+  getSandboxViolationStore(): Pick<
+    SandboxViolationStore,
+    "getTotalCount" | "getViolationsForCommand" | "subscribe"
+  >;
+};
 
 const baseConfig = (): SandboxRuntimeConfig => ({
   network: {
@@ -221,6 +241,52 @@ const wrapError = (what: string, error: unknown): PiSandboxError =>
         cause: error,
       });
 
+/**
+ * Run srt's initialize without the SIGINT/SIGTERM handlers it registers in
+ * this process: they reset srt (its proxies) the moment a signal arrives,
+ * while the host is still stopping the sandboxed processes. The host calls
+ * the provider's dispose() last in its own shutdown instead. srt's `exit`
+ * handler stays, as the last-resort cleanup.
+ */
+async function withoutSignalCleanup(run: () => Promise<void>): Promise<void> {
+  const signals = ["SIGINT", "SIGTERM"] as const;
+  const before = new Map(signals.map((signal) => [signal, new Set(process.rawListeners(signal))]));
+  try {
+    await run();
+  } finally {
+    for (const signal of signals) {
+      for (const listener of process.rawListeners(signal)) {
+        if (!before.get(signal)!.has(listener)) {
+          process.removeListener(signal, listener as (...args: unknown[]) => void);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Why srt cannot run on this host, or undefined when it can: its package
+ * loads, the platform is one it supports, and its dependency check
+ * (bubblewrap and socat on Linux) reports no error.
+ */
+export async function srtProblem(
+  load: () => Promise<
+    Pick<typeof SandboxManager, "isSupportedPlatform" | "checkDependencies">
+  > = async () => (await import(SRT_PACKAGE)).SandboxManager,
+  platform: NodeJS.Platform = process.platform,
+): Promise<string | undefined> {
+  if (platform === "win32") return "srt does not run on Windows";
+  let srt: Pick<typeof SandboxManager, "isSupportedPlatform" | "checkDependencies">;
+  try {
+    srt = await load();
+  } catch (error) {
+    return `${SRT_PACKAGE} could not be loaded: ${String(error)}`;
+  }
+  if (!srt.isSupportedPlatform()) return `srt does not support ${platform}`;
+  const { errors } = srt.checkDependencies();
+  return errors.length > 0 ? errors.join("; ") : undefined;
+}
+
 /** An srt provider over `load` (tests inject a fake manager and file checks). */
 export function createSrtProvider(
   load: () => Promise<SrtManager> = async () => (await import(SRT_PACKAGE)).SandboxManager,
@@ -230,8 +296,38 @@ export function createSrtProvider(
   let manager: Promise<SrtManager> | undefined;
   let initialized: Promise<void> | undefined;
   let global = baseConfig();
+  // The policy of every live wrap by its command id, for violation attribution.
+  const active = new Map<string, SandboxPolicy>();
+  const violationListeners = new Set<(violation: SandboxViolationLine) => void>();
+  let unsubscribeStore: (() => void) | undefined;
+  /** dispose() ran: no initialize and no wrap after it. */
+  let disposed = false;
+  /** Wraps in flight, which dispose() lets settle before it resets srt. */
+  const pending = new Set<Promise<unknown>>();
+
+  /** Attribute each new line of srt's store to the live wrap it belongs to. */
+  const watchViolations = (srt: SrtManager): void => {
+    if (unsubscribeStore || violationListeners.size === 0) return;
+    const store = srt.getSandboxViolationStore();
+    let seen = store.getTotalCount();
+    unsubscribeStore = store.subscribe((all) => {
+      const total = store.getTotalCount();
+      const count = Math.min(total - seen, all.length);
+      seen = total;
+      // slice(-0) is the whole list: nothing new is nothing to do.
+      if (count <= 0) return;
+      const fresh = new Set(all.slice(-count));
+      for (const [commandId, policy] of active) {
+        for (const violation of store.getViolationsForCommand(commandId)) {
+          if (!fresh.has(violation)) continue;
+          for (const listener of violationListeners) listener({ policy, line: violation.line });
+        }
+      }
+    });
+  };
 
   const ready = async (): Promise<SrtManager> => {
+    if (disposed) throw new PiSandboxError(`pi-host: sandbox provider "srt" was disposed`);
     manager ??= load().catch((error: unknown) => {
       manager = undefined;
       throw new PiSandboxError(
@@ -240,11 +336,16 @@ export function createSrtProvider(
       );
     });
     const srt = await manager;
-    initialized ??= srt.initialize(global).catch((error: unknown) => {
-      initialized = undefined;
-      throw wrapError(`could not start ${SRT_PACKAGE}`, error);
-    });
+    // The log monitor: srt then observes refused writes (Linux seccomp,
+    // macOS Seatbelt) besides the refused hosts its proxy always records.
+    initialized ??= withoutSignalCleanup(() => srt.initialize(global, undefined, true)).catch(
+      (error: unknown) => {
+        initialized = undefined;
+        throw wrapError(`could not start ${SRT_PACKAGE}`, error);
+      },
+    );
     await initialized;
+    watchViolations(srt);
     return srt;
   };
 
@@ -263,71 +364,99 @@ export function createSrtProvider(
 
   return {
     name: "srt",
-    async wrap(cmd, policy) {
-      if (platform === "win32") {
-        throw new PiSandboxError(
-          'pi-host: sandbox provider "srt" runs on Linux and macOS only; use "none" on Windows',
-        );
-      }
-      const srt = await ready();
-      let denyWrite: string[];
-      try {
-        widen(srt, policy);
-        // The roots first: a deny path is created only under a root that exists.
-        for (const dir of [SRT_TMPDIR, ...policy.createDirs]) fs.mkdir(dir);
-        denyWrite = prepareDenyWrite(policy, fs);
-      } catch (error) {
-        throw wrapError("could not prepare the sandbox", error);
-      }
-      // 256 random bits: the id is all that binds a connection to this list.
-      const commandId = randomBytes(32).toString("hex");
-      let registered = false;
-      try {
-        srt.registerCommandNetworkLists(commandId, { allowedDomains: projectHosts(policy) });
-        registered = true;
-        const command = `TMPDIR=${shellQuote(policy.tmpDir)} ${[cmd.command, ...cmd.args]
-          .map(shellQuote)
-          .join(" ")}`;
-        const { argv } = await srt.wrapWithSandboxArgv(
-          command,
-          undefined,
-          srtSettings(policy, denyWrite, fs),
-          undefined,
-          cmd.cwd,
-          { commandId },
-        );
-        const [shell, ...args] = argv;
-        if (!shell) throw new Error("srt returned an empty argv");
-        let released = false;
-        const release = (): void => {
-          if (released) return;
-          released = true;
-          try {
-            srt.cleanupAfterCommand();
-          } finally {
-            srt.unregisterCommandNetworkLists(commandId);
-          }
-        };
-        return {
-          command: shell,
-          args,
-          env: { ...cmd.env, TMPDIR: policy.tmpDir, NODE_USE_ENV_PROXY: "1" },
-          cwd: cmd.cwd,
-          release,
-        };
-      } catch (error) {
-        if (registered) srt.unregisterCommandNetworkLists(commandId);
-        throw wrapError(`could not wrap ${cmd.command}`, error);
-      }
+    wrap(cmd, policy) {
+      const run = wrapOne(cmd, policy);
+      pending.add(run);
+      void run.then(
+        () => pending.delete(run),
+        () => pending.delete(run),
+      );
+      return run;
+    },
+    onViolation(listener) {
+      violationListeners.add(listener);
+      if (initialized) void manager?.then(watchViolations);
+      return () => {
+        violationListeners.delete(listener);
+      };
     },
     async dispose() {
-      if (!initialized) return;
+      disposed = true;
+      // Let an initialize and the wraps in flight finish before srt resets.
+      await Promise.allSettled([...pending]);
+      const started = initialized;
+      if (!started) return;
+      await started.catch(() => {});
       const srt = await manager;
       initialized = undefined;
+      unsubscribeStore?.();
+      unsubscribeStore = undefined;
+      active.clear();
       global = baseConfig();
       await srt?.reset();
     },
   };
+
+  async function wrapOne(cmd: SandboxCommand, policy: SandboxPolicy): Promise<SandboxedCommand> {
+    if (platform === "win32") {
+      throw new PiSandboxError(
+        'pi-host: sandbox provider "srt" runs on Linux and macOS only; use "none" on Windows',
+      );
+    }
+    const srt = await ready();
+    let denyWrite: string[];
+    try {
+      widen(srt, policy);
+      // The roots first: a deny path is created only under a root that exists.
+      for (const dir of [SRT_TMPDIR, ...policy.createDirs]) fs.mkdir(dir);
+      denyWrite = prepareDenyWrite(policy, fs);
+    } catch (error) {
+      throw wrapError("could not prepare the sandbox", error);
+    }
+    // 256 random bits: the id is all that binds a connection to this list.
+    const commandId = randomBytes(32).toString("hex");
+    let registered = false;
+    try {
+      srt.registerCommandNetworkLists(commandId, { allowedDomains: projectHosts(policy) });
+      registered = true;
+      active.set(commandId, policy);
+      const command = `TMPDIR=${shellQuote(policy.tmpDir)} ${[cmd.command, ...cmd.args]
+        .map(shellQuote)
+        .join(" ")}`;
+      const { argv } = await srt.wrapWithSandboxArgv(
+        command,
+        undefined,
+        srtSettings(policy, denyWrite, fs),
+        undefined,
+        cmd.cwd,
+        { commandId },
+      );
+      const [shell, ...args] = argv;
+      if (!shell) throw new Error("srt returned an empty argv");
+      let released = false;
+      const release = (): void => {
+        if (released) return;
+        released = true;
+        try {
+          srt.cleanupAfterCommand();
+        } finally {
+          active.delete(commandId);
+          srt.unregisterCommandNetworkLists(commandId);
+        }
+      };
+      return {
+        command: shell,
+        args,
+        env: { ...cmd.env, TMPDIR: policy.tmpDir, NODE_USE_ENV_PROXY: "1" },
+        cwd: cmd.cwd,
+        release,
+      };
+    } catch (error) {
+      active.delete(commandId);
+      if (registered) srt.unregisterCommandNetworkLists(commandId);
+      throw wrapError(`could not wrap ${cmd.command}`, error);
+    }
+  }
 }
 
 /** The process-wide srt provider (srt's SandboxManager is a singleton). */

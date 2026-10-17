@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -12,6 +12,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import type { PiSandbox, SandboxedCommand } from "@agent-deck/pi-host";
+import { gitSync } from "./git.ts";
 import {
   clampMaxIterations,
   diffLoopRuns,
@@ -83,6 +85,8 @@ export async function runValidationCommand(
   timeoutMs = 120_000,
   /** The session's launch env (owner credentials, git identity); the server's otherwise. */
   env?: Record<string, string | undefined>,
+  /** ADR 0007: the session's sandbox; the command runs as `/bin/sh -c` inside it. */
+  sandbox?: PiSandbox,
 ): Promise<ValidationResult> {
   const started = Date.now();
   let workingDirectory: string;
@@ -102,6 +106,30 @@ export async function runValidationCommand(
       evidence: stderr,
     };
   }
+  // ADR 0007: a sandboxed command is the shell its unsandboxed spawn would
+  // start, wrapped by the session's provider; a wrap that fails is a spawn error.
+  const commandEnv = env ? { ...process.env, ...env } : process.env;
+  let wrapped: SandboxedCommand | undefined;
+  if (sandbox) {
+    try {
+      wrapped = await sandbox.provider.wrap(
+        { command: "/bin/sh", args: ["-c", command], env: commandEnv, cwd: workingDirectory },
+        sandbox.policy,
+      );
+    } catch (error) {
+      return {
+        command,
+        workingDirectory,
+        exitCode: null,
+        durationMs: Date.now() - started,
+        stdout: "",
+        stderr: error instanceof Error ? error.message : String(error),
+        classification: "spawnError",
+        passed: false,
+        evidence: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
   return await new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
@@ -113,6 +141,7 @@ export async function runValidationCommand(
     const finish = (exitCode: number | null): void => {
       if (settled) return;
       settled = true;
+      wrapped?.release?.();
       clearTimeout(timer);
       signal?.removeEventListener("abort", abort);
       let stdoutPath: string | undefined;
@@ -169,14 +198,19 @@ export async function runValidationCommand(
     };
     let timer: ReturnType<typeof setTimeout>;
     try {
-      child = spawn(command, {
-        cwd: workingDirectory,
-        shell: true,
+      const options = {
         windowsHide: true,
         detached: process.platform !== "win32",
-        stdio: ["ignore", "pipe", "pipe"],
-        ...(env ? { env: { ...process.env, ...env } } : {}),
-      });
+        stdio: ["ignore", "pipe", "pipe"] as ["ignore", "pipe", "pipe"],
+      };
+      child = wrapped
+        ? spawn(wrapped.command, wrapped.args, { ...options, cwd: wrapped.cwd, env: wrapped.env })
+        : spawn(command, {
+            ...options,
+            cwd: workingDirectory,
+            shell: true,
+            ...(env ? { env: commandEnv } : {}),
+          });
       child.stdout?.on("data", (chunk: Buffer) => {
         stdout = appendBounded(stdout, chunk);
         stdoutTail = appendTail(stdoutTail, chunk);
@@ -315,6 +349,7 @@ export interface LoopEngineDeps {
     signal?: AbortSignal,
     outputDirectory?: string,
     env?: Record<string, string | undefined>,
+    sandbox?: PiSandbox,
   ) => Promise<boolean | LegacyValidationResult | ValidationResult>;
   now?: () => string;
   /** App data directory. Omit only for hermetic in-memory tests. */
@@ -335,6 +370,8 @@ export interface LoopStartOptions {
   cancel?: () => Promise<void>;
   /** A7: the Loop session's launch env, for the validation command (as its Pi gets). */
   validationEnv?: () => Record<string, string | undefined> | undefined;
+  /** ADR 0007: the Loop session's sandbox for a validation command in `cwd`. */
+  validationSandbox?: (cwd: string) => PiSandbox | undefined;
 }
 
 export class UnsupportedLoopStructureError extends Error {
@@ -358,6 +395,7 @@ interface ActiveRun {
   controller: AbortController;
   cancel?: () => Promise<void>;
   validationEnv?: LoopStartOptions["validationEnv"];
+  validationSandbox?: LoopStartOptions["validationSandbox"];
   cancelPromise?: Promise<void>;
 }
 
@@ -633,12 +671,7 @@ function changedFilesForGit(cwd: string, reportOnly: boolean): LoopChangedFile[]
   if (reportOnly) return [];
   let raw: string;
   try {
-    raw = execFileSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
-      cwd,
-      encoding: "utf8",
-      maxBuffer: 2_000_000,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    raw = gitSync(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
   } catch {
     return [];
   }
@@ -668,12 +701,7 @@ function changedFilesForGit(cwd: string, reportOnly: boolean): LoopChangedFile[]
   }
   for (const extra of [[], ["--cached"]] as const) {
     try {
-      const binary = execFileSync("git", ["diff", ...extra, "--numstat", "--no-renames"], {
-        cwd,
-        encoding: "utf8",
-        maxBuffer: 2_000_000,
-        stdio: ["ignore", "pipe", "ignore"],
-      });
+      const binary = gitSync(cwd, ["diff", ...extra, "--numstat", "--no-renames"]);
       for (const line of binary.split("\n")) {
         const match = /^-\t-\t(.+)$/.exec(line);
         if (
@@ -717,8 +745,8 @@ export class LoopEngine {
     this.defaultExecuteRole = deps.executeRole;
     this.runValidation =
       deps.runValidation ??
-      ((cwd, command, signal, outputDirectory, env) =>
-        runValidationCommand(cwd, command, signal, outputDirectory, undefined, env));
+      ((cwd, command, signal, outputDirectory, env, sandbox) =>
+        runValidationCommand(cwd, command, signal, outputDirectory, undefined, env, sandbox));
     this.warn = deps.warn ?? (() => {});
     this.storePath = deps.dataDir ? path.join(deps.dataDir, "loop-runs.json") : undefined;
     let artifactsRoot: string | undefined;
@@ -1476,6 +1504,7 @@ export class LoopEngine {
       controller: new AbortController(),
       cancel: options.cancel,
       validationEnv: options.validationEnv,
+      validationSandbox: options.validationSandbox,
     };
     this.runs.set(run.id, run);
     this.active.set(run.id, active);
@@ -1843,6 +1872,7 @@ export class LoopEngine {
         signal,
         validationDirectory,
         this.active.get(run.id)?.validationEnv?.(),
+        this.active.get(run.id)?.validationSandbox?.(cwd),
       );
       const normalized: ValidationResult =
         typeof result === "boolean" || !("classification" in result)

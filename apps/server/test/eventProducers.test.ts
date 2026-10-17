@@ -552,6 +552,46 @@ describe("A1b1 producers", () => {
     expect(scanEventLines(h.lines(), [h.dataDir, "Alice", token, "hunter2"])).toEqual([]);
   });
 
+  it("ADR 0007: a refused sandbox.json is one session event with its cleaned problem lines", () => {
+    const h = harness();
+    h.events.sandboxConfigInvalid("s1", [
+      'allowedDomains.0: "localhost" is localhost',
+      `read from ${h.dataDir}/projects token=hunter2`,
+    ]);
+    const [event] = h.all();
+    expect(event).toMatchObject({
+      kind: "sandbox.configInvalid",
+      sessionId: "s1",
+      projectId: "project-1",
+      subject: { type: "session", id: "s1" },
+      actor: { type: "system" },
+    });
+    const { problems } = event!.payload as { problems: string[] };
+    expect(problems[0]).toBe('allowedDomains.0: "localhost" is localhost');
+    expect(scanEventLines(h.lines(), [h.dataDir, "hunter2"])).toEqual([]);
+  });
+
+  it("ADR 0007: a sandbox violation is a session event with its kind, target and operation", () => {
+    const h = harness();
+    h.events.sandboxViolation("s1", {
+      kind: "write",
+      target: `${h.dataDir}/users/abcd/agent/auth.json`,
+      operation: "openat",
+    });
+    const [event] = h.all();
+    expect(event).toMatchObject({
+      kind: "sandbox.violation",
+      sessionId: "s1",
+      subject: { type: "session", id: "s1" },
+      payload: {
+        kind: "write",
+        target: "<dataDir>/users/abcd/agent/auth.json",
+        operation: "openat",
+      },
+    });
+    expect(scanEventLines(h.lines(), [h.dataDir])).toEqual([]);
+  });
+
   it("secrets scan: a log of every producer holds no capability field, path or raw output", () => {
     const h = harness();
     h.events.sessionCreated(meta(), userActor());

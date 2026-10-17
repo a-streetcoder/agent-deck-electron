@@ -12,6 +12,7 @@ import {
   type ProjectServerCommand,
 } from "@agent-deck/contracts";
 import { Context, Data, Deferred, Duration, Effect, Layer, Option, type Scope } from "effect";
+import type { PiSandbox } from "@agent-deck/pi-host";
 import { TERMINAL_ENV_BLOCKLIST } from "./terminal.ts";
 
 /**
@@ -210,6 +211,8 @@ export interface ScriptSpawnOptions {
   readonly resolvePortOwners?: PortOwnersResolver;
   readonly readProcessTable?: ProcessTableReader;
   readonly maxScrollbackChars?: number;
+  /** ADR 0007: the owning session's sandbox (absent: none). */
+  readonly sandbox?: PiSandbox;
 }
 
 export interface ScriptLaunch {
@@ -639,6 +642,12 @@ function capScrollback(buffer: string, maxChars: number): string {
 // Default adapter: node:child_process, shell-run + cross-platform tree-kill
 // ---------------------------------------------------------------------------
 
+/** An env with its unset entries dropped (a wrapped command's env is a ProcessEnv). */
+const definedEnv = (env: NodeJS.ProcessEnv): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  );
+
 /** The production adapter: a shell child process with process-tree kill. */
 export const nodeScriptAdapter: ScriptAdapter = {
   spawn(input) {
@@ -745,6 +754,18 @@ export const spawnScript = (
           return yield* Effect.fail(new ScriptExecutableMissing({ executable }));
         }
         const env = buildScriptEnv(baseEnv, options.cwd);
+        // ADR 0007: the declared command, wrapped by the session's provider.
+        const sandbox = options.sandbox;
+        const wrapped = sandbox
+          ? yield* Effect.tryPromise({
+              try: () =>
+                sandbox.provider.wrap(
+                  { command: launch.executable, args: [...launch.argv], env, cwd: options.cwd },
+                  sandbox.policy,
+                ),
+              catch: (cause) => new ScriptSpawnFailed({ command: launch.command, cause }),
+            })
+          : undefined;
         const probePort = options.probePort ?? defaultProbePort;
         const resolvePortOwners = options.resolvePortOwners ?? defaultResolvePortOwners;
         const readProcessTable = options.readProcessTable ?? defaultReadProcessTable;
@@ -752,14 +773,17 @@ export const spawnScript = (
         const proc = yield* Effect.try({
           try: () =>
             adapter.spawn({
-              executable: launch.executable,
-              argv: launch.argv,
+              executable: wrapped?.command ?? launch.executable,
+              argv: wrapped?.args ?? launch.argv,
               command: launch.command,
-              cwd: options.cwd,
-              env,
+              cwd: wrapped?.cwd ?? options.cwd,
+              env: wrapped ? definedEnv(wrapped.env) : env,
               shell: false,
             }),
-          catch: (cause) => new ScriptSpawnFailed({ command: launch.command, cause }),
+          catch: (cause) => {
+            wrapped?.release?.();
+            return new ScriptSpawnFailed({ command: launch.command, cause });
+          },
         });
 
         const exitDeferred = yield* Deferred.make<ScriptExit>();
@@ -866,6 +890,7 @@ export const spawnScript = (
             abandoned = true;
             onData();
             onExit();
+            wrapped?.release?.();
           },
         };
       }),

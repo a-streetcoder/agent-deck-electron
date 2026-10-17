@@ -29,7 +29,6 @@ export default defineConfig({
       "/agents": { target: serverTarget },
       "/runtime": { target: serverTarget },
       "/settings": { target: serverTarget },
-      "/bridge": { target: serverTarget },
       "/loops": { target: serverTarget },
       "/mcp": { target: serverTarget },
       "/memory": { target: serverTarget },

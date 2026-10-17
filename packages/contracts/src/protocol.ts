@@ -622,6 +622,9 @@ export const SessionWorkspace = Schema.mutable(
     identity: Schema.optional(Schema.String),
     branch: Schema.optional(Schema.String),
     sourceBranch: Schema.optional(Schema.String),
+    /** ADR 0007: the commit the worktree was forked from, recorded by the
+     * server (a worktree session can move refs; this cannot change). */
+    baseCommit: Schema.optional(Schema.String),
     /** Device-local CAS input captured only from an exactly registered, native-
      * identity-verified worktree before physical removal. It is never sufficient
      * authority without that exact stale Git registration. */

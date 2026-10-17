@@ -110,6 +110,7 @@ function makeFakePiHost(): {
         cwd: options.cwd,
         env: options.env,
         requestTimeoutMs: options.requestTimeoutMs,
+        ...(options.bridge ? { bridge: options.bridge } : {}),
       }).pipe(
         Effect.tap((handle) =>
           Effect.map(handle.pid, (pid) => {
@@ -3472,6 +3473,113 @@ describe("durable session attention", () => {
               actor,
             ],
           ]);
+        }),
+      ),
+    );
+  }, 15_000);
+
+  it("ADR 0007: a launch notice (a refused sandbox.json) is a transcript line once ingestion starts", async () => {
+    const { piHost } = makeFakePiHost();
+    const notice = {
+      kind: "notice" as const,
+      id: "sandbox-config-1",
+      level: "warning" as const,
+      message: "Sandbox: .agent-deck/sandbox.json was ignored, the defaults apply.",
+    };
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rt = yield* makeManagedSessionRuntime(
+            piHost,
+            buses,
+            makeParams({ notices: [notice] }),
+          );
+          expect((yield* rt.snapshot).state.cells).toEqual([]);
+          yield* Effect.fork(rt.ingest);
+          yield* waitUntil(() => Effect.runSync(rt.snapshot).state.cells.length > 0);
+          expect((yield* rt.snapshot).state.cells).toEqual([notice]);
+        }),
+      ),
+    );
+  });
+
+  it("ADR 0007: answers bridge dialogs over stdio by id, and only a genuine dialog becomes a human node", async () => {
+    const { piHost, seen } = makeFakePiHost();
+    const requested: Array<{ id: string }> = [];
+    const calls: Array<{ sessionId: string; tool: string; generation: string }> = [];
+    let releaseSlow: () => void = () => {};
+    let current = "launch-1";
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const params = makeParams({
+            // The generation in force when the process was spawned travels with
+            // each of its calls, whatever the session's current one is later.
+            bridgeGeneration: () => current,
+            bridgeCall: async (sessionId, call, _signal, generation) => {
+              calls.push({ sessionId, tool: call.tool, generation });
+              if (call.tool === "slow") await new Promise<void>((r) => (releaseSlow = r));
+              return { status: 200, body: { content: `${call.tool} done`, params: call.params } };
+            },
+            turnEvents: {
+              consumed: () => {},
+              current: () => undefined,
+              end: () => undefined,
+              completed: () => {},
+              uiRequested: (request) => requested.push(request),
+              uiResolved: () => {},
+            },
+          });
+          const rt = yield* makeManagedSessionRuntime(piHost, buses, params);
+          yield* Effect.fork(rt.ingest);
+          yield* rt.prompt("bridge-calls");
+          current = "launch-2";
+          const answers = (): Array<{ id: string; value: string }> =>
+            seen.flatMap((item) => {
+              const event = (item as { event?: { type?: string; id?: string; value?: string } })
+                .event;
+              return event?.type === "bridge_answered"
+                ? [{ id: event.id!, value: event.value! }]
+                : [];
+            });
+          // The fast call is answered while the slow one is still running.
+          yield* waitUntil(
+            () => answers().length === 2,
+            5_000,
+            () => JSON.stringify(seen),
+          );
+          const byId = (id: string): unknown =>
+            JSON.parse(answers().find((answer) => answer.id === id)!.value);
+          expect(
+            answers()
+              .map((answer) => answer.id)
+              .sort(),
+          ).toEqual(["bridge-2", "bridge-3"]);
+          expect(byId("bridge-2")).toEqual({
+            status: 200,
+            body: { content: "fast done", params: { n: 2 } },
+          });
+          expect(byId("bridge-3")).toMatchObject({ status: 400 });
+          releaseSlow();
+          yield* waitUntil(() => answers().length === 3);
+          expect(answers()[2]!.id).toBe("bridge-1");
+          expect(calls).toEqual([
+            { sessionId: params.meta.id, tool: "slow", generation: "launch-1" },
+            { sessionId: params.meta.id, tool: "fast", generation: "launch-1" },
+          ]);
+          // Only the genuine dialog is a human node; no bridge call reached ingest.
+          yield* waitUntil(() => requested.length === 1);
+          expect(requested.map((request) => request.id)).toEqual(["genuine-1"]);
+          expect(params.meta.needsAttention).toBe(true);
+          const snapshot = yield* rt.snapshot;
+          const questions = snapshot.state.cells.filter((cell) => cell.kind === "question");
+          expect(questions.map((cell) => cell.id)).toEqual(["question-genuine-1"]);
+          expect(
+            seen.some((item) => {
+              const event = (item as { event?: { title?: string } }).event;
+              return event?.title === "agent-deck-bridge/1";
+            }),
+          ).toBe(false);
         }),
       ),
     );

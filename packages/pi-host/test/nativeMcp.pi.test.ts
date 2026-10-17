@@ -1,4 +1,3 @@
-import { createServer, type Server } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -16,6 +15,7 @@ import {
 } from "@agent-deck/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { writeBridgeExtension } from "../src/bridge.ts";
+import { serveBridge } from "./serveBridge.ts";
 import { buildLaunchArgs } from "../src/launchPlan.ts";
 import { PiSession } from "../src/PiSession.ts";
 import { resolvePiBinary } from "../src/resolve.ts";
@@ -70,16 +70,25 @@ interface Harness {
 }
 
 let http: MockHttpMcpServer;
-// Stands in for Agent Deck's /bridge: allows every __mcp_authorize__, except
-// that alpha__x is allowed at tool_call and refused at tool_result.
-let bridge: Server;
-let bridgeUrl: string;
+// Stands in for Agent Deck's bridge: allows every __mcp_authorize__, except
+// that beta is refused, and alpha__x and gamma are allowed at tool_call and
+// refused at tool_result.
+function authorize(call: { params: Record<string, unknown> }): { body: unknown } {
+  const server = call.params.server as string;
+  const refuse =
+    server === "beta" ||
+    ((server === "alpha__x" || server === "gamma") &&
+      authorizeCalls.some((c) => (c.params as { server?: string }).server === server));
+  authorizeCalls.push(call);
+  return { body: refuse ? { allow: false, reason: `revoked ${server}` } : { allow: true } };
+}
 const authorizeCalls: Array<Record<string, unknown>> = [];
 
 async function launch(
   extraExtensions: string[],
   hostNativeMcp = true,
-  endpoint = bridgeUrl,
+  /** False: the app answers every call as not ready (503). */
+  bridgeOnline = true,
 ): Promise<Harness> {
   const tmpHome = mkdtempSync(path.join(tmpdir(), "pi-home-"));
   const agentDir = path.join(tmpHome, ".pi", "agent");
@@ -125,9 +134,6 @@ export default function (pi) {
   );
 
   const bridgeExt = writeBridgeExtension({
-    endpoint,
-    sessionId: "native-mcp-spike",
-    token: "test-token",
     tools: [],
     nativeMcp: hostNativeMcp
       ? {
@@ -160,6 +166,9 @@ export default function (pi) {
     },
     requestTimeoutMs: 45_000,
   });
+  serveBridge(session, (call) =>
+    bridgeOnline ? authorize(call) : { status: 503, body: { error: "the bridge is not ready" } },
+  );
   session.start();
   return { mock, session, probeOut };
 }
@@ -188,33 +197,10 @@ async function close(h: Harness | undefined): Promise<void> {
 
 beforeAll(async () => {
   http = await startMockHttpMcpServer();
-  bridge = createServer((req, res) => {
-    let body = "";
-    req.on("data", (chunk: Buffer) => (body += chunk.toString()));
-    req.on("end", () => {
-      const call = JSON.parse(body) as { params: { server: string } };
-      // beta is refused before it runs; alpha__x and gamma are allowed to run
-      // and refused on their result.
-      const { server } = call.params;
-      const refuse =
-        server === "beta" ||
-        ((server === "alpha__x" || server === "gamma") &&
-          authorizeCalls.some((c) => (c.params as { server?: string }).server === server));
-      authorizeCalls.push(call);
-      res.setHeader("content-type", "application/json");
-      res.end(
-        JSON.stringify(refuse ? { allow: false, reason: `revoked ${server}` } : { allow: true }),
-      );
-    });
-  });
-  await new Promise<void>((resolve) => bridge.listen(0, "127.0.0.1", resolve));
-  const address = bridge.address();
-  bridgeUrl = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}/bridge`;
 });
 
 afterAll(async () => {
   await http.close();
-  await new Promise<void>((resolve) => bridge.close(() => resolve()));
 });
 
 describe("spike: Pi native MCP inside the generated bridge extension", () => {
@@ -262,8 +248,6 @@ describe("spike: Pi native MCP inside the generated bridge extension", () => {
     );
     expect(alpha).toHaveLength(2);
     expect(alpha[0]).toMatchObject({
-      sessionId: "native-mcp-spike",
-      token: "test-token",
       tool: "__mcp_authorize__",
       params: { serverId: "id-alpha", server: "alpha", toolName: "mcp__alpha__echo" },
     });
@@ -300,10 +284,10 @@ describe("spike: Pi native MCP inside the generated bridge extension", () => {
   });
 });
 
-describe("fail closed: the bridge cannot be reached", () => {
+describe("fail closed: the bridge cannot answer", () => {
   let h: Harness;
   beforeAll(async () => {
-    h = await launch([], true, "http://127.0.0.1:9/unused");
+    h = await launch([], true, false);
     await runTurn(h);
   }, 70_000);
   afterAll(() => close(h));

@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { join } from "node:path";
 import { Effect, Either, Exit, Scope } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { PiSandbox, SandboxCommand } from "@agent-deck/pi-host";
 import { makeServerRuntime } from "../src/runtime.ts";
 import {
   defaultReadProcessTable,
@@ -217,6 +218,55 @@ describe("project server command detection", () => {
 // --- Scoped spawn (fake adapter) -------------------------------------------
 
 describe("spawnScript scoped child service (fake adapter)", () => {
+  it("ADR 0007: a sandboxed script spawns the declared command through the session's wrap", async () => {
+    const { adapter, spawns, procs } = fakeAdapter();
+    const wraps: Array<{ command: SandboxCommand; policy: unknown }> = [];
+    let released = 0;
+    const policy = { allowWrite: [process.cwd()] } as PiSandbox["policy"];
+    const sandbox: PiSandbox = {
+      provider: {
+        name: "srt",
+        wrap: async (command, given) => {
+          wraps.push({ command, policy: given });
+          return {
+            command: "/bin/bash",
+            args: ["-c", "wrapped"],
+            env: { ...command.env, UNSET: undefined },
+            cwd: command.cwd,
+            release: () => void released++,
+          };
+        },
+      },
+      policy,
+    };
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* spawnScript(adapter, {
+            ...baseOpts,
+            launch: { executable: "vite", argv: ["--port", "5173"], command: "vite" },
+            sandbox,
+          });
+          expect(wraps).toHaveLength(1);
+          expect(wraps[0]!.policy).toBe(policy);
+          expect(wraps[0]!.command).toMatchObject({
+            command: "vite",
+            args: ["--port", "5173"],
+            cwd: process.cwd(),
+          });
+          expect(spawns[0]).toMatchObject({
+            executable: "/bin/bash",
+            argv: ["-c", "wrapped"],
+            command: "vite",
+          });
+          expect("UNSET" in spawns[0]!.env).toBe(false);
+          procs[0]!.emitExit({ exitCode: 0, signal: null });
+        }),
+      ),
+    );
+    expect(released).toBe(1);
+  });
+
   it("streams output to attached listeners and buffers scrollback", async () => {
     const { adapter, procs, spawns } = fakeAdapter();
     await Effect.runPromise(

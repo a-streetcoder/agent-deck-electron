@@ -989,6 +989,103 @@ describe("notice cell (extension notify, PI-03d)", () => {
     expect(screen.getByTestId("notice-cell").textContent).toContain('MCP server "docs"');
   });
 
+  describe("sandbox refusal line (ADR 0007)", () => {
+    const refused = {
+      kind: "notice" as const,
+      id: "sandbox-1",
+      level: "warning" as const,
+      message: "Sandbox refused: network to api.example.com",
+      sandbox: {
+        violation: { kind: "network" as const, target: "api.example.com" },
+        allowHost: "api.example.com",
+      },
+    };
+    const session = {
+      id: "s1",
+      cwd: "/w",
+      createdAt: "2026-10-17T00:00:00Z",
+      location: { kind: "server" as const, owner: { id: "alice@example.com" } },
+    };
+    afterEach(() => useAppStore.setState({ me: null }));
+
+    it("offers the owner to allow the host and says when it applies", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true }) });
+      vi.stubGlobal("fetch", fetchMock);
+      useAppStore.setState({
+        session,
+        me: { id: "alice@example.com", email: "alice@example.com" },
+      });
+      render(<CellView cell={refused} />);
+      expect(screen.getByTestId("notice-cell").textContent).toContain(
+        "Sandbox refused: network to api.example.com",
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Allow api.example.com for this project" }),
+      );
+      await waitFor(() => expect(screen.getByText(/next starts/)).toBeTruthy());
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("/sessions/s1/sandbox/allowed-hosts");
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(String(init.body))).toEqual({ host: "api.example.com" });
+    });
+
+    it("shows the operator the action, nobody else; a refusal shows its reason", async () => {
+      useAppStore.setState({ session, me: { id: "bob@example.com", email: "bob@example.com" } });
+      const { unmount } = render(<CellView cell={refused} />);
+      expect(screen.queryByRole("button")).toBeNull();
+      unmount();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: false,
+          json: async () => ({ error: "sandbox.json is invalid; fix it first" }),
+        }),
+      );
+      useAppStore.setState({
+        session,
+        me: { id: "ops@example.com", email: "ops@example.com", operator: true },
+      });
+      render(<CellView cell={refused} />);
+      fireEvent.click(screen.getByRole("button", { name: /Allow api.example.com/ }));
+      await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("fix it first"));
+    });
+
+    it("a sandbox.json proposal offers the same action", () => {
+      useAppStore.setState({ session, me: null });
+      render(
+        <CellView
+          cell={{
+            ...refused,
+            level: "info",
+            message: "sandbox.json proposes host api.example.com",
+            sandbox: {
+              violation: { kind: "proposal", target: "api.example.com" },
+              allowHost: "api.example.com",
+            },
+          }}
+        />,
+      );
+      expect(screen.getByTestId("notice-cell").textContent).toContain("proposes host");
+      expect(
+        screen.getByRole("button", { name: "Allow api.example.com for this project" }),
+      ).toBeTruthy();
+    });
+
+    it("a refused write has no action", () => {
+      useAppStore.setState({ session });
+      render(
+        <CellView
+          cell={{
+            ...refused,
+            message: "Sandbox refused: write to /etc/x",
+            sandbox: { violation: { kind: "write", target: "/etc/x" } },
+          }}
+        />,
+      );
+      expect(screen.queryByRole("button")).toBeNull();
+    });
+  });
+
   it("keeps trailing punctuation out of the link", () => {
     render(
       <CellView

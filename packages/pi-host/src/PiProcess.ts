@@ -87,6 +87,13 @@ export class PiProcess extends EventEmitter<PiProcessEvents> {
   /** Sandboxed start: the wrap is in flight; lines written meanwhile. */
   private wrapping: string[] | null = null;
   private releaseSandbox: (() => void) | undefined;
+  private settleSpawned: (pid: number | undefined) => void = () => {};
+  /** The child's pid once it is spawned, or undefined when it never was (a
+   * failed wrap or spawn, a stop first). A sandboxed start spawns
+   * asynchronously, so `pid` read right after start() may still be undefined. */
+  readonly spawned: Promise<number | undefined> = new Promise((resolve) => {
+    this.settleSpawned = resolve;
+  });
 
   constructor(private readonly options: PiProcessOptions) {
     super();
@@ -149,6 +156,7 @@ export class PiProcess extends EventEmitter<PiProcessEvents> {
       detached: process.platform !== "win32",
     });
     this.child = child;
+    this.settleSpawned(child.pid);
 
     // A write racing process death surfaces asynchronously as an 'error' on
     // the stdin socket (EPIPE et al.). Without a listener that is an uncaught
@@ -222,6 +230,7 @@ export class PiProcess extends EventEmitter<PiProcessEvents> {
       this.drainTimer = null;
     }
     this.exited = this.exitRecord;
+    this.settleSpawned(undefined); // no-op once spawned
     this.releaseSandbox?.();
     this.releaseSandbox = undefined;
     this.emit("exit", this.exited);
@@ -229,6 +238,11 @@ export class PiProcess extends EventEmitter<PiProcessEvents> {
 
   get isRunning(): boolean {
     return (this.child !== null || this.wrapping !== null) && this.exited === null;
+  }
+
+  /** True while a sandboxed start waits for its wrap (the child is not spawned yet). */
+  get spawning(): boolean {
+    return this.wrapping !== null && this.exited === null;
   }
 
   /** OS process id of the spawned child, once started (undefined if spawn failed). */

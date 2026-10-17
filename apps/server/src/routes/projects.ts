@@ -602,6 +602,12 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     if (!existsSync(projectPath) || !statSync(projectPath).isDirectory()) {
       return reply.status(400).send({ error: `not a directory: ${projectPath}` });
     }
+    // ADR 0007: anyone signed in registers projects, and a project folder is a
+    // sandbox write root: never a reserved part of the data dir or an agent dir.
+    const reserved = ctx.sandboxRootProblem?.(projectPath);
+    if (reserved) {
+      return reply.status(400).send({ code: "project_path_reserved", error: reserved });
+    }
     // Idempotent by path: re-adding an existing (possibly hidden) project
     // returns it with its metadata intact — hide is never data loss.
     const existing = projects.find((p) => p.path === projectPath);

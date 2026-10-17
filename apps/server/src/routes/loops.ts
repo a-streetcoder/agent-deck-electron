@@ -872,6 +872,9 @@ export function registerLoopRoutes(
         retryOf: body.retryOf,
         // A7: validation runs with the Loop session's own launch env (owner credentials).
         validationEnv: () => sessions.sessionLaunchEnv(loopParent.meta.id),
+        // ADR 0007: and inside the Loop session's sandbox.
+        validationSandbox: (validationCwd) =>
+          sessions.sessionSandbox(loopParent.meta.id, validationCwd),
         launch: {
           sessionId: parent.meta.id,
           writeTarget: loop.writeTarget,

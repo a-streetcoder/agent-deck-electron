@@ -4,10 +4,24 @@ import {
   type ComposerDraftStore,
 } from "./composerDrafts.ts";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import nodePath from "node:path";
-import type { DiffPush, ServerMessage, SessionMeta } from "@agent-deck/contracts";
+import {
+  isSandboxDomain,
+  type DiffPush,
+  type ServerMessage,
+  type SessionMeta,
+} from "@agent-deck/contracts";
 import {
   equivalenceReport,
   extensionBridgeConflict,
@@ -15,6 +29,8 @@ import {
   projectOpenHumanRequests,
   sessionActivity,
   type OpenHumanRequest,
+  type NoticeCell,
+  type SandboxPolicy,
 } from "@agent-deck/domain";
 import {
   addResourceWatchPaths,
@@ -37,11 +53,7 @@ import {
   type ProviderLoginFn,
   type ResourceRoots,
 } from "@agent-deck/resources";
-import {
-  hasEffectiveEnvValue,
-  sweepStaleBridgeExtensions,
-  writeBridgeExtension,
-} from "@agent-deck/pi-host";
+import { hasEffectiveEnvValue, writeBridgeExtension } from "@agent-deck/pi-host";
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { buildMemoryPreamble, injectableIndex, type Embedder } from "@agent-deck/memory";
@@ -115,7 +127,7 @@ import {
 import { InjectedCommandStore } from "./injectedCommands.ts";
 import { ReceiptBus } from "./receipts.ts";
 import { makeServerRuntime, type ServerRuntime } from "./runtime.ts";
-import { registerBridgeRoutes } from "./routes/bridge.ts";
+import { registerBridgeRoutes, type BridgeRouteHandles } from "./routes/bridge.ts";
 import {
   registerEventRoutes,
   registerSubagentDeltaRoute,
@@ -139,8 +151,23 @@ import { SessionImageStore } from "./sessionImages.ts";
 import { forkSessionAttachmentStores } from "./sessionAttachmentLifecycle.ts";
 import { SessionPasteStore } from "./sessionPastes.ts";
 import { SessionAuthorStore } from "./sessionAuthors.ts";
+import { hardenServerGit } from "./git.ts";
 import { GitIdentityMap } from "./gitIdentity.ts";
-import { UserAgentDirs, userRoots } from "./userAgentDirs.ts";
+import { ensureUserDir, UserAgentDirs, userRoots } from "./userAgentDirs.ts";
+import {
+  chooseSandboxProvider,
+  createSandboxViolationReporter,
+  SandboxHostGrants,
+  sandboxViolationNotice,
+  sessionSandbox,
+  isSessionSegment,
+  launchDirOf,
+  serverWriteRootProblem,
+  sweepStaleLaunchFolders,
+  type SessionLaunchSandbox,
+  type SessionSandboxDeps,
+} from "./sandbox.ts";
+import { registerSandboxRoutes } from "./routes/sandbox.ts";
 import { GitHubConnections, githubEnv } from "./githubConnections.ts";
 import { registerGitHubRoutes } from "./routes/github.ts";
 import { migrateAzureAuthFiles } from "./azureProviderRename.ts";
@@ -239,6 +266,8 @@ export interface AgentDeckServer {
   supervisor: SupervisorLog;
   /** Parent-only structured human decision coordinator. */
   askUser: AskUserCoordinator;
+  /** Answer a bridge call as if the Pi process of `sessionId` sent it. */
+  bridgeCall: BridgeRouteHandles["handleBridgeCall"];
   /**
    * Effect composition seam (Slice 3): the ManagedRuntime serving every
    * `serverLayers` service (runtime.ts). Created per server, disposed in
@@ -316,9 +345,25 @@ async function initServer(
   // capability opens it: create it if missing, reject a linked/reparse root, and resolve ancestor
   // links to one authoritative physical directory for all app-data services below.
   const dataDir = resolveTrustedDataDir(requestedDataDir);
+  // ADR 0007: a session's own files live in `<dataDir>/sandbox/<sessionId>`
+  // (its scratch and temp folders), the server-written launch files (bridge
+  // extension, prompt files, a child's checker shell) in its `launch`
+  // subfolder, which the session's sandbox can read and not write.
+  const sandboxRoot = nodePath.join(dataDir, "sandbox");
+  const sessionLaunchDir = (sessionId: string): string | undefined =>
+    launchDirOf(sandboxRoot, sessionId, sandboxProvider.name !== "none");
+  const withDir = (dir: string | undefined): { dir?: string } => (dir ? { dir } : {});
   // Generated bridge extensions can embed resolved MCP credentials (PI-03b);
-  // session exit removes them, this clears what a crash left.
-  sweepStaleBridgeExtensions();
+  // session exit removes them, this clears what a crash left: every launch
+  // folder prefix, in the shared temp folder (earlier versions) and per session.
+  const sessionFolders = existsSync(sandboxRoot)
+    ? readdirSync(sandboxRoot).map((entry) => nodePath.join(sandboxRoot, entry))
+    : [];
+  sweepStaleLaunchFolders([
+    tmpdir(),
+    ...sessionFolders,
+    ...sessionFolders.map((dir) => nodePath.join(dir, "launch")),
+  ]);
   // A1 event log: opened before the stores, whose constructors already write on load.
   // Not authoritative until A1d, so a log that cannot open must not stop the server.
   // projectOf is late-bound: the session index is created just below.
@@ -392,15 +437,105 @@ async function initServer(
   const githubConnections = userAgentDirs
     ? new GitHubConnections(dataDir, userAgentDirs, undefined, options.githubFetch)
     : undefined;
-  // App-managed tool bridge (memory/mcp/subagents register here). The endpoint
-  // is only known after listen(), so the factory reads it lazily and returns no
-  // extension until both a tool is registered and the address is bound.
+  // ADR 0007: the process sandbox around every session's Pi (and, through the
+  // same provider, every other spawn that runs worktree code).
+  const sandboxChoice = await chooseSandboxProvider({
+    env: process.env,
+    sharedServer: trustedProxy !== null,
+  });
+  const sandboxProvider = sandboxChoice.provider;
+  if (sandboxChoice.warning) serverLog.warn("sandbox", sandboxChoice.warning);
+  serverLog.info("sandbox", `provider ${sandboxProvider.name}`);
+  // A sandboxed session must not reach the server's own git through config.
+  hardenServerGit(sandboxProvider.name !== "none");
+  const operatorEmail = process.env.AGENT_DECK_OPERATOR_EMAIL?.trim() || undefined;
+  // ponytail: one entry per session whose sandbox.json was refused, never dropped.
+  const sandboxConfigReported = new Map<string, string>();
+  // Hosts allowed from a violation line, per project (kept off the project tree).
+  const sandboxHostGrants = new SandboxHostGrants(nodePath.join(dataDir, "sandbox-hosts.json"));
+  // The session each derived policy belongs to: violations name the policy.
+  const policySessions = new WeakMap<SandboxPolicy, SessionMeta>();
+  // The proposed hosts each session was shown a line for (dropped on destroy).
+  const sandboxProposalsShown = new Map<string, Set<string>>();
+  /** A session launch's lines about its sandbox.json: a refusal (once per
+   * refusal) and each proposed host the project was not granted (once). */
+  const sandboxLaunchNotices = (
+    record: SessionMeta,
+    launched: SessionLaunchSandbox,
+  ): NoticeCell[] => {
+    const notices: NoticeCell[] = [];
+    const problems = launched.configProblems;
+    const key = problems ? JSON.stringify(problems) : undefined;
+    if (problems && key && sandboxConfigReported.get(record.id) !== key) {
+      sandboxConfigReported.set(record.id, key);
+      events.sandboxConfigInvalid(record.id, problems);
+      notices.push({
+        kind: "notice",
+        id: `sandbox-config-${randomUUID()}`,
+        level: "warning",
+        message: `Sandbox: .agent-deck/sandbox.json was refused. ${problems.join("; ")}`,
+      });
+    }
+    let shown = sandboxProposalsShown.get(record.id);
+    for (const host of launched.proposals ?? []) {
+      if (!shown) sandboxProposalsShown.set(record.id, (shown = new Set()));
+      if (shown.has(host.toLowerCase())) continue;
+      shown.add(host.toLowerCase());
+      const violation = { kind: "proposal" as const, target: host };
+      events.sandboxViolation(record.id, violation);
+      notices.push(
+        sandboxViolationNotice(
+          violation,
+          record.projectId ? host : undefined,
+          `sandbox-proposal-${randomUUID()}`,
+        ),
+      );
+    }
+    return notices;
+  };
+  // A refusal is a session event and a line in the session's transcript.
+  const violationReporter = createSandboxViolationReporter({
+    sessionOf: (policy) => policySessions.get(policy),
+    emit: (record, violation) => {
+      events.sandboxViolation(record.id, violation);
+      const allowHost =
+        violation.kind === "network" && record.projectId && isSandboxDomain(violation.target)
+          ? violation.target
+          : undefined;
+      sessions
+        .get(record.id)
+        ?.appendNotice(sandboxViolationNotice(violation, allowHost, `sandbox-${randomUUID()}`));
+    },
+    truncated: (record) => {
+      sessions.get(record.id)?.appendNotice({
+        kind: "notice",
+        id: `sandbox-truncated-${randomUUID()}`,
+        level: "warning",
+        message: "Sandbox: further refusals of this session are not shown.",
+      });
+    },
+  });
+  const sandboxDeps: SessionSandboxDeps = {
+    dataDir,
+    side: trustedProxy ? "server" : "local",
+    provider: sandboxProvider,
+    sharedAgentDir: () => piAgentHome(rootsFor()),
+    ...(operatorEmail ? { operator: { id: operatorEmail } } : {}),
+    projectPath: (meta) =>
+      (meta.projectId
+        ? projects.find((project) => project.id === meta.projectId)?.path
+        : undefined) ?? meta.cwd,
+    ...(trustedProxy ? { ownerDir: (owner) => ensureUserDir(dataDir, owner.id) } : {}),
+    grantedHosts: (meta) => (meta.projectId ? sandboxHostGrants.hosts(meta.projectId) : []),
+  };
+  // App-managed tool bridge (memory/mcp/subagents register here). Calls ride on
+  // each Pi process's stdio (ADR 0007), so the session of a call is the one
+  // whose process sent it.
   const bridge = new BridgeRegistry();
-  // Filled in after listen() binds a port; the factory closure reads it lazily.
-  const bridgeAddress: { endpoint?: string } = {};
-  // Per-session secret baked into each generated bridge extension. The /bridge
-  // route requires a call's token to match its session's, so a local caller
-  // can't invoke another session's (project/session-scoped) tools.
+  // Each session's current bridge generation, set when its extension is
+  // generated and dropped when it is disposed. Never sent to Pi: a call is
+  // refused when its session has none, and a generation change fences
+  // per-launch state (askUser).
   const bridgeTokens = new Map<string, string>();
   // Supervisor channel (native-subagent-bridge.md): a child subagent talks UP to
   // its parent via a contact_supervisor tool. `supervisor` records those requests;
@@ -510,6 +645,10 @@ async function initServer(
   let cancelChildSupervisorRequests: (childSessionId: string) => void = () => {
     throw new Error("cancelChildSupervisorRequests called before the bridge routes registered");
   };
+  let handleBridgeCall: BridgeRouteHandles["handleBridgeCall"] = async () => ({
+    status: 503,
+    body: { error: "the bridge is not ready" },
+  });
 
   // Slice 9: per-session changed-file tracking + on-demand diffs, resolved
   // through the runtime's SessionDiff service (see services/diff.ts).
@@ -562,7 +701,7 @@ async function initServer(
       ...(settings.get().openAIFastModels.length > 0 ? [openAIFastExtension] : []),
     ],
     (meta) => {
-      if (bridge.size === 0 || !bridgeAddress.endpoint) return undefined;
+      if (bridge.size === 0) return undefined;
       const token = randomUUID();
       bridgeTokens.set(meta.id, token);
       // Per-session MCP scoping: project assignment is the execution trust grant.
@@ -594,9 +733,7 @@ async function initServer(
         meta.mcpServerNames = mergeMcpServerNames(meta.mcpServerNames, native.idMap);
       meta.mcpServerNamesCurrent = Object.fromEntries(native?.idMap ?? []);
       return writeBridgeExtension({
-        endpoint: bridgeAddress.endpoint,
-        sessionId: meta.id,
-        token,
+        ...withDir(sessionLaunchDir(meta.id)),
         tools,
         ...(native?.servers.length ? { nativeMcp: { servers: native.servers } } : {}),
         // The generated bridge is appended after every provider/user extension.
@@ -606,7 +743,7 @@ async function initServer(
         promptAudit: true,
       });
     },
-    (cwd, home) => {
+    (cwd, home, sessionId) => {
       // Parent system-prompt appends. While memory automation is paused, add
       // nothing and leave APPEND_SYSTEM discovery entirely to Pi. When active,
       // memory's explicit append suppresses that discovery, so put the resolved
@@ -622,9 +759,11 @@ async function initServer(
       const block = buildMemoryPreamble(
         injectableIndex({ baseDir: memoryBaseDir, projectPath: cwd }),
       );
-      const cleanupDir = mkdtempSync(nodePath.join(tmpdir(), "agent-deck-mem-append-"));
+      const launchRoot = sessionLaunchDir(sessionId) ?? tmpdir();
+      mkdirSync(launchRoot, { recursive: true });
+      const cleanupDir = mkdtempSync(nodePath.join(launchRoot, "agent-deck-mem-append-"));
       const blockFile = nodePath.join(cleanupDir, "memory.md");
-      writeFileSync(blockFile, block, "utf8");
+      writeFileSync(blockFile, block, { encoding: "utf8", flag: "wx" });
       appends.push(blockFile);
       return { appends, cleanupDir };
     },
@@ -633,7 +772,6 @@ async function initServer(
     // parent's registered project is authoritative. The token gets an exact
     // dispatch allowlist; dispose removes every route/project/token mapping.
     async (childSessionId, route) => {
-      if (!bridgeAddress.endpoint) return undefined;
       const token = randomUUID();
       const parent = sessions.get(route.parentSessionId)?.meta;
       const project = parent?.projectId
@@ -672,10 +810,9 @@ async function initServer(
       const tools = [CONTACT_SUPERVISOR_SPEC, ...memorySpecs];
       const toolNames = tools.map((tool) => tool.name);
       // Generate first; publish authentication/authorization only on success.
+      // The parent's scratch folder: a child runs under its parent's policy.
       const extension = writeBridgeExtension({
-        endpoint: bridgeAddress.endpoint,
-        sessionId: childSessionId,
-        token,
+        ...withDir(sessionLaunchDir(route.parentSessionId)),
         tools,
         ...(native?.servers.length ? { nativeMcp: { servers: native.servers } } : {}),
       });
@@ -864,6 +1001,28 @@ async function initServer(
     userAgentDirs,
     (meta) => events.turnHooks(meta),
     githubConnections,
+    {
+      bridgeCall: (sessionId, call, signal, generation) =>
+        handleBridgeCall(sessionId, call, signal, generation),
+      bridgeGeneration: (sessionId) => bridgeTokens.get(sessionId),
+      launchDir: sessionLaunchDir,
+      sandboxed: sandboxProvider.name !== "none",
+      sandbox: (record, launch) => {
+        const launched = sessionSandbox(sandboxDeps, record, launch);
+        if (!launched) return undefined;
+        // A one-shot helper belongs to no session: no violation lines for it.
+        if (!launch.helper) policySessions.set(launched.sandbox.policy, record);
+        return { ...launched, notices: sandboxLaunchNotices(record, launched) };
+      },
+      forget: (sessionId) => {
+        violationReporter.forget(sessionId);
+        sandboxConfigReported.delete(sessionId);
+        sandboxProposalsShown.delete(sessionId);
+        if (isSessionSegment(sessionId)) {
+          rmSync(nodePath.join(sandboxRoot, sessionId), { recursive: true, force: true });
+        }
+      },
+    },
   );
   // Loop run engine (native single-agent loop). Each run's agent executor is
   // built per-run, bound to a parent session in the project cwd.
@@ -1429,11 +1588,10 @@ async function initServer(
 
   if (accessVerifier) {
     // Trusted proxy: cloudflared (loopback) authenticated the person and attached
-    // the Access assertion. Anything else is refused, except the health probe and
-    // the local Pi subprocess calling its own per-session-token tool bridge.
+    // the Access assertion. Anything else is refused, except the health probe.
     fastify.addHook("onRequest", async (request, reply) => {
       const route = request.routeOptions.url;
-      if (route === "/health" || route === "/bridge") return;
+      if (route === "/health") return;
       const result = await authenticateProxiedRequest(accessVerifier, request.raw);
       if (!result.user) {
         return reply.status(401).send({ code: "unauthenticated", error: result.reason });
@@ -1475,6 +1633,8 @@ async function initServer(
         email: user.email,
         ...(user.name ? { name: user.name } : {}),
         ...(providersConnected === undefined ? {} : { providersConnected }),
+        // ADR 0007: the web offers the operator the owner's actions too.
+        ...(userAgentDirs?.isOperator(user) ? { operator: true } : {}),
       },
     };
   });
@@ -1733,6 +1893,11 @@ async function initServer(
     userAgentDirs,
     githubConnections,
     sharedServer: trustedProxy !== null,
+    sandboxProvider,
+    sandboxRootProblem: (root) =>
+      sandboxProvider.name === "none"
+        ? undefined
+        : serverWriteRootProblem(root, { dataDir, piAgentDir: piAgentHome(rootsFor()) }),
     importedSessionsDir: nodePath.join(dataDir, "imported-sessions"),
     withActivity,
     promptSession,
@@ -1828,17 +1993,16 @@ async function initServer(
     if (event.subject.type === "human" && event.sessionId) nudgeSessionActivity(event.sessionId);
   });
   const bridgeRouteHandles = registerBridgeRoutes(ctx);
-  ({ cancelChildSupervisorRequests } = bridgeRouteHandles);
+  ({ cancelChildSupervisorRequests, handleBridgeCall } = bridgeRouteHandles);
   // This parent-only tool delegates to the route coordinator's exactly-once
   // settlement path. Register only after that coordinator and its handles exist.
   registerSupervisorAnswerBridgeTool(bridge, bridgeRouteHandles);
+  registerSandboxRoutes(ctx, sandboxHostGrants);
+  const stopSandboxViolations = sandboxProvider.onViolation?.(violationReporter.report);
 
   await fastify.listen({ port: options.port ?? 0, host: options.host ?? "127.0.0.1" });
   const address = fastify.server.address();
   const port = typeof address === "object" && address !== null ? address.port : 0;
-  // Now that the port is bound, bridge extensions can target this server. The
-  // pi subprocess is always local, so loopback is correct regardless of host.
-  bridgeAddress.endpoint = `http://127.0.0.1:${port}/bridge`;
   analytics.track("app_started");
 
   let closePromise: Promise<void> | undefined;
@@ -1896,6 +2060,12 @@ async function initServer(
       } finally {
         // Dispose LAST, after the HTTP/WS surface is gone (see startServer).
         await effectRuntime.dispose();
+        stopSandboxViolations?.();
+        // ADR 0007: the sandbox runtime last, once every sandboxed process is
+        // gone (its proxies serve them until then).
+        await sandboxProvider.dispose?.().catch((error: unknown) => {
+          serverLog.warn("sandbox", "could not dispose the sandbox provider", error);
+        });
       }
       if (errors.length === 1) throw errors[0];
       if (errors.length > 1) throw new AggregateError(errors, "agent-deck server close failed");
@@ -1911,6 +2081,7 @@ async function initServer(
     bridge,
     supervisor,
     askUser,
+    bridgeCall: (sessionId, call, signal) => handleBridgeCall(sessionId, call, signal),
     runtime: effectRuntime,
     close,
   };

@@ -319,7 +319,7 @@ export class AskUserCoordinator {
           { id: pending.id, sessionId: pending.sessionId },
           "The server is shutting down.",
         );
-        // The admitted /bridge request must settle even if projecting the
+        // The admitted bridge call must settle even if projecting the
         // cancellation into one session's transcript fails.
         pending.settle(content({ status: "cancelled", reason: "The server is shutting down." }));
       }

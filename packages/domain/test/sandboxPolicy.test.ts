@@ -5,8 +5,10 @@ import {
   DEFAULT_SANDBOX_DOMAINS,
   SANDBOX_AGENT_PROTECTED_ENTRIES,
   SANDBOX_HOME_TOOLCHAIN_DIRS,
+  sandboxAllowsWrite,
   sandboxPolicy,
   SandboxPolicyError,
+  sandboxViolationOf,
   type SandboxPolicy,
   type SandboxPolicyInput,
   type SandboxSide,
@@ -384,5 +386,130 @@ describe("parseProjectSandboxConfig", () => {
   it("reports every invalid entry, not just the first", () => {
     const parsed = parseProjectSandboxConfig({ allowedDomains: ["ok.example", "bad one", "x/y"] });
     expect(parsed.ok ? [] : parsed.problems).toHaveLength(2);
+  });
+});
+
+describe("sandboxPolicy: the write root never holds the data or the agent dir", () => {
+  it("refuses a write root that is or contains the data dir or the operator's agent dir", () => {
+    for (const projectPath of ["/", "/data", "/data/home", "/data/home/.pi"]) {
+      expect(() => policy({}, "server", { projectPath })).toThrow(SandboxPolicyError);
+    }
+    expect(() => policy({ workspace: { path: "/" } })).toThrow(SandboxPolicyError);
+    // Inside the data dir (a worktree) or beside it is fine.
+    expect(() => policy({ workspace: { path: "/data/worktrees/s1" } })).not.toThrow();
+    expect(() => policy({}, "server", { projectPath: "/srv/app" })).not.toThrow();
+  });
+
+  it("refuses the data dir's reserved folders as a project or write root", () => {
+    for (const projectPath of [
+      "/data/users",
+      "/data/users/abcd",
+      "/data/sandbox/other-session",
+      "/data/sandbox",
+      "/data/imported-sessions/x",
+      "/data/events",
+      "/data/plan-events/index.json",
+      "/data/session-worktrees",
+      "/data/users/abcd/agent/extensions",
+    ]) {
+      expect(() => policy({}, "server", { projectPath })).toThrow(SandboxPolicyError);
+    }
+    // A worktree must lie inside session-worktrees, never in another reserved folder.
+    expect(() => policy({ workspace: { path: "/data/users/abcd" } })).toThrow(SandboxPolicyError);
+    expect(() => policy({ workspace: { path: "/data/session-worktrees" } })).toThrow(
+      SandboxPolicyError,
+    );
+    expect(() => policy({ workspace: { path: "/data/session-worktrees/ab12cd34" } })).not.toThrow();
+    // A registered project elsewhere in the data dir (a projects root) is fine.
+    expect(() => policy({}, "server", { projectPath: "/data/projects/app" })).not.toThrow();
+  });
+
+  it("compares without case where the filesystem folds it", () => {
+    const cased = { projectPath: "/DATA/Users/abcd" };
+    expect(() => policy({}, "server", { ...cased, caseInsensitivePaths: true })).toThrow(
+      SandboxPolicyError,
+    );
+    expect(() => policy({}, "server", { ...cased, caseInsensitivePaths: false })).not.toThrow();
+    expect(() =>
+      policy({}, "server", { projectPath: "/data/home/.PI", caseInsensitivePaths: true }),
+    ).toThrow(SandboxPolicyError);
+    // Trailing separators and dot segments do not hide a reserved folder.
+    expect(() => policy({}, "server", { projectPath: "/data/projects/../users/" })).toThrow(
+      SandboxPolicyError,
+    );
+  });
+
+  it("the server's launch files in the scratch folder are never writable", () => {
+    const p = policy();
+    expect(p.denyWrite).toContainEqual({ path: "/data/sandbox/s1/launch", kind: "dir" });
+    expect(writable(p, "/data/sandbox/s1/launch/agent-deck-bridge-ext-x/bridge.ts")).toBe(false);
+    expect(writable(p, "/data/sandbox/s1/tmp/x")).toBe(true);
+  });
+});
+
+describe("sandbox violations (srt's lines)", () => {
+  it("reads a refused host, a Linux write and a macOS rule; ignores other lines", () => {
+    expect(sandboxViolationOf("deny network-outbound evil.example.com:443 (not allowed)")).toEqual({
+      kind: "network",
+      target: "evil.example.com",
+      operation: "network-outbound",
+    });
+    expect(sandboxViolationOf("deny network-outbound [::1]:80 (loopback)")).toMatchObject({
+      target: "::1",
+    });
+    expect(sandboxViolationOf("deny openat /data/projects/app/.git/config")).toEqual({
+      kind: "write",
+      target: "/data/projects/app/.git/config",
+      operation: "openat",
+    });
+    expect(sandboxViolationOf("deny(1) file-read-data /Users/a/.ssh/id_ed25519")).toEqual({
+      kind: "read",
+      target: "/Users/a/.ssh/id_ed25519",
+      operation: "file-read-data",
+    });
+    expect(sandboxViolationOf("deny(1) file-write-create /etc/x")).toMatchObject({ kind: "write" });
+    expect(sandboxViolationOf("deny(1) mach-lookup com.apple.x")).toBeUndefined();
+  });
+
+  it("a write the session's policy allowed is not a violation", () => {
+    const p = policy({ workspace: { path: "/data/worktrees/s1" } });
+    expect(sandboxAllowsWrite(p, "/data/worktrees/s1/src/a.ts")).toBe(true);
+    expect(sandboxAllowsWrite(p, "/data/worktrees/s1/../s2/a.ts")).toBe(false);
+    expect(sandboxAllowsWrite(p, "/data/projects/app/.git/config")).toBe(false);
+  });
+
+  it("srt's own denies inside the working folder count as refused", () => {
+    const p = policy({ workspace: { path: "/data/worktrees/s1" } });
+    for (const refused of [
+      "/data/worktrees/s1/.vscode/settings.json",
+      "/data/worktrees/s1/.VSCode/deep/a/b/c.json",
+      "/data/worktrees/s1/.mcp.json",
+      "/data/worktrees/s1/pkg/.bashrc",
+      "/data/worktrees/s1/pkg/.idea/x.xml",
+      "/data/worktrees/s1/.claude/commands/run.md",
+      "/data/worktrees/s1/vendor/.git/hooks/pre-commit",
+      // The protected directory itself, and any depth below a nested one.
+      "/data/worktrees/s1/.vscode",
+      "/data/worktrees/s1/pkg/.vscode/deep/config.json",
+      "/data/worktrees/s1/pkg/.idea",
+    ]) {
+      expect([refused, sandboxAllowsWrite(p, refused, "linux")]).toEqual([refused, false]);
+    }
+    for (const allowed of [
+      "/data/worktrees/s1/a/b/c/.bashrc", // deeper than srt looks
+      "/data/worktrees/s1/.claude/settings.json",
+      "/data/worktrees/s1/src/vscode.ts",
+      "/data/worktrees/s1/a/b/.vscode/x.json", // a nested one deeper than srt scans
+    ]) {
+      expect([allowed, sandboxAllowsWrite(p, allowed, "linux")]).toEqual([allowed, true]);
+    }
+    // macOS: Seatbelt matches the names at any depth.
+    for (const refused of [
+      "/data/worktrees/s1/a/b/c/.bashrc",
+      "/data/worktrees/s1/a/b/.vscode/x.json",
+      "/data/worktrees/s1/a/b/c/.git/hooks/post-checkout",
+    ]) {
+      expect([refused, sandboxAllowsWrite(p, refused, "darwin")]).toEqual([refused, false]);
+    }
   });
 });

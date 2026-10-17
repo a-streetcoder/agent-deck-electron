@@ -50,7 +50,8 @@ export function sessionVerifierDeps(
     head: (worktreePath) => gitHead(worktreePath),
     filesChanged: async (target) =>
       target.worktreePath ? (await filesChanged(target, warn)).filesChangedSinceBase : undefined,
-    runValidation: (parentSessionId, cwd, command, signal) =>
+    // ADR 0007: inside the parent session's sandbox, as its Pi runs.
+    runValidation: async (parentSessionId, cwd, command, signal) =>
       runValidationCommand(
         cwd,
         command,
@@ -58,6 +59,7 @@ export function sessionVerifierDeps(
         undefined,
         undefined,
         sessions.sessionLaunchEnv(parentSessionId),
+        sessions.sessionSandbox(parentSessionId, cwd),
       ),
     spawn: (
       parentSessionId,

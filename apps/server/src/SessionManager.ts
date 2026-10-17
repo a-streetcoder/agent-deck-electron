@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { copyFileSync, lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import {
@@ -20,6 +28,7 @@ import {
 import type {
   AskUserAnswer,
   AskUserCell,
+  NoticeCell,
   UserCell,
   SessionPlanItem,
   SessionPlanUpdate,
@@ -34,8 +43,8 @@ import {
   resolvePiBinary,
   type AgentSessionPlan,
   type LaunchPlan,
-  type ModelSelection,
   type PiProcessExit,
+  type PiSandbox,
 } from "@agent-deck/pi-host";
 import { Effect, Exit, Scope } from "effect";
 import { runPromiseUnwrapped, runSyncUnwrapped } from "./effectRun.ts";
@@ -44,6 +53,7 @@ import type { ReceiptBus } from "./receipts.ts";
 import type { SubagentRunRecord, SubagentRunStore } from "./subagentRunStore.ts";
 import { planMayRunShell } from "./verifier.ts";
 import type { ServerRuntime } from "./runtime.ts";
+import type { SessionLaunchSandbox, SessionSandboxLaunch } from "./sandbox.ts";
 import { SessionMutationClaims } from "./sessionMutationClaims.ts";
 import { gitIdentityEnv, type GitIdentityMap } from "./gitIdentity.ts";
 import { userAgentDirEnv, type UserAgentDirs } from "./userAgentDirs.ts";
@@ -58,6 +68,7 @@ import {
   runOneShotHelper,
   SessionManagerService,
   type ChildBridgeFactory,
+  type HelperContext,
   type ChildMemoryRecall,
   type ChildToolPolicy,
   type SessionTurnEvents,
@@ -76,6 +87,27 @@ export type {
   ChildToolPolicy,
   AgentResolver,
 } from "./services/sessionManager.ts";
+
+/** ADR 0007 hooks a session launch needs from the server. */
+export interface SessionSpawnHooks {
+  /** Answer a bridge call from the Pi process of `sessionId`. */
+  bridgeCall: SpawnSessionParams["bridgeCall"];
+  /** The current bridge generation of a session or child id. */
+  bridgeGeneration?: SpawnSessionParams["bridgeGeneration"];
+  /** The folder of the session's server-written launch files,
+   * `<dataDir>/sandbox/<sessionId>/launch` (read-only to its sandbox);
+   * undefined (the OS temp folder) for a legacy id under the `none` provider. */
+  launchDir: (sessionId: string) => string | undefined;
+  /** The session was destroyed: drop what the server keeps for its sandbox. */
+  forget?: (sessionId: string) => void;
+  /** True when launches are sandboxed (the provider is not `none`). */
+  sandboxed?: boolean;
+  /** The sandbox of one launch of a session (undefined: none). */
+  sandbox?: (
+    record: SessionMeta,
+    launch: SessionSandboxLaunch,
+  ) => (SessionLaunchSandbox & { notices?: NoticeCell[] }) | undefined;
+}
 
 /**
  * SessionManager — the synchronous class facade over the Slice 5 Effect service
@@ -210,7 +242,13 @@ export interface CreateSessionOptions {
   environmentOverride?: Record<string, string | undefined>;
   /** Set when this session runs in an isolated git worktree (cwd IS the worktree)
    *  so the fields persist WITH the initial meta — no orphan window. */
-  worktree?: { path: string; branch: string; sourceBranch: string; identityToken?: string };
+  worktree?: {
+    path: string;
+    branch: string;
+    sourceBranch: string;
+    identityToken?: string;
+    baseCommit?: string;
+  };
   /** Server-owned marker for retained Loop review semantics. */
   loopReviewRunId?: string;
   /** Verified creator on a shared server (trusted proxy); absent on loopback. */
@@ -508,6 +546,11 @@ export class ManagedSession {
 
   openAskUser(cell: AskUserCell): void {
     runSyncUnwrapped(this.rt.openAskUser(cell));
+  }
+
+  /** ADR 0007: a system line in the transcript (a sandbox refusal). */
+  appendNotice(cell: NoticeCell): void {
+    runSyncUnwrapped(this.rt.appendNotice(cell));
   }
 
   answerAskUser(requestId: string, answer: AskUserAnswer): void {
@@ -810,6 +853,7 @@ export class SessionManager {
     private readonly parentAppendFactory: (
       cwd: string,
       home: string,
+      sessionId: string,
     ) => { appends: string[]; cleanupDir?: string } = () => ({ appends: [] }),
     /**
      * Builds a child subagent's contact_supervisor bridge (server-provided).
@@ -881,6 +925,8 @@ export class SessionManager {
     private readonly turnEventsFor?: (meta: SessionMeta) => SessionTurnEvents,
     /** SRV-06: the session owner's GitHub connection (githubConnections.ts). */
     private readonly githubConnections?: GitHubConnections,
+    /** ADR 0007: the stdio bridge and the per-session scratch folders. */
+    private readonly spawnHooks?: SessionSpawnHooks,
   ) {}
 
   /** Reconfigure all live deadlines. Existing parked placeholders remain cold. */
@@ -1128,6 +1174,7 @@ export class SessionManager {
                 : {}),
               branch: options.worktree.branch,
               sourceBranch: options.worktree.sourceBranch,
+              ...(options.worktree.baseCommit ? { baseCommit: options.worktree.baseCommit } : {}),
             },
           }
         : {}),
@@ -1388,27 +1435,10 @@ export class SessionManager {
         if (activityPublicationEnabled) this.onMetaChange(changed);
         else this.onParkingMetaChange(changed);
       };
-      const layered = { ...this.envFileLayer(meta.projectId), ...env };
       const params = this.buildSpawnParams(
         meta,
         plan,
-        {
-          ...layered,
-          // SRV-04: the session OWNER's git identity, fixed at spawn so later
-          // prompt authors cannot change it, and re-derived from meta on every
-          // resume. Attribution, not authorization: Pi can still override it.
-          ...gitIdentityEnv(sessionOwner(meta), this.gitIdentities),
-          // SRV-11: the OWNER's credentials (own agent dir), re-derived on every
-          // resume. Storage separation, not isolation (userAgentDirs.ts).
-          ...userAgentDirEnv(sessionOwner(meta), this.userAgentDirs),
-          // SRV-06: pushes and PRs as the OWNER (GH_TOKEN + a github.com git
-          // credential helper); no connection leaves the server default.
-          // Pi spawns with process.env under this, so both count for GIT_CONFIG_*.
-          ...githubEnv(sessionOwner(meta), this.githubConnections, {
-            ...process.env,
-            ...layered,
-          }),
-        },
+        this.ownerLaunchEnv(meta, env),
         tempDirs,
         publishMeta,
         resumedIdle,
@@ -1490,6 +1520,7 @@ export class SessionManager {
     onMetaChange: (meta: SessionMeta) => void = this.onMetaChange,
     resumedIdle = false,
   ): SpawnSessionParams {
+    const launchDir = this.spawnHooks?.launchDir(meta.id);
     const bridgeExtension = this.bridgeExtensionFactory(meta);
     let launchPlan: LaunchPlan = bridgeExtension
       ? { ...plan, extensions: [...(plan.extensions ?? []), bridgeExtension] }
@@ -1501,7 +1532,7 @@ export class SessionManager {
     // ahead of our own; empty leaves pi to discover it.
     if (launchPlan.kind === "parent") {
       const launchHome = env?.HOME ?? env?.USERPROFILE ?? homedir();
-      const { appends, cleanupDir } = this.parentAppendFactory(meta.cwd, launchHome);
+      const { appends, cleanupDir } = this.parentAppendFactory(meta.cwd, launchHome, meta.id);
       if (appends.length > 0) {
         launchPlan = {
           ...launchPlan,
@@ -1516,20 +1547,38 @@ export class SessionManager {
     // multi-line agent body through a temp file (single-line bodies stay
     // literal). The temp dir is cleaned up with the others on exit.
     if (launchPlan.kind === "agent" && launchPlan.systemPrompt.text.includes("\n")) {
-      const dir = mkdtempSync(join(tmpdir(), "agent-deck-agent-prompt-"));
+      const root = launchDir ?? tmpdir();
+      mkdirSync(root, { recursive: true });
+      const dir = mkdtempSync(join(root, "agent-deck-agent-prompt-"));
       tempDirs.push(dir);
       const file = join(dir, "system.md");
-      writeFileSync(file, launchPlan.systemPrompt.text);
+      writeFileSync(file, launchPlan.systemPrompt.text, { flag: "wx" });
       launchPlan = {
         ...launchPlan,
         systemPrompt: { ...launchPlan.systemPrompt, text: file },
       };
     }
+    // ADR 0007: the session's policy; its helpers and children derive theirs
+    // the same way for their own cwd and session folder.
+    const sandboxFor = this.spawnHooks?.sandbox;
+    const launched = sandboxFor?.(meta, {
+      cwd: meta.cwd,
+      env,
+      ...(launchPlan.kind !== "helper" && launchPlan.resumeSessionPath
+        ? { resumeSessionPath: launchPlan.resumeSessionPath }
+        : launchPlan.kind === "agent" && launchPlan.sessionDir
+          ? { sessionDir: launchPlan.sessionDir }
+          : {}),
+      tempPaths: tempDirs,
+      report: true,
+    });
+    const sandbox = launched?.sandbox;
     const spawn: PiSpawnOptions = {
       binPath: resolvePiBinary().path,
       args: buildLaunchArgs(launchPlan),
       cwd: meta.cwd,
       env,
+      ...(sandbox ? { sandbox } : {}),
     };
     return {
       meta,
@@ -1543,11 +1592,23 @@ export class SessionManager {
         // provider-registration extensions, which custom providers require.
         extensions: this.helperExtensions(),
         env,
-      } satisfies ModelSelection & {
-        extensions?: string[];
-        env?: Record<string, string | undefined>;
-      },
+        ...(sandboxFor
+          ? { sandbox: (launch) => sandboxFor(meta, { ...launch, env })?.sandbox }
+          : {}),
+      } satisfies HelperContext,
       tempDirs,
+      ...(this.spawnHooks
+        ? {
+            bridgeCall: this.spawnHooks.bridgeCall,
+            ...(this.spawnHooks.bridgeGeneration
+              ? { bridgeGeneration: this.spawnHooks.bridgeGeneration }
+              : {}),
+            ...(launchDir ? { launchDir } : {}),
+          }
+        : {}),
+      // ADR 0007: what the sandbox.json says (a refusal, proposed hosts) is
+      // a line in the transcript.
+      ...(launched?.notices?.length ? { notices: launched.notices } : {}),
       childBridgeFactory: this.childBridgeFactory,
       resolveAgent: this.resolveAgent,
       recallChildMemory: this.recallChildMemory,
@@ -1702,10 +1763,60 @@ export class SessionManager {
     await this.subagentRuns?.removeWorktreesForMerge(sessionId);
   }
 
+  /** The env a launch of `meta` runs with: the .env layers under `env`, then
+   * the owner's identity, agent dir and GitHub connection. */
+  private ownerLaunchEnv(
+    meta: SessionMeta,
+    env?: Record<string, string | undefined>,
+  ): Record<string, string | undefined> {
+    const layered = { ...this.envFileLayer(meta.projectId), ...env };
+    return {
+      ...layered,
+      // SRV-04: the session OWNER's git identity, fixed at spawn so later
+      // prompt authors cannot change it, and re-derived from meta on every
+      // resume. Attribution, not authorization: Pi can still override it.
+      ...gitIdentityEnv(sessionOwner(meta), this.gitIdentities),
+      // SRV-11: the OWNER's credentials (own agent dir), re-derived on every
+      // resume. Storage separation, not isolation (userAgentDirs.ts).
+      ...userAgentDirEnv(sessionOwner(meta), this.userAgentDirs),
+      // SRV-06: pushes and PRs as the OWNER (GH_TOKEN + a github.com git
+      // credential helper); no connection leaves the server default.
+      // Pi spawns with process.env under this, so both count for GIT_CONFIG_*.
+      ...githubEnv(sessionOwner(meta), this.githubConnections, {
+        ...process.env,
+        ...layered,
+      }),
+    };
+  }
+
+  /**
+   * ADR 0007: the transcript reader of a parent, live or cold, runs under the
+   * parent's policy built from its record and with its owner's launch env. On
+   * a sandboxed server no policy means no reader.
+   */
+  private parentReaderLaunch(
+    parent: SessionMeta,
+    cwd: string,
+    sessionFile: string,
+  ): { sandbox?: PiSandbox; env: Record<string, string | undefined> } {
+    const env = this.sessions.get(parent.id)?.launchEnv ?? this.ownerLaunchEnv(parent);
+    const sandbox = this.spawnHooks?.sandbox?.(parent, {
+      cwd,
+      env,
+      resumeSessionPath: sessionFile,
+    })?.sandbox;
+    if (!sandbox && this.spawnHooks?.sandboxed) {
+      throw new SubagentTranscriptEvidenceError("No sandbox policy for the transcript reader");
+    }
+    return { ...(sandbox ? { sandbox } : {}), env };
+  }
+
   async subagentTranscript(
     parentSessionId: string,
     runId: string,
     parentCwd: string,
+    /** The parent's record (live or from the index); the reader's policy. */
+    parentMeta?: SessionMeta,
   ): Promise<ChildTranscriptSnapshot | undefined> {
     const store = this.subagentRuns;
     const run = store?.get(runId);
@@ -1721,8 +1832,16 @@ export class SessionManager {
     // Fail closed at the last possible moment before handing the opaque handle
     // to Pi. Validation failures are not converted to summary evidence.
     const sessionFile = store.validateOwnedSession(run.id, run.sessionFile);
+    const parent = this.sessions.get(parentSessionId)?.meta ?? parentMeta;
+    const reader = parent
+      ? this.parentReaderLaunch(parent, parentCwd, sessionFile)
+      : this.spawnHooks?.sandboxed
+        ? (() => {
+            throw new SubagentTranscriptEvidenceError("No parent record for the transcript reader");
+          })()
+        : undefined;
     const transcript = await this.runtime.runPromise(
-      readCanonicalChildTranscript(sessionFile, parentCwd),
+      readCanonicalChildTranscript(sessionFile, parentCwd, reader?.sandbox, reader?.env),
     );
 
     // Reconstruction is asynchronous. Parent deletion or continuation may win
@@ -1790,6 +1909,23 @@ export class SessionManager {
   /** A7: the live session's launch env (what its Pi and children run with). */
   sessionLaunchEnv(sessionId: string): Record<string, string | undefined> | undefined {
     return this.sessions.get(sessionId)?.launchEnv;
+  }
+
+  /**
+   * ADR 0007: the sandbox of a command that runs worktree code for a live
+   * session (validation, a script, a terminal) in `cwd`: the session's
+   * policy, derived for that cwd. Undefined with the `none` provider; throws
+   * on a sandboxed server for a session that is not live (no policy, no run).
+   */
+  sessionSandbox(sessionId: string, cwd: string): PiSandbox | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      if (this.spawnHooks?.sandboxed) {
+        throw new Error("This session is not running, so its sandbox is unknown: start it first.");
+      }
+      return undefined;
+    }
+    return this.spawnHooks?.sandbox?.(session.meta, { cwd, env: session.launchEnv })?.sandbox;
   }
 
   /**
@@ -2148,7 +2284,27 @@ export class SessionManager {
    */
   async runHelper(opts: RunHelperOptions, requester?: UserIdentity): Promise<string> {
     const env = { ...opts.env, ...userAgentDirEnv(requester, this.userAgentDirs) };
-    return await runPromiseUnwrapped(this.runtime, runOneShotHelper({ ...opts, env }));
+    // ADR 0007: a helper has no session; it runs under a policy of its own
+    // (its own scratch folder, removed after the run; the requester as owner;
+    // no tools, no session file, no violation lines).
+    const id = `helper-${randomUUID()}`;
+    const sandbox = this.spawnHooks?.sandbox?.(
+      {
+        id,
+        cwd: opts.cwd,
+        createdAt: new Date().toISOString(),
+        ...(requester ? { createdBy: requester } : {}),
+      },
+      { cwd: opts.cwd, env, noSession: true, helper: true },
+    )?.sandbox;
+    try {
+      return await runPromiseUnwrapped(
+        this.runtime,
+        runOneShotHelper({ ...opts, env, ...(sandbox ? { sandbox } : {}) }),
+      );
+    } finally {
+      if (sandbox) this.spawnHooks?.forget?.(id);
+    }
   }
 
   list(): SessionMeta[] {
@@ -2160,6 +2316,7 @@ export class SessionManager {
    * the owner registered so no second process can launch under the same id. */
   async destroy(id: string): Promise<void> {
     await this.destroySession(id, false);
+    this.spawnHooks?.forget?.(id);
   }
 
   private async destroySession(id: string, preserveEnvironmentOverride: boolean): Promise<void> {

@@ -8,6 +8,10 @@ import {
   createSessionWorktree,
   createSessionWorktreeWithBranchRetries,
   gitApplyPatch,
+  gitCommitOid,
+  gitShowFileSync,
+  hardenedGitEnv,
+  hardenServerGit,
   gitApplyPatchCheck,
   gitBlobAtCommit,
   gitCommitsAhead,
@@ -502,6 +506,61 @@ describe("Loop worktree review patch", () => {
   });
 });
 
+describe("ADR 0007: the server's own git, hardened", () => {
+  it("pins no global or system config, no replace objects, no fsmonitor, no pager and plain ssh, after the pins already set", () => {
+    const env = hardenedGitEnv({
+      PATH: "/bin",
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "credential.helper",
+      GIT_CONFIG_VALUE_0: "!gh auth git-credential",
+    });
+    expect(env).toMatchObject({
+      PATH: "/bin",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_NO_REPLACE_OBJECTS: "1",
+      GIT_CONFIG_COUNT: "4",
+      GIT_CONFIG_KEY_0: "credential.helper",
+      GIT_CONFIG_KEY_1: "core.fsmonitor",
+      GIT_CONFIG_VALUE_1: "false",
+      GIT_CONFIG_KEY_2: "core.pager",
+      GIT_CONFIG_VALUE_2: "cat",
+      GIT_CONFIG_KEY_3: "core.sshCommand",
+      GIT_CONFIG_VALUE_3: "ssh",
+    });
+  });
+
+  it("reads through a planted refs/replace object as the real one", () => {
+    const repo = makeRepo();
+    const real = git(repo, ["rev-parse", "HEAD:README.md"]).trim();
+    writeFileSync(path.join(repo, "forged.txt"), "forged\n");
+    const forged = git(repo, ["hash-object", "-w", "forged.txt"]).trim();
+    git(repo, ["replace", real, forged]);
+    expect(git(repo, ["cat-file", "blob", "HEAD:README.md"])).toBe("forged\n");
+    expect(gitShowFileSync(repo, "HEAD", "README.md")).toBe("test\n");
+  });
+
+  it("every call ignores a global config once hardened (a broken one fails it otherwise)", async () => {
+    const repo = makeRepo();
+    const head = git(repo, ["rev-parse", "HEAD"]).trim();
+    const broken = path.join(repo, "..", `broken-${path.basename(repo)}.gitconfig`);
+    writeFileSync(broken, "[broken\n");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", broken);
+    try {
+      await expect(gitCommitOid(repo, "HEAD")).rejects.toThrow();
+      hardenServerGit(true);
+      expect(await gitCommitOid(repo, "HEAD")).toBe(head);
+      // The synchronous read the sandbox policy uses is hardened always.
+      hardenServerGit(false);
+      expect(gitShowFileSync(repo, "HEAD", "README.md")).toBe("test\n");
+    } finally {
+      hardenServerGit(false);
+      vi.unstubAllEnvs();
+      rmSync(broken, { force: true });
+    }
+  });
+});
+
 describe("session worktree branch ownership", () => {
   it("allocates base-2 with exact ownership when the generated base branch is occupied", async () => {
     const repo = makeRepo();
@@ -521,6 +580,8 @@ describe("session worktree branch ownership", () => {
       path: target,
       branch: `${baseBranch}-2`,
       sourceBranch: "main",
+      // ADR 0007: the immutable base the server records for the session.
+      baseCommit: git(repo, ["rev-parse", "main"]).trim(),
       identityToken,
       branchOwned: true,
     });
