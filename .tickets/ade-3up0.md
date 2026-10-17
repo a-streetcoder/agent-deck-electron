@@ -1,6 +1,6 @@
 ---
 id: ade-3up0
-status: open
+status: in_progress
 deps: [ade-210c]
 links: []
 created: 2026-10-17T01:19:53Z

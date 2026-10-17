@@ -1,6 +1,6 @@
 ---
 id: ade-210c
-status: in_progress
+status: closed
 deps: [ade-pv1c]
 links: []
 created: 2026-10-17T01:19:53Z
@@ -24,3 +24,11 @@ typecheck, domain and pi-host tests green; no behaviour change with provider non
 **2026-10-17T02:26:47Z**
 
 2026-10-17 reviews on eaf95f8+b518364: GPT (review63) FIX FIRST — sessionId path containment (../home -> /data/home scratch), Unix-socket bridge branch must go, worktree commits blocked (common git dir not writable), agent dir not writable (no OAuth refresh/lock files), toolchain dirs must exist before the wrap, async spawn continuation can throw unhandled, cleanupAfterCommand never called, allowLocalBinding ineffective, validator accepts entries srt rejects, real-srt test needs real fixtures. Contrarian: same plus Pi starts with no credentials/settings under srt (lockfile mkdir on EROFS swallowed), no writable session folder on first start, .git/commondir redirect on no-worktree sessions lets the server run session code, denyRead too narrow (events, sessions.json, pastes, ~/.ssh, gh hosts), stop() should end stdin first, OAuth domains missing, widen() ordering. Verified sound: per-command list ids travel in the proxy username and are not learnable across sessions; worktree .git pointer bound read-only; no races in the async start; no injection in bridge.ts. Fix round 1 (16 items) sent.
+
+**2026-10-17T02:41:26Z**
+
+2026-10-17 fix round 1 landed (2e3ae51, 16 items). GPT re-review (review64) FIX FIRST, three blockers: absent deny paths under writable roots are filtered out and thus creatable (objects/info, config.worktree, agent entries, ~/.config/git); operator/ownerless sessions get the whole shared sessions tree; re-allowing the transcript's parent exposes /data/imported-sessions. Fix round 2 (last) sent: deny entries carry kind and are created before the wrap; <agentDir>/sessions denied with sessionDir and the transcript file as the only re-allows.
+
+**2026-10-17T02:51:37Z**
+
+2026-10-17 fix round 2 landed (c67d9b0): denyWrite entries carry a kind and absent ones under a writable root are created before the wrap; <agentDir>/sessions and <piAgentDir>/sessions read-denied with sessionDir and the transcript file as the only re-allows; transcript re-allowed as a file, never its folder. Verified by reading the diff (stop rule: no third GPT pass). Squashed as 6962efa, merged b7d76fe. Gates in main: typecheck, format:check, pi-host sandbox 19 + sandboxDomains 26, domain sandboxPolicy 61, contracts parity 64, real-Pi session.pi 3 + bridge.pi 1. Closed. Open for SBX-04 on the VM: the real-srt test, the symlink deny, commondir, worktree commits, Pi loading auth/settings under srt.
