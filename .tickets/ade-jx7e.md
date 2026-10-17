@@ -1,6 +1,6 @@
 ---
 id: ade-jx7e
-status: in_progress
+status: closed
 deps: [ade-vyov]
 links: []
 created: 2026-10-17T01:19:54Z
@@ -44,3 +44,7 @@ SPIKE blocker, srt 0.0.80 credential model vs a multi-user server (source: sandb
 **2026-10-17T10:18:00Z**
 
 DECISION: deferred. tlsTerminate itself held up ((a)-(d) pass, no proxy failures, remote overhead +12% median, local +0.9 ms per request, i.e. above 25% only relative to a sub-ms baseline), but credential masking cannot ship as designed: srt 0.0.80's process-wide, name-keyed registry fed from the server's own env injects one user's (or the operator's) token into another session's requests and does not mask per-session values, and it breaks git's Basic-auth credential helper, WebSockets and HTTP/2. Options for a later ticket: one srt proxy per user (out-of-process srt, its own registry), an upstream srt change keying sentinels per command id with values from the wrap's env, or masking only server-wide values that are the same for every session (none today). Evidence written to docs/remote-server-poc.md Known gaps.
+
+**2026-10-17T10:19:19Z**
+
+2026-10-18 CLOSED AS DEFERRED (architect): the spike proves srt 0.0.80's envVars masking is per server process, keyed by variable name, with values from the server env, so on a shared server one user's token reaches another user's requests; plus WebSocket refused, HTTP/2 downgraded, basic auth not substituted. Credentials stay env vars of the Pi process (ADR 0007 am. 19). Re-open when srt keys placeholders per command or with a per-user proxy outside the server. Merged 7933cb9 (notes + runbook Known gaps).

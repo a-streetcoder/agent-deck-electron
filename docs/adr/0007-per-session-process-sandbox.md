@@ -215,3 +215,19 @@ do not interfere.
     unless the project's `.env` or the launch env sets them: a user's exported `NODE_ENV` no
     longer reaches Pi, nor the desktop launcher's `PORT=0`. The terminal and the script runner
     drop both always (their blocklist).
+
+## Amendments (2026-10-18, from the SBX-05 spike)
+
+19. **Credential masking (decision 5, second release) is deferred.** The runtime's masking is
+    sound for one user: the sandboxed environment shows placeholders, the proxy injects the real
+    value on egress to the listed hosts, TLS termination costs about 12% on remote requests and
+    streams SSE. It is unusable on a shared server as built: the placeholder registry is one per
+    server process, keyed by variable name, and takes its values from the server's own
+    environment, so two sessions with different `GH_TOKEN`s receive one placeholder and the last
+    value wins, and a token present only in a session's spawn environment (how each owner gets
+    theirs) is not masked at all. Termination also refuses WebSocket upgrades, downgrades HTTP/2,
+    breaks clients that ignore the exported CA, and does not substitute basic auth, which git's
+    credential helper uses. Credentials stay environment variables of the Pi process (first
+    release of decision 5). Masking returns when the runtime keys placeholders per command and
+    reads values from that command's environment, or with one proxy per user outside the server
+    process; the evidence is on ade-jx7e and in the runbook's Known gaps.
