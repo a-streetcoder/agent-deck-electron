@@ -167,3 +167,60 @@ describe("draft launch settings", () => {
     expect(useAppStore.getState().error).toContain("Invalid project");
   });
 });
+
+describe("new chat on a sandboxed server (ADR 0007)", () => {
+  const refusal = () =>
+    jsonResponse(
+      {
+        code: "cwd_outside_projects",
+        error: "On this server a session runs inside a registered project.",
+      },
+      400,
+    );
+  const project = (id: string) => ({ id, path: `/data/projects/${id}`, name: id });
+
+  it("uses the only registered project and selects it when none is chosen", async () => {
+    const created = { ...session("created"), projectId: "only" };
+    useAppStore.setState({
+      projects: [project("only")] as never,
+      currentProjectId: null,
+      currentAgentName: null,
+    });
+    const bodies: string[] = [];
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      if (String(input) === "/sessions" && init?.method === "POST") {
+        bodies.push(String(init.body));
+        return Promise.resolve(
+          bodies.length === 1 ? refusal() : jsonResponse({ session: created }),
+        );
+      }
+      return Promise.resolve(jsonResponse({ sessions: [created] }));
+    });
+
+    await expect(newChat()).resolves.toEqual(created);
+    expect(bodies).toEqual(["{}", JSON.stringify({ projectId: "only" })]);
+    expect(useAppStore.getState().currentProjectId).toBe("only");
+    expect(useAppStore.getState().error).toBeNull();
+  });
+
+  it("asks the user to pick when several projects are registered", async () => {
+    useAppStore.setState({
+      projects: [project("a"), project("b")] as never,
+      currentAgentName: null,
+      currentProjectId: null,
+    });
+    let posts = 0;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      if (String(input) === "/sessions" && init?.method === "POST") {
+        posts += 1;
+        return Promise.resolve(refusal());
+      }
+      return Promise.resolve(jsonResponse({ sessions: [] }));
+    });
+
+    await expect(newChat()).resolves.toBeNull();
+    expect(posts).toBe(1);
+    expect(useAppStore.getState().error).toContain("Pick a project in the sidebar first");
+    expect(useAppStore.getState().currentProjectId).toBeNull();
+  });
+});
