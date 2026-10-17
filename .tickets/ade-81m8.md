@@ -1,8 +1,8 @@
 ---
 id: ade-81m8
-status: open
+status: closed
 deps: []
-links: []
+links: [ade-k1nc]
 created: 2026-10-17T18:49:59Z
 type: bug
 priority: 0
@@ -17,3 +17,6 @@ Found 2026-10-17 in the browser: a session on deck.moretti.cc with the default m
 
 (a) Guard: when the launch's provider is claude-bridge and the bridge is unavailable, treat it like a refused model (pin the first offered model, else the stable 409), with a test; same for set_model. (b) Image: install Claude Code in the server image (pinned version) and document the sign-in on the VM (owner runs it; the login must live in the data volume so it survives image upgrades); /me and the Providers screen must show the bridge as unavailable until then. (c) Re-run the browser check: a new session on the default model runs through claude-bridge (the transcript model shows provider claude-bridge) and spends the subscription.
 
+
+## 2026-10-18
+Superseded by ADR 0009: per-user Claude Code sign-in through the broker (SUB-05). The guard fix (47ba86b) stays. Closing in favour of SUB-05.

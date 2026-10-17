@@ -1,6 +1,6 @@
 # ADR 0009 — Subscriptions in shared sessions: whose credentials run a turn, and a broker that keeps them out of sessions
 
-- Status: **Proposed** 2026-10-18 (owner direction of 2026-10-18: "broker first"; awaiting the owner's `approved`)
+- Status: **Accepted** 2026-10-18 (owner `approved`; broker first; new sessions start with no shares, a share covers all providers in the first release, members without a subscription may still read)
 - Deciders: Ale (owner), architect session
 - Related: [ADR 0003](0003-shared-server-trust-model.md) (trust model: attribution, not isolation),
   [ADR 0006](0006-session-record-and-provenance.md) (session record), [ADR 0007](0007-per-session-process-sandbox.md)
@@ -128,28 +128,43 @@ Facts the design rests on (verified 2026-10-17/18):
   processes and splits the transcript.
 - **Owner-only toggle.** Keeps the owner's credentials as everyone's default; the owner rejected it.
 
-## Consequences (ticket tree, to approve)
+## Consequences (ticket tree; epic ade-u3ld)
 
-- CRB-01 spike (VM): a broker in the server process on the container address; a sandboxed Pi
+- CRB-01 (ade-w2zc) spike (VM): a broker in the server process on the container address; a sandboxed Pi
   completes real turns on Anthropic (key) and Codex (sign-in, account header) through placeholders;
   Claude Code completes a turn through `ANTHROPIC_BASE_URL`; SSE streams; the sandbox allows only
   the broker; overhead measured against SBX-05's numbers. Evidence on the ticket; go/no-go.
-- CRB-02 broker service: per-session placeholders for subscriptions and secret Environment
+- CRB-02 (ade-nobk) broker service: per-session placeholders for subscriptions and secret Environment
   variables, sponsor selection per request, OAuth refresh in the server, revocation, per-turn
   spend log, no credential in any session file or env; the Environment store gains the secret
   flag and injection rule.
-- CRB-03 sandbox: the broker allow and the provider hosts' removal from brokered sessions (ADR 0007
+- CRB-03 (ade-0mj8) sandbox: the broker allow and the provider hosts' removal from brokered sessions (ADR 0007
   amendment), stack matrix row.
-- SUB-02 record and rules: `shares` on the session record (ADR 0006 amendment), sponsor on each turn
+- SUB-02 (ade-q0z3) record and rules: `shares` on the session record (ADR 0006 amendment), sponsor on each turn
   event, the refusal and its message, `allowedOperations` for share and withdraw.
-- SUB-04 web: the two-level picker, the composer chip, the session header share controls, the
+- SUB-04 (ade-9syd) web: the two-level picker, the composer chip, the session header share controls, the
   refusal message, Providers and Doctor per user, the Environment screen's secret flag and rule.
-- SUB-05 package: Claude Code pinned in the image, per-user config folder, sign-in from the
+- SUB-05 (ade-k1nc) package: Claude Code pinned in the image, per-user config folder, sign-in from the
   session terminal, runbook first-run step (absorbs ade-81m8).
 - Docs: `remote-server-poc.md` "Credentials" rewritten to this ADR; ADR 0003 and ADR 0007 amended.
 
-## Open questions for the owner
+## Open questions for the owner (answered 2026-10-18)
 
-1. Default for a new session: no shares (this ADR) or the owner's subscription shared by default.
-2. Whether a share may be limited to some providers or is all-or-nothing in the first release.
-3. Whether a member without any subscription may still read a session they cannot prompt (today: yes).
+1. Default for a new session: **no shares**.
+2. A share is **all-or-nothing across providers** in the first release.
+3. A member without any subscription **may still read** a session they cannot prompt.
+
+## Amendments
+
+1. **2026-10-18, from CRB-01 (ade-w2zc).** The spike ran curl, Node fetch and Claude Code inside srt
+   against a broker on the container address, not a sandboxed Pi: Pi itself runs outside srt and
+   dials the broker directly; only its tool commands and Claude Code sit inside the sandbox. All
+   checks passed (header, query and bearer placeholders swapped; 2 MB up and 20 MB down streamed;
+   SSE unbatched; direct provider host refused; +0.2 ms per request for the broker). Three facts
+   bind the implementation: srt denies a hostname that resolves to the container's own address
+   unless `<ip>:<port>` is itself in `allowedDomains` (that literal is the carve-out, not
+   `deniedResolvedAddresses` as the decision's point 6 and CRB-03 said); inside srt every host goes
+   through srt's proxy, so the sandbox env clears `NO_PROXY` and Node clients get
+   `NODE_USE_ENV_PROXY=1`; srt drops single quotes from a wrapped one-liner, so the spawn path hands
+   it a script or argv. The real Codex turn moves to the first brokered turn on the deployed CRB-02
+   server, with the owner's go.
