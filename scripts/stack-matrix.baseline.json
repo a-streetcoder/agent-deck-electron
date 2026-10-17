@@ -1,33 +1,4 @@
 {
   "$comment": "Known failures of scripts/stack-matrix.mjs: a step listed here may fail without failing the run only when its output contains the signature (case-insensitive) and it was not a timeout, a transport error or a budget skip; when it passes it is reported as fixed (remove it then). Each names its follow-up ticket.",
-  "failures": [
-    {
-      "stack": "rails",
-      "step": "toolchain",
-      "reason": "rv's Ruby needs glibc 2.38; the image has 2.36 and no libyaml-dev/zlib1g-dev for ruby-build",
-      "ticket": "SBX-08 ade-si3i",
-      "signature": "GLIBC_2.38' not found"
-    },
-    {
-      "stack": "rails",
-      "step": "install",
-      "reason": "no Ruby (see toolchain)",
-      "ticket": "SBX-08 ade-si3i",
-      "signature": "GLIBC_2.38' not found"
-    },
-    {
-      "stack": "rails",
-      "step": "test",
-      "reason": "no Ruby (see toolchain)",
-      "ticket": "SBX-08 ade-si3i",
-      "signature": "GLIBC_2.38' not found"
-    },
-    {
-      "stack": "rails",
-      "step": "dev",
-      "reason": "no Ruby (see toolchain)",
-      "ticket": "SBX-08 ade-si3i",
-      "signature": "GLIBC_2.38' not found"
-    }
-  ]
+  "failures": []
 }
