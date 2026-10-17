@@ -120,7 +120,7 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
     reply: Reply,
     operation: "returnFinish" | "returnCancel" = "returnFinish",
   ): { meta: SessionMeta; user: UserIdentity } | undefined => {
-    if (!ctx.sharedServer) {
+    if (ctx.profile !== "shared-server") {
       reply.status(409).send({ error: "A session goes back to a device from a shared server." });
       return undefined;
     }
@@ -350,7 +350,7 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
     "/sessions/:id/import-return",
     { bodyLimit: MAX_TRANSFER_BYTES + 1024 * 1024 },
     async (request, reply) => {
-      if (ctx.sharedServer)
+      if (ctx.profile === "shared-server")
         return reply.status(409).send({ error: "A session comes back on the device it left." });
       const { id } = request.params as { id: string };
       const meta = metaOf(id);
@@ -587,7 +587,7 @@ export function registerSessionReturnRoutes(ctx: ServerContext): void {
 
   // The server copy is closed (or the owner gave up on it): the return is done here.
   fastify.patch("/sessions/:id/return-pending", async (request, reply) => {
-    if (ctx.sharedServer) return reply.status(409).send({ error: "Device sessions only." });
+    if (ctx.profile === "shared-server") return reply.status(409).send({ error: "Device sessions only." });
     if (!z.object({ returnPending: z.null() }).strict().safeParse(request.body).success)
       return reply.status(400).send({ error: "Send { returnPending: null }." });
     const { id } = request.params as { id: string };

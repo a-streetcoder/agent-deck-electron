@@ -64,7 +64,7 @@ export function registerGitRoutes(ctx: ServerContext): void {
     gitIdentityEnv(requestUser(request.raw), ctx.gitIdentities);
   // ade-q0pz: on a shared server every push runs without hooks, also a tokenless
   // one (it uses the service's own credentials).
-  const pushOptions = { noHooks: ctx.sharedServer === true };
+  const pushOptions = { noHooks: ctx.profile === "shared-server" };
 
   // Whether a push from here uses the clicker's GitHub connection (the URL itself stays here).
   fastify.get("/projects/:id/git/push-remote", async (request, reply) => {

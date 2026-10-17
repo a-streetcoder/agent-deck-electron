@@ -24,7 +24,7 @@ function harness(sharedServer = false, extra: Partial<ServerContext> = {}) {
     watchProject: () => {},
     broadcast: () => {},
     forgetMcpProbes: () => {},
-    sharedServer,
+    profile: sharedServer ? "shared-server" : "desktop",
     projectHasEffectiveMcpGrant: () => false,
     rootsFor: () => ({ home: scratch }),
     mcpAssignments: { projectServerNames: () => [] },

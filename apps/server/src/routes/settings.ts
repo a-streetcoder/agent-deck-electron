@@ -194,7 +194,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
       .safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const { projectId, scope, key, value } = parsed.data;
-    if (ctx.sharedServer && PROVIDER_CREDENTIAL_ENV_KEYS.has(key)) {
+    if (ctx.profile === "shared-server" && PROVIDER_CREDENTIAL_ENV_KEYS.has(key)) {
       return reply.status(409).send({ error: SHARED_SERVER_REFUSAL.providerKey });
     }
     if (scope === "project" && !rootsFor(projectId).projectPath) {
@@ -220,7 +220,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
       .safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const { projectId, scope, key } = parsed.data;
-    if (ctx.sharedServer && PROVIDER_CREDENTIAL_ENV_KEYS.has(key)) {
+    if (ctx.profile === "shared-server" && PROVIDER_CREDENTIAL_ENV_KEYS.has(key)) {
       return reply.status(409).send({ error: SHARED_SERVER_REFUSAL.providerKey });
     }
     if (scope === "project" && !rootsFor(projectId).projectPath) {
@@ -243,7 +243,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
    * outside the data dir.
    */
   const serverChecks = async (user: UserIdentity | undefined): Promise<HealthCheck[]> => {
-    if (!ctx.sharedServer) return [];
+    if (ctx.profile !== "shared-server") return [];
     const checks: HealthCheck[] = [];
     const sandbox = ctx.sandboxProvider?.name ?? "none";
     checks.push({
@@ -327,7 +327,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
   fastify.get("/runtime/doctor", async (request) => {
     const { projectId } = request.query as { projectId?: string };
     const report = await buildDoctorReport(projectId);
-    if (ctx.sharedServer) {
+    if (ctx.profile === "shared-server") {
       // The host's gh login is not how a shared server authenticates GitHub:
       // each person connects under Providers (SRV-06); the server check below says so.
       const gh = report.checks.find((check) => check.id === "github");
@@ -371,7 +371,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     if (rejectCrossOrigin(request as unknown as { headers: Record<string, unknown> })) {
       return reply.status(403).send({ error: "cross-origin requests are not allowed" });
     }
-    if (ctx.sharedServer) {
+    if (ctx.profile === "shared-server") {
       return reply.status(409).send({ error: SHARED_SERVER_REFUSAL.terminal });
     }
     const { checkId, projectId } = (request.body ?? {}) as {
@@ -404,7 +404,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     if (rejectCrossOrigin(request as unknown as { headers: Record<string, unknown> })) {
       return reply.status(403).send({ error: "cross-origin requests are not allowed" });
     }
-    if (ctx.sharedServer) {
+    if (ctx.profile === "shared-server") {
       return reply.status(409).send({ error: SHARED_SERVER_REFUSAL.terminal });
     }
     try {
@@ -430,7 +430,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     userRoots(
       rootsFor(),
       requestUser(request.raw),
-      ctx.sharedServer ? ctx.userAgentDirs : undefined,
+      ctx.profile === "shared-server" ? ctx.userAgentDirs : undefined,
     );
 
   fastify.get("/runtime/providers", async (request) => ({
@@ -516,7 +516,7 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     ...value,
     defaultMcpServers: [...mcpAssignments.defaultServerNames()],
     // ANA-01: the shared server sends nothing, so it has nothing to switch or announce.
-    ...(ctx.sharedServer ? { analyticsEnabled: false, analyticsNoticeSeen: true } : {}),
+    ...(ctx.profile === "shared-server" ? { analyticsEnabled: false, analyticsNoticeSeen: true } : {}),
   });
 
   const capabilities = () => ({

@@ -376,7 +376,7 @@ export function registerProjectRoutes(ctx: ServerContext): void {
   };
   // No clone is in flight at registration: a leftover temp folder is from a crash.
   {
-    const root = ctx.sharedServer ? projectRoot() : undefined;
+    const root = ctx.profile === "shared-server" ? projectRoot() : undefined;
     for (const entry of root ? readdirSync(root, { withFileTypes: true }) : []) {
       if (!entry.name.startsWith(CLONE_TEMP_PREFIX)) continue;
       try {
@@ -391,7 +391,7 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     request: { raw: IncomingMessage; body: unknown },
     reply: FastifyReply,
   ) => {
-    if (!ctx.sharedServer)
+    if (ctx.profile !== "shared-server")
       return reply
         .status(400)
         .send({ error: "Adding a project from a repository needs a shared server." });
@@ -627,7 +627,7 @@ export function registerProjectRoutes(ctx: ServerContext): void {
       createdAt: new Date().toISOString(),
     };
     // SRV-12a: on a shared server the delete rule covers folder projects too.
-    const creator = ctx.sharedServer ? requestUser(request.raw) : undefined;
+    const creator = ctx.profile === "shared-server" ? requestUser(request.raw) : undefined;
     if (creator) project.createdBy = identityOf(creator);
     projects.upsert(project);
     watchProject(project.path);
@@ -638,7 +638,7 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     const parsed = patchProjectBody.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     // SRV-12b: a shared server's project is never a pointer to another server.
-    if (parsed.data.sharedTo !== undefined && ctx.sharedServer)
+    if (parsed.data.sharedTo !== undefined && ctx.profile === "shared-server")
       return reply.status(409).send({ error: "sharedTo is for local projects only" });
     const { id } = request.params as { id: string };
     const project = projects.find((p) => p.id === id);
@@ -723,7 +723,7 @@ export function registerProjectRoutes(ctx: ServerContext): void {
     const project = projects.find((p) => p.id === id);
     if (!project) return reply.status(404).send({ error: "unknown project" });
     // SRV-12a (owner answer 2): only its creator or the operator removes a shared project.
-    if (ctx.sharedServer && project.createdBy) {
+    if (ctx.profile === "shared-server" && project.createdBy) {
       const user = requestUser(request.raw);
       const allowed =
         !!user &&
@@ -1092,7 +1092,7 @@ export function registerProjectRoutes(ctx: ServerContext): void {
         connected: false,
         login: null,
         profileUrl: null,
-        error: ctx.sharedServer
+        error: ctx.profile === "shared-server"
           ? "GitHub is not connected for you on this server. Connect GitHub under Providers, then reload."
           : "GitHub CLI is not authenticated. Run `gh auth login` in a terminal, then reload.",
       };

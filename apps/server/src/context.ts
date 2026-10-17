@@ -160,11 +160,9 @@ export interface ServerContext {
   userAgentDirs?: UserAgentDirs;
   /** SRV-06: per-user GitHub connections (githubConnections.ts); absent without a trusted proxy. */
   githubConnections?: GitHubConnections;
-  /** ADR 0008: the deployment profile this process runs under (profile.ts). */
-  profile?: DeploymentProfile;
-  /** SRV-09: derived from `profile` ("shared-server"); host launchers (terminal, editor) refuse.
-   * New gates read `profile`; this alias stays until the existing ones move (PRF-02). */
-  sharedServer?: boolean;
+  /** ADR 0008: the deployment profile this process runs under (profile.ts). Every
+   * product difference reads it; the matrix in the ADR lists them. */
+  profile: DeploymentProfile;
   /** ADR 0007: the process sandbox provider sessions run in (absent: none). */
   sandboxProvider?: SandboxProvider;
   /** ADR 0007: why a folder cannot hold a sandboxed session (a reserved part

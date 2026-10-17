@@ -1265,7 +1265,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       // merged into the server's own checkout.
       const owner = sessionOwner(meta);
       const asPullRequest =
-        ctx.sharedServer === true &&
+        ctx.profile === "shared-server" &&
         prProject?.origin !== undefined &&
         parseGitHubRepo(prProject.origin) !== undefined;
       let ownerGithubEnv: Record<string, string> = {};
@@ -2420,7 +2420,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         // ADR 0006: written once, here; the first send keeps it.
         provenance: { kind: "created", by: actorRef(createdBy), at: now },
         location: {
-          kind: ctx.sharedServer ? "server" : "local",
+          kind: ctx.profile === "shared-server" ? "server" : "local",
           ...(createdBy ? { owner: createdBy } : {}),
         },
         projectId: body.projectId,

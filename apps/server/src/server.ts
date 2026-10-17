@@ -1938,7 +1938,6 @@ async function initServer(
     userAgentDirs,
     githubConnections,
     profile,
-    sharedServer,
     sandboxProvider,
     sandboxRootProblem: (root) =>
       sandboxProvider.name === "none"

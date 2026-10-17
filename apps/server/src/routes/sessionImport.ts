@@ -43,7 +43,7 @@ export function registerSessionImportRoutes(ctx: ServerContext): void {
     // The transcript can be large; JSON escaping adds a little on top of the cap.
     { bodyLimit: MAX_TRANSFER_BYTES + 1024 * 1024 },
     async (request, reply) => {
-      if (!ctx.sharedServer)
+      if (ctx.profile !== "shared-server")
         return reply.status(409).send({ error: "Importing a session needs a shared server." });
       const user = requestUser(request.raw);
       if (!user) return reply.status(403).send({ error: "sign in to import a session" });

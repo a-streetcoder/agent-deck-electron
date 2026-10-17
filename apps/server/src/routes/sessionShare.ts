@@ -121,7 +121,7 @@ export function registerSessionShareRoutes(ctx: ServerContext): void {
     const { id } = request.params as { id: string };
     const meta = metaOf(id);
     if (!meta) return reply.status(404).send({ error: "unknown session" });
-    if (ctx.sharedServer) return refuse(reply, "This session is already on a shared server.");
+    if (ctx.profile === "shared-server") return refuse(reply, "This session is already on a shared server.");
     const project = projectOf(meta);
     const refusal = shareRefusal(meta, project, await liveState(sessions, id));
     if (refusal) return refuse(reply, refusal);
@@ -154,7 +154,7 @@ export function registerSessionShareRoutes(ctx: ServerContext): void {
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
     const { mode } = parsed.data;
     const { id } = request.params as { id: string };
-    if (ctx.sharedServer) return refuse(reply, "This session is already on a shared server.");
+    if (ctx.profile === "shared-server") return refuse(reply, "This session is already on a shared server.");
     // A retry replaces this device's unfinished move of the same session, but
     // never one being finalized, and never forgets the ref the earlier one pushed.
     const blocked = await handoffs.replace(id);
@@ -212,7 +212,7 @@ export function registerSessionShareRoutes(ctx: ServerContext): void {
   fastify.post("/sessions/:id/share/abort", async (request, reply) => {
     // Device-only, as preflight and share: on a shared server any member could
     // end another's hand-off (a return has its own owner-checked abort).
-    if (ctx.sharedServer) return refuse(reply, "This session is already on a shared server.");
+    if (ctx.profile === "shared-server") return refuse(reply, "This session is already on a shared server.");
     const { id } = request.params as { id: string };
     const parsed = abortBody.safeParse(request.body);
     const ref = parsed.success ? parsed.data.ref : undefined;
@@ -239,7 +239,7 @@ export function registerSessionShareRoutes(ctx: ServerContext): void {
 
   // The server took the session: freeze this copy into a pointer to it.
   fastify.patch("/sessions/:id/shared-to", async (request, reply) => {
-    if (ctx.sharedServer)
+    if (ctx.profile === "shared-server")
       return reply.status(409).send({ error: "sharedTo is for local sessions only" });
     // SRV-12c2 Unlink: the pointer becomes a normal local session again, resumed
     // from its own Pi file (the server copy, if any, is left as it is).
