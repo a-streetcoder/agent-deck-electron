@@ -17,3 +17,6 @@ Browser run 2026-10-17. Instructions > Project says 'Select a project in the sid
 
 A project picker on the Instructions (and Issues) screen like Git's, or the sidebar group header selects the project; Issues copy on a shared server points to Providers > GitHub.
 
+
+## Outcome (2026-10-17)
+Instructions has its own project picker (verified: Project scope loads CrunchyMurmur's AGENTS.md on the server); the Issues sign-in message points to Providers on a shared server; Doctor's gh check no longer says "run gh auth login" there and a "Your GitHub connection" check was added. Open: the Issues "This project" scope still depends on currentProjectId (same picker pattern wanted there).

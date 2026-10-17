@@ -1,6 +1,6 @@
 ---
 id: ade-yu35
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-10-17T19:53:38Z
@@ -17,3 +17,6 @@ Browser run 2026-10-17 on the server. Skills > qa-greet > Delete removed /data/h
 
 deleteSkill (EngineSkillStore / engine) removes the fan-out link with the store folder, or the scan prunes dangling fan-out links; test.
 
+
+## Outcome (2026-10-17)
+Fixed: deleteSkill unlinks ~/.pi/agent/skills/<name> when it is a link. Verified on the VM: create qa-del -> delete -> neither the link nor the store folder remain. Closed.

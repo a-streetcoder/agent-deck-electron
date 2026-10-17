@@ -96,3 +96,11 @@ Legend: [ ] todo · [x] pass · [!] bug found (ticket/fix) · [-] not runnable h
 - G2 note: the first ask_user call timed out before a human answered (~30 s from card to click). Server default when the model omits timeout is 110 s (askUserCoordinator); the model can pass 1-290 s. Consider a human-scale floor or the A8 timeoutPolicy by default.
 - [?] E1 remove: the project row menu on the server offers only "Choose Image" and "Hide" — no Remove for a server-cloned project. Removed via the API for cleanup; check the intended server flow (operator removes? then the UI should say so).
 - E1 note: DELETE /projects/:id (200) unregisters the project but leaves /data/projects/Hello-World on disk (orphan clone). Removed by hand at cleanup.
+
+## MCP real test 2026-10-17
+
+- [x] E6 MCP screen: assign cloudflare-docs (HTTP, no auth) to CrunchyMurmur via the row checkbox -> project.assignedMcpServers updated; server-side "Check" discovered the tool (log: output-schema warning, ticket ade-sgw1) but the row still showed not checked / Tools (0) and the renderer froze during the check (re-check once).
+- [!] Session with the assigned server: Pi's native MCP tried docs.mcp.cloudflare.com from inside the sandbox -> "Sandbox refused: network to docs.mcp.cloudflare.com" + "MCP servers need attention: cloudflare-docs failed: fetch failed"; the agent had no tool. Fix: an assigned HTTP MCP server's host is granted to the project's sandbox automatically (assignment = intent).
+- fix: assigned HTTP MCP server hosts join the sandbox grants at launch (ADR 0007 am. 20); re-test after deploy: new session must list the tool and the search must return a result.
+- [x] MCP real test PASS after the grant fix: new session listed cloudflare-docs, the agent called search_cloudflare_documentation inside the sandbox and got Cloudflare docs results (first result "Glossary"); tool output spooled to the session tmp folder.
+- [x] Environment: Add variable (project scope) QA_ENV_CHECK -> listed masked; a fresh session's bash printed QA_ENV_CHECK=[granite]. Value never appeared in the server log.

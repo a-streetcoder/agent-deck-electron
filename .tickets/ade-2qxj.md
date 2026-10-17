@@ -24,3 +24,6 @@ Decide the server removal flow (operator-only or owner), expose it in the row me
 missing Remove is a naming issue, not a missing action. Remaining: the clone folder stays on
 disk after unregistering a server-cloned project (owner decision: delete, archive or say so),
 and the Add Projects dialog stayed open after a successful clone (fixed: closes on success).
+
+## Outcome (2026-10-17)
+Add Projects dialog closes after a successful clone (verified). Open for the owner: whether unregistering a server-cloned project removes the clone folder, and whether "Hide" should read "Remove" on the server.

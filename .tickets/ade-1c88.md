@@ -135,3 +135,19 @@ Cleanup: test sessions deleted (incl. the 09:43 draft that New chat had reused),
 commit reset (`git reset --hard origin/main` in the clone), Hello-World clone removed,
 agent/skill/prompt/loop qa-* deleted through the UI. Loop artifacts left in
 /data/loop-artifacts (two small runs).
+
+## Fix round + MCP, Environment, Doctor (2026-10-17, later)
+
+Fixed and deployed: ade-3q16 (re-run keeps the chip model; rebound session launches on it),
+ade-yu35 (skill delete unlinks the fan-out), ade-v3zw (Instructions project picker, Issues
+copy, Doctor gh copy), ade-2qxj (Add dialog closes), ade-d4ec (ask_user 280 s default,
+compact toast, own-draft reuse, Doctor copy). MCP tested for real: assigning cloudflare-docs
+(HTTP, no auth) to the project, the session's Pi hit "Sandbox refused" for the MCP host; fixed
+by ADR 0007 amendment 20 (assigned HTTP MCP hosts join the grants); after the deploy the agent
+called search_cloudflare_documentation inside the sandbox and got results. Open: ade-sgw1
+(MCP SDK 1.12.1 output-schema warning), OAuth remote MCP sign-in (owner: the cloudflare
+server has a sign-in on file; the check froze my browser once — re-check by hand).
+Environment: project variable set in the UI, seen by a fresh session's bash, deleted, .env
+removed. Doctor on the server now adds: process sandbox, Claude Code for the bridge, your
+GitHub connection, your git identity, data volume free space; verified on deck.moretti.cc.
+Cleanup: test sessions deleted, cloudflare-docs unassigned, test variable removed.
