@@ -9,6 +9,8 @@ import { sessionOwner } from "./sessionRecord.ts";
  * and the package registries and toolchain downloads of the common stacks.
  * A project adds its own. */
 export const DEFAULT_SANDBOX_DOMAINS: readonly string[] = [
+  // Pi's own host: the remote model catalog refresh and the version check.
+  "pi.dev",
   "api.anthropic.com",
   "platform.claude.com",
   "claude.ai",

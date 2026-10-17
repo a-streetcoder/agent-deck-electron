@@ -325,9 +325,10 @@ describe("sandboxPolicy network", () => {
     ]);
   });
 
-  it("the defaults include the model providers' OAuth endpoints", () => {
+  it("the defaults include Pi's own host and the model providers' OAuth endpoints", () => {
     expect(DEFAULT_SANDBOX_DOMAINS).toEqual(
       expect.arrayContaining([
+        "pi.dev",
         "platform.claude.com",
         "claude.ai",
         "auth.openai.com",
