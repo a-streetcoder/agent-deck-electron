@@ -15,7 +15,8 @@
 // command's (128 + the signal number when it was killed). Refused hosts, and
 // refused writes when AGENT_DECK_SANDBOX_MONITOR=1, print to stderr as
 // `[sandbox] refused <kind> <target>`. --allow-host stands for a host the
-// owner or operator granted the project.
+// owner or operator granted the project. The command never gets this
+// process's NODE_ENV or PORT (always removed: there is no .env layer here).
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
@@ -35,6 +36,7 @@ import {
   type SandboxChoice,
   type SessionSandboxDeps,
 } from "../sandbox.ts";
+import { SERVER_ONLY_ENV } from "../sessionEnv.ts";
 import { ensureUserDir, UserAgentDirs, userAgentDirEnv } from "../userAgentDirs.ts";
 
 export interface SandboxRunArgs {
@@ -135,9 +137,11 @@ export function sandboxRunSession(
     ...(owner ? { location: { kind: "server" as const, owner } } : {}),
     ...(args.worktree ? { workspace: { path: args.worktree } } : {}),
   };
-  // As the server builds a session's env: a user's own agent dir; the
-  // operator's and an ownerless session's is the shared one.
+  // As the server builds a session's env: without the server's own NODE_ENV
+  // and PORT; a user's own agent dir, the operator's and an ownerless
+  // session's is the shared one.
   const launchEnv: NodeJS.ProcessEnv = { ...env };
+  for (const name of SERVER_ONLY_ENV) delete launchEnv[name];
   delete launchEnv.PI_CODING_AGENT_DIR;
   Object.assign(
     launchEnv,

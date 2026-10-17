@@ -84,6 +84,16 @@ import { containsGlobChars } from "@anthropic-ai/sandbox-runtime/dist/sandbox/sa
  *   `/tmp/claude` is writable to every sandbox, shared between sessions. The
  *   provider creates it and sets `TMPDIR` to the policy's per-session `tmpDir`
  *   in front of the command itself, which wins over srt's.
+ * - On Linux a `privateTmp` policy (the server's) gives the sandbox its own
+ *   `/tmp`: a read-deny of `/tmp`, which srt turns into an empty writable
+ *   tmpfs, with `/tmp/claude` (still shared) and, by their exact paths, this
+ *   srt's proxy sockets and its write monitor's socket folder bound back. It
+ *   lives as long as the wrap, so Pi and the commands it starts share it,
+ *   while the session's terminal or a validation command (other wraps) each
+ *   get their own; TMPDIR stays the session's folder on disk. The tmpfs has no
+ *   size of its own (srt passes none): it counts against the container's
+ *   memory limit, so on Linux every wrapped command first raises its OOM score
+ *   to 1000 (OOM_FIRST_SCRIPT).
  * - srt skips write roots that do not exist, so the provider creates the
  *   policy's `createDirs` (scratch, tmpDir, session folder, home toolchain
  *   folders) first. The toolchain folders are one home on the server, shared
@@ -150,6 +160,17 @@ export const noneProvider: SandboxProvider = {
 export const SRT_PACKAGE = "@anthropic-ai/sandbox-runtime";
 /** srt points TMPDIR here inside the sandbox but does not create it. */
 const SRT_TMPDIR = "/tmp/claude";
+/** The folder srt's Linux write monitor makes for its socket (0.0.80:
+ * `mkdtemp(<tmpdir>/srt-obs-)`; no accessor, sandbox.srtContract.test pins it). */
+export const SRT_MONITOR_DIR_PREFIX = "srt-obs-";
+
+/**
+ * Raises the sandboxed tree's OOM score to the maximum before srt's wrapper
+ * runs (raising needs no privilege; bubblewrap and everything under it
+ * inherit it), so a session that fills its in-memory `/tmp` is killed before
+ * the server. The argv is `[/bin/sh, -c, <this>, sh, <srt's argv>...]`.
+ */
+export const OOM_FIRST_SCRIPT = 'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$@"';
 
 type SrtManager = Pick<
   typeof SandboxManager,
@@ -160,6 +181,8 @@ type SrtManager = Pick<
   | "unregisterCommandNetworkLists"
   | "cleanupAfterCommand"
   | "reset"
+  | "getLinuxHttpSocketPath"
+  | "getLinuxSocksSocketPath"
 > & {
   getSandboxViolationStore(): Pick<
     SandboxViolationStore,
@@ -301,18 +324,31 @@ export function prepareDenyWrite(policy: SandboxPolicy, fs: SandboxFs = hostFs):
 
 /** srt's per-wrap settings for one session; `deniedDomains` must be present or
  * srt refuses. `denyWrite` comes from prepareDenyWrite; `denyRead` keeps the
- * entries that exist and every glob (srt expands those). */
+ * entries that exist and every glob (srt expands those). On Linux a
+ * `privateTmp` policy read-denies `/tmp`: srt mounts an empty, writable tmpfs
+ * there and restores its own `/tmp/claude`; `tmpBinds` (this srt's proxy
+ * sockets and its monitor's socket folder, which srt bound before the tmpfs)
+ * are bound back into it, or the sandbox has no network and no monitor. */
 export function srtSettings(
   policy: SandboxPolicy,
   denyWrite: string[],
   fs: SandboxFs = hostFs,
+  platform: NodeJS.Platform = process.platform,
+  tmpBinds: readonly string[] = [],
 ): Partial<SandboxRuntimeConfig> {
+  const privateTmp = policy.privateTmp === true && platform === "linux";
   return {
     filesystem: {
       allowWrite: policy.allowWrite,
       denyWrite,
-      denyRead: policy.denyRead.filter((entry) => entry.includes("*") || fs.exists(entry)),
-      allowRead: carveReadAroundWrites(policy.allowRead, policy.allowWrite, policy.denyRead, fs),
+      denyRead: [
+        ...policy.denyRead.filter((entry) => entry.includes("*") || fs.exists(entry)),
+        ...(privateTmp ? ["/tmp"] : []),
+      ],
+      allowRead: [
+        ...carveReadAroundWrites(policy.allowRead, policy.allowWrite, policy.denyRead, fs),
+        ...(privateTmp ? tmpBinds : []),
+      ],
     },
     network: {
       allowedDomains: policy.allowedDomains,
@@ -517,6 +553,14 @@ export function createSrtProvider(
     new PiSandboxError(`pi-host: sandbox provider "srt" was disposed`);
   /** Wraps in flight, which dispose() lets settle before it resets srt. */
   const pending = new Set<Promise<unknown>>();
+  /** srt's write-monitor socket folder (Linux, monitor on), once initialized. */
+  let monitorDir: string | undefined;
+  const monitorDirs = (): string[] => {
+    const root = tmpdir().replace(/\/+$/, "");
+    return (fs.children(root) ?? [])
+      .filter((name) => name.startsWith(SRT_MONITOR_DIR_PREFIX))
+      .map((name) => `${root}/${name}`);
+  };
 
   /** Attribute each new line of srt's store to the live wrap it belongs to. */
   const watchViolations = (srt: SrtManager): void => {
@@ -555,12 +599,26 @@ export function createSrtProvider(
     if (disposed) throw disposedError();
     // The log monitor: srt then observes refused writes (Linux seccomp,
     // macOS Seatbelt) besides the refused hosts its proxy always records.
-    initialized ??= withoutSignalCleanup(() => srt.initialize(global, undefined, monitor)).catch(
-      (error: unknown) => {
-        initialized = undefined;
-        throw wrapError(`could not start ${SRT_PACKAGE}`, error);
-      },
-    );
+    initialized ??= withoutSignalCleanup(async () => {
+      const watchDir = monitor && platform === "linux";
+      const before = new Set(watchDir ? monitorDirs() : []);
+      await srt.initialize(global, undefined, monitor);
+      if (!watchDir) return;
+      // The monitor's folder is the one srt-obs- folder this initialize made
+      // (srt keeps the monitor private). Not exactly one: fail closed rather
+      // than run with the monitor asked for and silent under a private /tmp.
+      const made = monitorDirs().filter((dir) => !before.has(dir));
+      monitorDir = made.length === 1 ? made[0] : undefined;
+      if (!monitorDir) {
+        const why = `pi-host: sandbox: srt's write monitor folder not found (${made.length} new ${SRT_MONITOR_DIR_PREFIX}* folders, another srt initializing at the same time?); refused writes in sessions with a private /tmp would not be reported, so the monitor (AGENT_DECK_SANDBOX_MONITOR=1) cannot start`;
+        console.warn(why);
+        await srt.reset().catch(() => {});
+        throw new PiSandboxError(why);
+      }
+    }).catch((error: unknown) => {
+      initialized = undefined;
+      throw wrapError(`could not start ${SRT_PACKAGE}`, error);
+    });
     await initialized;
     if (disposed) {
       // Finished after dispose(): never hand out argv. dispose() resets it
@@ -626,6 +684,7 @@ export function createSrtProvider(
         unsubscribeStore = undefined;
         active.clear();
         global = baseConfig();
+        monitorDir = undefined;
         const srt = loaded;
         if (srt && started) {
           resetIssued = true;
@@ -666,15 +725,24 @@ export function createSrtProvider(
       const { argv } = await srt.wrapWithSandboxArgv(
         command,
         undefined,
-        srtSettings(policy, denyWrite, fs),
+        srtSettings(policy, denyWrite, fs, platform, [
+          ...new Set(
+            [srt.getLinuxHttpSocketPath(), srt.getLinuxSocksSocketPath(), monitorDir].filter(
+              (entry): entry is string => !!entry,
+            ),
+          ),
+        ]),
         undefined,
         cmd.cwd,
         { commandId },
       );
       // Disposed meanwhile: srt is (being) reset, the argv would run unfenced.
       if (disposed) throw disposedError();
-      const [shell, ...args] = argv;
-      if (!shell) throw new Error("srt returned an empty argv");
+      if (argv.length === 0) throw new Error("srt returned an empty argv");
+      // Linux: the sandboxed tree is the OOM killer's first choice (its /tmp
+      // is memory the container shares with the server).
+      const [shell = "", ...args] =
+        platform === "linux" ? ["/bin/sh", "-c", OOM_FIRST_SCRIPT, "sh", ...argv] : argv;
       let released = false;
       const release = (): void => {
         if (released) return;

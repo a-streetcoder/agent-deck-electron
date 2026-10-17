@@ -5,7 +5,8 @@ import type { SandboxViolation } from "./transcript.ts";
 import { sessionOwner } from "./sessionRecord.ts";
 
 /** Hosts every sandboxed session may reach: the model providers (and their
- * OAuth endpoints), GitHub and the package registries of the common stacks.
+ * OAuth endpoints), GitHub (its release downloads are `*.githubusercontent.com`),
+ * and the package registries and toolchain downloads of the common stacks.
  * A project adds its own. */
 export const DEFAULT_SANDBOX_DOMAINS: readonly string[] = [
   "api.anthropic.com",
@@ -26,7 +27,29 @@ export const DEFAULT_SANDBOX_DOMAINS: readonly string[] = [
   "index.crates.io",
   "static.rust-lang.org",
   "proxy.golang.org",
+  "sum.golang.org",
   "repo.maven.apache.org",
+  // Toolchain downloads and the registries beyond those (docs/stack-matrix.md):
+  // node-gyp's headers, yarn, gems
+  "nodejs.org",
+  "registry.yarnpkg.com",
+  "repo.yarnpkg.com",
+  "rubygems.org",
+  "index.rubygems.org",
+  // uv's managed Python, rustup's installer, Go's releases
+  "releases.astral.sh",
+  "sh.rustup.rs",
+  "go.dev",
+  "dl.google.com",
+  // the Gradle wrapper and plugins, Temurin's "latest" links
+  "services.gradle.org",
+  "plugins.gradle.org",
+  "plugins-artifacts.gradle.org",
+  "api.adoptium.net",
+  // Playwright's browsers (current releases; older ones use *.azureedge.net
+  // mirrors, which a project grants)
+  "cdn.playwright.dev",
+  "playwright.download.prss.microsoft.com",
 ];
 
 /** Folders under the server's `<dataDir>/home` that per-user toolchain
@@ -173,6 +196,10 @@ export interface SandboxPolicy {
   allowRead: string[];
   /** The session's own temp folder (inside its scratch folder). */
   tmpDir: string;
+  /** `/tmp` inside the sandbox is the sandbox's own, empty and writable (for
+   * tools that ignore TMPDIR: the JVM, turbo's strict env), never the host's.
+   * Set on the server; the provider applies it where it can (srt on Linux). */
+  privateTmp?: boolean;
   /** Writable folders the provider creates before the wrap (srt skips
    * write paths that do not exist). */
   createDirs: string[];
@@ -321,7 +348,8 @@ const ownedByOperator = (
  * Reads on the server: all of `<dataDir>` is denied but what the session works
  * on (above, the owner's folder, the shared agent entries), plus the home's
  * credentials and other sessions' `/tmp/agent-deck-*`; the operator's auth
- * files are denied unless the owner is the operator. Network: the default
+ * files are denied unless the owner is the operator; `/tmp` is the sandbox's
+ * own (`privateTmp`). Network: the default
  * hosts plus the project's, and never a private address.
  *
  * Throws SandboxPolicyError for a session id that is not one path segment
@@ -449,6 +477,7 @@ export function sandboxPolicy(
     denyRead: unique(denyRead),
     allowRead: unique(allowRead),
     tmpDir,
+    ...(server ? { privateTmp: true } : {}),
     createDirs: unique([scratch, tmpDir, sessionDir, ...toolchains]),
     allowedDomains,
     deniedResolvedAddresses: unique([
@@ -488,19 +517,22 @@ export function sandboxViolationOf(line: string): SandboxViolation | undefined {
  * Whether `policy` lets the session write `file`: inside an `allowWrite` root
  * and no `denyWrite` entry. srt's Linux observer reports every write outside
  * the roots it knew at its start; this drops the ones the session's own wrap
- * allowed.
+ * allowed, writes into a private `/tmp` (Linux) included.
  */
 export function sandboxAllowsWrite(
-  policy: Pick<SandboxPolicy, "allowWrite" | "denyWrite">,
+  policy: Pick<SandboxPolicy, "allowWrite" | "denyWrite" | "privateTmp">,
   file: string,
   /** srt's rules differ per platform (srtDeniesInWorkingFolder). */
-  platform?: string,
+  platform: string | undefined = (globalThis as { process?: { platform?: string } }).process
+    ?.platform,
 ): boolean {
   const target = normalize(file);
   const covers = (root: string): boolean => {
     const base = normalize(root);
     return target === base || target.startsWith(`${base === "/" ? "" : base}/`);
   };
+  // The sandbox's own tmpfs: the write never reaches the host.
+  if (policy.privateTmp && platform === "linux" && covers("/tmp")) return true;
   if (!policy.allowWrite.some(covers) || policy.denyWrite.some((entry) => covers(entry.path))) {
     return false;
   }

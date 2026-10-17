@@ -2882,6 +2882,39 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
     }
   });
 
+  it("spawns Pi without the server's own NODE_ENV and PORT, unless the project's .env sets them", async () => {
+    const { runtime, spawned } = makeFakeRuntime();
+    // envFileLayer is the 19th positional constructor argument.
+    const args: unknown[] = [runtime, new ReceiptBus(false)];
+    args[18] = (projectId?: string) =>
+      projectId === "dev" ? { NODE_ENV: "development", PORT: "3000" } : {};
+    const manager = new SessionManager(...(args as ConstructorParameters<typeof SessionManager>));
+    const meta = (projectId?: string): SessionMeta => ({
+      id: randomUUID(),
+      cwd: process.cwd(),
+      createdAt: new Date().toISOString(),
+      ...(projectId ? { projectId } : {}),
+    });
+    const server = { NODE_ENV: process.env.NODE_ENV, PORT: process.env.PORT };
+    process.env.NODE_ENV = "production";
+    process.env.PORT = "4200";
+    try {
+      await manager.resume(meta(), { kind: "parent" }).catch(() => {});
+      await manager.resume(meta("dev"), { kind: "parent" }).catch(() => {});
+      // As PiProcess merges it: the session's env over the server's.
+      const effective = (index: number) => ({ ...process.env, ...spawned[index]!.spawn.env });
+      expect(effective(0).NODE_ENV).toBeUndefined();
+      expect(effective(0).PORT).toBeUndefined();
+      expect(effective(1)).toMatchObject({ NODE_ENV: "development", PORT: "3000" });
+    } finally {
+      for (const [name, value] of Object.entries(server)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      await runtime.dispose();
+    }
+  });
+
   it("spawns Pi with the owner's GitHub token, and none for an unconnected owner (SRV-06)", async () => {
     const { runtime, spawned } = makeFakeRuntime();
     // githubConnections is the 27th positional constructor argument.

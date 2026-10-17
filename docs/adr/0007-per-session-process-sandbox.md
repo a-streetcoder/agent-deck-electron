@@ -192,3 +192,26 @@ do not interfere.
     keeps x86_64 only, with non-overlapping `socket` allow rules (all families except
     `AF_NETLINK` protocol 12 and `AF_VSOCK`) and the default `EPERM` for the rest. The AppArmor
     profile denies every write under `/proc/sys/kernel/` except `shm*`.
+
+## Amendments (2026-10-17, from the SBX-06 stack matrix, SBX-07)
+
+16. **A sandbox's `/tmp` is its own.** Tools that ignore `TMPDIR` (the JVM, turbo's strict env)
+    failed on the read-only `/tmp`. On the server the policy asks for a private `/tmp`
+    (`privateTmp`); srt on Linux gets a read-deny of `/tmp`, which it mounts as an empty writable
+    tmpfs per wrap, and the provider binds this srt's proxy sockets and its write monitor's
+    socket folder back into it by their exact paths (srt restores `/tmp/claude` itself, still
+    shared as amendment 3 says). srt has no option to bind the session's folder there instead;
+    `TMPDIR` stays that folder. The private `/tmp` belongs to one wrap: Pi (and what it runs),
+    each terminal, each validation command and each script get their own, and Pi's is lost when
+    it relaunches; what is written under `TMPDIR` persists on disk. The tmpfs is in memory, has
+    no size (srt passes none) and counts against the container's limit, so every wrapped command
+    raises its OOM score to 1000 and dies before the server; macOS keeps the host's `/tmp`.
+17. **The default list covers the common stacks' toolchains.** Decision 2's default list also
+    holds the toolchain downloads and registries the matrix needed (Node headers, yarn, RubyGems,
+    uv's Python, rustup, Go and its checksum database, Gradle, Temurin, Playwright's current
+    browser CDNs). It limits accidental reach; it is not an exfiltration control.
+18. **The server's own env stays with the server.** On every host (the shared server and a
+    desktop alike), a session's launch env leaves out the server process's `NODE_ENV` and `PORT`
+    unless the project's `.env` or the launch env sets them: a user's exported `NODE_ENV` no
+    longer reaches Pi, nor the desktop launcher's `PORT=0`. The terminal and the script runner
+    drop both always (their blocklist).

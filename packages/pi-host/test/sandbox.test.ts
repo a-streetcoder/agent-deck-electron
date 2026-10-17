@@ -6,6 +6,7 @@ import {
   type SandboxPolicyInput,
 } from "@agent-deck/domain";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
+import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import { PiProcess } from "../src/PiProcess.ts";
 import {
@@ -13,6 +14,7 @@ import {
   createSrtProvider,
   MAX_CARVED_ENTRIES,
   noneProvider,
+  OOM_FIRST_SCRIPT,
   PiSandboxError,
   prepareDenyWrite,
   sandboxProbeProblem,
@@ -117,6 +119,9 @@ function fakeSrt(argv: string[] = ["/bin/bash", "-c", "wrapped"]) {
     unregisterCommandNetworkLists: vi.fn(),
     cleanupAfterCommand: vi.fn(),
     reset: vi.fn(async () => {}),
+    // srt 0.0.80 with its mux: one socket for both protocols.
+    getLinuxHttpSocketPath: vi.fn(() => "/tmp/claude-http-0123.sock"),
+    getLinuxSocksSocketPath: vi.fn(() => "/tmp/claude-http-0123.sock"),
   };
 }
 
@@ -205,9 +210,108 @@ describe("sandboxProbeProblem (startup probe)", () => {
 });
 
 describe("srt provider (fake SandboxManager)", () => {
+  it("gives a server session its own /tmp on Linux, with this srt's sockets bound back", async () => {
+    const root = tmpdir().replace(/\/+$/, "");
+    const settingsOn = async (
+      platform: NodeJS.Platform,
+      policy: SandboxPolicy,
+      monitor = false,
+      sockets: [string, string] = ["/tmp/claude-http-0123.sock", "/tmp/claude-http-0123.sock"],
+    ) => {
+      const srt = fakeSrt();
+      srt.getLinuxHttpSocketPath.mockReturnValue(sockets[0]);
+      srt.getLinuxSocksSocketPath.mockReturnValue(sockets[1]);
+      // Another srt's monitor folder was there before; this initialize makes one.
+      const host = fakeFs([root, `${root}/srt-obs-other`]);
+      srt.initialize.mockImplementation(async () => host.fs.mkdir(`${root}/srt-obs-mine`));
+      const provider = createSrtProvider(async () => srt, platform, host.fs, monitor);
+      await provider.wrap(plan(), policy);
+      await provider.dispose?.();
+      const call = srt.wrapWithSandboxArgv.mock.calls[0] as unknown as WrapCall;
+      return call[2].filesystem as { denyRead: string[]; allowRead: string[] };
+    };
+    const server = serverPolicy("s1");
+    expect(server.privateTmp).toBe(true);
+    const linux = await settingsOn("linux", server);
+    expect(linux.denyRead).toContain("/tmp");
+    // The exact paths, the mux's one socket once, never a glob.
+    expect(linux.allowRead.filter((entry) => entry.startsWith("/tmp/"))).toEqual([
+      "/tmp/claude-http-0123.sock",
+    ]);
+    expect(linux.allowRead.some((entry) => entry.includes("*"))).toBe(false);
+    const split = await settingsOn("linux", server, false, ["/tmp/h.sock", "/tmp/s.sock"]);
+    expect(split.allowRead).toEqual(expect.arrayContaining(["/tmp/h.sock", "/tmp/s.sock"]));
+    // With the monitor: only the folder this initialize made, not another srt's.
+    const monitored = await settingsOn("linux", server, true);
+    expect(monitored.allowRead).toContain(`${root}/srt-obs-mine`);
+    expect(monitored.allowRead).not.toContain(`${root}/srt-obs-other`);
+    // macOS (Seatbelt has no tmpfs: a deny would only refuse /tmp) and a
+    // desktop's policy keep the host's /tmp.
+    for (const [platform, policy] of [
+      ["darwin", server],
+      ["linux", POLICY],
+    ] as const) {
+      const fs = await settingsOn(platform, policy, true);
+      expect(fs.denyRead).not.toContain("/tmp");
+      expect(fs.allowRead.some((entry) => entry.endsWith(".sock"))).toBe(false);
+      expect(fs.allowRead.some((entry) => entry.includes("srt-obs-"))).toBe(false);
+    }
+  });
+
+  it("fails closed when the monitor is asked for and its folder is not one new srt-obs- folder", async () => {
+    const root = tmpdir().replace(/\/+$/, "");
+    const attempt = async (monitor: boolean) => {
+      const srt = fakeSrt();
+      const host = fakeFs([root]);
+      const children = vi.spyOn(host.fs, "children");
+      // Another srt initializing at the same moment: two new folders.
+      srt.initialize.mockImplementation(async () => {
+        host.fs.mkdir(`${root}/srt-obs-a`);
+        host.fs.mkdir(`${root}/srt-obs-b`);
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const provider = createSrtProvider(async () => srt, "linux", host.fs, monitor);
+      try {
+        return { result: await provider.wrap(plan(), serverPolicy("s1")).catch((e) => e), srt };
+      } finally {
+        await provider.dispose?.();
+        warn.mockRestore();
+        expect(children.mock.calls.some(([dir]) => dir === root)).toBe(monitor);
+      }
+    };
+    const on = await attempt(true);
+    expect(on.result).toBeInstanceOf(PiSandboxError);
+    expect(String(on.result.message)).toMatch(/2 new srt-obs-\* folders/);
+    expect(on.srt.reset).toHaveBeenCalled();
+    expect(on.srt.wrapWithSandboxArgv).not.toHaveBeenCalled();
+    // Not asked for: no detection, no failure.
+    const off = await attempt(false);
+    expect(off.result).not.toBeInstanceOf(Error);
+    expect(off.srt.wrapWithSandboxArgv).toHaveBeenCalledTimes(1);
+  });
+
+  it("on Linux runs srt's argv behind an OOM score of 1000; elsewhere as srt returns it", async () => {
+    for (const platform of ["linux", "darwin"] as const) {
+      const srt = fakeSrt(["/bin/bash", "-c", "wrapped"]);
+      const provider = createSrtProvider(async () => srt, platform, fakeFs().fs);
+      const wrapped = await provider.wrap(plan(), POLICY);
+      await provider.dispose?.();
+      expect([wrapped.command, ...wrapped.args]).toEqual(
+        platform === "linux"
+          ? ["/bin/sh", "-c", OOM_FIRST_SCRIPT, "sh", "/bin/bash", "-c", "wrapped"]
+          : ["/bin/bash", "-c", "wrapped"],
+      );
+    }
+    expect(OOM_FIRST_SCRIPT).toBe('echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$@"');
+  });
+
   it("starts srt's log monitor only when asked (AGENT_DECK_SANDBOX_MONITOR=1)", async () => {
     const srt = fakeSrt();
-    const provider = createSrtProvider(async () => srt, "linux", fakeFs().fs, true);
+    const root = tmpdir().replace(/\/+$/, "");
+    const host = fakeFs([root]);
+    // srt's monitor makes its socket folder during initialize.
+    srt.initialize.mockImplementation(async () => host.fs.mkdir(`${root}/srt-obs-x`));
+    const provider = createSrtProvider(async () => srt, "linux", host.fs, true);
     await provider.wrap(plan(), POLICY);
     expect((srt.initialize.mock.calls[0] as unknown[])[2]).toBe(true);
     await provider.dispose?.();
@@ -279,8 +383,8 @@ describe("srt provider (fake SandboxManager)", () => {
       allowedDomains: [],
     });
     expect(wrapped).toEqual({
-      command: "/bin/bash",
-      args: ["-c", "wrapped"],
+      command: "/bin/sh",
+      args: ["-c", OOM_FIRST_SCRIPT, "sh", "/bin/bash", "-c", "wrapped"],
       env: { ...plan().env, TMPDIR: "/srv/deck/sandbox/s1/tmp", NODE_USE_ENV_PROXY: "1" },
       cwd: "/data/wt/s1",
       release: expect.any(Function),
