@@ -969,13 +969,14 @@ async function createChatSession(
       .catch(() => ({}))) as { code?: unknown };
     if (body.code === "cwd_outside_projects") {
       const { projects } = useAppStore.getState();
-      if (projects.length !== 1) {
+      const only = projects.length === 1 ? projects[0] : undefined;
+      if (!only) {
         throw new Error(
           "Pick a project in the sidebar first: on this server every chat runs inside a project.",
         );
       }
-      useAppStore.getState().setCurrentProject(projects[0].id);
-      response = await post(projects[0].id);
+      useAppStore.getState().setCurrentProject(only.id);
+      response = await post(only.id);
     }
   }
   if (!response.ok) throw new Error(await responseErrorMessage(response));
