@@ -2299,6 +2299,7 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       if (error instanceof Error && "statusCode" in error && typeof error.statusCode === "number") {
         return reply.status(error.statusCode).send({ error: error.message });
       }
+      serverLog.error("sessions", "session start failed", error);
       return reply.status(500).send({
         code: "session_creation_failed",
         error: `The session couldn't be started or activated. Fix the launch error and try again: ${error instanceof Error ? error.message : String(error)}`,
