@@ -178,8 +178,8 @@ import {
   authenticateProxiedRequest,
   CloudflareAccessVerifier,
   requestUser,
-  trustedProxyConfigFromEnv,
 } from "./trustedProxy.ts";
+import { resolveProfile } from "./profile.ts";
 import { LoopSessionSnapshotStore } from "./loopSessionSnapshots.ts";
 import { SubagentRunStore } from "./subagentRunStore.ts";
 import {
@@ -406,8 +406,10 @@ async function initServer(
   const receipts = new ReceiptBus(process.env.AGENT_DECK_TEST === "1");
   // Remote-server POC (docs/remote-server-poc.md): behind cloudflared + Access,
   // every request carries a verified identity; sessions and prompts record it.
-  const trustedProxy = trustedProxyConfigFromEnv();
-  const index = new SessionIndex(dataDir, trustedProxy ? "server" : "local");
+  // ADR 0008: one deployment profile, resolved once; everything below derives from it.
+  const { profile, trustedProxy, side } = resolveProfile(process.env);
+  const sharedServer = profile === "shared-server";
+  const index = new SessionIndex(dataDir, side);
   // The live session first: a fork or a deferred launch emits before its index row exists.
   projectOfSession = (sessionId) =>
     sessions.get(sessionId)?.meta.projectId ??
@@ -460,12 +462,13 @@ async function initServer(
     : undefined;
   // ADR 0007: the process sandbox around every session's Pi (and, through the
   // same provider, every other spawn that runs worktree code).
-  const sandboxChoice = await chooseSandboxProvider({
-    env: process.env,
-    sharedServer: trustedProxy !== null,
-  });
+  const sandboxChoice = await chooseSandboxProvider({ env: process.env, sharedServer });
   const sandboxProvider = sandboxChoice.provider;
   if (sandboxChoice.warning) serverLog.warn("sandbox", sandboxChoice.warning);
+  serverLog.info(
+    "profile",
+    `${profile}${trustedProxy ? ` (trusted proxy ${trustedProxy.teamDomain})` : ""}, sandbox ${sandboxProvider.name}`,
+  );
   serverLog.info("sandbox", `provider ${sandboxProvider.name}`);
   // A sandboxed session must not reach the server's own git through config.
   hardenServerGit(sandboxProvider.name !== "none");
@@ -539,7 +542,7 @@ async function initServer(
   const extraDeniedAddresses = await sandboxDenyAddresses(process.env, sandboxProvider);
   const sandboxDeps: SessionSandboxDeps = {
     dataDir,
-    side: trustedProxy ? "server" : "local",
+    side,
     provider: sandboxProvider,
     sharedAgentDir: () => piAgentHome(rootsFor()),
     ...(operatorEmail ? { operator: { id: operatorEmail } } : {}),
@@ -1815,7 +1818,7 @@ async function initServer(
     sessionPastes,
     sessionAuthors,
     events,
-    sharedServer: trustedProxy !== null,
+    sharedServer,
     // SRV-04/06: the typing user's git identity and GitHub connection, as on
     // the Git screen (no global gitconfig exists on the server, so without the
     // identity a commit in the terminal fails to auto-detect an email).
@@ -1913,7 +1916,7 @@ async function initServer(
     key: process.env.AGENT_DECK_POSTHOG_KEY,
     dataDir,
     appVersion: process.env.AGENT_DECK_APP_VERSION || "dev",
-    sharedServer: trustedProxy !== null,
+    sharedServer,
   });
   sessions.onSubagentStarted = () => analytics.track("subagent_spawned");
 
@@ -1934,7 +1937,8 @@ async function initServer(
     gitIdentities,
     userAgentDirs,
     githubConnections,
-    sharedServer: trustedProxy !== null,
+    profile,
+    sharedServer,
     sandboxProvider,
     sandboxRootProblem: (root) =>
       sandboxProvider.name === "none"
@@ -1991,7 +1995,7 @@ async function initServer(
   };
 
   // ADR 0006: the records this server creates say which side they live on.
-  sessions.recordSide = trustedProxy ? "server" : "local";
+  sessions.recordSide = side;
   sessions.configureResourceRefresh(
     (meta) => {
       const defaults = envDefaults();

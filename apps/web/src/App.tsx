@@ -162,12 +162,13 @@ export function App() {
               piAgentTranscriptVisibility?: unknown;
               analyticsNoticeSeen?: boolean;
             };
-            capabilities?: { analytics?: boolean };
+            capabilities?: { analytics?: boolean; profile?: "desktop" | "shared-server" };
           } | null,
         ) => {
           if (!data) throw new Error("Settings request failed");
           if (!active) return;
           if (data?.settings?.keybindings) setKeybindings(data.settings.keybindings);
+          useAppStore.getState().setProfile(data.capabilities?.profile ?? "desktop");
           setAnalyticsSettings(data);
           setTranscriptVisibility(
             coerceTranscriptVisibility(data.settings?.piAgentTranscriptVisibility),

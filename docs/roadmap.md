@@ -69,6 +69,13 @@ ADR 0003 trust model; live setup in [`remote-server-poc.md`](remote-server-poc.m
 Lane A's event log (A1) is what the shared server will serve as the team stream; B and A meet
 there. Until A1 lands, B keeps `session-authors.json` and the per-session push bus.
 
+## Lane PRF — Deployment profiles ([ADR 0008](adr/0008-deployment-profiles.md), accepted 2026-10-17)
+
+- ade-qpt0 (epic): one fact for "desktop or shared server"; the behaviour matrix lives in the ADR.
+- ade-4koj PRF-01: profile module, server derivations, `capabilities.profile`, matrix — done 2026-10-17 by the architect in the accepting change.
+- ade-lqmw PRF-02: the 43 `sharedServer` reads move to `ctx.profile`; key route tests run under both profiles.
+- ade-7w6y PRF-03: web gates on the store profile; `isElectron()` only for Electron-only features.
+
 ## Lane C — Distribution (carried over)
 
 See [`release-windows.md`](release-windows.md). Tickets in `.tickets/`.

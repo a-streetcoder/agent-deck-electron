@@ -525,6 +525,8 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     analytics: ctx.analytics?.available ?? false,
     // ADR 0007: the process sandbox sessions run in.
     sandbox: { provider: ctx.sandboxProvider?.name ?? "none" },
+    // ADR 0008: the deployment profile, so the web gates on one fact.
+    profile: ctx.profile ?? "desktop",
   });
 
   fastify.get("/settings", async () => ({

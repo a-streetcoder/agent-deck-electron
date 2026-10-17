@@ -25,6 +25,7 @@ type FileKind = "context" | "system" | "append";
 
 export function InstructionsScreen() {
   const storeProjectId = useAppStore((state) => state.currentProjectId);
+  const profile = useAppStore((state) => state.profile);
   const projects = useAppStore((state) => state.projects);
   const setError = useAppStore((state) => state.setError);
   // ade-v3zw: the shared server's sidebar selects no project, so the screen
@@ -305,7 +306,7 @@ export function InstructionsScreen() {
           }
           trailing={
             <>
-              {scope === "project" ? (
+              {scope === "project" && profile === "shared-server" ? (
                 <ControlSelect
                   aria-label="Instructions project"
                   data-testid="instructions-project-picker"

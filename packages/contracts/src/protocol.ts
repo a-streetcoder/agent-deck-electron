@@ -929,3 +929,6 @@ export const ServerMessage = Schema.Union(
   }),
 );
 export type ServerMessage = typeof ServerMessage.Type;
+
+/** ADR 0008: the deployment profile a backend runs under, carried in `/settings` capabilities. */
+export type DeploymentProfile = "desktop" | "shared-server";

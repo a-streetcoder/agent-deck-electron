@@ -6,6 +6,7 @@ import type {
   ProjectMeta,
   SessionMeta,
   TranscriptVisibilitySettings,
+  DeploymentProfile,
 } from "@agent-deck/contracts";
 import { DEFAULT_TRANSCRIPT_VISIBILITY } from "@agent-deck/contracts";
 import {
@@ -301,6 +302,8 @@ export const mirroredTranscript = (state: AppState): TranscriptState =>
 export interface AppState {
   connection: ConnectionStatus;
   me: CurrentUser | null;
+  /** ADR 0008: the backend's deployment profile (from /settings capabilities); null until loaded. */
+  profile: DeploymentProfile | null;
   /** True once GET /me has answered (null `me` then means loopback, not "unknown yet"). */
   meKnown: boolean;
   /** True only after the current session's (re)subscription ack settles. */
@@ -466,6 +469,7 @@ export interface AppState {
   setSession(session: SessionMeta | null): void;
   setSessions(sessions: SessionMeta[]): void;
   setMe(me: CurrentUser | null): void;
+  setProfile(profile: DeploymentProfile): void;
   setAttentionAnnouncement(message: string): void;
   setAttentionRoutingToken(token: number | null): void;
   setPendingComposerText(pending: PendingComposerText | null): void;
@@ -587,6 +591,7 @@ export const useAppStore = create<AppState>((set) => ({
   connection: "connecting",
   me: null,
   meKnown: false,
+  profile: null,
   sessionSubscriptionSettled: false,
   view: "chat",
   panelExpanded: initialPanelExpanded(),
@@ -690,6 +695,7 @@ export const useAppStore = create<AppState>((set) => ({
     ),
   setSessions: (sessions) => set({ sessions, sessionsLoaded: true }),
   setMe: (me) => set({ me, meKnown: true }),
+  setProfile: (profile) => set({ profile }),
   setAttentionAnnouncement: (text) =>
     set((state) => ({
       attentionAnnouncement: { id: (state.attentionAnnouncement?.id ?? 0) + 1, text },
