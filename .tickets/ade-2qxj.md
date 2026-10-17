@@ -17,3 +17,10 @@ Browser run 2026-10-17. Add Projects from a repository URL cloned https://github
 
 Decide the server removal flow (operator-only or owner), expose it in the row menu, remove or archive the clone on delete (or say it stays), close the Add dialog on success.
 
+
+## Correction (architect, 2026-10-17)
+
+"Hide" in the project row menu already calls DELETE /projects/:id (unregister), so the
+missing Remove is a naming issue, not a missing action. Remaining: the clone folder stays on
+disk after unregistering a server-cloned project (owner decision: delete, archive or say so),
+and the Add Projects dialog stayed open after a successful clone (fixed: closes on success).

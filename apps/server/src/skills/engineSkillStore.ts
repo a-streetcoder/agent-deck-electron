@@ -14,6 +14,8 @@
  * REST routes keep their existing HTTP status mapping.
  */
 
+import { lstatSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 import { ResourceCatalogCapabilityError, type ResourceRecovery } from "@agent-deck/resources";
 import type { ResourceCatalogErrorCode } from "@agent-deck/resources";
 import type { SkillInfo } from "@agent-deck/domain";
@@ -139,8 +141,16 @@ export class EngineSkillStore implements SkillStore {
   }
 
   deleteSkill(scope: SkillScope, name: string, projectId?: string): void {
-    const { projectRoot } = this.resolveRoots(scope, projectId);
+    const { projectRoot, fanRoot } = this.resolveRoots(scope, projectId);
     fromEngine(() => this.deps.engine.deleteSkill(this.deps.home, projectRoot, scope, name));
+    // The engine deletes the canonical tree; its fan-out link in Pi's skills
+    // folder would stay dangling (ade-yu35). Only a link is removed, never a dir.
+    const link = join(fanRoot, ".pi", "agent", "skills", name);
+    try {
+      if (lstatSync(link).isSymbolicLink()) unlinkSync(link);
+    } catch {
+      // No link (project scope, or an older write): nothing to remove.
+    }
   }
 
   renameSkill(scope: SkillScope, name: string, newName: string, projectId?: string): string {

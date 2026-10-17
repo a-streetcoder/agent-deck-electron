@@ -2,7 +2,7 @@ import { AppEmptyState } from "@/design-system/components/AppEmptyState";
 import { AppLabelTag } from "@/design-system/components/AppLabelTag";
 import { AppSegmentedPicker } from "@/design-system/components/AppSegmentedPicker";
 import { Button } from "@/design-system/components/Button";
-import { ControlTextArea } from "@/design-system/components/NativeControls";
+import { ControlSelect, ControlTextArea } from "@/design-system/components/NativeControls";
 import { PageShell } from "@/design-system/components/PageShell";
 import { PageToolbar } from "@/design-system/components/PageToolbar";
 import { SectionHero } from "@/design-system/components/SectionHero";
@@ -24,9 +24,16 @@ type Scope = "project" | "global";
 type FileKind = "context" | "system" | "append";
 
 export function InstructionsScreen() {
-  const currentProjectId = useAppStore((state) => state.currentProjectId);
+  const storeProjectId = useAppStore((state) => state.currentProjectId);
   const projects = useAppStore((state) => state.projects);
   const setError = useAppStore((state) => state.setError);
+  // ade-v3zw: the shared server's sidebar selects no project, so the screen
+  // carries its own picker (as the Git screen does); the store's choice is the default.
+  const [selection, setSelection] = useState<string | null>(null);
+  const available = projects.filter((p) => !p.hidden);
+  const currentProjectId = available.some((p) => p.id === selection)
+    ? selection
+    : (available.find((p) => p.id === storeProjectId)?.id ?? null);
   const project = projects.find((p) => p.id === currentProjectId) ?? null;
 
   const [scope, setScope] = useState<Scope>(currentProjectId ? "project" : "global");
@@ -298,6 +305,25 @@ export function InstructionsScreen() {
           }
           trailing={
             <>
+              {scope === "project" ? (
+                <ControlSelect
+                  aria-label="Instructions project"
+                  data-testid="instructions-project-picker"
+                  size="sm"
+                  fullWidth={false}
+                  value={currentProjectId ?? ""}
+                  onChange={(event) => setSelection(event.target.value)}
+                >
+                  <option value="" disabled>
+                    Select a project
+                  </option>
+                  {available.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </ControlSelect>
+              ) : null}
               <AppSegmentedPicker
                 aria-label="Instructions scope"
                 size="sm"

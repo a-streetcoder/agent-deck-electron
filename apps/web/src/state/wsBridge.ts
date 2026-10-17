@@ -981,7 +981,10 @@ async function createChatSession(
       const { sessions } = await fetchJson<{ sessions: SessionMeta[] }>(
         `/sessions?projectId=${encodeURIComponent(only.id)}`,
       );
-      const draft = sessions.filter((s) => s.lifecycle === "draft").at(-1);
+      const me = useAppStore.getState().me?.id;
+      const draft = sessions
+        .filter((s) => s.lifecycle === "draft" && (!me || !s.createdBy || s.createdBy.id === me))
+        .at(-1);
       if (draft) return resumeSession(draft.id);
       response = await post(only.id);
     }

@@ -215,7 +215,7 @@ export class AskUserCoordinator {
         policyMs !== undefined
           ? expire
           : () => close("timed_out", "No answer was received before the timeout."),
-        policyMs ?? (params.timeout ?? 110) * 1_000,
+        policyMs ?? (params.timeout ?? 280) * 1_000,
       );
       timer.unref();
       const entry: PendingAsk = {

@@ -1370,7 +1370,16 @@ export function Composer() {
                   sendCompact();
                   // Safety re-enable if no contextRevision bump arrives (e.g. pi
                   // rejects "nothing to compact") — the success path resets sooner.
-                  window.setTimeout(() => setCompacting(false), 15_000);
+                  const revisionAtClick = useAppStore.getState().transcript.contextRevision;
+                  window.setTimeout(() => {
+                    setCompacting(false);
+                    if (useAppStore.getState().transcript.contextRevision === revisionAtClick) {
+                      useAppStore.getState().pushToast({
+                        kind: "info",
+                        message: "Nothing to compact yet: the context is still small.",
+                      });
+                    }
+                  }, 15_000);
                 }
               }}
             >

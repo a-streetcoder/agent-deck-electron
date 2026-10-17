@@ -1092,7 +1092,9 @@ export function registerProjectRoutes(ctx: ServerContext): void {
         connected: false,
         login: null,
         profileUrl: null,
-        error: "GitHub CLI is not authenticated. Run `gh auth login` in a terminal, then reload.",
+        error: ctx.sharedServer
+          ? "GitHub is not connected for you on this server. Connect GitHub under Providers, then reload."
+          : "GitHub CLI is not authenticated. Run `gh auth login` in a terminal, then reload.",
       };
     }
   });

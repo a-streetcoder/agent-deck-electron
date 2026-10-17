@@ -55,15 +55,14 @@ export function webAccessChecks(exaConfigured: boolean): HealthCheck[] {
       label: "Web Access — Exa search",
       status: "warn",
       detail: exaConfigured
-        ? "EXA_API_KEY is configured, but Exa web tools are unavailable in this Electron build. No network or credential validity test ran."
-        : "Optional: add EXA_API_KEY in Environment. Exa web tools are unavailable in this Electron build, and no network or credential validity test ran.",
+        ? "EXA_API_KEY is configured, but Exa web tools are unavailable in this build. No network or credential validity test ran."
+        : "Optional: add EXA_API_KEY in Environment. Exa web tools are unavailable in this build, and no network or credential validity test ran.",
     },
     {
       id: "web-access-url-fetch",
       label: "Web Access — URL fetch",
       status: "warn",
-      detail:
-        "Optional known-URL fetching is unavailable in this Electron build. No network test ran.",
+      detail: "Optional known-URL fetching is unavailable in this build. No network test ran.",
     },
   ];
 }

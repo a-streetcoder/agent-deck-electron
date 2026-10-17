@@ -312,6 +312,19 @@ export class HistoryActionCoordinator {
       }
 
       if (action === "rerun") {
+        // Pi's branch restores the model in force at the entry; a re-run means
+        // "this message again, with my current settings" (ade-3q16): re-apply
+        // the pre-fork model and thinking level when the branch changed them.
+        const before = state.model;
+        if (
+          before &&
+          (branchState?.model?.provider !== before.provider || branchState?.model?.id !== before.id)
+        ) {
+          await source.setModel(before.provider, before.id).catch(() => {});
+        }
+        if (state.thinkingLevel && branchState?.thinkingLevel !== state.thinkingLevel) {
+          await source.setThinkingLevel(state.thinkingLevel).catch(() => {});
+        }
         try {
           await source.prompt(forked.text, promptImages.length ? promptImages : undefined);
           await waitForIdle(source);

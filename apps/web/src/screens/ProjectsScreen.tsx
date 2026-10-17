@@ -195,7 +195,10 @@ function AddProjectsDialog({ onClose }: { onClose: () => void }) {
             <h3 className="text-label font-semibold text-text-primary">Choose a project</h3>
             <ProjectSourcePicker
               testIdPrefix="projects-add"
-              onAdded={() => void scan()}
+              onAdded={async () => {
+                await scan();
+                onClose();
+              }}
               folder={
                 <>
                   {!canPickLocalPaths() ? (
