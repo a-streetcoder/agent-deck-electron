@@ -40,3 +40,7 @@ Lockfile is up to date, resolution step is skipped
 Already up to date
 
 Done in 745ms using pnpm v10.32.1 now keeps devDependencies and Java/turbo builds work.
+
+**2026-10-17T10:04:01Z**
+
+2026-10-18 REDEPLOYED: production rebuilt from ade290c (SBX-08: Ruby per user, ~/.bundle writable, cache.ruby-lang.org; ade-zzrp new-chat fix already live). Lane SBX now has one open ticket, SBX-05 ade-jx7e.
