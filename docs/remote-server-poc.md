@@ -1441,6 +1441,18 @@ that folder at the end) and a `--data-dir` other than `AGENT_DECK_DATA_DIR`.
 - GitHub tokens are per user (ade-gfs4, see [GitHub connection](#github-connection)) and sit in
   the owner's Pi environment, readable by everything that session runs. Without a sandbox, every
   agent can read every user's tokens.
+- Credentials are not masked inside the sandbox (SBX-05, deferred): a session's own GitHub token
+  and any key in its env stay readable by what it runs. The SBX-05 spike on the VM found srt
+  0.0.80's TLS termination stable (git, `gh`, node `fetch`, Python `urllib`/`requests` and
+  `pip` trust its exported CA; 50 MB bodies and SSE pass; no proxy failures; +12% median on
+  remote requests, +0.9 ms per request locally), but its credential masking unusable on a
+  multi-user server: the placeholder registry is one per server process, keyed by variable name
+  and fed from the server's own environment, so a session's requests carry the token of the
+  last session (or of the server) with that name, and a value that only the session's env holds
+  is not masked at all. Termination also refuses WebSocket upgrades, downgrades HTTP/2 to 1.1,
+  breaks clients that ignore the exported CA, and does not substitute inside Basic auth, which
+  git's token credential helper uses. Per-user model credentials are `auth.json` files, not env
+  vars, so env masking would not cover them either. The evidence is in the ticket (ade-jx7e).
 - Per-user credentials: under `srt` a session reads only its own user's `auth.json`; without a
   sandbox every user's agent can read every `auth.json`. Sessions without an owner cannot read
   the operator's under `srt` (they run without model sign-ins); without a sandbox they, Doctor
