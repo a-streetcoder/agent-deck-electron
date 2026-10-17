@@ -18,3 +18,9 @@ On the VM, from a git-archive copy in a scratch dir (never the replica): build a
 
 Ticket note with: the two profile files, the exact docker run flags, pass/fail per check for srt and Zerobox, the three-stack smoke results, the overhead table, a recommendation (container with profiles, or host unit) and any config the runtime needs (allowNestedUserNamespaces etc.). No change to the running stack.
 
+
+## Notes
+
+**2026-10-17T01:48:11Z**
+
+2026-10-17 spike done on wt/ade-pv1c (66d2732, 67b98d7): container path works with deploy/seccomp.json + apparmor profile agent-deck-sandbox + --security-opt systempaths=unconfined (bwrap needs a fresh /proc; Docker's masks replaced by AppArmor deny rules). srt 0.0.80 all checks pass, Zerobox 0.3.3 passes but allows nested unshare; overhead: ~200 ms per sandbox start, ~50 ms on a clone, nothing inside. Rust smoke failed only for lack of cc in the image (SBX-04 builder layer). srt needs network.deniedDomains present, /tmp/claude created, NODE_USE_ENV_PROXY=1. Contrarian on the profiles running; merge after.

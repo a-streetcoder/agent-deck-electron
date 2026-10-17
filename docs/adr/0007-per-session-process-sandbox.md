@@ -101,3 +101,26 @@ do not interfere.
   install). macOS and Linux desktops may opt in through a setting later.
 - `docs/remote-server-poc.md` "Security model" gains the per-session boundary; the Known gaps
   list loses "sessions share the server's filesystem".
+
+## Amendments (2026-10-17, from the SBX-01 spike and its contrarian pass)
+
+1. **Not one spawn site.** On the shared server, Pi is not the only process that runs code from a
+   worktree: the Loop engine's validation commands, the script runner and the terminal do too.
+   All of them go through the same `SandboxProvider`, with a permissive policy where the session's
+   needs it. The profiles that enable user namespaces are not deployed before that is true,
+   because they hand namespace capabilities to every unwrapped process in the container.
+2. **The tool bridge leaves loopback.** Pi's bridge extension called the server on
+   `127.0.0.1:<port>/bridge`; a sandbox has its own network namespace and must never be allowed
+   to reach the server's port. The bridge listens on a Unix socket under the data directory and
+   the sandbox allows exactly that socket.
+3. **Per-session state leaves `/tmp`.** Bridge extensions, prompt files and the session's
+   temporary files live under `<dataDir>/sandbox/<sessionId>/`, with a per-session `TMPDIR`;
+   `/tmp/claude`, which the runtime hard-codes, stays shared and is kept out of any code path.
+4. **Per-project network lists are registered per wrap** (`registerCommandNetworkLists`); the
+   runtime's per-call config alone does not enforce them. The project's `sandbox.json` is read
+   from the base branch, not from the worktree the agent edits.
+5. **Deployment detail.** The container also needs `systempaths=unconfined` (bubblewrap mounts a
+   fresh `/proc`); the AppArmor profile carries deny rules for the paths Docker masked, is
+   installed under `/etc/apparmor.d` so it survives a reboot, and seccomp refuses
+   `NETLINK_NETFILTER` sockets. Measured: user namespaces cannot be scoped to bubblewrap alone
+   under `no-new-privileges`, so wrapping every spawn (item 1) is the control.
