@@ -2,7 +2,8 @@ import { EventEmitter } from "node:events";
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import spawn from "cross-spawn";
 import { createJsonlReader, type JsonlReader } from "./jsonl.ts";
-import { resolvePiSpawnPlan } from "./resolve.ts";
+import { resolvePiSpawnPlan, type PiSpawnPlan } from "./resolve.ts";
+import type { PiSandbox } from "./sandbox.ts";
 
 const STDERR_CAP_BYTES = 64 * 1024;
 const KILL_GRACE_MS = 3_000;
@@ -21,6 +22,9 @@ export interface PiProcessOptions {
   args: string[];
   cwd: string;
   env?: Record<string, string | undefined>;
+  /** ADR 0007: the provider and policy to wrap the spawn in. Absent: the
+   * `none` provider (the plan is spawned unchanged). */
+  sandbox?: PiSandbox;
 }
 
 export interface PiProcessExit {
@@ -57,6 +61,17 @@ export interface PiProcessEvents {
  * walks and kills the tree (including the cmd shim cross-spawn may introduce
  * for .cmd entry points). Windows has no graceful path regardless — libuv maps
  * SIGTERM to an unconditional TerminateProcess.
+ *
+ * ## Sandboxed start
+ *
+ * With a sandbox provider other than `none` (see sandbox.ts) the plan is
+ * wrapped before the spawn, which is asynchronous: start() returns at once,
+ * the process counts as running, lines written meanwhile are queued and sent
+ * after the spawn, and a wrap failure (the provider's PiSandboxError) surfaces
+ * like a spawn failure: an exit with the message in stderr. With `none` (the
+ * default) start() spawns synchronously, exactly as without a sandbox. A
+ * sandboxed stop() ends stdin instead of signalling (a signal kills the
+ * sandbox and Pi with SIGKILL), and kills the tree only after the grace.
  */
 export class PiProcess extends EventEmitter<PiProcessEvents> {
   private child: ChildProcess | null = null;
@@ -69,17 +84,63 @@ export class PiProcess extends EventEmitter<PiProcessEvents> {
   private drainTimer: NodeJS.Timeout | null = null;
   /** The PUBLISHED exit — set (and 'exit' emitted) only after stdout drained. */
   private exited: PiProcessExit | null = null;
+  /** Sandboxed start: the wrap is in flight; lines written meanwhile. */
+  private wrapping: string[] | null = null;
+  private releaseSandbox: (() => void) | undefined;
 
   constructor(private readonly options: PiProcessOptions) {
     super();
   }
 
+  private get sandboxed(): boolean {
+    const name = this.options.sandbox?.provider.name;
+    return name !== undefined && name !== "none";
+  }
+
   start(): void {
-    if (this.child) throw new Error("PiProcess already started");
+    if (this.child || this.wrapping || this.exitRecord)
+      throw new Error("PiProcess already started");
     const env = { ...process.env, ...this.options.env };
     const plan = resolvePiSpawnPlan(this.options.binPath, this.options.args, env);
+    const sandbox = this.options.sandbox;
+    if (!sandbox || !this.sandboxed) {
+      this.spawnPlan(plan, this.options.cwd);
+      return;
+    }
+    const queued: string[] = [];
+    this.wrapping = queued;
+    const fail = (error: unknown): void => {
+      if (this.exitRecord) return;
+      this.appendStderr(error instanceof Error ? error.message : String(error));
+      this.stdoutDone = true;
+      this.recordExit({ code: null, signal: null }); // publishes and releases
+    };
+    sandbox.provider.wrap({ ...plan, cwd: this.options.cwd }, sandbox.policy).then(
+      (wrapped) => {
+        this.wrapping = null;
+        if (this.exitRecord) {
+          wrapped.release?.(); // stopped while wrapping
+          return;
+        }
+        this.releaseSandbox = wrapped.release;
+        try {
+          // spawn can throw synchronously (a NUL byte in an argument).
+          this.spawnPlan(wrapped, wrapped.cwd);
+          for (const line of queued) this.child?.stdin?.write(line);
+        } catch (error) {
+          fail(error);
+        }
+      },
+      (error: unknown) => {
+        this.wrapping = null;
+        fail(error);
+      },
+    );
+  }
+
+  private spawnPlan(plan: PiSpawnPlan, cwd: string): void {
     const child = spawn(plan.command, plan.args, {
-      cwd: this.options.cwd,
+      cwd,
       env: plan.env,
       stdio: ["pipe", "pipe", "pipe"],
       // POSIX: lead a fresh process group so stop() can signal pi AND its
@@ -161,11 +222,13 @@ export class PiProcess extends EventEmitter<PiProcessEvents> {
       this.drainTimer = null;
     }
     this.exited = this.exitRecord;
+    this.releaseSandbox?.();
+    this.releaseSandbox = undefined;
     this.emit("exit", this.exited);
   }
 
   get isRunning(): boolean {
-    return this.child !== null && this.exited === null;
+    return (this.child !== null || this.wrapping !== null) && this.exited === null;
   }
 
   /** OS process id of the spawned child, once started (undefined if spawn failed). */
@@ -178,6 +241,10 @@ export class PiProcess extends EventEmitter<PiProcessEvents> {
   }
 
   writeLine(line: string): void {
+    if (this.wrapping && !this.exited) {
+      this.wrapping.push(line);
+      return;
+    }
     if (!this.child || this.exited) {
       throw new Error("PiProcess is not running");
     }
@@ -214,6 +281,13 @@ export class PiProcess extends EventEmitter<PiProcessEvents> {
   }
 
   async stop(): Promise<PiProcessExit> {
+    if (this.wrapping && !this.exited) {
+      // Stopped before the sandboxed spawn: nothing runs yet; the wrap's
+      // result is released when it arrives (see start()).
+      this.stdoutDone = true;
+      this.recordExit({ code: null, signal: null });
+      return this.exited ?? { code: null, signal: null };
+    }
     const child = this.child;
     if (!child || this.exited) {
       return this.exited ?? { code: null, signal: null };
@@ -239,7 +313,14 @@ export class PiProcess extends EventEmitter<PiProcessEvents> {
         clearTimeout(deadline);
         resolve(exit);
       });
-      this.killTree("SIGTERM");
+      if (this.sandboxed) {
+        // A signal to the group kills bubblewrap, which SIGKILLs Pi (see
+        // sandbox.ts): end stdin instead, Pi disposes and exits on it, and
+        // the tree is killed only after the grace period.
+        child.stdin?.end();
+      } else {
+        this.killTree("SIGTERM");
+      }
     });
   }
 }

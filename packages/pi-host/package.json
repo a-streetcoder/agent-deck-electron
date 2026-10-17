@@ -13,11 +13,13 @@
   },
   "dependencies": {
     "@agent-deck/domain": "workspace:*",
+    "@anthropic-ai/sandbox-runtime": "0.0.80",
     "@earendil-works/pi-coding-agent": "1.2.0",
     "cross-spawn": "7.0.6",
     "pi-claude-bridge": "0.9.3"
   },
   "devDependencies": {
+    "@agent-deck/contracts": "workspace:*",
     "@agent-deck/testkit": "workspace:*",
     "@types/cross-spawn": "6.0.6",
     "@types/node": "22.15.29"

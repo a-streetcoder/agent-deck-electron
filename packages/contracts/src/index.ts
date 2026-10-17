@@ -10,6 +10,7 @@ export * from "./keybindings.ts";
 export * from "./memory.ts";
 export * from "./protocol.ts";
 export * from "./rpc.ts";
+export * from "./sandbox.ts";
 export * from "./scripts.ts";
 export * from "./settings.ts";
 export * from "./slashUniverse.ts";

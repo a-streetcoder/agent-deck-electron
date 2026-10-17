@@ -15,6 +15,22 @@ export {
 } from "./claudeBridge.ts";
 export { PiProcess, type PiProcessExit, type PiProcessOptions } from "./PiProcess.ts";
 export {
+  createSrtProvider,
+  noneProvider,
+  PiSandboxError,
+  SRT_PACKAGE,
+  srtProvider,
+  srtSettings,
+  hostFs,
+  prepareDenyWrite,
+  type SandboxFs,
+  type PiSandbox,
+  projectHosts,
+  type SandboxCommand,
+  type SandboxedCommand,
+  type SandboxProvider,
+} from "./sandbox.ts";
+export {
   discoverModelCatalog,
   ModelCatalogError,
   parseModelCatalog,
