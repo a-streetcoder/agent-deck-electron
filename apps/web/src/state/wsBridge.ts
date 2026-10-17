@@ -943,6 +943,45 @@ function isUnknownSessionFailure(error: unknown): boolean {
   return text.includes("unknown session") || /\(404\)/.test(text);
 }
 
+/**
+ * POST /sessions for a new chat. A sandboxed server (ADR 0007) refuses a chat
+ * without a project (`cwd_outside_projects`): with one registered project the
+ * chat uses it and the sidebar selects it; with several, the user picks first.
+ */
+async function createChatSession(
+  projectId: string | null | undefined,
+  agentName: string | null | undefined,
+): Promise<SessionMeta> {
+  const post = (project: string | null | undefined): Promise<Response> =>
+    fetch("/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...(project ? { projectId: project } : {}),
+        ...(agentName ? { agentName } : {}),
+      }),
+    });
+  let response = await post(projectId);
+  if (response.status === 400 && !projectId) {
+    const body = (await response
+      .clone()
+      .json()
+      .catch(() => ({}))) as { code?: unknown };
+    if (body.code === "cwd_outside_projects") {
+      const { projects } = useAppStore.getState();
+      if (projects.length !== 1) {
+        throw new Error(
+          "Pick a project in the sidebar first: on this server every chat runs inside a project.",
+        );
+      }
+      useAppStore.getState().setCurrentProject(projects[0].id);
+      response = await post(projects[0].id);
+    }
+  }
+  if (!response.ok) throw new Error(await responseErrorMessage(response));
+  return ((await response.json()) as { session: SessionMeta }).session;
+}
+
 async function recoverUnknownSession(sessionId: string, token: number): Promise<void> {
   try {
     let session: SessionMeta;
@@ -951,15 +990,7 @@ async function recoverUnknownSession(sessionId: string, token: number): Promise<
     } catch (error) {
       if (!isUnknownSessionFailure(error)) throw error;
       const { currentProjectId, currentAgentName } = useAppStore.getState();
-      const created = await fetchJson<{ session: SessionMeta }>("/sessions", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          ...(currentProjectId ? { projectId: currentProjectId } : {}),
-          ...(currentAgentName ? { agentName: currentAgentName } : {}),
-        }),
-      });
-      session = created.session;
+      session = await createChatSession(currentProjectId, currentAgentName);
     }
     if (token !== activationToken) return;
     useAppStore.getState().setSession(session);
@@ -1150,14 +1181,7 @@ export async function newChat(): Promise<SessionMeta | null> {
     store.setError(null);
     store.resetTranscript();
     store.setSession(null);
-    const { session } = await fetchJson<{ session: SessionMeta }>("/sessions", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ...(projectId ? { projectId } : {}),
-        ...(agentName ? { agentName } : {}),
-      }),
-    });
+    const session = await createChatSession(projectId, agentName);
     await restoreComposerDraft(session.id);
     if (token !== activationToken) return null;
     useAppStore.getState().setSession(session);
