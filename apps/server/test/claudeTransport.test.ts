@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type * as PiHost from "@agent-deck/pi-host";
@@ -214,6 +214,26 @@ describe("PRV-01 launch and set_model choices", () => {
     expect(launched.status).toBe(409);
     expect(launched.body).toEqual({ error: REFUSED });
     expect(launched.plan).toBeUndefined();
+  });
+
+  it("refuses a claude-bridge default when Claude Code is missing instead of letting Pi fall back", async () => {
+    // PRV-02: without Claude Code the bridge provider never registers in Pi,
+    // which then falls back to its own default: the refused sign-in.
+    const settings = readFileSync(piSettingsFile, "utf8");
+    writeFileSync(
+      piSettingsFile,
+      JSON.stringify({ defaultProvider: "claude-bridge", defaultModel: launchedTwin }),
+    );
+    claudeCodeLoggedIn = false;
+    try {
+      const launched = await launchPlan();
+      expect(launched.status).toBe(409);
+      expect(launched.body).toEqual({ error: REFUSED });
+      expect(launched.plan).toBeUndefined();
+    } finally {
+      claudeCodeLoggedIn = true;
+      writeFileSync(piSettingsFile, settings);
+    }
   });
 
   it("leaves an API-key owner's anthropic default alone", async () => {

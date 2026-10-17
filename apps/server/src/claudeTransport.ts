@@ -313,11 +313,20 @@ export async function claudeLaunchModel(
   const { refused } = await credentialTransport(await ownerRuntime(ctx, owner));
   if (refused.size === 0) return undefined;
   const { provider, model } = launchChoice(ctx, owner, chosen, where, refused);
-  if (provider && model && !refused.has(provider)) return undefined;
+  // A claude-bridge choice without Claude Code on this host: Pi cannot register
+  // the provider (no bridge extension) and falls back to its own default, the
+  // refused sign-in. Pin as if no model were chosen.
+  const bridgeless = provider === BRIDGE && !(await bridgeAvailable(ctx));
+  if (provider && model && !refused.has(provider) && !bridgeless) return undefined;
   await ensureBridgeCatalog(ctx);
   // The twin is looked up by id; the thinking choice stays on the pinned model.
-  const parts = model === undefined ? undefined : modelParts(provider, model);
-  const pinned = pinLaunchModel(provider, parts?.id, refused, await ownerCatalog(ctx, owner));
+  const parts = model === undefined || bridgeless ? undefined : modelParts(provider, model);
+  const pinned = pinLaunchModel(
+    bridgeless ? undefined : provider,
+    parts?.id,
+    refused,
+    await ownerCatalog(ctx, owner),
+  );
   const thinking = parts?.thinking ? `:${parts.thinking}` : "";
   return pinned && { provider: pinned.provider, model: `${pinned.id}${thinking}` };
 }
