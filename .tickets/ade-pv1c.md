@@ -1,6 +1,6 @@
 ---
 id: ade-pv1c
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-10-17T01:19:52Z
@@ -27,3 +27,7 @@ Ticket note with: the two profile files, the exact docker run flags, pass/fail p
 **2026-10-17T01:46:00Z**
 
 Spike done (commit 66d2732, record in docs/archive/sbx-01-spike-2026-10-17.md). Recommendation: container with deploy/seccomp.json + apparmor=agent-deck-sandbox + systempaths=unconfined (needed: bwrap cannot mount a fresh /proc under Docker's masked paths; the AppArmor profile re-denies keys, timer_list, acpi etc.). srt 0.0.80 passes a-e fully sandboxed (no enableWeakerNestedSandbox, no allowNestedUserNamespaces, no bwrapPath/socatPath) and refuses nested userns; Zerobox 0.3.3 passes b-e but allows nested unshare. Overhead: nothing measurable inside the sandbox, ~50 ms proxy hop on a git clone, ~200 ms per srt wrap (130 ms Zerobox). Smoke: pnpm and uv pass; Rust fails at cargo build (no cc in the image, same outside the sandbox: SBX-04 builder layer). SBX-02 must: write a complete settings file (deniedDomains required), mkdir /tmp/claude before the wrap, set NODE_USE_ENV_PROXY=1 for Node children (corepack fetch ignores HTTPS_PROXY otherwise; check Pi's provider calls). Host path not measured (not needed). AppArmor profile agent-deck-sandbox left loaded on the VM.
+
+**2026-10-17T02:03:18Z**
+
+2026-10-17 contrarian pass on the profiles: files sound (rule 28 is exactly the ten syscalls; AppArmor adds exactly userns/mount/remount/pivot_root plus the stand-in deny rules; srt blocks nested namespaces; a sandbox cannot reach 127.0.0.1:4200 by default). Design consequences are binding notes on ade-3up0 and ade-vyov; ADR 0007 amended (511b22a). Squashed as e391bd5, merged 135d9b0. Closed.
