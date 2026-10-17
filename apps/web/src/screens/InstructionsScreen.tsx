@@ -34,7 +34,10 @@ export function InstructionsScreen() {
   const available = projects.filter((p) => !p.hidden);
   const currentProjectId = available.some((p) => p.id === selection)
     ? selection
-    : (available.find((p) => p.id === storeProjectId)?.id ?? null);
+    : (available.find((p) => p.id === storeProjectId)?.id ??
+      // No project selected anywhere (the shared server): the first one, so
+      // the Project scope shows a file instead of an empty editor.
+      (profile === "shared-server" ? (available[0]?.id ?? null) : null));
   const project = projects.find((p) => p.id === currentProjectId) ?? null;
 
   const [scope, setScope] = useState<Scope>(currentProjectId ? "project" : "global");
