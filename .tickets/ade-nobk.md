@@ -1,6 +1,6 @@
 ---
 id: ade-nobk
-status: in_progress
+status: closed
 deps: [ade-w2zc]
 links: []
 created: 2026-10-17T22:05:04Z
@@ -77,3 +77,17 @@ Five findings, all applied by the architect: the shared `models.json` is denied 
 Decision on the AWS keys: they stay in PROVIDER_CREDENTIAL_ENV_KEYS, so the shared server's Environment screen refuses them (409) rather than accepting values the brokered launch would silently drop; project tooling that needs AWS credentials on the shared server is CRB-04's host-bound secrets.
 
 Merged for the VM Codex validation. Shares stay disabled until SUB-02's preconditions hold.
+
+## VM validation (2026-10-18, deployed as poc-6d7497f)
+
+Three deploys were needed:
+
+1. `d7dcab8` (the reviewed implementation): the first Codex turn answered `401 openai-codex needs a subscription` although the owner's shared `auth.json` holds the Codex sign-in. Two findings: the generated models.json gave a placeholder to all 42 built-in providers, so Pi treated every provider as signed in and probed `openrouter` (`GET /models`, 401 at the broker) and `radius.pi.dev` (sandbox refusal); and the sponsor failure was logged as a bare `ModelsError`.
+2. `e9fe16a`: only the providers the owner (and later the sharers) hold a credential for point at the broker, the rest lose `apiKey` and `headers`; the warning now carries the redacted message. It read: `OAuth auth derivation failed for openai-codex: Cannot find module '/app/dist/server/openai-codex.js'`. pi-ai 1.2 loads its OAuth and API modules through `import(__rewriteRelativeImportExtension(specifier))`, a computed dynamic import the single-file server bundle cannot resolve; standalone probes in the container (unbundled Pi runtime) succeeded, which is how the bundle was isolated.
+3. `6d7497f`: the image bundles with `AGENT_DECK_BUNDLE_EXTERNAL_PI=1` (both `@earendil-works` packages external) and links them from the Pi runtime in the image, with a build-time smoke import of the Codex OAuth loader. The desktop bundle is unchanged.
+
+Result on `6d7497f`, one turn in CrunchyMurmur on `openai-codex/gpt-6-luna` from the owner's browser ("Reply with the single word broker-ok"): the answer was `broker-ok`. Server log: `[broker] openai-codex POST 200 1278ms`, `[broker] openai-codex POST 200 741ms` (no 426 line: pi-ai's first attempt went straight to SSE in this build, or the refused upgrade happened before this log window; to confirm on the next turn). `credential-spend.jsonl`: two lines for session `369e25ef…`, `sponsor` = `author` = the owner, status 200. The session's `agent/models.json` holds two providers (`anthropic`, `openai-codex`: the two credentials in the owner's auth.json), both with the broker base URL and the `ph.` placeholder; the `eyJ…` segment a token scan flags is the placeholder's own base64 claim, confirmed by context; `agent/auth.json` is `{}`; no other file under the session folder matches a token pattern. No warnings in the server log for the turn.
+
+Clean-up: the probe-created `/data/users/<owner hash>/agent` (an empty auth.json the probe's ModelRuntime wrote) was removed; the two failed draft sessions stay as ordinary records. Commands run on the VM: `docker compose logs`, `docker compose exec -T agent-deck <read-only sh / node probes via stdin>`, `docker compose up -d`, `docker image prune -f`, the build via `~/agent-deck-build` as in the deploy recipe. The production volume was otherwise untouched.
+
+Carried to CRB-03: helpers through the broker before provider hosts leave the allow-list; confirm the 426/SSE fallback on a second Codex turn; `pi.dev` stays allowed (Pi itself calls it).
