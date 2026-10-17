@@ -1,6 +1,6 @@
 ---
 id: ade-vyov
-status: in_progress
+status: closed
 deps: [ade-pv1c, ade-3up0]
 links: []
 created: 2026-10-17T01:19:53Z
@@ -56,3 +56,7 @@ acceptance amended by the architect: refused HOSTS always show a line; refused W
 **2026-10-17T06:35:11Z**
 
 2026-10-17 review round 2 (review69): (1) seccomp archMap drops SCMP_ARCH_X86 and SCMP_ARCH_X32 (libseccomp turns the family-limited socket ALLOWs into an unrestricted socketcall(SYS_SOCKET) for them). VM, gcc -m32 -static built in a throwaway container with gcc-multilib (not in the image): under the previous profile (834badb) 32-bit socketcall(SYS_SOCKET,16,3,12) OPENED a NETLINK_NETFILTER socket; under the new one the 32-bit process is killed at its first syscall (SIGSYS, exit 159). 64-bit table unchanged (16/3/12, 0x10000000c, high-bit families, AF_VSOCK -> EPERM; INET, INET6, UNIX, ALG, NETLINK ROUTE/15/16 open), unshare -Ur 0, server probe '[sandbox] provider srt'. AArch64 keeps SCMP_ARCH_ARM (the image is amd64 only). (2) carve uses srt's containsGlobChars/denyGlobRegex (deep imports; the image bundle builds). (3) dispose bounded (2 s) after a hung probe. (4) only the session's own launch quarantines and queues notices.
+
+**2026-10-17T06:49:52Z**
+
+2026-10-17 CLOSED: merged a721f44 (squash 02da527). Reviews: GPT review68 full (carve re-exposed denied paths, seccomp arg2 rule, quarantine race, probe deadline, dropped notices, deny-address validation, carve cap), contrarian (other sessions' transcripts and operator auth.json via the carve, stale packed-refs -> gc pins, none weaker than Docker under the profiles, AppArmor kernel/s* leak, compose never run), review69 narrow (i386 socketcall bypass -> 32-bit ABIs dropped, glob semantics, dispose after timeout, notice scoping), review70 narrow (bounded dispose: reset on a late manager, no argv after dispose; fixed in 04b0ac1, verified by the architect: pi-host sandbox 35 pass). Accepted residuals: same-user planting via the agent dir (ADR am. 13), carved parents are writable tmpfs (am. 11), monitor off (am. 12), shared pids_limit (SBX-06 note). Gates: typecheck, format, lint, 7 single files (298) green. Production deploy by the architect follows this close; the end-to-end check on deck.moretti.cc is recorded on ade-1c88.

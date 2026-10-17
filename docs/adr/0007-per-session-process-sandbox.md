@@ -157,3 +157,38 @@ do not interfere.
    data directory or the Pi agent directory, and a sandboxed server refuses a session whose
    working folder is outside a registered project or one of its worktrees. One-shot helpers run
    under a per-run policy with their own scratch folder and emit no violation events.
+
+## Amendments (2026-10-17, from the SBX-04 deployment and its reviews)
+
+10. **The provider is chosen by a probe, not by presence.** On a shared server the default is `srt`
+    only when a real sandboxed `/bin/true` succeeds at startup; otherwise `none` with a loud warning.
+    An explicit `AGENT_DECK_SANDBOX=srt` fails closed when the probe fails, and an explicit `none`
+    under the user-namespace profiles is warned about: those profiles make an unsandboxed container
+    weaker than Docker's defaults, so the Compose security options go with the provider.
+11. **Reads are carved around writes.** The runtime re-binds read-only any readable folder that
+    contains a writable one, so a worktree session could not commit. The provider lists such a
+    folder once per wrap and binds its entries separately, never an entry at or under a write root
+    (the write bind covers it), never an entry the policy denies for reading inside that folder
+    (an allowRead entry would cancel the deny), and at most 200 entries. The carved parent is a
+    tmpfs the runtime does not mount read-only: a new name there accepts a write that never
+    reaches the host. A denied write is therefore demonstrated on an existing file.
+12. **Write violations are visible only with the monitor.** The runtime's log monitor costs about
+    88% on small writes, so it is off by default (`AGENT_DECK_SANDBOX_MONITOR=1` turns it on).
+    Refused hosts always produce a transcript line; refused writes produce one only with the
+    monitor, and the tool error the agent sees is the signal otherwise. Decision 4 is read with
+    this limit.
+13. **Code-bearing entries of a user's agent folder are quarantined, not trusted.** The runtime
+    protects what a link points at, not the link, so a session can replace a protected link in
+    its own user's agent folder. Before each reporting launch on a sandboxed server a real file or
+    folder found in place of a protected link is moved aside (`<name>.quarantined-<timestamp>`)
+    and the link recreated, with a violation line. Accepted residual: a user's sessions can still
+    plant code for that same user's other running sessions; cross-user planting is prevented.
+14. **Server git under `srt` has a default identity and no automatic maintenance.** Ownerless
+    commits are made as `Agent Deck <agent-deck@localhost>`; `gc.auto=0` and
+    `maintenance.auto=false` keep the server from rewriting `packed-refs` under a session's frozen
+    per-file view.
+15. **The seccomp profile drops the 32-bit ABIs.** libseccomp rewrites a socket rule into an
+    unrestricted `socketcall` for the i386 ABI, which reopened `NETLINK_NETFILTER`; the profile
+    keeps x86_64 only, with non-overlapping `socket` allow rules (all families except
+    `AF_NETLINK` protocol 12 and `AF_VSOCK`) and the default `EPERM` for the rest. The AppArmor
+    profile denies every write under `/proc/sys/kernel/` except `shm*`.
