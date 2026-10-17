@@ -1,0 +1,103 @@
+# ADR 0007 — A process sandbox around every session
+
+- Status: **Proposed** 2026-10-17 (owner: "let's do the suggested approach"; awaiting `approved` on the ticket tree)
+- Deciders: Ale (owner), architect session
+- Related: [ADR 0003](0003-shared-server-trust-model.md) (trust model: named people behind Cloudflare Access), [ADR 0006](0006-session-record-and-provenance.md) (the session record, `workspace`), SRV-17 (the server as a container, ade-a105)
+
+## Context
+
+SRV-17 packaged the shared server as a hardened container: read-only root, no capabilities, non-root,
+no published port, one `/data` volume. That is right for the control plane, and wrong as the place
+where agents work: every session shares one process space and one fixed toolchain, an agent cannot
+install what a project needs, a dev server it starts is unreachable, and a misbehaving session can
+read every other session's files and the operator's credentials.
+
+The owner's requirement is that a session can build **any stack**, with the **lightest** isolation
+that still gives each session its own fence. Three tiers exist in October 2026:
+
+| Tier                                                                                       | Start cost           | Per-session overhead     | Root inside | Any stack                           |
+| ------------------------------------------------------------------------------------------ | -------------------- | ------------------------ | ----------- | ----------------------------------- |
+| Process sandbox (bubblewrap + Landlock + seccomp; Anthropic `srt`, Zerobox, Fence, nsjail) | none                 | none                     | no          | host toolchains + per-user installs |
+| Container per session (Sandcastle model, gVisor optional)                                  | seconds, image build | one image, one container | tamed root  | Dockerfile per project              |
+| MicroVM per session (libkrun: Microsandbox, SmolVM; Docker Sandboxes)                      | 100–300 ms boot      | a kernel per session     | real root   | anything, Docker inside             |
+
+The coding agents themselves (Claude Code, Codex CLI) moved to tier 1 in 2026. Measured on the VM
+(Debian 13, kernel 6.12, Docker 26): unprivileged user namespaces work on the host for the plain
+user, and inside a container they are blocked by Docker's default seccomp **and** AppArmor profiles;
+they work only when both are replaced (`unshare -Ur` succeeds with both `seccomp=unconfined` and
+`apparmor=unconfined`, fails with either alone). `cap_drop ALL`, `read_only` and the non-root user
+do not interfere.
+
+## Decision
+
+1. **Every Pi process runs inside a process sandbox.** The wrap happens at the one spawn site,
+   `PiProcess.start()` in `packages/pi-host`, behind a `SandboxProvider` with two
+   implementations: `none` (today's behaviour; the default on a desktop and the only one on
+   Windows) and `srt` (Anthropic's `@anthropic-ai/sandbox-runtime`, Apache-2.0, bubblewrap on
+   Linux, Seatbelt on macOS, Node API `SandboxManager.wrapWithSandbox`). The shared server
+   defaults to `srt`; a desktop may opt in. Sessions never see the provider; only the spawn does.
+
+2. **The policy is derived from the session record, not configured per session.** From ADR 0006's
+   `workspace` and the session's identity: write access to the worktree (or the project path when
+   there is no worktree), the session's Pi session folder and its own scratch folder; everything
+   else read-only; other users' folders under `/data/users` and the operator's `auth.json` denied
+   for reading unless the session is the operator's. Network is allow-only: a server default list
+   (the model providers the install uses, `github.com`, the package registries of the common
+   stacks) extended by the project's `.agent-deck/sandbox.json` (`allowedDomains`,
+   `allowLocalBinding`). The policy is a pure function in `packages/domain`
+   (`sandboxPolicy(record, side, project)`), tested like `allowedOperations`.
+
+3. **Any stack without images.** No per-project Dockerfile, no rebuilds. Toolchains that install
+   into the home folder (rustup, uv, nvm, sdkman, pipx, go tarballs) work as the user and persist
+   in `/data/home` across sessions. The server image gains a builder layer (compilers, headers,
+   Python 3, the libraries Playwright's browsers need) so the common stacks need nothing more.
+   `apt` is not available to sessions; a stack that needs a system package is a change to the
+   image, reviewed like code. The agent can change what it needs for the next session by editing
+   `.agent-deck/sandbox.json`; the change applies when the session's Pi process restarts.
+
+4. **Violations are visible, not silent.** A denied write or a refused host becomes a
+   `sandbox.violation` session event rendered as a system line in the transcript, with the path
+   or host. The owner or operator can add a host to the project's allow-list from that line.
+
+5. **Credentials.** First release: as today, model and GitHub credentials are environment
+   variables of the Pi process; the sandbox does not change that. Second release: `srt`'s
+   credential masking (`credentials.envVars` mode `mask`, injected by the proxy on egress to the
+   listed hosts) so secrets never sit in the sandbox. It depends on `network.tlsTerminate`, which
+   the runtime marks experimental; it ships when the spike shows it stable.
+
+6. **Deployment.** The server container keeps `cap_drop ALL`, `read_only`, the non-root user and
+   no published port, and gains two files in `deploy/`: a seccomp profile (the Docker default
+   plus the syscalls user namespaces need) and an AppArmor profile that grants `userns`. The image
+   gains `bubblewrap`, `socat` and `ripgrep`. If the spike (SBX-01) cannot make `srt` run fully
+   inside the container with those profiles, the fallback is the server as a user unit on the host
+   from the same release, with the container kept as the packaging; `enableWeakerNestedSandbox`
+   is not an accepted fallback (it drops the namespaces the fence is made of).
+
+## Alternatives considered
+
+- **A container per session (Sandcastle's model).** Sound and simple, but heavier than needed
+  for a trusted team: an image per project, a daemon the server must reach (the Docker socket in
+  the server container, or a launcher sidecar), and no on-the-fly installs without root inside.
+  Kept as the second provider if a project needs Docker inside or the team stops being trusted.
+- **MicroVMs (libkrun, Docker Sandboxes).** The strongest fence and real root, at the cost of a
+  kernel per session and a KVM dependency. Not lighter, which was the requirement. Same provider
+  interface; added when needed.
+- **Zerobox or Fence instead of `srt`.** Same primitives (Zerobox repackages Codex's sandbox
+  crates with Rust, TypeScript and Python SDKs and its own credential proxy; Fence is Go, inspired
+  by `srt`). `srt` is chosen for its Node API inside our Node spawn path, its violation store,
+  and its credential masking design. If its beta config format moves under us, Zerobox is the
+  drop-in.
+- **Leave the server as the only boundary.** Rejected: it protects the VM from the server, not
+  one session from another, and it caps what a session can build.
+
+## Consequences
+
+- Lane SBX (epic SBX-00): SBX-01 spike on the VM (profiles, `srt` inside the image, stack smoke,
+  overhead), SBX-02 `SandboxProvider` and `sandboxPolicy` with tests, SBX-03 server and web wiring
+  (defaults per side, `.agent-deck/sandbox.json`, violation events and the allow-host action),
+  SBX-04 image, profiles, Compose and runbook, SBX-05 credential masking, SBX-06 the stack matrix
+  as a recurring gate.
+- The Windows desktop keeps `none` (the runtime's Windows support is alpha and needs an elevated
+  install). macOS and Linux desktops may opt in through a setting later.
+- `docs/remote-server-poc.md` "Security model" gains the per-session boundary; the Known gaps
+  list loses "sessions share the server's filesystem".
