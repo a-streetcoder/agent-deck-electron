@@ -12,6 +12,7 @@ files:
   - apps/desktop/preload.cjs
   - apps/web/dist/**
   - dist/server/**
+  - "!dist/server/sandbox-run.mjs*"
   - package.json
 
 asar: true

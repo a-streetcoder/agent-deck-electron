@@ -10,10 +10,16 @@ await rm(outputDirectory, { recursive: true, force: true });
 // Keep the TypeScript native loaders (loop-catalog-native, skill-engine-native) in this
 // backend bundle. The architecture-specific `.node` binaries are intentionally external
 // to app.asar, shipped by electron-builder as extraResources, and selected at runtime.
+// sandbox-run.mjs (SBX-06): one command in a session's sandbox, for the stack
+// matrix; the server image ships it, the desktop package leaves it out.
 await build({
   absWorkingDir: root,
-  entryPoints: ["apps/server/src/index.ts"],
-  outfile: "dist/server/index.mjs",
+  entryPoints: {
+    index: "apps/server/src/index.ts",
+    "sandbox-run": "apps/server/src/cli/sandboxRun.ts",
+  },
+  outdir: "dist/server",
+  outExtension: { ".js": ".mjs" },
   bundle: true,
   format: "esm",
   platform: "node",
@@ -40,4 +46,4 @@ await build({
   ],
 });
 
-console.log("Bundled backend: dist/server/index.mjs");
+console.log("Bundled backend: dist/server/index.mjs, dist/server/sandbox-run.mjs");

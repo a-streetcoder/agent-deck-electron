@@ -52,7 +52,7 @@ RUN set -eux; \
     mkdir -p "$app/resources/loop-catalog-native" "$app/resources/skill-engine-native" \
       "$app/node_modules/node-pty/build/Release"; \
     mkdir -p "$app/dist/server"; \
-    cp dist/server/index.mjs "$app/dist/server/"; \
+    cp dist/server/index.mjs dist/server/sandbox-run.mjs "$app/dist/server/"; \
     cp -r apps/web/dist "$app/web"; \
     cp packages/loop-catalog-native/native/loop-catalog-native.linux-x64.node "$app/resources/loop-catalog-native/"; \
     cp packages/skill-engine-native/native/skill-engine-native.linux-x64.node "$app/resources/skill-engine-native/"; \
