@@ -1,6 +1,6 @@
 ---
 id: ade-pv1c
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-10-17T01:19:52Z

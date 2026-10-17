@@ -1,6 +1,6 @@
 # ADR 0007 — A process sandbox around every session
 
-- Status: **Proposed** 2026-10-17 (owner: "let's do the suggested approach"; awaiting `approved` on the ticket tree)
+- Status: **Accepted** 2026-10-17 (owner `approved`; lane SBX, epic ade-1c88)
 - Deciders: Ale (owner), architect session
 - Related: [ADR 0003](0003-shared-server-trust-model.md) (trust model: named people behind Cloudflare Access), [ADR 0006](0006-session-record-and-provenance.md) (the session record, `workspace`), SRV-17 (the server as a container, ade-a105)
 

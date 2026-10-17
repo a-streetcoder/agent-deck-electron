@@ -17,3 +17,9 @@ Lane SBX. Every Pi process runs inside a process sandbox (bubblewrap/Landlock/se
 
 SBX-01..SBX-06 closed; deck.moretti.cc sessions run sandboxed; the stack matrix passes; ADR 0007 Accepted.
 
+
+## Notes
+
+**2026-10-17T01:31:57Z**
+
+2026-10-17 ADR 0007 and the SBX tree approved by the owner ("make sense approved"). SBX-01 started.
