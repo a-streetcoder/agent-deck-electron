@@ -153,7 +153,8 @@ import { SessionPasteStore } from "./sessionPastes.ts";
 import { SessionAuthorStore } from "./sessionAuthors.ts";
 import { hardenServerGit } from "./git.ts";
 import { GitIdentityMap, gitIdentityEnv } from "./gitIdentity.ts";
-import { ensureUserDir, UserAgentDirs, userRoots } from "./userAgentDirs.ts";
+import { ensureUserDir, UserAgentDirs, userClaudeConfigDir, userRoots } from "./userAgentDirs.ts";
+import { CredentialBroker } from "./credentialBroker.ts";
 import {
   chooseSandboxProvider,
   sandboxDenyAddresses,
@@ -456,6 +457,28 @@ async function initServer(
         },
       )
     : undefined;
+  // CRB-02: the credential broker (shared server only; started once rootsFor exists).
+  // The operator keeps the host's Claude Code login (the env the bridge runs with).
+  const operatorClaudeDir = (): string => {
+    const env = { ...process.env, ...envDefaults().env };
+    return env.CLAUDE_CONFIG_DIR ?? nodePath.join(env.HOME ?? homedir(), ".claude");
+  };
+  const credentialBroker =
+    sharedServer && userAgentDirs
+      ? new CredentialBroker({
+          dataDir,
+          sharedAgentDir: () => piAgentHome(rootsFor()),
+          session: (sessionId) =>
+            sessions.get(sessionId)?.meta ?? index.find((session) => session.id === sessionId),
+          latestAuthor: (sessionId) => sessionAuthors?.latest(sessionId),
+          agentDirOf: (user) => userAgentDirs.resolve(user),
+          isOperator: (user) => userAgentDirs.isOperator(user),
+          claudeConfigDirOf: (user) =>
+            userAgentDirs.isOperator(user)
+              ? operatorClaudeDir()
+              : userClaudeConfigDir(dataDir, user.id),
+        })
+      : undefined;
   // SRV-06: each user's own GitHub connection, injected into their sessions' env.
   const githubConnections = userAgentDirs
     ? new GitHubConnections(dataDir, userAgentDirs, undefined, options.githubFetch)
@@ -1053,6 +1076,7 @@ async function initServer(
         };
       },
       forget: (sessionId) => {
+        credentialBroker?.forget(sessionId);
         violationReporter.forget(sessionId);
         launchNotices.forget(sessionId);
         sandboxConfigReported.delete(sessionId);
@@ -1062,6 +1086,7 @@ async function initServer(
         }
       },
     },
+    credentialBroker,
   );
   // Loop run engine (native single-agent loop). Each run's agent executor is
   // built per-run, bound to a parent session in the project cwd.
@@ -1421,6 +1446,20 @@ async function initServer(
   migrateAzureAuthFiles(piAgentHome(rootsFor()), dataDir, (message, error) =>
     serverLog.warn("azure-provider-rename", message, error),
   );
+  if (credentialBroker) {
+    startupCleanups.push(() => void credentialBroker.stop());
+    try {
+      await credentialBroker.start();
+      // Read per launch: no session has launched yet.
+      sandboxDeps.broker = {
+        address: credentialBroker.address,
+        secrets: [nodePath.join(operatorClaudeDir(), ".credentials.json")],
+      };
+    } catch (error) {
+      // The server stays up; brokered launches refuse until a restart fixes it.
+      serverLog.warn("broker", "could not listen; sessions cannot launch", error);
+    }
+  }
   // SKL-09: Codex plugin skill REFERENCES resolve against the plugin cache's active version
   // on every scan (version-follow, never copied) and join as read-only collection roots.
   const pluginRootsFor = (): string[] =>
@@ -2093,6 +2132,7 @@ async function initServer(
         // tree-kill every dev server before dispose().
         await step(() => scripts.closeAll());
         await step(() => fastify.close());
+        await step(() => credentialBroker?.stop());
         // Sessions and the transport are stopped, so no new native filesystem
         // operations can begin. Release each held root independently before the
         // app-data owner is allowed to remove it (notably on Windows).

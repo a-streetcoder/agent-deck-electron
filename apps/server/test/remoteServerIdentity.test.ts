@@ -647,6 +647,42 @@ describe("SessionAuthorStore", () => {
     expect(reloaded.attachToUserCell("s2", live("hello"), raw("hello")).author).toBeUndefined();
   });
 
+  it("latest is the running turn's author, never a queued or inherited one (CRB-02)", () => {
+    const store = new SessionAuthorStore(new SessionAuthorIndex(dataDir));
+    const ale = { id: "ale@example.com" };
+    const andrea = { id: "andrea@example.com" };
+    const raw = (text: string) => ({ role: "user", content: [{ type: "text", text }] });
+    const cell = (text: string): UserCell => ({ kind: "user", id: `u-${text}`, text });
+    expect(store.latest("s-latest")).toBeUndefined();
+    // Nothing claimed yet: the newest staged turn.
+    store.stage("s-latest", "one", ale);
+    expect(store.latest("s-latest")).toEqual(ale);
+    store.attachToUserCell("s-latest", cell("one"), raw("one"));
+    // Andrea's follow-up is queued while Ale's turn runs: still Ale's.
+    store.stage("s-latest", "two", andrea);
+    expect(store.latest("s-latest")).toEqual(ale);
+    // Pi starts Andrea's turn (echoes it): now hers.
+    store.attachToUserCell("s-latest", cell("two"), raw("two"));
+    expect(store.latest("s-latest")).toEqual(andrea);
+    // Staged in one order, started in the other: the one Pi started last runs.
+    store.stage("s-latest", "three", ale);
+    store.stage("s-latest", "four", andrea);
+    store.attachToUserCell("s-latest", cell("four"), raw("four"));
+    expect(store.latest("s-latest")).toEqual(andrea);
+    store.attachToUserCell("s-latest", cell("three"), raw("three"));
+    expect(store.latest("s-latest")).toEqual(ale);
+    // A fork and an import inherit turns, never the running author.
+    store.fork("s-latest", "s-fork");
+    expect(store.latest("s-fork")).toBeUndefined();
+    store.importTurns("s-imported", [
+      { signature: "a".repeat(64), author: ale, entryId: "e1", claimed: true },
+    ]);
+    expect(store.latest("s-imported")).toBeUndefined();
+    expect(store.exportTurns("s-imported")[0]).not.toHaveProperty("inherited");
+    store.stage("s-fork", "three", andrea);
+    expect(store.latest("s-fork")).toEqual(andrea);
+  });
+
   it("a fork keeps the source's bound authors, not its staged turns (SRV-15a)", () => {
     const store = new SessionAuthorStore(new SessionAuthorIndex(dataDir));
     const andrea = { id: "andrea@example.com", name: "Andrea" };

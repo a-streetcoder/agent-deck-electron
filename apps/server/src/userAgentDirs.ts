@@ -70,6 +70,12 @@ export function userAgentDir(dataDir: string, userId: string): string {
   return path.join(dataDir, "users", hash, "agent");
 }
 
+/** CRB-02: `<dataDir>/users/<hash>/claude`, the user's Claude Code config dir
+ * (read by the credential broker, never by a session). */
+export function userClaudeConfigDir(dataDir: string, userId: string): string {
+  return path.join(path.dirname(userAgentDir(dataDir, userId)), "claude");
+}
+
 const lstatOrUndefined = (file: string): Stats | undefined => {
   try {
     return lstatSync(file);
@@ -134,11 +140,15 @@ export interface QuarantinedEntry {
  * returned so the caller can report it; a link that merely points elsewhere
  * is relinked as always. Residual (accepted): another live session of the
  * same user can swap it again after this check.
+ *
+ * `except`: shared entries not linked (CRB-02: a brokered session writes its
+ * own models.json).
  */
 export function ensureUserAgentDir(
   sharedAgentDir: string,
   userDir: string,
   sandboxed = false,
+  { except = [] }: { except?: readonly string[] } = {},
 ): QuarantinedEntry[] {
   const quarantined: QuarantinedEntry[] = [];
   // Refuse aliases (review3 R2): a symlinked `users`, `<hash>` or `agent` dir, or
@@ -157,7 +167,7 @@ export function ensureUserAgentDir(
   const entries = [
     ...USER_AGENT_LINK_DIRS.map((name) => ({ name, type: "dir" as const })),
     ...USER_AGENT_LINK_FILES.map((name) => ({ name, type: "file" as const })),
-  ];
+  ].filter(({ name }) => !except.includes(name));
   for (const { name, type } of entries) {
     const target = path.join(sharedAgentDir, name);
     const link = path.join(userDir, name);

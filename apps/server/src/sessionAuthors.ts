@@ -19,6 +19,10 @@ export interface AuthorTurn {
   /** A live cell already took this turn; the entry id arrives at reconciliation. */
   claimed?: boolean;
   entryId?: string;
+  /** CRB-02: copied by a fork or an import; never the running turn's author. */
+  inherited?: boolean;
+  /** CRB-02: when a live cell claimed it (ms); claims can arrive out of staging order. */
+  claimedAt?: number;
 }
 
 const signatureFor = (text: string): string => createHash("sha256").update(text).digest("hex");
@@ -46,6 +50,13 @@ export class SessionAuthorStore {
   static readonly MAX_PENDING = 64;
 
   constructor(private readonly index: SessionAuthorIndex) {}
+
+  private lastClaim = 0;
+  /** Strictly increasing claim times: two claims in one millisecond keep their order. */
+  private claimTime(): number {
+    this.lastClaim = Math.max(Date.now(), this.lastClaim + 1);
+    return this.lastClaim;
+  }
 
   stage(sessionId: string, message: string, author: UserIdentity): void {
     const turns = this.turns(sessionId);
@@ -86,6 +97,7 @@ export class SessionAuthorStore {
         ? (candidates.find((turn) => turn.claimed) ?? candidates[0])
         : candidates.find((turn) => !turn.claimed);
       if (selected) {
+        if (!selected.claimed && !cell.entryId) selected.claimedAt = this.claimTime();
         selected.claimed = true;
         if (cell.entryId) selected.entryId = cell.entryId;
         this.index.upsert({ id: sessionId, turns });
@@ -104,21 +116,46 @@ export class SessionAuthorStore {
     return [...byId.values()];
   }
 
+  /**
+   * CRB-02: the author of the RUNNING turn, the broker's sponsor of first
+   * choice: the newest claimed turn (Pi echoed it, so it started), else the
+   * newest staged one. A queued steer or follow-up does not take over a turn
+   * that is still running; inherited turns never count.
+   */
+  latest(sessionId: string): UserIdentity | undefined {
+    const own = this.turns(sessionId).filter((turn) => !turn.inherited);
+    const claimed = own.filter((turn) => turn.claimed);
+    // Claim order first (a follow-up staged before a steer may start after it);
+    // turns claimed by a cold rebuild carry no time and fall back to staging order.
+    const timed = claimed.filter((turn) => turn.claimedAt !== undefined);
+    const running =
+      timed.length > 0 ? timed.sort((a, b) => a.claimedAt! - b.claimedAt!).at(-1) : claimed.at(-1);
+    const author = (running ?? own.at(-1))?.author;
+    return author ? { ...author } : undefined;
+  }
+
   /** SRV-15a: a fork keeps the source's bound turns, so inherited messages keep
    * their author. Staged, unclaimed turns stay with the source. */
   fork(sourceSessionId: string, targetSessionId: string): void {
-    const turns = this.turns(sourceSessionId).filter((turn) => turn.claimed || turn.entryId);
+    const turns = this.turns(sourceSessionId)
+      .filter((turn) => turn.claimed || turn.entryId)
+      .map((turn) => ({ ...turn, inherited: true }));
     if (turns.length > 0) this.index.upsert({ id: targetSessionId, turns });
   }
 
   /** SRV-12c1: the turns bound to a Pi entry, for a session moved to a server. */
   exportTurns(sessionId: string): AuthorTurn[] {
-    return this.turns(sessionId).filter((turn) => turn.entryId);
+    // The transfer envelope's schema is strict: `inherited` stays local.
+    return this.turns(sessionId)
+      .filter((turn) => turn.entryId)
+      .map(({ inherited: _inherited, claimedAt: _claimedAt, ...turn }) => turn);
   }
 
   /** SRV-12c1: an imported session's bound turns (validated by the import route). */
   importTurns(sessionId: string, turns: readonly AuthorTurn[]): void {
-    if (turns.length > 0) this.index.upsert({ id: sessionId, turns: turns.map((t) => ({ ...t })) });
+    if (turns.length > 0) {
+      this.index.upsert({ id: sessionId, turns: turns.map((t) => ({ ...t, inherited: true })) });
+    }
   }
 
   /** The session is gone (DELETE /sessions/:id): its authors go with it. */

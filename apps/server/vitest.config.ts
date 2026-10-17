@@ -5,7 +5,8 @@ const windowsCi = process.platform === "win32" && isCi;
 
 export default defineConfig({
   test: {
-    env: { AGENT_DECK_TEST: "1" },
+    // CRB-02: a shared-server test's credential broker on loopback, any free port.
+    env: { AGENT_DECK_TEST: "1", AGENT_DECK_BROKER_HOST: "127.0.0.1", AGENT_DECK_BROKER_PORT: "0" },
     include: ["test/**/*.test.ts"],
     exclude: ["test/**/*.pi.test.ts"],
     passWithNoTests: true,

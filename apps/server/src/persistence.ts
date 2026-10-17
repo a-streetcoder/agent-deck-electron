@@ -378,7 +378,14 @@ export class SessionIndex extends JsonArrayStore<SessionMeta> {
 /** One row per session: the authors of its user messages (sessionAuthors.ts). */
 export interface SessionAuthorRecord {
   id: string;
-  turns: Array<{ signature: string; author: UserIdentity; claimed?: boolean; entryId?: string }>;
+  turns: Array<{
+    signature: string;
+    author: UserIdentity;
+    claimed?: boolean;
+    entryId?: string;
+    inherited?: boolean;
+    claimedAt?: number;
+  }>;
 }
 
 export class SessionAuthorIndex extends JsonArrayStore<SessionAuthorRecord> {

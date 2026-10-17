@@ -680,6 +680,37 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
   everyone. Pi locks `settings.json` and `trust.json` beside the link (`realpath: false`), so two
   users writing them at the same time are not locked against each other.
 
+### Credential broker
+
+On the shared server sessions hold no real provider credential (ADR 0009, CRB-02,
+`apps/server/src/credentialBroker.ts`). The server runs an HTTP broker on
+`AGENT_DECK_BROKER_HOST` (default: the container's first non-internal IPv4) and
+`AGENT_DECK_BROKER_PORT` (default `4211`); Compose never publishes it, and the session sandbox
+allows exactly that `<ip>:<port>`. A broker that cannot listen is logged and the server stays
+up, but brokered sessions then refuse to launch. Each launch gets its own agent dir,
+`<dataDir>/sandbox/<sessionId>/agent`, with an `{}` `auth.json`, the shared links above, and a
+generated `models.json` that points every provider at
+`http://<ip>:<port>/<sessionId>/<token>/<provider>` with the session's placeholder as its key
+and no configured headers (the shared `models.json` is not readable from the session).
+`token` is random per launch and held in memory: a server restart invalidates it, and the next
+launch issues a new one. Claude Code gets `ANTHROPIC_BASE_URL` at the broker, the placeholder as
+`CLAUDE_CODE_OAUTH_TOKEN`, and its own `CLAUDE_CONFIG_DIR`; provider keys (and the AWS
+credentials) from `.env` or the server's env are unset. Per request the broker runs the turn on
+the running turn's author's own subscription, else on one a participant shared into the session
+(`shares` on the record), else answers 401 naming the provider. Only a credential in the
+person's own `auth.json` counts; the operator may also spend a key configured in the shared
+`models.json`, and a key in the server's env is nobody's. The placeholder is swapped only in
+`authorization`, `x-api-key`, `x-goog-api-key`, `api-key`, `chatgpt-account-id` and the `key`
+query parameter (anywhere else: 400), and response headers are masked again. WebSocket
+upgrades get 426, so Codex runs on SSE and every request picks its sponsor. One line per
+upstream request or refusal goes to `<dataDir>/credential-spend.jsonl` (`at`, `sessionId`,
+`provider`, `sponsor`, `author`, `status`, `ms`; user ids only, no rotation), besides a
+`[broker] <provider> <method> <status>` log line. The operator's Claude Code login is the
+host's `~/.claude` (or `CLAUDE_CONFIG_DIR`); other users' is `<dataDir>/users/<hash>/claude`.
+Limitation: a per-model `baseUrl` in the operator's `models.json` is dropped for brokered
+sessions (the provider's base URL is used), and one-shot helpers (titles, commit messages)
+still run on the requester's own agent dir.
+
 ### GitHub connection
 
 Each user connects their own GitHub account (ticket ade-gfs4,

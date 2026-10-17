@@ -695,6 +695,14 @@ export const SessionMeta = Schema.mutable(
     lifecycle: Schema.optional(SessionLifecycle),
     provenance: Schema.optional(SessionProvenanceFromSelf),
     location: Schema.optional(SessionLocationFromSelf),
+    /** ADR 0009: participants who share their subscriptions into this session,
+     * by user id (CRB-02 reads it; SUB-02 adds the routes and rules). */
+    shares: Schema.optional(
+      Schema.Record({
+        key: Schema.String,
+        value: Schema.Struct({ providers: Schema.Literal("all"), at: Schema.String }),
+      }),
+    ),
     workspace: Schema.optional(SessionWorkspace),
     launch: Schema.optional(SessionLaunch),
     /** sha256 of the Pi transcript as it was copied at the last move, return or

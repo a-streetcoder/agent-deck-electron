@@ -338,6 +338,40 @@ describe("sandboxPolicy network", () => {
     expect(policy().allowedDomains).toEqual(DEFAULT_SANDBOX_DOMAINS);
   });
 
+  it("allows the credential broker's address literal when given (CRB-02)", () => {
+    expect(policy({}, "server", { broker: { address: "172.18.0.5:4211" } }).allowedDomains).toEqual(
+      [...DEFAULT_SANDBOX_DOMAINS, "172.18.0.5:4211"],
+    );
+  });
+
+  it("a brokered session reads neither the owner's dir nor any operator credential (CRB-02)", () => {
+    const brokered = {
+      broker: { address: "172.18.0.5:4211", secrets: ["/srv/claude/.credentials.json"] },
+      agentDir: "/data/sandbox/s1/agent",
+    };
+    const p = policy({}, "server", brokered);
+    expect(readable(p, "/data/users/abcd/agent/auth.json")).toBe(false);
+    expect(readable(p, "/data/users/abcd/claude/.credentials.json")).toBe(false);
+    expect(readable(p, "/data/home/.claude/.credentials.json")).toBe(false);
+    // The operator's Claude Code sign-in where CLAUDE_CONFIG_DIR puts it.
+    expect(readable(p, "/srv/claude/.credentials.json")).toBe(false);
+    expect(readable(p, "/data/sandbox/s1/agent/models.json")).toBe(true);
+    // The shared models.json (configured keys, headers) is the broker's alone.
+    expect(readable(p, `${AGENT}/models.json`)).toBe(false);
+    expect(readable(policy(), `${AGENT}/models.json`)).toBe(true);
+    // ... also when the shared agent dir is not under the data dir.
+    const outside = policy({}, "server", { ...brokered, piAgentDir: "/root/.pi/agent" });
+    expect(readable(outside, "/root/.pi/agent/models.json")).toBe(false);
+    expect(readable(outside, "/root/.pi/agent/skills")).toBe(true);
+    // The operator's own session no longer reads the shared auth.json either.
+    const operatorOwned = policy(
+      { location: { kind: "server", owner: OPERATOR } },
+      "server",
+      brokered,
+    );
+    for (const file of AUTH) expect(readable(operatorOwned, file)).toBe(false);
+  });
+
   it("denies the private ranges plus the extra addresses", () => {
     expect(
       policy({}, "server", { extraDeniedAddresses: ["172.17.0.1", "10.0.0.0/8"] })

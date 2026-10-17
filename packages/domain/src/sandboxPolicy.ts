@@ -183,6 +183,11 @@ export interface SandboxPolicyInput {
   sessionTmpPaths?: readonly string[];
   /** Addresses to refuse besides the private ranges (the Docker gateway). */
   extraDeniedAddresses?: readonly string[];
+  /** CRB-02: the credential broker. `address` (`<ip>:<port>`) is allowed:
+   * srt refuses a name or address of this host unless that literal itself is
+   * (CRB-01). `secrets`: files the broker reads for the operator (their
+   * Claude Code sign-in), denied for reading. */
+  broker?: { address: string; secrets?: readonly string[] };
 }
 
 /** A path that must never be writable, and what it is when it exists: the
@@ -447,8 +452,23 @@ export function sandboxPolicy(
   if (server) {
     denyRead.push(trimEnd(input.dataDir), "/tmp/agent-deck-*", ...SANDBOX_HOME_SECRETS.map(home));
     allowRead.push(writeRoot, projectPath, scratch, agentDir);
-    if (input.ownerDir) allowRead.push(trimEnd(input.ownerDir));
-    for (const entry of SANDBOX_SHARED_AGENT_ENTRIES) allowRead.push(join(input.piAgentDir, entry));
+    // CRB-02: a brokered session has its own agent dir; the owner's dir holds
+    // their real auth.json and Claude Code sign-in, which the broker reads for it.
+    if (input.ownerDir && !input.broker) allowRead.push(trimEnd(input.ownerDir));
+    if (input.broker) {
+      denyRead.push(
+        home(".claude/.credentials.json"),
+        // Explicit: the shared agent dir may sit outside the read-denied dataDir.
+        join(input.piAgentDir, "models.json"),
+        ...(input.broker.secrets ?? []).map(trimEnd),
+      );
+    }
+    for (const entry of SANDBOX_SHARED_AGENT_ENTRIES) {
+      // CRB-02: a brokered session reads its own models.json; the shared one
+      // may carry configured keys and headers.
+      if (input.broker && entry === "models.json") continue;
+      allowRead.push(join(input.piAgentDir, entry));
+    }
     allowRead.push(...toolchains, ...(input.sessionTmpPaths ?? []).map(trimEnd));
   }
   // Every session's transcripts share one `sessions` tree (a user's agent dir
@@ -460,7 +480,8 @@ export function sandboxPolicy(
   denyRead.push(join(agentDir, "sessions"), join(input.piAgentDir, "sessions"));
   allowRead.push(sessionDir);
   if (transcript) allowRead.push(transcript);
-  if (!ownedByOperator(record, side, input.operator)) {
+  // CRB-02: with a broker nobody's session reads the operator's credentials either.
+  if (input.broker || !ownedByOperator(record, side, input.operator)) {
     denyRead.push(...OPERATOR_AUTH_FILES.map((file) => join(input.piAgentDir, file)));
   }
 
@@ -468,6 +489,7 @@ export function sandboxPolicy(
   const allowedDomains = [
     ...DEFAULT_SANDBOX_DOMAINS,
     ...(input.project?.allowedDomains ?? []),
+    ...(input.broker ? [input.broker.address] : []),
   ].filter((domain) => {
     const key = domain.toLowerCase();
     if (seen.has(key)) return false;

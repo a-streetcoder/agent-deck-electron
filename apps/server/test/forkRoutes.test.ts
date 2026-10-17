@@ -44,7 +44,13 @@ vi.mock("../src/userAgentDirs.ts", async (importOriginal) => {
       return dir;
     }
   }
-  return { ...original, UserAgentDirs: PlainUserAgentDirs };
+  // CRB-02: the broker's per-session agent dir, plain too.
+  const ensureUserAgentDir = (_shared: string, dir: string): [] => {
+    mkdirSync(dir, { recursive: true });
+    if (!existsSync(path.join(dir, "auth.json"))) writeFileSync(path.join(dir, "auth.json"), "{}");
+    return [];
+  };
+  return { ...original, UserAgentDirs: PlainUserAgentDirs, ensureUserAgentDir };
 });
 
 const TEAM = "team.cloudflareaccess.test";
@@ -185,11 +191,13 @@ describe("SRV-15a fork routes on a shared server", () => {
       expect(new SessionIndex(dataDir).find((item) => item.id === session.id)?.createdBy).toEqual(
         bob,
       );
-      // The fork's Pi ran on Bob's agent dir (the last spawn; a message fork
-      // resumes Alice's source first, on hers).
-      const bobHash = createHash("sha256").update(bob.id).digest("hex").slice(0, 16);
+      // CRB-02: the fork's Pi runs on its own brokered agent dir (the last
+      // spawn; a message fork resumes Alice's source first), never on a
+      // member's; the broker spends Bob's subscription as its owner.
       const forkSpawn = spawned.slice(before).at(-1);
-      expect(forkSpawn?.env?.PI_CODING_AGENT_DIR).toContain(bobHash);
+      expect(forkSpawn?.env?.PI_CODING_AGENT_DIR).toBe(
+        path.join(dataDir, "sandbox", session.id, "agent"),
+      );
       expect(await snapshotAuthor(session.id)).toEqual(alice);
     },
     30_000,

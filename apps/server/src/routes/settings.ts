@@ -53,6 +53,7 @@ import { envDefaults, type ServerContext } from "../context.ts";
 import { bridgeAvailable } from "../claudeTransport.ts";
 import { declaredPiPackages } from "../piPackages.ts";
 import { requestUser, SHARED_SERVER_REFUSAL, trustedProxyConfigFromEnv } from "../trustedProxy.ts";
+import { PROVIDER_CREDENTIAL_ENV_KEYS } from "../sessionEnv.ts";
 import { userRoots } from "../userAgentDirs.ts";
 import {
   createExternalCommandLauncher,
@@ -89,52 +90,6 @@ export function readPiRuntimeDefaultModel(home: string): string | null {
     return null;
   }
 }
-
-/**
- * SRV-10: provider credential env names, copied from pi-ai 1.2.0
- * dist/env-api-keys.js (getApiKeyEnvVars, not exported). EXA_API_KEY is absent on
- * purpose: web search is shared by design.
- */
-const PROVIDER_CREDENTIAL_ENV_KEYS = new Set([
-  "COPILOT_GITHUB_TOKEN",
-  "ANTHROPIC_AUTH_TOKEN",
-  "ANTHROPIC_OAUTH_TOKEN",
-  "ANTHROPIC_API_KEY",
-  "ANT_LING_API_KEY",
-  "QWEN_TOKEN_PLAN_API_KEY",
-  "QWEN_TOKEN_PLAN_CN_API_KEY",
-  "OPENAI_API_KEY",
-  "AZURE_OPENAI_API_KEY",
-  "NVIDIA_API_KEY",
-  "DEEPSEEK_API_KEY",
-  "GEMINI_API_KEY",
-  "GOOGLE_CLOUD_API_KEY",
-  "GROQ_API_KEY",
-  "CEREBRAS_API_KEY",
-  "XAI_API_KEY",
-  "TYPESAFE_API_KEY",
-  "RADIUS_API_KEY",
-  "OPENROUTER_API_KEY",
-  "AI_GATEWAY_API_KEY",
-  "ZAI_API_KEY",
-  "ZAI_CODING_CN_API_KEY",
-  "MISTRAL_API_KEY",
-  "MINIMAX_API_KEY",
-  "MINIMAX_CN_API_KEY",
-  "MOONSHOT_API_KEY",
-  "HF_TOKEN",
-  "FIREWORKS_API_KEY",
-  "TOGETHER_API_KEY",
-  "BASETEN_API_KEY",
-  "OPENCODE_API_KEY",
-  "KIMI_API_KEY",
-  "META_API_KEY",
-  "CLOUDFLARE_API_KEY",
-  "XIAOMI_API_KEY",
-  "XIAOMI_TOKEN_PLAN_CN_API_KEY",
-  "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
-  "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
-]);
 
 export function registerSettingsRoutes(ctx: ServerContext): void {
   const {
@@ -539,6 +494,8 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     sandbox: { provider: ctx.sandboxProvider?.name ?? "none" },
     // ADR 0008: the deployment profile, so the web gates on one fact.
     profile: ctx.profile ?? "desktop",
+    // CRB-02: subscriptions reach sessions through the credential broker (SUB-04 reads it).
+    ...(ctx.profile === "shared-server" ? { broker: true } : {}),
   });
 
   fastify.get("/settings", async () => ({

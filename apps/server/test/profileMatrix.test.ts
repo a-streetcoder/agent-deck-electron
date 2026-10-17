@@ -95,6 +95,13 @@ describe.each<Profile>(["desktop", "shared-server"])("ADR 0008 matrix under %s",
     expect(body.capabilities.profile).toBe(profile);
   });
 
+  it("reports the credential broker only on the shared server", async () => {
+    const body = (await (await call(profile, "/settings")).json()) as {
+      capabilities: { broker?: boolean };
+    };
+    expect(body.capabilities.broker).toBe(shared ? true : undefined);
+  });
+
   it("refuses provider credentials in Environment only on the shared server", async () => {
     const response = await call(profile, "/runtime/env", {
       method: "PUT",

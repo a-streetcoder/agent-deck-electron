@@ -239,6 +239,7 @@ describe("history action durable store reconstruction", () => {
           createdAt: "now",
           title: "Current source",
           piSessionFile: "/tmp/source.jsonl",
+          shares: { "bob@example.com": { providers: "all", at: "now" } },
         },
         "/tmp/branch.jsonl",
         undefined,
@@ -255,6 +256,8 @@ describe("history action durable store reconstruction", () => {
           recap: { text: "User:\nEarlier prompt", truncated: false },
         },
       });
+      // ADR 0009 decision 4 (CRB-02): a fork carries no shares.
+      expect(target.meta.shares).toBeUndefined();
       await manager.destroy(target.meta.id);
     } finally {
       await runtime.dispose();

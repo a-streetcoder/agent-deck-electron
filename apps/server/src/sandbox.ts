@@ -182,6 +182,9 @@ export interface SessionSandboxDeps {
   grantedHosts?: (record: SessionMeta) => readonly string[];
   /** Addresses to refuse besides the private ranges. */
   extraDeniedAddresses?: readonly string[];
+  /** CRB-02 (shared server only): the credential broker's `<ip>:<port>` and
+   * the files it reads for the operator, which no session may read. */
+  broker?: { address: string; secrets?: readonly string[] };
 }
 
 /** One Pi spawn of a session (or of its helper or child). */
@@ -243,6 +246,7 @@ export function sessionSandboxPolicy(
     ...(project ? { project } : {}),
     sessionTmpPaths: launch.tempPaths ?? [],
     ...(deps.extraDeniedAddresses ? { extraDeniedAddresses: deps.extraDeniedAddresses } : {}),
+    ...(deps.broker ? { broker: deps.broker } : {}),
   });
 }
 

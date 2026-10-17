@@ -59,7 +59,8 @@ import { SessionMutationClaims } from "./sessionMutationClaims.ts";
 import { gitIdentityEnv, type GitIdentityMap } from "./gitIdentity.ts";
 import { declaredPiPackages } from "./piPackages.ts";
 import { userAgentDirEnv, type UserAgentDirs } from "./userAgentDirs.ts";
-import { withoutServerOnlyEnv } from "./sessionEnv.ts";
+import { withoutProviderCredentialEnv, withoutServerOnlyEnv } from "./sessionEnv.ts";
+import type { CredentialBroker } from "./credentialBroker.ts";
 import { githubEnv, type GitHubConnections } from "./githubConnections.ts";
 import { normalizeSessionError } from "./sessionFailure.ts";
 import type { LaunchResourceConfigV1, ResolvedLaunchResources } from "./launchResources.ts";
@@ -930,6 +931,8 @@ export class SessionManager {
     private readonly githubConnections?: GitHubConnections,
     /** ADR 0007: the stdio bridge and the per-session scratch folders. */
     private readonly spawnHooks?: SessionSpawnHooks,
+    /** CRB-02 (shared server): sessions reach their subscriptions through the broker. */
+    private readonly credentialBroker?: CredentialBroker,
   ) {}
 
   /** Reconfigure all live deadlines. Existing parked placeholders remain cold. */
@@ -1776,12 +1779,13 @@ export class SessionManager {
     env?: Record<string, string | undefined>,
     launch = false,
   ): Record<string, string | undefined> {
-    const layered = withoutServerOnlyEnv({ ...this.envFileLayer(meta.projectId), ...env });
-    const agentDirEnv = userAgentDirEnv(
-      sessionOwner(meta),
-      this.userAgentDirs,
-      launch ? meta.id : undefined,
-    );
+    const ownLayered = withoutServerOnlyEnv({ ...this.envFileLayer(meta.projectId), ...env });
+    // CRB-02: a brokered session gets its own agent dir with placeholders, and
+    // no provider key from the .env layers or the server's env.
+    const layered = this.credentialBroker ? withoutProviderCredentialEnv(ownLayered) : ownLayered;
+    const agentDirEnv = this.credentialBroker
+      ? this.credentialBroker.launchEnv(meta, launch && !!this.spawnHooks?.sandboxed)
+      : userAgentDirEnv(sessionOwner(meta), this.userAgentDirs, launch ? meta.id : undefined);
     return {
       ...layered,
       // SBX-09: under the sandbox Pi cannot install the packages settings.json
@@ -2516,6 +2520,8 @@ export class SessionManager {
     // A history rewrite has not run a turn under the new ancestry yet. Never
     // present the source turn's audited prompt as evidence for this target.
     delete meta.finalSystemPromptAudit;
+    // ADR 0009 decision 4: a fork carries no shares.
+    delete meta.shares;
     // The target shares the checkout as a portable cwd reference, never the
     // source's app-owned worktree deletion authority. Persist the dependency so
     // source deletion/merge cannot remove the checkout while this target exists.

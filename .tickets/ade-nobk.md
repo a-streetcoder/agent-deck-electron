@@ -61,3 +61,19 @@ Out of scope here: the web picker (SUB-04), share routes (SUB-02), Claude Code i
 ### Validation after merge (architect, on the VM)
 
 Deploy; from the owner's browser one Codex turn on `openai-codex:gpt-6-luna` in CrunchyMurmur; expect `[broker] openai-codex ... 200` lines in the server log, the session's `models.json` carrying only `ph.` values, `credential-spend.jsonl` naming sponsor = author = the owner, and no real token anywhere under `<dataDir>/sandbox`.
+
+## Review round 1 (2026-10-18): GPT code-reviewer + contrarian on the first implementation
+
+Both said "do not merge yet". Fixed before merge (second developer pass): sponsor qualification by the candidate's own auth.json only (env and ambient keys qualify nobody; the operator may also use keys configured in the shared models.json); placeholder swap limited to credential positions (`authorization`, `x-api-key`, `x-goog-api-key`, `api-key`, `chatgpt-account-id`, query `key`) with 400 on a placeholder anywhere else and response headers re-masked; WebSocket upgrades refused with 426 (pi-ai keeps one Codex socket per session for up to 55 minutes keyed by the account id, so the handshake's sponsor would stick across other participants' turns; Pi falls back to SSE); `latest()` returns the author of the RUNNING turn (newest claimed, else newest staged) and ignores turns copied by fork or import; forks drop `shares`; generated models.json carries no `headers`; the shared models.json is unreadable to brokered sessions; AWS credential variables stripped; the operator's actual Claude credential file denied through `broker.secrets`; random per-launch token in memory instead of the HMAC; boot survives a broken catalog or a taken port; stream error propagation; Codex sponsor without an account claim refused; 401s logged, no user id in the message.
+
+Recorded for SUB-02 (ade-q0z3) as preconditions for enabling shares: a per-API path allow-list at the broker (a sponsor's key must spend, not act: no `/v1/files`, `backend-api/*`, `/api/oauth/*`); refusing broker requests while the session has no running turn (a leftover background job or a planted hook otherwise spends the last author's subscription); compaction, rerun and `/mcp login` recording the requester as the turn's sponsor.
+
+Not changed: the Anthropic OAuth placeholder (`sk-ant-oat` marker) — PRV-01 keeps Pi's Anthropic sign-in out, only API keys sponsor `anthropic`; Claude subscriptions go through Claude Code.
+
+## Review round 2 (2026-10-18): narrow GPT re-review of the fixes
+
+Five findings, all applied by the architect: the shared `models.json` is denied explicitly (the shared agent dir may sit outside the read-denied data dir); response-header masking covers every secret the sponsor's auth injects (header-borne credentials too, not only the API key); `latest()` orders claimed turns by a strictly increasing claim time, so a follow-up staged before a steer but started after it wins; connection-nominated hop-by-hop names are taken from the client's and the sponsor's headers; the 426 answer destroys the socket once flushed. Tests: credentialBroker 16 passed 1 skipped (symlinks), remoteServerIdentity 21 passed 6 skipped, domain sandboxPolicy 72 passed; server and domain typecheck and eslint clean. Not run locally: forkRoutes, historyActions.real-store, sessionMove, sessionReturn (run by the developer in round 1), the Pi suites, the web.
+
+Decision on the AWS keys: they stay in PROVIDER_CREDENTIAL_ENV_KEYS, so the shared server's Environment screen refuses them (409) rather than accepting values the brokered launch would silently drop; project tooling that needs AWS credentials on the shared server is CRB-04's host-bound secrets.
+
+Merged for the VM Codex validation. Shares stay disabled until SUB-02's preconditions hold.
