@@ -93,14 +93,14 @@ do not interfere.
 ## Consequences
 
 - Lane SBX (epic SBX-00): SBX-01 spike on the VM (profiles, `srt` inside the image, stack smoke,
-  overhead), SBX-02 `SandboxProvider` and `sandboxPolicy` with tests, SBX-03 server and web wiring
-  (defaults per side, `.agent-deck/sandbox.json`, violation events and the allow-host action),
-  SBX-04 image, profiles, Compose and runbook, SBX-05 credential masking, SBX-06 the stack matrix
-  as a recurring gate.
+  overhead) (done), SBX-02 `SandboxProvider` and `sandboxPolicy` with tests (done), SBX-03 server
+  and web wiring (defaults per side, `.agent-deck/sandbox.json`, violation events and the
+  allow-host action) (done), SBX-04 image, profiles, Compose and runbook (done; the production
+  deploy is separate), SBX-05 credential masking, SBX-06 the stack matrix as a recurring gate.
 - The Windows desktop keeps `none` (the runtime's Windows support is alpha and needs an elevated
   install). macOS and Linux desktops may opt in through a setting later.
 - `docs/remote-server-poc.md` "Security model" gains the per-session boundary; the Known gaps
-  list loses "sessions share the server's filesystem".
+  list loses "sessions share the server's filesystem" (done, SBX-04).
 
 ## Amendments (2026-10-17, from the SBX-01 spike and its contrarian pass)
 

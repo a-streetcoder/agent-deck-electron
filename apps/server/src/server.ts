@@ -156,6 +156,8 @@ import { GitIdentityMap } from "./gitIdentity.ts";
 import { ensureUserDir, UserAgentDirs, userRoots } from "./userAgentDirs.ts";
 import {
   chooseSandboxProvider,
+  sandboxDenyAddresses,
+  createLaunchNoticeQueue,
   createSandboxViolationReporter,
   SandboxHostGrants,
   sandboxViolationNotice,
@@ -426,11 +428,29 @@ async function initServer(
   const gitIdentities = trustedProxy ? new GitIdentityMap(dataDir) : undefined;
   // SRV-11: each signed-in user's own Pi agent dir (credentials); the operator keeps ~/.pi/agent.
   // `rootsFor` is declared below; the lambda only runs after startup.
+  const launchNotices = createLaunchNoticeQueue();
   const userAgentDirs = trustedProxy
     ? new UserAgentDirs(
         dataDir,
         () => piAgentHome(rootsFor()),
         process.env.AGENT_DECK_OPERATOR_EMAIL?.trim() || undefined,
+        {
+          // Both lambdas run after startup (sandboxProvider is declared below).
+          on: () => sandboxProvider.name !== "none",
+          quarantined: (_user, entry, sessionId) => {
+            serverLog.warn(
+              "sandbox",
+              `${entry.path} was not the link to the shared entry; moved to ${entry.movedTo} and linked again`,
+            );
+            const violation = { kind: "write" as const, target: entry.path };
+            events.sandboxViolation(sessionId, violation);
+            // Found while the launch's env is built: the session is not registered yet.
+            launchNotices.add(
+              sessionId,
+              sandboxViolationNotice(violation, undefined, `sandbox-${randomUUID()}`),
+            );
+          },
+        },
       )
     : undefined;
   // SRV-06: each user's own GitHub connection, injected into their sessions' env.
@@ -515,6 +535,7 @@ async function initServer(
       });
     },
   });
+  const extraDeniedAddresses = await sandboxDenyAddresses(process.env, sandboxProvider);
   const sandboxDeps: SessionSandboxDeps = {
     dataDir,
     side: trustedProxy ? "server" : "local",
@@ -527,6 +548,7 @@ async function initServer(
         : undefined) ?? meta.cwd,
     ...(trustedProxy ? { ownerDir: (owner) => ensureUserDir(dataDir, owner.id) } : {}),
     grantedHosts: (meta) => (meta.projectId ? sandboxHostGrants.hosts(meta.projectId) : []),
+    extraDeniedAddresses,
   };
   // App-managed tool bridge (memory/mcp/subagents register here). Calls ride on
   // each Pi process's stdio (ADR 0007), so the session of a call is the one
@@ -1012,10 +1034,15 @@ async function initServer(
         if (!launched) return undefined;
         // A one-shot helper belongs to no session: no violation lines for it.
         if (!launch.helper) policySessions.set(launched.sandbox.policy, record);
-        return { ...launched, notices: sandboxLaunchNotices(record, launched) };
+        const notices = sandboxLaunchNotices(record, launched);
+        return {
+          ...launched,
+          notices: launch.report ? [...launchNotices.take(record.id), ...notices] : notices,
+        };
       },
       forget: (sessionId) => {
         violationReporter.forget(sessionId);
+        launchNotices.forget(sessionId);
         sandboxConfigReported.delete(sessionId);
         sandboxProposalsShown.delete(sessionId);
         if (isSessionSegment(sessionId)) {

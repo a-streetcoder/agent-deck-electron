@@ -507,7 +507,7 @@ describe("Loop worktree review patch", () => {
 });
 
 describe("ADR 0007: the server's own git, hardened", () => {
-  it("pins no global or system config, no replace objects, no fsmonitor, no pager and plain ssh, after the pins already set", () => {
+  it("pins no global or system config, no replace objects, no fsmonitor, no pager, plain ssh and no auto gc/maintenance, after the pins already set", () => {
     const env = hardenedGitEnv({
       PATH: "/bin",
       GIT_CONFIG_COUNT: "1",
@@ -519,7 +519,7 @@ describe("ADR 0007: the server's own git, hardened", () => {
       GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_NO_REPLACE_OBJECTS: "1",
-      GIT_CONFIG_COUNT: "4",
+      GIT_CONFIG_COUNT: "6",
       GIT_CONFIG_KEY_0: "credential.helper",
       GIT_CONFIG_KEY_1: "core.fsmonitor",
       GIT_CONFIG_VALUE_1: "false",
@@ -527,7 +527,34 @@ describe("ADR 0007: the server's own git, hardened", () => {
       GIT_CONFIG_VALUE_2: "cat",
       GIT_CONFIG_KEY_3: "core.sshCommand",
       GIT_CONFIG_VALUE_3: "ssh",
+      GIT_CONFIG_KEY_4: "gc.auto",
+      GIT_CONFIG_VALUE_4: "0",
+      GIT_CONFIG_KEY_5: "maintenance.auto",
+      GIT_CONFIG_VALUE_5: "false",
     });
+  });
+
+  it("commits with no identity anywhere as Agent Deck, and keeps the owner's identity", () => {
+    const repo = mkdtempSync(path.join(tmpdir(), "agent-deck-git-ident-"));
+    try {
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+      const bare = { PATH: process.env.PATH, HOME: repo, USERPROFILE: repo };
+      execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "ownerless"], {
+        cwd: repo,
+        env: hardenedGitEnv(bare),
+      });
+      const owner = { ...bare, GIT_AUTHOR_NAME: "Ale", GIT_AUTHOR_EMAIL: "ale@example.com" };
+      execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "owned"], {
+        cwd: repo,
+        env: hardenedGitEnv(owner),
+      });
+      expect(git(repo, ["log", "--format=%an <%ae> / %cn <%ce>"]).trim().split("\n")).toEqual([
+        "Ale <ale@example.com> / Ale <ale@example.com>",
+        "Agent Deck <agent-deck@localhost> / Agent Deck <agent-deck@localhost>",
+      ]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   it("reads through a planted refs/replace object as the real one", () => {

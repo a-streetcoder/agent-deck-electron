@@ -42,8 +42,9 @@ const execFileAsync = ((
 /**
  * ADR 0007: the environment of a server-side git call that must not run code
  * a session could have planted (checkerShell's rules): no global or system
- * config, no replace objects, no fsmonitor, no pager, plain ssh. Hooks are disabled per call where git would
- * run them (`hooksPathArgs`). The config pins ride in GIT_CONFIG_COUNT (the
+ * config, no replace objects, no fsmonitor, no pager, plain ssh, no automatic
+ * gc or maintenance, and an `Agent Deck` identity where the environment has
+ * none. Hooks are disabled per call where git would run them (`hooksPathArgs`). The config pins ride in GIT_CONFIG_COUNT (the
  * same level as `-c`) after any pins the environment already carries.
  */
 export function hardenedGitEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -54,12 +55,22 @@ export function hardenedGitEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Pr
     // A session can write objects and refs: refs/replace must not change a read.
     GIT_NO_REPLACE_OBJECTS: "1",
   };
+  // No global config means no identity: a commit for a session without an owner
+  // would fail with "empty ident name". The owner's identity (gitIdentity.ts) wins.
+  env.GIT_AUTHOR_NAME = base.GIT_AUTHOR_NAME || "Agent Deck";
+  env.GIT_AUTHOR_EMAIL = base.GIT_AUTHOR_EMAIL || "agent-deck@localhost";
+  env.GIT_COMMITTER_NAME = base.GIT_COMMITTER_NAME || env.GIT_AUTHOR_NAME;
+  env.GIT_COMMITTER_EMAIL = base.GIT_COMMITTER_EMAIL || env.GIT_AUTHOR_EMAIL;
   const count = Number.parseInt(base.GIT_CONFIG_COUNT ?? "0", 10) || 0;
   // GIT_SSH_COMMAND in the environment still wins over core.sshCommand.
   const pins: Array<[string, string]> = [
     ["core.fsmonitor", "false"],
     ["core.pager", "cat"],
     ["core.sshCommand", "ssh"],
+    // A session's sandbox binds .git files (packed-refs) as they were at its
+    // wrap: a repack or pack-refs here would leave it a stale view.
+    ["gc.auto", "0"],
+    ["maintenance.auto", "false"],
   ];
   pins.forEach(([key, value], index) => {
     env[`GIT_CONFIG_KEY_${count + index}`] = key;

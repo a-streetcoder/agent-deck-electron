@@ -67,7 +67,7 @@ RUN set -eux; \
     test -f "$app/pi-runtime/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"; \
     test -f "$app/web/index.html"
 
-# --- Runtime stage: no sources, no pnpm, no toolchains ----------------------------
+# --- Runtime stage: no sources, no pnpm; a builder layer for sessions -------------
 FROM node:22.23.3-bookworm-slim
 
 # ripgrep and fd-find: Pi uses the system rg/fdfind instead of downloading them on
@@ -76,10 +76,20 @@ FROM node:22.23.3-bookworm-slim
 # bubblewrap, socat and sandbox-runtime (srt): the per-session process sandbox (ADR 0007);
 # they need deploy/seccomp.json, the agent-deck-sandbox AppArmor profile and
 # systempaths=unconfined at run time (docs/archive/sbx-01-spike-2026-10-17.md). curl for sessions.
+# Builder layer (ADR 0007, Decision 3): compilers and headers for native modules, the
+# linker cargo needs, Python wheels; python3 with venv and pip (installs go to the home,
+# PEP 668 keeps the system site-packages closed); the libraries and fonts Playwright's
+# Chromium needs on Debian 12 (Firefox and WebKit need more). Sessions cannot run apt: a
+# system package is a change here, reviewed like code.
 ARG SANDBOX_RUNTIME_VERSION=0.0.80
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates git openssh-client tini ripgrep fd-find \
       bubblewrap socat curl \
+      build-essential pkg-config libssl-dev libffi-dev python3 python3-venv python3-pip \
+      libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 libdbus-1-3 \
+      libdrm2 libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
+      libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 \
+      fonts-liberation fonts-noto-color-emoji \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g --no-fund --no-audit "@anthropic-ai/sandbox-runtime@${SANDBOX_RUNTIME_VERSION}" \
  && npm cache clean --force \
@@ -89,6 +99,10 @@ RUN apt-get update \
  && chown agentdeck:agentdeck /data
 
 COPY --from=build /out/ /
+# The bundle imports srt at run time; ESM resolves it from /app/node_modules only (no
+# NODE_PATH), so the global install is linked there. Without it the startup probe fails.
+RUN mkdir -p /app/node_modules/@anthropic-ai \
+ && ln -s /usr/local/lib/node_modules/@anthropic-ai/sandbox-runtime /app/node_modules/@anthropic-ai/sandbox-runtime
 
 ARG APP_VERSION=dev
 ENV NODE_ENV=production \

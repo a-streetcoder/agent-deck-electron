@@ -4,11 +4,14 @@
 # unconfined) plus what bubblewrap needs inside the container:
 #   - userns: create unprivileged user namespaces (docker-default is refused userns_create);
 #   - mount, remount, pivot_root: bwrap builds the sandbox's mount tree in its own mount
-#     namespace (docker-default has `deny mount`).
-# Every other rule is docker-default's, unchanged. Load on the host (it does not touch
-# docker-default):
-#   sudo apparmor_parser -r -W deploy/apparmor-agent-deck
-# and run the container with --security-opt apparmor=agent-deck-sandbox.
+#     namespace (docker-default has `deny mount`);
+# and the deny rules marked "Added" or "Changed" below; every other rule is docker-default's.
+# Install on the host so it survives a reboot (it does not touch docker-default; without it
+# loaded Docker refuses to start the container):
+#   sudo install -m 0644 deploy/apparmor-agent-deck /etc/apparmor.d/agent-deck-sandbox
+#   sudo apparmor_parser -r -W /etc/apparmor.d/agent-deck-sandbox
+# and run the container with --security-opt apparmor=agent-deck-sandbox
+# (docs/remote-server-poc.md, "The AppArmor profile").
 
 #include <tunables/global>
 
@@ -37,8 +40,17 @@ profile agent-deck-sandbox flags=(attach_disconnected,mediate_deleted) {
   deny @{PROC}/* w,   # deny write for all files directly in /proc (not in a subdir)
   # deny write to files not in /proc/<number>/** or /proc/sys/**
   deny @{PROC}/{[^1-9],[^1-9][^0-9],[^1-9s][^0-9y][^0-9s],[^1-9][^0-9][^0-9][^0-9/]*}/** w,
-  deny @{PROC}/sys/[^k]** w,  # deny /proc/sys except /proc/sys/k* (effectively /proc/sys/kernel)
-  deny @{PROC}/sys/kernel/{?,??,[^s][^h][^m]**} w,  # deny everything except shm* in /proc/sys/kernel/
+  # Changed from docker-default's [^k]: /proc/sys/user stays writable so srt's apply-seccomp
+  # can set user.max_user_namespaces=0 inside the sandbox's own user namespace (the write
+  # is refused outside one: the container's limit belongs to the host's namespace).
+  deny @{PROC}/sys/[^ku]** w,  # deny /proc/sys except /proc/sys/k* and /proc/sys/u*
+  # Changed from docker-default's {?,??,[^s][^h][^m]**}, which leaves s* other than shm*
+  # (sysrq, sched_*, sem) writable once Docker's read-only /proc/sys is gone: everything
+  # in /proc/sys/kernel/ but shm* is denied.
+  deny @{PROC}/sys/kernel/[^s]** w,
+  deny @{PROC}/sys/kernel/s[^h]** w,
+  deny @{PROC}/sys/kernel/sh[^m]** w,
+  deny @{PROC}/sys/kernel/{s,sh} w,
   deny @{PROC}/sysrq-trigger rwklx,
   deny @{PROC}/kcore rwklx,
   # Added: bwrap mounts a fresh /proc, which the kernel allows only when the container's

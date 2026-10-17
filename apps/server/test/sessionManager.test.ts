@@ -2830,9 +2830,14 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
     // a wiring test (the dir logic is userAgentDirs.test.ts, which needs symlinks).
     const args: unknown[] = [runtime, new ReceiptBus(false)];
     const resolved: string[] = [];
+    const launches: Array<string | undefined> = [];
     const dir = mkdtempSync(path.join(tmpdir(), "deck-sm-agent-dir-"));
     args[24] = {
-      resolve: (user: { id: string }) => (resolved.push(user.id), `/data/users/${user.id}/agent`),
+      resolve: (user: { id: string }, sessionId?: string) => (
+        resolved.push(user.id),
+        launches.push(sessionId),
+        `/data/users/${user.id}/agent`
+      ),
     } as unknown as UserAgentDirs;
     const manager = new SessionManager(...(args as ConstructorParameters<typeof SessionManager>));
     const meta = (createdBy?: SessionMeta["createdBy"]): SessionMeta => ({
@@ -2842,13 +2847,25 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
       ...(createdBy ? { createdBy } : {}),
     });
     try {
-      await manager.resume(meta({ id: "o@example.com" }), { kind: "parent" }).catch(() => {});
+      const owned = meta({ id: "o@example.com" });
+      await manager.resume(owned, { kind: "parent" }).catch(() => {});
       await manager.resume(meta(), { kind: "parent" }).catch(() => {});
       expect(spawned[0]!.spawn.env).toMatchObject({
         PI_CODING_AGENT_DIR: "/data/users/o@example.com/agent",
       });
       expect(Object.keys(spawned[1]!.spawn.env ?? {})).not.toContain("PI_CODING_AGENT_DIR");
       expect(resolved).toEqual(["o@example.com"]);
+      // The session's own launch names it (it may quarantine and report); a
+      // cold transcript reader of the same parent does not.
+      expect(launches).toEqual([owned.id]);
+      (
+        manager as unknown as {
+          parentReaderLaunch: (parent: SessionMeta, cwd: string, file: string) => unknown;
+        }
+      ).parentReaderLaunch({ ...owned, id: randomUUID() }, process.cwd(), "t.jsonl");
+      expect(launches).toEqual([owned.id, undefined]);
+      resolved.length = 0;
+      launches.length = 0;
       // A fork keeps the source owner, so it spawns on the same credentials.
       const source = path.join(dir, "source.jsonl");
       writeFileSync(source, "");

@@ -1,16 +1,31 @@
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import {
   DEFAULT_SANDBOX_DENIED_ADDRESSES,
   DEFAULT_SANDBOX_DOMAINS,
   type SandboxPolicy,
 } from "@agent-deck/domain";
 import type {
+  NetworkConfigSchema as NetworkConfig,
   SandboxManager,
   SandboxRuntimeConfig,
   SandboxViolationStore,
 } from "@anthropic-ai/sandbox-runtime";
+// Deep imports (no exports map; srt is pinned): the carve must read deny globs
+// exactly as srt does.
+import { denyGlobRegex } from "@anthropic-ai/sandbox-runtime/dist/sandbox/glob-pattern.js";
+import { containsGlobChars } from "@anthropic-ai/sandbox-runtime/dist/sandbox/sandbox-utils.js";
 
 /**
  * The process sandbox around a spawn (ADR 0007). A provider turns a command
@@ -59,7 +74,8 @@ import type {
  *   for the server's unwrapped git or Pi to read later. So the provider
  *   creates every absent `denyWrite` entry under an existing writable root as
  *   the kind the policy names (an empty folder, an empty file, `{}` for a
- *   `.json` file, which Pi reads as no settings) and passes it to srt, which
+ *   `.json` file, which Pi reads as no settings, `{"providers":{}}` for
+ *   `models.json`, whose schema needs the key) and passes it to srt, which
  *   binds it read-only. Deny paths outside every writable root cannot be
  *   created by the session; the absent ones are not passed (no placeholder
  *   lands in, say, a `.git` the server uses). `denyRead` entries are passed
@@ -170,6 +186,9 @@ export interface SandboxFs {
   mkdir(path: string): void;
   /** Create a new file (never overwrites, never follows a link). */
   createFile(path: string, content: string): void;
+  /** The entry names of a directory (not of a link to one); undefined for
+   * anything else or an unreadable one. */
+  children(path: string): string[] | undefined;
 }
 
 export const hostFs: SandboxFs = {
@@ -186,7 +205,80 @@ export const hostFs: SandboxFs = {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, content, { flag: "wx" });
   },
+  children: (path) => {
+    try {
+      return lstatSync(path).isDirectory() ? readdirSync(path) : undefined;
+    } catch {
+      return undefined;
+    }
+  },
 };
+
+/** The most children one carved folder may have (each becomes a bwrap argument). */
+export const MAX_CARVED_ENTRIES = 200;
+
+/**
+ * srt (0.0.80) restores the write roots a read-denied tmpfs wiped and only
+ * then binds the `allowRead` entries back read-only, so an `allowRead` entry
+ * that holds a write root makes that root read-only (a worktree session's
+ * project holding `.git/objects`, a user's folder holding their agent dir).
+ * Such an entry is replaced by its children, recursively along the write
+ * roots only. Never emitted: a write root (its own bind makes it readable),
+ * anything at or under a write root (an entry there is dropped for the same
+ * reason; srt skips it too), and anything at or under a `denyRead` entry that
+ * lies inside the entry being carved: srt
+ * would re-expose it (an `allowRead` inside a denied folder is restored, and
+ * one naming an exact file drops that file's mask). An entry that cannot be
+ * listed is kept as it is (reads stay, those writes are lost). A carved
+ * folder with more than MAX_CARVED_ENTRIES children fails the wrap.
+ * ponytail: the children are listed at wrap time; an entry created later next
+ * to a write root stays hidden from that sandbox, and a file the server
+ * replaces by rename stays the old one there, until the next wrap.
+ */
+export function carveReadAroundWrites(
+  allowRead: readonly string[],
+  allowWrite: readonly string[],
+  denyRead: readonly string[],
+  fs: SandboxFs = hostFs,
+): string[] {
+  const within = (root: string, path: string): boolean =>
+    path === root || path.startsWith(`${root}/`);
+  // srt's own glob reading of a deny entry (`**` crosses separators, a match
+  // covers its subtree), so the carve never emits what srt would mask.
+  const globs = denyRead
+    .filter(containsGlobChars)
+    .map((entry) => new RegExp(denyGlobRegex(entry.replace(/\/\*\*$/, "") || "/")));
+  // Only denials at or inside the entry being carved: the one it re-allows
+  // from (`<dataDir>` around a project) is above it.
+  const denied = (top: string, path: string): boolean =>
+    denyRead.some(
+      (entry) => !containsGlobChars(entry) && within(top, entry) && within(entry, path),
+    ) || globs.some((glob) => !glob.test(top) && glob.test(path));
+  const underWrite = (path: string): boolean => allowWrite.some((root) => within(root, path));
+  const carve = (top: string, entry: string): string[] => {
+    if (!allowWrite.some((root) => root !== entry && within(entry, root))) return [entry];
+    const names = fs.children(entry);
+    if (!names) return [entry];
+    if (names.length > MAX_CARVED_ENTRIES) {
+      throw new PiSandboxError(
+        `pi-host: sandbox: ${entry} holds a writable folder and ${names.length} other entries; at most ${MAX_CARVED_ENTRIES} can be bound one by one`,
+      );
+    }
+    return names
+      .map((name) => `${entry}/${name}`)
+      .filter((child) => !underWrite(child) && !denied(top, child))
+      .flatMap((child) => carve(top, child));
+  };
+  return [
+    ...new Set(
+      allowRead.filter((entry) => !underWrite(entry)).flatMap((entry) => carve(entry, entry)),
+    ),
+  ];
+}
+
+/** What an absent denied file is created as: Pi reads each as empty. */
+const emptyFileFor = (path: string): string =>
+  path.endsWith("/models.json") ? '{"providers":{}}' : path.endsWith(".json") ? "{}" : "";
 
 /**
  * The `denyWrite` paths to give srt: those that exist, and the absent ones
@@ -200,7 +292,7 @@ export function prepareDenyWrite(policy: SandboxPolicy, fs: SandboxFs = hostFs):
     if (!fs.exists(path)) {
       if (!roots.some((root) => path === root || path.startsWith(`${root}/`))) continue;
       if (kind === "dir") fs.mkdir(path);
-      else fs.createFile(path, path.endsWith(".json") ? "{}" : "");
+      else fs.createFile(path, emptyFileFor(path));
     }
     out.push(path);
   }
@@ -220,7 +312,7 @@ export function srtSettings(
       allowWrite: policy.allowWrite,
       denyWrite,
       denyRead: policy.denyRead.filter((entry) => entry.includes("*") || fs.exists(entry)),
-      allowRead: policy.allowRead,
+      allowRead: carveReadAroundWrites(policy.allowRead, policy.allowWrite, policy.denyRead, fs),
     },
     network: {
       allowedDomains: policy.allowedDomains,
@@ -287,11 +379,124 @@ export async function srtProblem(
   return errors.length > 0 ? errors.join("; ") : undefined;
 }
 
-/** An srt provider over `load` (tests inject a fake manager and file checks). */
+/**
+ * Why `provider` cannot actually run a sandboxed command here, or undefined
+ * when it can: wraps `/bin/true` under a minimal policy (a fresh scratch
+ * folder writable, no hosts) and runs it, so a host whose binaries are present
+ * but whose namespaces, mounts or /proc are refused (a container without the
+ * deploy/ profiles) is caught at startup rather than on every spawn.
+ */
+export async function sandboxProbeProblem(
+  provider: SandboxProvider,
+  timeoutMs = 15_000,
+): Promise<string | undefined> {
+  const scratch = realpathSync(mkdtempSync(join(tmpdir(), "agent-deck-sandbox-probe-")));
+  const policy: SandboxPolicy = {
+    allowWrite: [scratch],
+    denyWrite: [],
+    denyRead: [],
+    allowRead: [],
+    tmpDir: scratch,
+    createDirs: [],
+    allowedDomains: [],
+    deniedResolvedAddresses: [],
+  };
+  // One deadline for the wrap (srt's initialize), the run and the release.
+  let timer: NodeJS.Timeout | undefined;
+  let child: ReturnType<typeof spawn> | undefined;
+  let late = false;
+  const deadline = new Promise<string>((resolve) => {
+    timer = setTimeout(() => {
+      late = true;
+      child?.kill("SIGKILL");
+      resolve(`the sandbox probe did not finish within ${timeoutMs} ms`);
+    }, timeoutMs);
+  });
+  const run = async (): Promise<string | undefined> => {
+    let wrapped: SandboxedCommand | undefined;
+    try {
+      wrapped = await provider.wrap(
+        { command: "/bin/true", args: [], env: { PATH: process.env.PATH }, cwd: scratch },
+        policy,
+      );
+      if (late) return undefined;
+      const { command, args, env, cwd } = wrapped;
+      return await new Promise<string | undefined>((resolve) => {
+        let stderr = "";
+        child = spawn(command, args, { cwd, env, stdio: ["ignore", "ignore", "pipe"] });
+        child.stderr?.on("data", (chunk: Buffer) => {
+          if (stderr.length < 2000) stderr += chunk.toString();
+        });
+        child.on("error", (error) => {
+          resolve(`a sandboxed /bin/true could not start: ${String(error)}`);
+        });
+        child.on("close", (code, signal) => {
+          resolve(
+            code === 0
+              ? undefined
+              : `a sandboxed /bin/true exited ${code ?? signal}: ${stderr.trim() || "no output"}`,
+          );
+        });
+      });
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    } finally {
+      wrapped?.release?.();
+    }
+  };
+  try {
+    return await Promise.race([run(), deadline]);
+  } finally {
+    clearTimeout(timer);
+    try {
+      rmSync(scratch, { recursive: true, force: true });
+    } catch {
+      // A killed child may still hold it as its cwd: a temp folder, left behind.
+    }
+  }
+}
+
+/**
+ * Why srt's own schema refuses `entries` as `deniedResolvedAddresses`, or
+ * undefined: checked at startup so a value srt rejects does not fail every
+ * wrap instead.
+ */
+export async function srtDeniedAddressesProblem(
+  entries: readonly string[],
+): Promise<string | undefined> {
+  if (entries.length === 0) return undefined;
+  const { NetworkConfigSchema } = (await import(SRT_PACKAGE)) as {
+    NetworkConfigSchema: typeof NetworkConfig;
+  };
+  const parsed = NetworkConfigSchema.safeParse({
+    allowedDomains: [],
+    deniedDomains: [],
+    deniedResolvedAddresses: [...entries],
+  });
+  if (parsed.success) return undefined;
+  return parsed.error.issues
+    .map((issue) => {
+      const index = issue.path[1];
+      return typeof index === "number" ? `"${entries[index]}": ${issue.message}` : issue.message;
+    })
+    .join("; ");
+}
+
+/**
+ * An srt provider over `load` (tests inject a fake manager and file checks).
+ * `monitor`: srt's log monitor, which reports refused writes (on Linux its
+ * seccomp observer sees every write-intent syscall: 10k small writes took
+ * about twice as long on the VM, SBX-04). Off unless
+ * `AGENT_DECK_SANDBOX_MONITOR=1`; refused hosts are reported either way.
+ */
 export function createSrtProvider(
   load: () => Promise<SrtManager> = async () => (await import(SRT_PACKAGE)).SandboxManager,
   platform: NodeJS.Platform = process.platform,
   fs: SandboxFs = hostFs,
+  monitor: boolean = process.env.AGENT_DECK_SANDBOX_MONITOR === "1",
+  /** How long dispose() waits for a wrap or initialize in flight before it
+   * resets srt anyway (a hung one would hold it forever). */
+  disposeWaitMs = 2_000,
 ): SandboxProvider {
   let manager: Promise<SrtManager> | undefined;
   let initialized: Promise<void> | undefined;
@@ -302,6 +507,14 @@ export function createSrtProvider(
   let unsubscribeStore: (() => void) | undefined;
   /** dispose() ran: no initialize and no wrap after it. */
   let disposed = false;
+  /** The manager once loaded, kept apart from the promises dispose() races. */
+  let loaded: SrtManager | undefined;
+  /** dispose() has called reset on `loaded`. */
+  let resetIssued = false;
+  /** The one cleanup of an initialize that finished after that reset. */
+  let lateReset: Promise<void> | undefined;
+  const disposedError = (): PiSandboxError =>
+    new PiSandboxError(`pi-host: sandbox provider "srt" was disposed`);
   /** Wraps in flight, which dispose() lets settle before it resets srt. */
   const pending = new Set<Promise<unknown>>();
 
@@ -327,24 +540,37 @@ export function createSrtProvider(
   };
 
   const ready = async (): Promise<SrtManager> => {
-    if (disposed) throw new PiSandboxError(`pi-host: sandbox provider "srt" was disposed`);
-    manager ??= load().catch((error: unknown) => {
-      manager = undefined;
-      throw new PiSandboxError(
-        `pi-host: sandbox provider "srt" needs the package ${SRT_PACKAGE}, which could not be loaded: ${String(error)}`,
-        { cause: error },
-      );
-    });
+    if (disposed) throw disposedError();
+    manager ??= load().then(
+      (srt) => (loaded = srt),
+      (error: unknown) => {
+        manager = undefined;
+        throw new PiSandboxError(
+          `pi-host: sandbox provider "srt" needs the package ${SRT_PACKAGE}, which could not be loaded: ${String(error)}`,
+          { cause: error },
+        );
+      },
+    );
     const srt = await manager;
+    if (disposed) throw disposedError();
     // The log monitor: srt then observes refused writes (Linux seccomp,
     // macOS Seatbelt) besides the refused hosts its proxy always records.
-    initialized ??= withoutSignalCleanup(() => srt.initialize(global, undefined, true)).catch(
+    initialized ??= withoutSignalCleanup(() => srt.initialize(global, undefined, monitor)).catch(
       (error: unknown) => {
         initialized = undefined;
         throw wrapError(`could not start ${SRT_PACKAGE}`, error);
       },
     );
     await initialized;
+    if (disposed) {
+      // Finished after dispose(): never hand out argv. dispose() resets it
+      // unless it already did so before this initialize created its proxies.
+      if (resetIssued) {
+        lateReset ??= srt.reset();
+        await lateReset.catch(() => {});
+      }
+      throw disposedError();
+    }
     watchViolations(srt);
     return srt;
   };
@@ -382,18 +608,32 @@ export function createSrtProvider(
     },
     async dispose() {
       disposed = true;
-      // Let an initialize and the wraps in flight finish before srt resets.
-      await Promise.allSettled([...pending]);
-      const started = initialized;
-      if (!started) return;
-      await started.catch(() => {});
-      const srt = await manager;
-      initialized = undefined;
-      unsubscribeStore?.();
-      unsubscribeStore = undefined;
-      active.clear();
-      global = baseConfig();
-      await srt?.reset();
+      // Let an initialize and the wraps in flight finish before srt resets,
+      // within one deadline; past it, reset whatever has loaded anyway (an
+      // initialize that finishes later cleans up after itself, see ready()).
+      let timer: NodeJS.Timeout | undefined;
+      const deadline = new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), disposeWaitMs);
+      });
+      const settled = <T>(work: Promise<T>): Promise<T | undefined> =>
+        Promise.race([work, deadline]);
+      try {
+        await settled(Promise.allSettled([...pending]));
+        const started = initialized;
+        if (started) await settled(started.catch(() => {}));
+        initialized = undefined;
+        unsubscribeStore?.();
+        unsubscribeStore = undefined;
+        active.clear();
+        global = baseConfig();
+        const srt = loaded;
+        if (srt && started) {
+          resetIssued = true;
+          await settled(srt.reset().catch(() => {}));
+        }
+      } finally {
+        clearTimeout(timer);
+      }
     },
   };
 
@@ -431,6 +671,8 @@ export function createSrtProvider(
         cmd.cwd,
         { commandId },
       );
+      // Disposed meanwhile: srt is (being) reset, the argv would run unfenced.
+      if (disposed) throw disposedError();
       const [shell, ...args] = argv;
       if (!shell) throw new Error("srt returned an empty argv");
       let released = false;

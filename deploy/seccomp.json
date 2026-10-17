@@ -4,7 +4,7 @@
   "archMap": [
     {
       "architecture": "SCMP_ARCH_X86_64",
-      "subArchitectures": ["SCMP_ARCH_X86", "SCMP_ARCH_X32"]
+      "subArchitectures": null
     },
     {
       "architecture": "SCMP_ARCH_AARCH64",
@@ -341,7 +341,6 @@
         "signalfd4",
         "sigprocmask",
         "sigreturn",
-        "socketcall",
         "socketpair",
         "splice",
         "stat",
@@ -403,11 +402,187 @@
     {
       "names": ["socket"],
       "action": "SCMP_ACT_ALLOW",
+      "comment": "Changed from Docker's single 'family != 40' rule: socket() reads int arguments, so every rule here also requires the upper 32 bits to be zero (64-bit masks), libseccomp lets an ALLOW win over an overlapping ERRNO, and two comparisons on one argument do not AND. Families 0-15, 17-39 and 41-63 are allowed, AF_VSOCK (40) is not; AF_NETLINK (16) is allowed for every protocol but NETLINK_NETFILTER (12), closing nf_tables to namespace-capable processes. Anything else gets the default EPERM. The archMap has no 32-bit x86 ABIs: libseccomp would turn these rules into an unrestricted socketcall(SYS_SOCKET) there.",
       "args": [
         {
           "index": 0,
-          "value": 40,
-          "op": "SCMP_CMP_NE"
+          "value": 16,
+          "op": "SCMP_CMP_LT"
+        }
+      ]
+    },
+    {
+      "names": ["socket"],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 18446744073709551615,
+          "valueTwo": 17,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["socket"],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 18446744073709551614,
+          "valueTwo": 18,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["socket"],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 18446744073709551612,
+          "valueTwo": 20,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["socket"],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 18446744073709551608,
+          "valueTwo": 24,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["socket"],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 18446744073709551608,
+          "valueTwo": 32,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["socket"],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 18446744073709551615,
+          "valueTwo": 41,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["socket"],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 18446744073709551614,
+          "valueTwo": 42,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["socket"],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 18446744073709551612,
+          "valueTwo": 44,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["socket"],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 18446744073709551600,
+          "valueTwo": 48,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["socket"],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 16,
+          "op": "SCMP_CMP_EQ"
+        },
+        {
+          "index": 2,
+          "value": 12,
+          "op": "SCMP_CMP_LT"
+        }
+      ]
+    },
+    {
+      "names": ["socket"],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 16,
+          "op": "SCMP_CMP_EQ"
+        },
+        {
+          "index": 2,
+          "value": 18446744073709551615,
+          "valueTwo": 13,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["socket"],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 16,
+          "op": "SCMP_CMP_EQ"
+        },
+        {
+          "index": 2,
+          "value": 18446744073709551614,
+          "valueTwo": 14,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["socket"],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 16,
+          "op": "SCMP_CMP_EQ"
+        },
+        {
+          "index": 2,
+          "value": 18446744073709551600,
+          "valueTwo": 16,
+          "op": "SCMP_CMP_MASKED_EQ"
         }
       ]
     },

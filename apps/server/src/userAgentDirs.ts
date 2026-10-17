@@ -3,6 +3,7 @@ import {
   lstatSync,
   mkdirSync,
   readlinkSync,
+  renameSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -10,6 +11,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import type { UserIdentity } from "@agent-deck/contracts";
+import { SANDBOX_AGENT_PROTECTED_ENTRIES } from "@agent-deck/domain";
 import type { ResourceRoots } from "@agent-deck/resources";
 
 /**
@@ -108,6 +110,14 @@ export function ensureUserDir(dataDir: string, userId: string): string {
   return dir;
 }
 
+/** A protected entry that was not the expected link, moved aside (ADR 0007). */
+export interface QuarantinedEntry {
+  /** `<userDir>/<name>`, linked again to the shared entry. */
+  path: string;
+  /** Where what was there went: `<path>.quarantined-<ISO timestamp>`. */
+  movedTo: string;
+}
+
 /**
  * Create the user dir (0700) and its private auth.json ("{}", 0600) when
  * missing, then link the fixed shared entries. auth.json is written BEFORE any
@@ -115,8 +125,22 @@ export function ensureUserDir(dataDir: string, userId: string): string {
  * apiKeys into it. Idempotent: correct links are skipped, links pointing
  * elsewhere are replaced, real files or dirs (a private copy) are left alone
  * with a warning rather than deleted.
+ *
+ * `sandboxed` (a launch on a server whose provider is not `none`): a sandbox
+ * protects what a link points at, not the link, so a session can swap a
+ * code-bearing entry (SANDBOX_AGENT_PROTECTED_ENTRIES) for a real folder or
+ * file of its own. Such an entry is moved aside to
+ * `<name>.quarantined-<timestamp>` and linked again (fail closed), and
+ * returned so the caller can report it; a link that merely points elsewhere
+ * is relinked as always. Residual (accepted): another live session of the
+ * same user can swap it again after this check.
  */
-export function ensureUserAgentDir(sharedAgentDir: string, userDir: string): void {
+export function ensureUserAgentDir(
+  sharedAgentDir: string,
+  userDir: string,
+  sandboxed = false,
+): QuarantinedEntry[] {
+  const quarantined: QuarantinedEntry[] = [];
   // Refuse aliases (review3 R2): a symlinked `users`, `<hash>` or `agent` dir, or
   // an auth.json that is a link or not a regular file, could point a sign-in or
   // a spawn at someone else's credentials. Throwing stops the login or spawn.
@@ -143,6 +167,13 @@ export function ensureUserAgentDir(sharedAgentDir: string, userDir: string): voi
     if (type === "dir") mkdirSync(target, { recursive: true });
     const current = linkTarget(link);
     if (current === target) continue;
+    if (sandboxed && current === "" && SANDBOX_AGENT_PROTECTED_ENTRIES.includes(name)) {
+      const movedTo = `${link}.quarantined-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+      renameSync(link, movedTo);
+      symlinkSync(target, link, type);
+      quarantined.push({ path: link, movedTo });
+      continue;
+    }
     if (current === "") {
       console.warn(
         `[user-agent-dir] ${link} is a private copy, not a link to ${target}; leaving it`,
@@ -152,6 +183,7 @@ export function ensureUserAgentDir(sharedAgentDir: string, userDir: string): voi
     if (current !== undefined) unlinkSync(link);
     symlinkSync(target, link, type);
   }
+  return quarantined;
 }
 
 export class UserAgentDirs {
@@ -160,6 +192,12 @@ export class UserAgentDirs {
     /** The shared agent dir, resolved live (it follows the Pi HOME override). */
     private readonly sharedAgentDir: () => string,
     private readonly operatorEmail?: string,
+    /** Sessions run sandboxed: protected entries are quarantined (ADR 0007).
+     * Resolved live: the provider is chosen after construction. */
+    private readonly sandbox?: {
+      on: () => boolean;
+      quarantined: (user: UserIdentity, entry: QuarantinedEntry, sessionId: string) => void;
+    },
   ) {}
 
   isOperator(user: UserIdentity): boolean {
@@ -167,11 +205,15 @@ export class UserAgentDirs {
   }
 
   /** The prepared agent dir for `user`; the shared dir for the operator. */
-  resolve(user: UserIdentity): string {
+  /** `sessionId`: the launch this is for; only a launch quarantines. */
+  resolve(user: UserIdentity, sessionId?: string): string {
     const shared = this.sharedAgentDir();
     if (this.isOperator(user)) return shared;
     const dir = userAgentDir(this.dataDir, user.id);
-    ensureUserAgentDir(shared, dir);
+    const sandbox = sessionId !== undefined && this.sandbox?.on() ? this.sandbox : undefined;
+    for (const entry of ensureUserAgentDir(shared, dir, sandbox !== undefined)) {
+      sandbox?.quarantined(user, entry, sessionId!);
+    }
     return dir;
   }
 }
@@ -180,9 +222,10 @@ export class UserAgentDirs {
 export function userAgentDirEnv(
   owner: UserIdentity | undefined,
   dirs: UserAgentDirs | undefined,
+  sessionId?: string,
 ): Record<string, string> {
   if (!owner || !dirs) return {};
-  return { PI_CODING_AGENT_DIR: dirs.resolve(owner) };
+  return { PI_CODING_AGENT_DIR: dirs.resolve(owner, sessionId) };
 }
 
 /** `roots` with the user's agent dir, for provider auth reads and writes. */

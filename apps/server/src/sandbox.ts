@@ -33,6 +33,8 @@ import {
 } from "@agent-deck/domain";
 import {
   noneProvider,
+  sandboxProbeProblem,
+  srtDeniedAddressesProblem,
   srtProblem,
   srtProvider,
   type PiSandbox,
@@ -48,21 +50,25 @@ export interface SandboxChoice {
 
 /**
  * `AGENT_DECK_SANDBOX=srt|none`. Unset: `srt` on the shared server when srt
- * can run there (its package loads, bubblewrap and socat are installed),
- * otherwise `none` with a warning; `none` on a desktop. Windows is always
- * `none`. An explicit `srt` is kept even when the check fails (its spawns
- * then fail loudly rather than run unconfined); any other value is refused.
+ * can run there (its package loads, bubblewrap and socat are installed, and a
+ * real sandboxed `/bin/true` succeeds), otherwise `none` with a warning;
+ * `none` on a desktop. Windows is always `none`. An explicit `srt` that cannot
+ * run refuses to start (the operator asked for a sandbox: fail closed); any
+ * other value is refused.
  */
 export async function chooseSandboxProvider(options: {
   env: NodeJS.ProcessEnv;
   sharedServer: boolean;
   platform?: NodeJS.Platform;
+  /** Why srt cannot run (default: the dependency check, then the probe). */
   problem?: () => Promise<string | undefined>;
   srt?: SandboxProvider;
 }): Promise<SandboxChoice> {
   const platform = options.platform ?? process.platform;
-  const problem = options.problem ?? (() => srtProblem(undefined, platform));
   const srt = options.srt ?? srtProvider;
+  const problem =
+    options.problem ??
+    (async () => (await srtProblem(undefined, platform)) ?? (await sandboxProbeProblem(srt)));
   const raw = options.env.AGENT_DECK_SANDBOX?.trim().toLowerCase() || undefined;
   if (raw !== undefined && raw !== "srt" && raw !== "none") {
     throw new Error(
@@ -77,21 +83,48 @@ export async function chooseSandboxProvider(options: {
         : {}),
     };
   }
-  if (raw === "none") return { provider: noneProvider };
+  if (raw === "none") {
+    return options.sharedServer
+      ? {
+          provider: noneProvider,
+          warning:
+            "sandbox: AGENT_DECK_SANDBOX=none on a shared server: sessions run without a process sandbox, and the container's userns-enabled seccomp/AppArmor profiles make that weaker than plain Docker; drop those security_opt entries (seccomp, apparmor, systempaths) when choosing none",
+        }
+      : { provider: noneProvider };
+  }
   if (raw === undefined && !options.sharedServer) return { provider: noneProvider };
   const why = await problem();
+  if (!why) return { provider: srt };
+  await srt.dispose?.(); // the probe may have started srt's proxies
   if (raw === "srt") {
-    return {
-      provider: srt,
-      ...(why ? { warning: `sandbox: srt was asked for but cannot run here: ${why}` } : {}),
-    };
+    throw new Error(`sandbox: AGENT_DECK_SANDBOX=srt was asked for but cannot run here: ${why}`);
   }
-  return why
-    ? {
-        provider: noneProvider,
-        warning: `sandbox: srt cannot run here (${why}); sessions run without a process sandbox`,
-      }
-    : { provider: srt };
+  return {
+    provider: noneProvider,
+    warning: `sandbox: WARNING srt cannot run here (${why}); sessions run WITHOUT a process sandbox. Deploy with deploy/seccomp.json, the agent-deck-sandbox AppArmor profile and systempaths=unconfined, or set AGENT_DECK_SANDBOX=none to accept this.`,
+  };
+}
+
+/**
+ * `AGENT_DECK_SANDBOX_DENY_ADDRESSES`: addresses or CIDR ranges (comma-separated)
+ * a sandboxed host name must not resolve to, besides the private ranges (the
+ * server's public IP, a Docker gateway outside 172.16.0.0/12). Read only for a
+ * sandboxed server (`none` ignores it); an entry srt's own schema refuses stops
+ * the start rather than fail every wrap.
+ */
+export async function sandboxDenyAddresses(
+  env: NodeJS.ProcessEnv,
+  provider: SandboxProvider,
+  problem: (entries: readonly string[]) => Promise<string | undefined> = srtDeniedAddressesProblem,
+): Promise<string[]> {
+  if (provider.name === "none") return [];
+  const entries = (env.AGENT_DECK_SANDBOX_DENY_ADDRESSES ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const why = await problem(entries);
+  if (why) throw new Error(`AGENT_DECK_SANDBOX_DENY_ADDRESSES: ${why}`);
+  return entries;
 }
 
 /** The real path of `file`: its deepest existing ancestor resolved, the rest
@@ -357,6 +390,33 @@ export class SandboxHostGrants {
     writeFileSync(temp, `${JSON.stringify(all, null, 2)}\n`);
     renameSync(temp, this.file);
   }
+}
+
+/**
+ * Lines raised for a session before its launch registered it (a quarantined
+ * agent-dir entry, found while its env is built), shown with that launch's
+ * own initial notices.
+ */
+export function createLaunchNoticeQueue(): {
+  add: (sessionId: string, notice: NoticeCell) => void;
+  /** The queued lines, once. */
+  take: (sessionId: string) => NoticeCell[];
+  forget: (sessionId: string) => void;
+} {
+  const queued = new Map<string, NoticeCell[]>();
+  return {
+    add: (sessionId, notice) => {
+      queued.set(sessionId, [...(queued.get(sessionId) ?? []), notice]);
+    },
+    take: (sessionId) => {
+      const notices = queued.get(sessionId) ?? [];
+      queued.delete(sessionId);
+      return notices;
+    },
+    forget: (sessionId) => {
+      queued.delete(sessionId);
+    },
+  };
 }
 
 /** The transcript line of a violation. */
