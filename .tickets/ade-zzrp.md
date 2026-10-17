@@ -19,3 +19,12 @@ Reported by the owner 2026-10-18 on deck.moretti.cc: clicking New chat (and the 
 **2026-10-17T09:40:05Z**
 
 2026-10-18 CLOSED: fixed in the web client (createChatSession in wsBridge.ts: on cwd_outside_projects with no project selected, use the only registered project and select it, else 'Pick a project in the sidebar first'); tests in wsBridge.newChat.test.ts (9). Found from the owner's browser: POST /sessions {} -> 400. Architect fix, no GPT review (UI-only, 40 lines); deployed with the next build.
+
+## Follow-up 2026-10-17 (architect, browser check)
+
+The first fix (c7d7154, 09afbb5) covered only `createChatSession`. A fresh tab on
+deck.moretti.cc still showed the refusal banner on load: `findOrCreateSession`
+(page activation, agent switch) posted `/sessions` without a project on its own.
+Routed through `createChatSession` in 9d649d9; test
+"falls back to the only project when the page activates without a session".
+Verified in the browser after redeploy (see below).
