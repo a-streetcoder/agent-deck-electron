@@ -174,8 +174,10 @@ export interface SandboxPolicyInput {
   ownerDir?: string;
   /** The project's parsed `.agent-deck/sandbox.json`. */
   project?: ProjectSandboxConfig;
-  /** The session's own `/tmp/agent-deck-*` paths (its bridge extension
-   * folder, prompt files); readable inside the otherwise denied set. */
+  /** The launch's own files, readable inside the otherwise denied set: its
+   * `/tmp/agent-deck-*` paths (bridge extension folder, prompt files) and the
+   * extensions, skills and prompt templates it names on Pi's command line
+   * (injected commands and the stores live under the data folder). */
   sessionTmpPaths?: readonly string[];
   /** Addresses to refuse besides the private ranges (the Docker gateway). */
   extraDeniedAddresses?: readonly string[];

@@ -89,6 +89,7 @@ export {
 } from "./bridge.ts";
 export {
   buildLaunchArgs,
+  launchReadPaths,
   type AgentSessionPlan,
   type HelperPlan,
   type LaunchPlan,

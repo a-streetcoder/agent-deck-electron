@@ -190,7 +190,8 @@ export interface SessionSandboxLaunch {
   env?: Record<string, string | undefined>;
   sessionDir?: string;
   resumeSessionPath?: string;
-  /** The launch's own files (bridge extension and prompt folders). */
+  /** The launch's own files: bridge extension and prompt folders, and the
+   * extensions, skills and prompt templates on Pi's command line. */
   tempPaths?: readonly string[];
   /** A `--no-session` helper: Pi writes no session file. */
   noSession?: boolean;

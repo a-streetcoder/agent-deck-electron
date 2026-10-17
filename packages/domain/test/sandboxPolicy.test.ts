@@ -266,10 +266,16 @@ describe("sandboxPolicy reads", () => {
     }
   });
 
-  it("server: re-allows only the session's own /tmp/agent-deck-* paths", () => {
-    const p = policy({}, "server", { sessionTmpPaths: ["/tmp/agent-deck-bridge-ext-AbC/"] });
+  it("server: re-allows only the launch's own /tmp/agent-deck-* and data-folder files", () => {
+    const injected = "/data/injected-commands/bundled/optimize-agents-md.ts";
+    const p = policy({}, "server", {
+      sessionTmpPaths: ["/tmp/agent-deck-bridge-ext-AbC/", injected],
+    });
     expect(readable(p, "/tmp/agent-deck-bridge-ext-AbC/bridge.ts")).toBe(true);
     expect(readable(p, "/tmp/agent-deck-bridge-ext-XyZ/bridge.ts")).toBe(false);
+    expect(readable(p, injected)).toBe(true);
+    expect(readable(p, "/data/injected-commands/bundled/other.ts")).toBe(false);
+    expect(writable(p, injected)).toBe(false);
     expect(p.allowWrite.some((dir) => dir === "/tmp" || dir.startsWith("/tmp/"))).toBe(false);
   });
 

@@ -40,6 +40,7 @@ import type {
 } from "@agent-deck/domain";
 import {
   buildLaunchArgs,
+  launchReadPaths,
   resolvePiBinary,
   type AgentSessionPlan,
   type LaunchPlan,
@@ -1570,7 +1571,7 @@ export class SessionManager {
         : launchPlan.kind === "agent" && launchPlan.sessionDir
           ? { sessionDir: launchPlan.sessionDir }
           : {}),
-      tempPaths: tempDirs,
+      tempPaths: [...tempDirs, ...launchReadPaths(launchPlan)],
       report: true,
     });
     const sandbox = launched?.sandbox;
@@ -2300,7 +2301,7 @@ export class SessionManager {
         createdAt: new Date().toISOString(),
         ...(requester ? { createdBy: requester } : {}),
       },
-      { cwd: opts.cwd, env, noSession: true, helper: true },
+      { cwd: opts.cwd, env, noSession: true, helper: true, tempPaths: opts.extensions ?? [] },
     )?.sandbox;
     try {
       return await runPromiseUnwrapped(

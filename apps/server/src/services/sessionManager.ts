@@ -42,6 +42,8 @@ import {
   type PiInboundEvent,
   type PiProcessExit,
   type ThinkingLevel,
+  launchReadPaths,
+  type LaunchPlan,
 } from "@agent-deck/pi-host";
 import type { Scope } from "effect";
 import {
@@ -1234,7 +1236,13 @@ export const makeManagedSessionRuntime = (
             cwd: meta.cwd,
             env: helperContext.env,
             requestTimeoutMs: TITLE_TIMEOUT_MS,
-            ...withSandbox(helperContext.sandbox?.({ cwd: meta.cwd, noSession: true })),
+            ...withSandbox(
+              helperContext.sandbox?.({
+                cwd: meta.cwd,
+                noSession: true,
+                tempPaths: helperContext.extensions ?? [],
+              }),
+            ),
           });
           const prompt = [
             `Current title: ${currentTitle}`,
@@ -1303,7 +1311,13 @@ export const makeManagedSessionRuntime = (
             cwd: meta.cwd,
             env: helperContext.env,
             requestTimeoutMs: TITLE_TIMEOUT_MS,
-            ...withSandbox(helperContext.sandbox?.({ cwd: meta.cwd, noSession: true })),
+            ...withSandbox(
+              helperContext.sandbox?.({
+                cwd: meta.cwd,
+                noSession: true,
+                tempPaths: helperContext.extensions ?? [],
+              }),
+            ),
           });
           yield* handleHelperPrompt(helper, source.slice(0, 2000), TITLE_TIMEOUT_MS);
           const { text } = yield* helper.request({ type: "get_last_assistant_text" });
@@ -2724,41 +2738,42 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
           });
         }
 
+        const childPlan: LaunchPlan = {
+          kind: "agent",
+          systemPrompt: { mode: "replace", text: promptFile },
+          tools: childTools,
+          // An explicit pattern may name another provider; let Pi resolve it
+          // rather than constraining it to the parent's provider.
+          provider:
+            overrides?.provider ?? (explicitModel ? undefined : parentState.model?.provider),
+          model: explicitModel ?? parentState.model?.id,
+          thinking: overrides?.thinking ?? resolved?.thinking ?? parentState.thinkingLevel,
+          skills: resolved?.skillDirs,
+          ...(runOptions?.resumeSessionPath
+            ? { resumeSessionPath: runOptions.resumeSessionPath }
+            : artifactSessionsDirectory
+              ? { sessionDir: artifactSessionsDirectory }
+              : {}),
+          extensions: resolved
+            ? [
+                ...new Set([
+                  ...(helperContext.extensions ?? []),
+                  ...(resolved.extensions ?? []),
+                  ...(childBridge ? [childBridge.extension] : []),
+                  ...(checkerShell ? [checkerShell] : []),
+                ]),
+              ]
+            : childBridge || checkerShell
+              ? [
+                  ...(helperContext.extensions ?? []),
+                  ...(childBridge ? [childBridge.extension] : []),
+                  ...(checkerShell ? [checkerShell] : []),
+                ]
+              : helperContext.extensions,
+        };
         const child = yield* piHost.spawn({
           binPath: resolvePiBinary().path,
-          args: buildLaunchArgs({
-            kind: "agent",
-            systemPrompt: { mode: "replace", text: promptFile },
-            tools: childTools,
-            // An explicit pattern may name another provider; let Pi resolve it
-            // rather than constraining it to the parent's provider.
-            provider:
-              overrides?.provider ?? (explicitModel ? undefined : parentState.model?.provider),
-            model: explicitModel ?? parentState.model?.id,
-            thinking: overrides?.thinking ?? resolved?.thinking ?? parentState.thinkingLevel,
-            skills: resolved?.skillDirs,
-            ...(runOptions?.resumeSessionPath
-              ? { resumeSessionPath: runOptions.resumeSessionPath }
-              : artifactSessionsDirectory
-                ? { sessionDir: artifactSessionsDirectory }
-                : {}),
-            extensions: resolved
-              ? [
-                  ...new Set([
-                    ...(helperContext.extensions ?? []),
-                    ...(resolved.extensions ?? []),
-                    ...(childBridge ? [childBridge.extension] : []),
-                    ...(checkerShell ? [checkerShell] : []),
-                  ]),
-                ]
-              : childBridge || checkerShell
-                ? [
-                    ...(helperContext.extensions ?? []),
-                    ...(childBridge ? [childBridge.extension] : []),
-                    ...(checkerShell ? [checkerShell] : []),
-                  ]
-                : helperContext.extensions,
-          }),
+          args: buildLaunchArgs(childPlan),
           cwd: childCwd,
           // External pi-mcp-adapter policy is separate from Agent Deck's MCP
           // connection/assignment trust. Always overwrite inherited state so an
@@ -2781,7 +2796,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
                 : artifactSessionsDirectory
                   ? { sessionDir: artifactSessionsDirectory }
                   : {}),
-              tempPaths: [promptDir],
+              tempPaths: [promptDir, ...launchReadPaths(childPlan)],
             }),
           ),
           ...(params.bridgeCall

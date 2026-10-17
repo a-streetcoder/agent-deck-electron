@@ -98,6 +98,15 @@ function helperModelPattern(model: string): string {
   return model.includes(":") ? model : `${model}:off`;
 }
 
+/** The files a plan names on Pi's command line (extensions, skills, prompt
+ * templates). Under the data folder they are read-denied unless the sandbox
+ * re-allows them (ADR 0007): every spawn passes them with its temp paths. */
+export function launchReadPaths(plan: LaunchPlan): string[] {
+  const resources =
+    plan.kind === "helper" ? [] : [...(plan.skills ?? []), ...(plan.promptTemplates ?? [])];
+  return [...new Set([...(plan.extensions ?? []), ...resources])];
+}
+
 export function buildLaunchArgs(plan: LaunchPlan): string[] {
   const args: string[] = [...BASE_ARGS];
 
