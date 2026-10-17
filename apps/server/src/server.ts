@@ -152,7 +152,7 @@ import { forkSessionAttachmentStores } from "./sessionAttachmentLifecycle.ts";
 import { SessionPasteStore } from "./sessionPastes.ts";
 import { SessionAuthorStore } from "./sessionAuthors.ts";
 import { hardenServerGit } from "./git.ts";
-import { GitIdentityMap } from "./gitIdentity.ts";
+import { GitIdentityMap, gitIdentityEnv } from "./gitIdentity.ts";
 import { ensureUserDir, UserAgentDirs, userRoots } from "./userAgentDirs.ts";
 import {
   chooseSandboxProvider,
@@ -1807,7 +1807,13 @@ async function initServer(
     sessionAuthors,
     events,
     sharedServer: trustedProxy !== null,
-    terminalEnv: (user) => githubEnv(user, githubConnections),
+    // SRV-04/06: the typing user's git identity and GitHub connection, as on
+    // the Git screen (no global gitconfig exists on the server, so without the
+    // identity a commit in the terminal fails to auto-detect an email).
+    terminalEnv: (user) => ({
+      ...gitIdentityEnv(user, gitIdentities),
+      ...githubEnv(user, githubConnections),
+    }),
     publicOrigin: trustedProxy?.publicOrigin,
     accessVerifier,
   });
