@@ -1,6 +1,6 @@
 ---
 id: ade-qpt0
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-10-17T21:01:59Z

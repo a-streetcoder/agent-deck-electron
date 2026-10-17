@@ -961,6 +961,19 @@ async function createChatSession(
         ...(agentName ? { agentName } : {}),
       }),
     });
+  // ADR 0008: on the shared server every chat runs inside a project; pick before
+  // posting (the 400 below stays as the safety net for an older server).
+  if (!projectId && useAppStore.getState().profile === "shared-server") {
+    const { projects } = useAppStore.getState();
+    const only = projects.length === 1 ? projects[0] : undefined;
+    if (!only) {
+      throw new Error(
+        "Pick a project in the sidebar first: on this server every chat runs inside a project.",
+      );
+    }
+    useAppStore.getState().setCurrentProject(only.id);
+    projectId = only.id;
+  }
   let response = await post(projectId);
   if (response.status === 400 && !projectId) {
     const body = (await response

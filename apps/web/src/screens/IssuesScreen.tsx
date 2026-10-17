@@ -158,6 +158,7 @@ function IssueBoardCard({ issue, onSelect }: { issue: Issue; onSelect: () => voi
 
 export function IssuesScreen() {
   const currentProjectId = useAppStore((state) => state.currentProjectId);
+  const profile = useAppStore((state) => state.profile);
   const projects = useAppStore((state) => state.projects);
   const setView = useAppStore((state) => state.setView);
   const setGlobalError = useAppStore((state) => state.setError);
@@ -980,7 +981,9 @@ export function IssuesScreen() {
                 )}
                 title={
                   connection?.connected
-                    ? "The gh CLI is signed in — issues use its authentication"
+                    ? profile === "shared-server"
+                      ? "Your GitHub connection signs the issue requests"
+                      : "The gh CLI is signed in — issues use its authentication"
                     : (connection?.error ?? "Checking GitHub connection…")
                 }
               >

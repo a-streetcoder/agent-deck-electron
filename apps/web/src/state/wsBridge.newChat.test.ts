@@ -250,6 +250,28 @@ describe("new chat on a sandboxed server (ADR 0007)", () => {
     expect(useAppStore.getState().currentProjectId).toBe("only");
   });
 
+  it("ADR 0008: with the shared-server profile the only project is used without a probe", async () => {
+    const created = { ...session("created"), projectId: "only" };
+    useAppStore.setState({
+      projects: [project("only")] as never,
+      profile: "shared-server",
+      currentProjectId: null,
+      currentAgentName: null,
+    });
+    const bodies: string[] = [];
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      if (String(input) === "/sessions" && init?.method === "POST") {
+        bodies.push(String(init.body));
+        return Promise.resolve(jsonResponse({ session: created }));
+      }
+      return Promise.resolve(jsonResponse({ sessions: [created] }));
+    });
+
+    await expect(newChat()).resolves.toEqual(created);
+    expect(bodies).toEqual([JSON.stringify({ projectId: "only" })]);
+    useAppStore.setState({ profile: null });
+  });
+
   it("asks the user to pick when several projects are registered", async () => {
     useAppStore.setState({
       projects: [project("a"), project("b")] as never,
