@@ -92,3 +92,46 @@ deleted; the owner's draft of 09:43 UTC kept.
 
 Follow-ups noted, not scheduled: `$HOME/.local/bin` on the session PATH (pipx, uv,
 corepack install dir); SBX-09 (ade-91rh).
+
+## Full functional run 2026-10-17 (architect, deck.moretti.cc, CrunchyMurmur, owner's browser)
+
+Owner asked for every feature exercised for real, not screens. Model path: the Claude
+bridge cannot run on the server (no Claude Code in the image, PRV-02 ade-81m8); runs used
+openai-codex/gpt-6-luna (the only Codex model the ChatGPT account accepts) and the app
+default model was set to `openai-codex:gpt-6-luna` via PATCH /settings (left in place).
+
+Fixed and deployed during the run (commits 47ba86b, c258665, fe5cf44): bridge default refused when Claude Code is missing (PRV-02 guard);
+store fan-out skill links resolved before the launch plan (assigning an app-created
+skill broke every new session); pinned launches prefer the app default model (a Loop
+maker landed on a catalog model the account refuses).
+
+PASS (real effect verified on the VM or in the transcript): new chat/draft/worktree
+toggle; first prompt + streamed reply + title; stop a running bash tool + follow-up;
+rename, pin, fork (provenance card), ?session= links, unknown link; bash tool; file edit
++ Changed files diff; protected writes refused (.git/config, /etc), data dir invisible,
+denied host line + Allow button; Files panel (README preview); Checkpoints rollback
+(CONTEXT.md reverted on disk); terminal; agent create -> file -> session obeys prompt on
+its model, final system prompt dialog; skill create -> assign -> agent reads it (after
+fix); prompt create/edit -> /qa-echo expands and fires; loop create -> run -> maker +
+goal evaluator SUCCESS, artifacts on disk, Open Session, child card; Git screen AI
+message + Commit all (commit as the owner; push skipped on purpose); subagent spawn +
+await + child transcript dialog; ask_user card round trip; command palette; theme
+switch persisted and restored; Memory/Models/Providers/Doctor/MCP/Extensions/
+Performance render; add project from URL (server clone); worktree session: agent commit
+as the owner; session delete removes worktree + branch + sandbox folder.
+
+FOUND (tickets): ade-81m8 PRV-02 (image has no Claude Code; guard fixed, image + sign-in
+owner's); ade-3q16 re-run / Pi restart loses the model chosen in the chip; ade-lgde
+Prompt and Loop editors drop characters under fast input; ade-v3zw project-scoped
+screens unreachable on the server (Instructions > Project, Issues copy); ade-2qxj
+projects: no Remove in the UI, DELETE leaves the clone, Add dialog stays open; ade-d4ec
+small UX findings (ask_user timeout, compact feedback, draft reuse, nav aria names,
+Doctor copy, dangling skill links, palette entries, legacy loops); ade-91rh SBX-09.
+
+NOT RUN: merge/PR from a worktree session (would push to GitHub), image attach (file
+picker), provider sign-in sheet, MCP import, delegation cancel, keybindings editor.
+
+Cleanup: test sessions deleted (incl. the 09:43 draft that New chat had reused), test
+commit reset (`git reset --hard origin/main` in the clone), Hello-World clone removed,
+agent/skill/prompt/loop qa-* deleted through the UI. Loop artifacts left in
+/data/loop-artifacts (two small runs).
