@@ -109,10 +109,14 @@ do not interfere.
    All of them go through the same `SandboxProvider`, with a permissive policy where the session's
    needs it. The profiles that enable user namespaces are not deployed before that is true,
    because they hand namespace capabilities to every unwrapped process in the container.
-2. **The tool bridge leaves loopback.** Pi's bridge extension called the server on
+2. **The tool bridge leaves the network.** Pi's bridge extension called the server on
    `127.0.0.1:<port>/bridge`; a sandbox has its own network namespace and must never be allowed
-   to reach the server's port. The bridge listens on a Unix socket under the data directory and
-   the sandbox allows exactly that socket.
+   to reach the server's port. A Unix socket is not an option either: on Linux the runtime's
+   seccomp helper blocks `AF_UNIX`, and the switch that allows it drops the helper, and with it
+   the nested-namespace block. The bridge therefore rides on Pi's own stdio: the extension issues
+   an `extension_ui_request` (method `input`, a fixed title marker, the request as JSON) and the
+   server answers with the matching `extension_ui_response`. No token, no port, no socket, the
+   same on a desktop and on the server, inside or outside a sandbox.
 3. **Per-session state leaves `/tmp`.** Bridge extensions, prompt files and the session's
    temporary files live under `<dataDir>/sandbox/<sessionId>/`, with a per-session `TMPDIR`;
    `/tmp/claude`, which the runtime hard-codes, stays shared and is kept out of any code path.
