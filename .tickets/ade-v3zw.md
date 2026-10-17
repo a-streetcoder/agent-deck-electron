@@ -1,6 +1,6 @@
 ---
 id: ade-v3zw
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-10-17T19:51:16Z
@@ -20,3 +20,8 @@ A project picker on the Instructions (and Issues) screen like Git's, or the side
 
 ## Outcome (2026-10-17)
 Instructions has its own project picker (verified: Project scope loads CrunchyMurmur's AGENTS.md on the server); the Issues sign-in message points to Providers on a shared server; Doctor's gh check no longer says "run gh auth login" there and a "Your GitHub connection" check was added. Open: the Issues "This project" scope still depends on currentProjectId (same picker pattern wanted there).
+
+## Closed (2026-10-17)
+Issues on the server defaults to "All projects", which works without a selected project; the
+"This project" filter is the same picker pattern if ever wanted. Instructions, Doctor and Issues
+wording done and verified.

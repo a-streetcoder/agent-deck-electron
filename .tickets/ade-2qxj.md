@@ -27,3 +27,7 @@ and the Add Projects dialog stayed open after a successful clone (fixed: closes 
 
 ## Outcome (2026-10-17)
 Add Projects dialog closes after a successful clone (verified). Open for the owner: whether unregistering a server-cloned project removes the clone folder, and whether "Hide" should read "Remove" on the server.
+
+## Update (2026-10-17)
+On the shared server the row menu now says "Remove from server" with the note that the clone
+folder stays. Left open for one owner decision: delete or archive the clone on unregister.

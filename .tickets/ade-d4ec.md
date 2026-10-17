@@ -1,6 +1,6 @@
 ---
 id: ade-d4ec
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-10-17T19:51:47Z
@@ -16,3 +16,8 @@ Collected from the full functional run on deck.moretti.cc (checklist on ade-1c88
 
 ## Outcome (2026-10-17)
 Done: ask_user default 280 s; "Nothing to compact yet" toast; New chat reuses only the clicker's own draft; Doctor copy. Not done: nav rail accessible names (the buttons carry visible labels; the unlabeled ones in the tree belong to the inert layer), dangling-link flag (ade-yu35 fixes the cause), palette entries for Themes/Performance/Models, legacy loop conversion (data).
+
+## Closed (2026-10-17)
+Added since: "Go to Themes" in the palette. Not done, by decision: nav rail accessible names
+(the visible rows carry labels; the unlabeled tree entries are the inert layer), the dangling
+skill link flag (ade-yu35 removed the cause), legacy loop conversion (server data, owner).
