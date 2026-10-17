@@ -1,5 +1,3 @@
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -15,32 +13,16 @@ import { writeBridgeExtension } from "../src/bridge.ts";
 import { buildLaunchArgs } from "../src/launchPlan.ts";
 import { PiSession } from "../src/PiSession.ts";
 import { resolvePiBinary } from "../src/resolve.ts";
+import { serveBridge } from "./serveBridge.ts";
 
 let mock: MockProviderServer;
-let bridge: Server;
 let session: PiSession;
 const tmpHome = mkdtempSync(path.join(tmpdir(), "pi-home-"));
 const cwd = mkdtempSync(path.join(tmpdir(), "pi-memory-recall-"));
 
 beforeAll(async () => {
-  bridge = createServer((req, res) => {
-    req.resume();
-    req.on("end", () => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          content: "<recalled_memories>OAuth callback body</recalled_memories>",
-          recalled: [{ id: "decision-oauth", title: "OAuth callback", type: "decision" }],
-        }),
-      );
-    });
-  });
-  await new Promise<void>((resolve) => bridge.listen(0, "127.0.0.1", resolve));
   mock = await startMockProvider({ reply: () => "done" });
   const extension = writeBridgeExtension({
-    endpoint: `http://127.0.0.1:${(bridge.address() as AddressInfo).port}/bridge`,
-    sessionId: "recall-session",
-    token: "token",
     tools: [],
     recall: true,
   });
@@ -56,13 +38,18 @@ beforeAll(async () => {
     env: { HOME: tmpHome, USERPROFILE: tmpHome, PI_SKIP_VERSION_CHECK: "1" },
     requestTimeoutMs: 45_000,
   });
+  serveBridge(session, () => ({
+    body: {
+      content: "<recalled_memories>OAuth callback body</recalled_memories>",
+      recalled: [{ id: "decision-oauth", title: "OAuth callback", type: "decision" }],
+    },
+  }));
   session.start();
 });
 
 afterAll(async () => {
   await session.stop();
   await mock.close();
-  await new Promise<void>((resolve) => bridge.close(() => resolve()));
 });
 
 describe("real Pi memory recall entry", () => {

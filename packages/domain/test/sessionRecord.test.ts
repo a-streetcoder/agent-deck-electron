@@ -688,6 +688,12 @@ const TABLE: Array<{
     actor: OTHER,
     refused: {
       move: conflict("share_refused", "This session is already on a shared server."),
+      sandboxAllowHost: {
+        status: 403,
+        code: "sandbox_allow_forbidden",
+        error:
+          "Only the person who owns this session, or the operator, can allow a host for its project.",
+      },
       mergePullRequest: {
         status: 403,
         code: "merge_forbidden",
@@ -733,6 +739,12 @@ const TABLE: Array<{
     record: server(),
     refused: {
       move: conflict("share_refused", "This session is already on a shared server."),
+      sandboxAllowHost: {
+        status: 403,
+        code: "sandbox_allow_forbidden",
+        error:
+          "Only the person who owns this session, or the operator, can allow a host for its project.",
+      },
       mergePullRequest: {
         status: 403,
         code: "merge_forbidden",

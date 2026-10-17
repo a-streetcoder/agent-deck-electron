@@ -70,32 +70,29 @@ describe("final system prompt audit against pinned real Pi", () => {
       env: { HOME: home, USERPROFILE: home, PI_SKIP_VERSION_CHECK: "1" },
     });
     const originalUpdatedAt = session.meta.updatedAt;
-    const nonStrict = await fetch(`http://127.0.0.1:${server.port}/bridge`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        sessionId: session.meta.id,
-        token: "forged",
+    const nonStrict = await server.bridgeCall(
+      session.meta.id,
+      {
         tool: "__prompt_audit__",
         toolCallId: "forged",
         params: { systemPrompt: "FORGED" },
         unexpected: true,
-      }),
-    });
+      } as Parameters<typeof server.bridgeCall>[1],
+      new AbortController().signal,
+    );
     expect(nonStrict.status).toBe(400);
 
+    // Only the session's own Pi process reaches the bridge: no network route.
     const forged = await fetch(`http://127.0.0.1:${server.port}/bridge`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        sessionId: session.meta.id,
-        token: "another-session-or-local-caller-token",
         tool: "__prompt_audit__",
         toolCallId: "forged",
-        params: { systemPrompt: "FORGED" },
+        params: { systemPrompt: "FORGED", sequence: 1 },
       }),
     });
-    expect(forged.status).toBe(403);
+    expect(forged.status).toBe(404);
     expect(session.meta.finalSystemPromptAudit).toBeUndefined();
 
     const events: Array<{ seq: number; event: { type: string; delta?: string } }> = [];

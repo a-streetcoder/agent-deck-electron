@@ -144,6 +144,23 @@ export interface NoticeCell {
   level: "info" | "warning" | "error";
   /** SRV-12c2: stands in for a mirrored cell that is still changing (too large to send). */
   open?: true;
+  /** ADR 0007: the sandbox refused something the session did. */
+  sandbox?: {
+    violation: SandboxViolation;
+    /** A refused or proposed host the owner or operator may allow for the
+     * project (absent when it could not be allowed, or there is no project). */
+    allowHost?: string;
+  };
+}
+
+/** ADR 0007: what the process sandbox refused (from srt's violation lines),
+ * or a host the project's sandbox.json proposes (`proposal`). */
+export interface SandboxViolation {
+  kind: "write" | "read" | "network" | "proposal";
+  /** The path, or the host for network and proposal. */
+  target: string;
+  /** The refused operation as the sandbox named it (a syscall, a rule). */
+  operation?: string;
 }
 
 /**

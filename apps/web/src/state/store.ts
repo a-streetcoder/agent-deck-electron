@@ -270,6 +270,8 @@ export interface CurrentUser {
   name?: string;
   /** SRV-13: false when the user's own agent dir has no provider signed in or configured. */
   providersConnected?: boolean;
+  /** ADR 0007: the person who runs the server (acts for owners). */
+  operator?: true;
 }
 
 /** SRV-12c2: the open pointer's live view of its server session (renderer memory only). */

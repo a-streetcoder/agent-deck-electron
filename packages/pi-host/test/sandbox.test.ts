@@ -14,6 +14,7 @@ import {
   PiSandboxError,
   prepareDenyWrite,
   SRT_PACKAGE,
+  srtProblem,
   type SandboxCommand,
   type SandboxFs,
   type SandboxProvider,
@@ -69,8 +70,36 @@ const serverPolicy = (id: string, input: Partial<SandboxPolicyInput> = {}): Sand
 
 type WrapCall = [string, unknown, Record<string, unknown>, unknown, string, { commandId: string }];
 
-function fakeSrt(argv: string[] = ["/bin/bash", "-c", "wrapped"]) {
+/** srt's violation store as far as the provider uses it; `encodedCommand`
+ * is the command id itself here. */
+function fakeViolationStore() {
+  type Line = { line: string; encodedCommand?: string; timestamp: Date };
+  const lines: Line[] = [];
+  const listeners = new Set<(all: Line[]) => void>();
   return {
+    add: (line: string, encodedCommand?: string) => {
+      lines.push({ line, encodedCommand, timestamp: new Date() });
+      for (const listener of listeners) listener([...lines]);
+    },
+    /** A notification with nothing new (srt notifies on clear() too). */
+    notify: () => {
+      for (const listener of listeners) listener([...lines]);
+    },
+    getTotalCount: () => lines.length,
+    getViolationsForCommand: (id: string) => lines.filter((l) => l.encodedCommand === id),
+    subscribe: (listener: (all: Line[]) => void) => {
+      listeners.add(listener);
+      listener([...lines]);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
+function fakeSrt(argv: string[] = ["/bin/bash", "-c", "wrapped"]) {
+  const store = fakeViolationStore();
+  return {
+    store,
+    getSandboxViolationStore: vi.fn(() => store),
     initialize: vi.fn(async () => {}),
     updateConfig: vi.fn(),
     wrapWithSandboxArgv: vi.fn(async () => ({ argv, env: { IGNORED: "1" } })),
@@ -130,7 +159,7 @@ describe("srt provider (fake SandboxManager)", () => {
     );
     expect(POLICY.createDirs).toContain("/home/u/.pi/agent/sessions/--app--");
     expect(srt.initialize).toHaveBeenCalledTimes(1);
-    // One argument: no ask callback; the defaults are the global list, no strictAllowlist.
+    // No ask callback, the log monitor on; the defaults are the global list, no strictAllowlist.
     expect(srt.initialize.mock.calls[0]).toEqual([
       {
         network: {
@@ -140,6 +169,8 @@ describe("srt provider (fake SandboxManager)", () => {
         },
         filesystem: { denyRead: [], allowWrite: [], denyWrite: [] },
       },
+      undefined,
+      true,
     ]);
     expect(srt.updateConfig).not.toHaveBeenCalled();
     const [command, binShell, settings, , cwd, options] = srt.wrapWithSandboxArgv.mock
@@ -154,8 +185,9 @@ describe("srt provider (fake SandboxManager)", () => {
     expect(settings).toEqual({
       filesystem: {
         allowWrite: POLICY.allowWrite,
-        // Only the created folders exist here, and no deny path is under them.
-        denyWrite: [],
+        // Only the created folders exist here: the one deny path under them is
+        // the server's launch folder (created read-only, never by the session).
+        denyWrite: ["/srv/deck/sandbox/s1/launch"],
         denyRead: [],
         allowRead: ["/home/u/.pi/agent/sessions/--app--"],
       },
@@ -269,6 +301,93 @@ describe("srt provider (fake SandboxManager)", () => {
     expect(error).toBeInstanceOf(PiSandboxError);
     expect((error as Error).message).toContain(SRT_PACKAGE);
     expect((error as Error).message).toContain('"srt"');
+  });
+
+  it("attributes each new violation line to the policy of its live wrap, until released", async () => {
+    const srt = fakeSrt();
+    const provider = createSrtProvider(async () => srt, "linux", fakeFs().fs);
+    const seen: Array<{ policy: unknown; line: string }> = [];
+    provider.onViolation!((violation) => seen.push(violation));
+    const other = { ...POLICY, tmpDir: "/other" };
+    const first = await provider.wrap(plan(), POLICY);
+    await provider.wrap(plan(), other);
+    const [firstId, secondId] = srt.registerCommandNetworkLists.mock.calls.map(
+      (call) => (call as unknown as [string])[0],
+    );
+    srt.store.add("deny network-outbound a.example:443 (not allowed)", firstId);
+    srt.store.add("deny openat /etc/x", secondId);
+    srt.store.add("deny network-outbound b.example:443 (not allowed)"); // unattributed
+    expect(seen).toEqual([
+      { policy: POLICY, line: "deny network-outbound a.example:443 (not allowed)" },
+      { policy: other, line: "deny openat /etc/x" },
+    ]);
+    // A notification with nothing new replays nothing (slice(-0) is everything).
+    srt.store.notify();
+    expect(seen).toHaveLength(2);
+    first.release!();
+    srt.store.add("deny network-outbound c.example:443 (late)", firstId);
+    expect(seen).toHaveLength(2);
+  });
+
+  it("dispose() lets a wrap in flight finish before reset, and refuses wraps after it", async () => {
+    const srt = fakeSrt();
+    let finishWrap: () => void = () => {};
+    srt.wrapWithSandboxArgv.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishWrap = () => resolve({ argv: ["/bin/bash", "-c", "x"], env: { IGNORED: "1" } });
+        }),
+    );
+    const provider = createSrtProvider(async () => srt, "linux", fakeFs().fs);
+    const wrapping = provider.wrap(plan(), POLICY);
+    await vi.waitFor(() => expect(srt.wrapWithSandboxArgv).toHaveBeenCalled());
+    const disposing = provider.dispose!();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(srt.reset).not.toHaveBeenCalled();
+    finishWrap();
+    await wrapping;
+    await disposing;
+    expect(srt.reset).toHaveBeenCalledTimes(1);
+    await expect(provider.wrap(plan(), POLICY)).rejects.toThrow(/disposed/);
+    expect(srt.initialize).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops the SIGINT/SIGTERM resets srt registers, so the host disposes it last", async () => {
+    const srt = fakeSrt();
+    const reset = (): void => {};
+    const own = (): void => {};
+    process.on("SIGTERM", own);
+    srt.initialize.mockImplementation(async () => {
+      process.once("SIGINT", reset);
+      process.once("SIGTERM", reset);
+    });
+    try {
+      await createSrtProvider(async () => srt, "linux", fakeFs().fs).wrap(plan(), POLICY);
+      expect(process.listeners("SIGINT")).not.toContain(reset);
+      expect(process.listeners("SIGTERM")).not.toContain(reset);
+      expect(process.listeners("SIGTERM")).toContain(own);
+    } finally {
+      process.removeListener("SIGTERM", own);
+    }
+  });
+
+  it("srtProblem names what is missing, and nothing when srt can run", async () => {
+    const manager =
+      (errors: string[], supported = true) =>
+      async () => ({
+        isSupportedPlatform: () => supported,
+        checkDependencies: () => ({ errors, warnings: [] }),
+      });
+    expect(await srtProblem(manager([]), "linux")).toBeUndefined();
+    expect(await srtProblem(manager(["bubblewrap (bwrap) not installed"]), "linux")).toBe(
+      "bubblewrap (bwrap) not installed",
+    );
+    expect(await srtProblem(manager([], false), "freebsd")).toContain("does not support");
+    expect(await srtProblem(manager([]), "win32")).toContain("Windows");
+    const missing = await srtProblem(async () => {
+      throw new Error("Cannot find package");
+    }, "linux");
+    expect(missing).toContain(SRT_PACKAGE);
   });
 
   it("refuses Windows", async () => {

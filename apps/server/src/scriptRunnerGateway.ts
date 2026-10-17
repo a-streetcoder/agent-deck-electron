@@ -1,4 +1,5 @@
 import type { ProjectServerCommand } from "@agent-deck/contracts";
+import type { PiSandbox } from "@agent-deck/pi-host";
 import { Effect, Exit, Scope } from "effect";
 import { runPromiseUnwrapped, runSyncUnwrapped } from "./effectRun.ts";
 import type { ServerRuntime } from "./runtime.ts";
@@ -43,6 +44,8 @@ export interface ScriptRunnerGateway {
     sessionId: string;
     commandId: string;
     cwd: string;
+    /** ADR 0007: the session's sandbox (absent: none). */
+    sandbox?: PiSandbox;
   }) => Promise<OpenedScript>;
   /**
    * Close EVERY still-open run and await the tree-kills — the server shutdown
@@ -72,7 +75,7 @@ export function createScriptRunnerGateway(runtime: ServerRuntime): ScriptRunnerG
         runtime,
         Effect.flatMap(ScriptRunner, (runner) => runner.listScripts(cwd)),
       ),
-    start: async ({ sessionId, commandId, cwd }) => {
+    start: async ({ sessionId, commandId, cwd, sandbox }) => {
       if (bySession.has(sessionId)) throw new ScriptAlreadyRunning(sessionId);
       const scope = runtime.runSync(Scope.make());
       let handle;
@@ -80,7 +83,7 @@ export function createScriptRunnerGateway(runtime: ServerRuntime): ScriptRunnerG
         handle = await runPromiseUnwrapped(
           runtime,
           Effect.flatMap(ScriptRunner, (runner) =>
-            Scope.extend(runner.spawn({ commandId, cwd }), scope),
+            Scope.extend(runner.spawn({ commandId, cwd, ...(sandbox ? { sandbox } : {}) }), scope),
           ),
         );
       } catch (error) {

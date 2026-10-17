@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { cwd } from "node:process";
 import { type LoopChildRecord, type LoopDefinition } from "@agent-deck/domain";
+import type { PiSandbox, SandboxCommand } from "@agent-deck/pi-host";
 import { describe, expect, it, vi } from "vitest";
 import {
   LoopEngine,
@@ -327,6 +328,67 @@ describe("maker-checker validation ordering (D7)", () => {
       { PI_CODING_AGENT_DIR: "/owner" },
     );
     expect(probe.stdout).toBe("dir=/owner");
+  });
+
+  it("ADR 0007: runs validation inside the Loop session's sandbox, through its wrap", async () => {
+    const policy = { allowWrite: [cwd()] } as PiSandbox["policy"];
+    const asked: string[] = [];
+    const given: unknown[] = [];
+    const wraps: Array<{ command: SandboxCommand; policy: unknown }> = [];
+    let released = 0;
+    const sandbox: PiSandbox = {
+      provider: {
+        name: "srt",
+        // Stands in for srt: the shell command it was handed runs as node.
+        wrap: async (command, wrapPolicy) => {
+          wraps.push({ command, policy: wrapPolicy });
+          return {
+            command: process.execPath,
+            args: ["-e", "process.stdout.write('wrapped:' + process.argv[1])", command.args[1]!],
+            env: command.env,
+            cwd: command.cwd,
+            release: () => void released++,
+          };
+        },
+      },
+      policy,
+    };
+    const engine = new LoopEngine({
+      executeRole: async ({ phase }) =>
+        phase === "checker" ? "APPROVE\nok" : phase === "evaluator" ? "SUCCESS\nok" : "made",
+      runValidation: async (_cwd, _command, _signal, _dir, _env, runSandbox) => {
+        given.push(runSandbox);
+        return true;
+      },
+    });
+    const run = engine.start(
+      makeLoop({
+        structure: "makerChecker",
+        makerName: "Maker",
+        checkerName: "Checker",
+        checkerRubric: "strict",
+      }),
+      cwd(),
+      { validationSandbox: (validationCwd) => (asked.push(validationCwd), sandbox) },
+    );
+    await engine.settled(run.id);
+    expect(asked).toEqual([cwd()]);
+    expect(given).toEqual([sandbox]);
+    // The real runner hands the shell command to the provider and runs its argv.
+    const probe = await runValidationCommand(
+      cwd(),
+      "pnpm test",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      sandbox,
+    );
+    expect(wraps).toHaveLength(1);
+    expect(wraps[0]!.policy).toBe(policy);
+    expect(wraps[0]!.command).toMatchObject({ command: "/bin/sh", args: ["-c", "pnpm test"] });
+    expect(probe).toMatchObject({ passed: true, stdout: "wrapped:pnpm test" });
+    expect(released).toBe(1);
   });
 
   it("pins the checker prompt text (A7: shared verifierPrompt must not change loops)", async () => {

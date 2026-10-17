@@ -1,5 +1,6 @@
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   realpathSync,
@@ -42,13 +43,19 @@ function piMcpModuleUrl(): string {
  * Memory, MCP-proxy, and subagent features. Each of those is, mechanically,
  * "expose an app-managed tool to pi and route its calls back to the app."
  *
- * pi's extension API runs a tool's execute() INSIDE the pi process, so a
- * generated extension can HTTP-POST every call back to our server on
- * 127.0.0.1 and return the response as the tool result. The endpoint URL and
- * a session id are baked into the generated file (exactly how the testkit
- * mock-provider extension bakes its provider baseUrl), and it loads under
- * --no-extensions via an explicit --extension, per the launch-flag contract.
+ * pi's extension API runs a tool's execute() INSIDE the pi process. Every
+ * call rides on Pi's own stdio (ADR 0007, amendment 2): the extension opens an
+ * `input` dialog titled {@link BRIDGE_UI_TITLE} with the call as JSON in the
+ * placeholder, Pi writes it as an `extension_ui_request` and blocks the call
+ * until the matching `extension_ui_response`, whose value is a
+ * {@link BridgeReply} as JSON. The server knows the session from the process
+ * the line came from: no endpoint, token or socket, inside or outside a
+ * sandbox. The file loads under --no-extensions via an explicit --extension,
+ * per the launch-flag contract.
  */
+
+/** The dialog title that marks an extension_ui_request as a bridge call. */
+export const BRIDGE_UI_TITLE = "agent-deck-bridge/1";
 
 export interface BridgeToolSpec {
   /** Tool name the LLM calls, e.g. "agent_deck_memory_write". */
@@ -68,21 +75,15 @@ export interface BridgeToolSpec {
 }
 
 export interface BridgeExtensionOptions {
-  /** URL each tool call POSTs to, e.g. "http://127.0.0.1:PORT/bridge". */
-  endpoint: string;
-  /** Opaque session id echoed to the app so it can correlate the call. */
-  sessionId: string;
-  /**
-   * Per-session secret baked into the extension and sent with every call. The
-   * app rejects calls whose token doesn't match the session's — so a local
-   * caller can't invoke another session's (project/session-scoped) tools.
-   */
-  token: string;
+  /** The folder the generated extension's own folder is created in
+   * (default: the OS temp folder). The server uses the session's
+   * `<dataDir>/sandbox/<sessionId>`. */
+  dir?: string;
   /** The app-managed tools this bridge exposes to pi. */
   tools: BridgeToolSpec[];
   /**
    * When true, also register a before_agent_start hook that asks the app (via
-   * the same endpoint, tool `__recall__`) for the memories most relevant to the
+   * the same bridge, tool `__recall__`) for the memories most relevant to the
    * user's message and appends them to the turn's system prompt. Off unless the
    * app has memory recall enabled for this session.
    */
@@ -97,7 +98,7 @@ export interface BridgeExtensionOptions {
   /**
    * Host Pi's native MCP inside this extension via createMcpExtension with a
    * fixed server list instead of <agentDir>/mcp.json. Every `mcp__` call and
-   * result is checked live through the endpoint (tool `__mcp_authorize__`).
+   * result is checked live through the bridge (tool `__mcp_authorize__`).
    */
   nativeMcp?: {
     /** `id` is the Agent Deck server id the policy hook sends back. */
@@ -105,17 +106,87 @@ export interface BridgeExtensionOptions {
   };
 }
 
-/** The request body the bridge endpoint receives for each tool call. */
-export interface BridgeCallRequest {
-  sessionId: string;
-  /** The per-session secret; the app validates it before dispatching. */
-  token: string;
+/** One call as the extension sends it (the dialog's placeholder). */
+export interface BridgeWireCall {
   tool: string;
   toolCallId: string;
   params: Record<string, unknown>;
 }
 
-/** The response the bridge endpoint returns; mapped to the pi tool result. */
+/** A call as the app dispatches it: the wire call plus the session it came
+ * from and that session's current bridge generation (server-side only). */
+export interface BridgeCallRequest extends BridgeWireCall {
+  sessionId: string;
+  token: string;
+}
+
+/** The answer to one call (the dialog's value): an HTTP-like status and body. */
+export interface BridgeReply {
+  status: number;
+  body: unknown;
+}
+
+/** A bridge call read from Pi's stdout. */
+export interface BridgeUiRequest {
+  /** The dialog id to answer. */
+  id: string;
+  /** The parsed call, or undefined when the placeholder was not a call. */
+  call: BridgeWireCall | undefined;
+  /** Pi resolves the dialog on its own after this long. */
+  timeoutMs?: number;
+}
+
+/**
+ * The bridge call in a Pi event, or undefined when the event is anything else
+ * (a genuine extension dialog included: only the title marks a bridge call).
+ */
+export function parseBridgeUiRequest(event: unknown): BridgeUiRequest | undefined {
+  const e = event as {
+    type?: unknown;
+    id?: unknown;
+    method?: unknown;
+    title?: unknown;
+    placeholder?: unknown;
+    timeout?: unknown;
+  };
+  if (
+    !e ||
+    e.type !== "extension_ui_request" ||
+    e.method !== "input" ||
+    e.title !== BRIDGE_UI_TITLE ||
+    typeof e.id !== "string"
+  ) {
+    return undefined;
+  }
+  const timeoutMs = typeof e.timeout === "number" && e.timeout > 0 ? e.timeout : undefined;
+  let call: BridgeWireCall | undefined;
+  try {
+    const raw = JSON.parse(String(e.placeholder)) as Partial<BridgeWireCall>;
+    if (
+      raw &&
+      typeof raw.tool === "string" &&
+      typeof raw.toolCallId === "string" &&
+      (raw.params === undefined || (typeof raw.params === "object" && raw.params !== null))
+    ) {
+      call = { tool: raw.tool, toolCallId: raw.toolCallId, params: raw.params ?? {} };
+    }
+  } catch {
+    // Not JSON: answered as a bad request.
+  }
+  return { id: e.id, call, ...(timeoutMs ? { timeoutMs } : {}) };
+}
+
+/** The extension_ui_response line that answers a bridge call. */
+export const bridgeUiResponse = (
+  id: string,
+  reply: BridgeReply,
+): { type: "extension_ui_response"; id: string; value: string } => ({
+  type: "extension_ui_response",
+  id,
+  value: JSON.stringify(reply),
+});
+
+/** The response a bridge tool handler returns; mapped to the pi tool result. */
 export interface BridgeCallResponse {
   /** Text content returned to the model. */
   content: string;
@@ -131,13 +202,21 @@ const BRIDGE_DIR_PREFIX = "agent-deck-bridge-ext-";
  * Remove generated bridge folders a crash left behind: with native MCP they
  * hold resolved credentials. Only folders older than `maxAgeMs`, since another
  * Agent Deck instance (stable next to dev, tests) shares tmpdir() and its live
- * sessions own theirs. Returns how many were removed.
+ * sessions own theirs. `root` is the folder they were generated in (default
+ * the OS temp folder; a missing root has nothing to sweep). Returns how many
+ * were removed.
  */
-export function sweepStaleBridgeExtensions(maxAgeMs = 60 * 60 * 1000): number {
+export function sweepStaleBridgeExtensions(maxAgeMs = 60 * 60 * 1000, root = tmpdir()): number {
   let removed = 0;
-  for (const entry of readdirSync(tmpdir())) {
+  let entries: string[];
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return 0;
+  }
+  for (const entry of entries) {
     if (!entry.startsWith(BRIDGE_DIR_PREFIX)) continue;
-    const dir = path.join(tmpdir(), entry);
+    const dir = path.join(root, entry);
     try {
       if (Date.now() - statSync(dir).mtimeMs < maxAgeMs) continue;
       rmSync(dir, { recursive: true, force: true });
@@ -151,15 +230,16 @@ export function sweepStaleBridgeExtensions(maxAgeMs = 60 * 60 * 1000): number {
 
 /**
  * Write a pi extension that registers each spec'd tool and routes its calls to
- * `endpoint`. Returns the path to load with --extension. The generated file is
- * plain runtime JS (no type annotations) so pi's jiti loader runs it directly.
+ * the app over Pi's stdio. Returns the path to load with --extension. The
+ * generated file is plain runtime JS (no type annotations) so pi's jiti loader
+ * runs it directly.
  */
 export function writeBridgeExtension(opts: BridgeExtensionOptions): string {
-  const dir = mkdtempSync(path.join(tmpdir(), BRIDGE_DIR_PREFIX));
+  const parent = opts.dir ?? tmpdir();
+  mkdirSync(parent, { recursive: true });
+  const dir = mkdtempSync(path.join(parent, BRIDGE_DIR_PREFIX));
   const file = path.join(dir, "bridge.ts");
-  const endpoint = JSON.stringify(opts.endpoint);
-  const sessionId = JSON.stringify(opts.sessionId);
-  const token = JSON.stringify(opts.token);
+  const title = JSON.stringify(BRIDGE_UI_TITLE);
   const tools = JSON.stringify(
     opts.tools.map((t) => ({
       name: t.name,
@@ -179,10 +259,18 @@ import { StdioTransport, StreamableHttpTransport } from ${JSON.stringify(piMcpMo
 `
         : ""
     }export default function (pi) {
-  const endpoint = ${endpoint};
-  const sessionId = ${sessionId};
-  const token = ${token};
   const tools = ${tools};
+  // Every call is an input dialog with this title and the call as JSON; the
+  // app answers with { status, body } as JSON. No answer (an abort, the
+  // timeout, Pi or the app going away) resolves undefined and throws here.
+  const bridgeCall = async (ctx, tool, toolCallId, params, signal, timeout) => {
+    if (!ctx || !ctx.ui) throw new Error("no extension UI to reach Agent Deck");
+    const raw = await ctx.ui.input(${title}, JSON.stringify({ tool, toolCallId, params }), { signal, timeout });
+    if (raw === undefined) throw new Error(signal && signal.aborted ? "aborted" : "no answer from Agent Deck");
+    const reply = JSON.parse(raw);
+    return { ok: reply.status >= 200 && reply.status < 300, status: reply.status, body: reply.body };
+  };
+  const replyText = (res) => typeof res.body === "string" ? res.body : JSON.stringify(res.body);
   // execute() has no way to set the error flag on its return, so a tool call
   // the app (or transport) reported as failed is recorded by id here and the
   // flag is flipped in the tool_result handler below — which preserves the
@@ -201,15 +289,10 @@ import { StdioTransport, StreamableHttpTransport } from ${JSON.stringify(piMcpMo
       description: t.description,
       promptSnippet: t.promptSnippet,
       parameters: t.parameters,
-      execute: async (toolCallId, params, signal) => {
+      execute: async (toolCallId, params, signal, _onUpdate, ctx) => {
         let res;
         try {
-          res = await fetch(endpoint, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ sessionId, token, tool: t.name, toolCallId, params }),
-            signal,
-          });
+          res = await bridgeCall(ctx, t.name, toolCallId, params, signal);
         } catch (err) {
           errorCallIds.add(toolCallId);
           return {
@@ -218,14 +301,13 @@ import { StdioTransport, StreamableHttpTransport } from ${JSON.stringify(piMcpMo
           };
         }
         if (!res.ok) {
-          const text = await res.text().catch(() => res.statusText);
           errorCallIds.add(toolCallId);
           return {
-            content: [{ type: "text", text: "bridge error " + res.status + ": " + text }],
+            content: [{ type: "text", text: "bridge error " + res.status + ": " + replyText(res) }],
             details: { bridgeError: true, status: res.status },
           };
         }
-        const data = await res.json();
+        const data = res.body || {};
         if (data.isError) errorCallIds.add(toolCallId);
         return {
           content: [{ type: "text", text: String(data.content == null ? "" : data.content) }],
@@ -301,20 +383,14 @@ ${
         ? "Name one MCP server in the server argument: Agent Deck checks each server separately."
         : "Agent Deck cannot tell which MCP server " + event.toolName + " belongs to." };
     }
-    const timeout = AbortSignal.timeout(10000);
     try {
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sessionId, token, tool: "__mcp_authorize__", toolCallId: event.toolCallId, params: {
-          serverId: entry.id,
-          server: entry.name,
-          toolName: event.toolName,
-        } }),
-        signal: ctx && ctx.signal ? AbortSignal.any([ctx.signal, timeout]) : timeout,
-      });
+      const res = await bridgeCall(ctx, "__mcp_authorize__", event.toolCallId, {
+        serverId: entry.id,
+        server: entry.name,
+        toolName: event.toolName,
+      }, ctx && ctx.signal, 10000);
       if (!res.ok) return { reason: "Agent Deck policy check failed (" + res.status + ").", failed: true };
-      const data = await res.json();
+      const data = res.body;
       return data && data.allow === true ? undefined : { reason: String((data && data.reason) || "Refused by Agent Deck policy.") };
     } catch (err) {
       return { reason: "Agent Deck policy check failed: " + String(err), failed: true };
@@ -366,7 +442,7 @@ ${
 ${
   opts.recall
     ? `    // Never let an aborted/failed previous prompt leak evidence into a
-    // later turn. A successful fetch below may install one fresh bounded value.
+    // later turn. A successful bridge call below may install one fresh bounded value.
     pendingRecall = undefined;
     // Pi 1.x: before_agent_start is a union on messageType; custom-message
     // runs (sendMessage with triggerTurn) carry no prompt, so there is nothing
@@ -374,17 +450,10 @@ ${
     if (event.messageType === "user") {
     // Recall is best-effort and bounded: a broken bridge must not stall or
     // otherwise alter the turn.
-    const recallController = new AbortController();
-    const recallTimer = setTimeout(() => recallController.abort(), 5000);
     try {
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sessionId, token, tool: "__recall__", toolCallId: "recall", params: { query: event.prompt } }),
-        signal: recallController.signal,
-      });
+      const res = await bridgeCall(ctx, "__recall__", "recall", { query: event.prompt }, undefined, 5000);
       if (res.ok) {
-        const data = await res.json();
+        const data = res.body;
         const block = data && typeof data.content === "string" ? data.content : "";
         // Persist only bounded, payload-free source metadata. Bodies, query,
         // filesystem paths and project identity never enter the Pi entry.
@@ -410,38 +479,22 @@ ${
       }
     } catch (err) {
       // Best-effort: leave the prompt unchanged.
-    } finally {
-      clearTimeout(recallTimer);
     }
     }
 `
     : ""
 }${
             opts.promptAudit
-              ? `    // Sensitive, internal audit callback. It is authenticated by this
-    // session's bridge token and is never registered as a model-facing tool.
+              ? `    // Sensitive, internal audit callback. The app accepts it only from this
+    // session's own Pi process and it is never a model-facing tool.
     const sequence = ++promptAuditSequence;
-    const auditController = new AbortController();
-    // Await a credible bounded loopback acknowledgement so a normal turn's
-    // capture is durable before its provider call. Failure leaves the previous
-    // successful capture untouched; the monotonic sequence fences late writes.
-    const auditTimer = setTimeout(() => auditController.abort(), 2000);
-    auditTimer.unref?.();
+    // Await a bounded acknowledgement so a normal turn's capture is durable
+    // before its provider call. Failure leaves the previous successful capture
+    // untouched; the monotonic sequence fences late writes.
     try {
-      const auditResponse = await fetch(endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sessionId, token, tool: "__prompt_audit__", toolCallId: "prompt-audit", params: { systemPrompt: finalSystemPrompt, sequence } }),
-        signal: auditController.signal,
-      });
-      if (!auditResponse.ok) {
-        // A rejected/stale write is not a capture for this turn.
-        await auditResponse.body?.cancel().catch(() => {});
-      }
+      await bridgeCall(ctx, "__prompt_audit__", "prompt-audit", { systemPrompt: finalSystemPrompt, sequence }, undefined, 2000);
     } catch (err) {
       // Auditing is best-effort and must never prevent the Pi turn.
-    } finally {
-      clearTimeout(auditTimer);
     }
 `
               : ""
@@ -453,6 +506,7 @@ ${
         : ""
     }}
 `,
+    { flag: "wx" },
   );
   return file;
 }

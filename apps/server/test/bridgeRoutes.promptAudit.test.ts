@@ -16,7 +16,7 @@ function harness() {
   let lastSequence = 0;
   const upsert = vi.fn();
   const broadcast = vi.fn();
-  registerBridgeRoutes({
+  const handles = registerBridgeRoutes({
     fastify,
     sessions: {
       get: (id: string) => (id === meta.id ? { meta } : undefined),
@@ -47,18 +47,14 @@ function harness() {
     memoryBaseDir: "",
     recallMemories: vi.fn(),
   } as unknown as ServerContext);
-  const audit = (sequence: number, systemPrompt: string) =>
-    fastify.inject({
-      method: "POST",
-      url: "/bridge",
-      payload: {
-        sessionId: meta.id,
-        token: "token-a",
-        tool: "__prompt_audit__",
-        toolCallId: "prompt-audit",
-        params: { sequence, systemPrompt },
-      },
-    });
+  const audit = async (sequence: number, systemPrompt: string) => {
+    const reply = await handles.handleBridgeCall(
+      meta.id,
+      { tool: "__prompt_audit__", toolCallId: "prompt-audit", params: { sequence, systemPrompt } },
+      new AbortController().signal,
+    );
+    return { statusCode: reply.status, json: () => reply.body };
+  };
   return { audit, meta, upsert, broadcast };
 }
 

@@ -54,9 +54,6 @@ beforeAll(async () => {
   const tmpHome = mkdtempSync(path.join(tmpdir(), "pi-home-"));
   agentDir = path.join(tmpHome, ".pi", "agent");
   const bridgeExt = writeBridgeExtension({
-    endpoint: "http://127.0.0.1:9/unused",
-    sessionId: "native-mcp-oauth",
-    token: "test-token",
     tools: [],
     nativeMcp: {
       servers: [

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { SessionMeta } from "@agent-deck/contracts";
@@ -21,6 +21,7 @@ import {
   type DomainEvent,
   type EventActor,
   type IngestState,
+  type NoticeCell,
   type ProviderRetryCell,
   type SessionPlanItem,
   type SessionPlanUpdate,
@@ -34,7 +35,10 @@ import {
   buildLaunchArgs,
   resolvePiBinary,
   type AgentSessionPlan,
+  type BridgeReply,
+  type BridgeWireCall,
   type ModelSelection,
+  type PiSandbox,
   type PiInboundEvent,
   type PiProcessExit,
   type ThinkingLevel,
@@ -215,6 +219,16 @@ export type AgentResolver = (
 export type HelperContext = ModelSelection & {
   extensions?: string[];
   env?: Record<string, string | undefined>;
+  /** ADR 0007: the sandbox of a helper or child launch of this session (its
+   * policy, derived for the launch's cwd and session folder). */
+  sandbox?: (launch: {
+    cwd: string;
+    /** A --no-session helper: no session folder. */
+    noSession?: boolean;
+    sessionDir?: string;
+    resumeSessionPath?: string;
+    tempPaths?: readonly string[];
+  }) => PiSandbox | undefined;
 };
 
 /** A delegated child's identity for its turn event (it has no session index row). */
@@ -292,6 +306,10 @@ export const reportChildTurn = (
     }),
   );
 
+/** The spawn option for a sandbox, nothing for none. */
+const withSandbox = (sandbox: PiSandbox | undefined): { sandbox?: PiSandbox } =>
+  sandbox ? { sandbox } : {};
+
 const quietly = <T>(run: () => T): T | undefined => {
   try {
     return run();
@@ -311,6 +329,24 @@ export interface SpawnSessionParams {
   readonly helperContext: HelperContext;
   /** Temp dirs generated for this launch; removed once pi has exited. */
   readonly tempDirs: readonly string[];
+  /** ADR 0007: answers the bridge calls that arrive on the stdio of this
+   * session's Pi and of its children's, by the session id of the process. */
+  readonly bridgeCall?: (
+    sessionId: string,
+    call: BridgeWireCall,
+    signal: AbortSignal,
+    /** The bridge generation the process was launched with: a call from a
+     * process of an earlier launch (still exiting) is refused. */
+    generation: string,
+  ) => Promise<BridgeReply>;
+  /** The current bridge generation of a session (or child) id. */
+  readonly bridgeGeneration?: (sessionId: string) => string | undefined;
+  /** Notices for the transcript once ingestion starts (after any history). */
+  readonly notices?: readonly NoticeCell[];
+  /** The session's launch-file folder (`<dataDir>/sandbox/<id>/launch`, read-only
+   * to its sandbox), where its children's prompt files go; the OS temp folder
+   * when absent. */
+  readonly launchDir?: string;
   readonly childBridgeFactory?: ChildBridgeFactory;
   readonly resolveAgent?: AgentResolver;
   /** Server-owned, launch-only context for ordinary managed children. */
@@ -419,6 +455,8 @@ export interface RunHelperOptions {
   extensions?: string[];
   env?: Record<string, string>;
   timeoutMs?: number;
+  /** ADR 0007: the sandbox the helper runs in (absent: none). */
+  sandbox?: PiSandbox;
 }
 
 /**
@@ -489,6 +527,8 @@ export interface ManagedSessionRuntime {
   readonly answerSupervisorQuestion: (requestId: string, answer: string) => Effect.Effect<void>;
   readonly closeSupervisorQuestion: (requestId: string, reason: string) => Effect.Effect<void>;
   readonly openAskUser: (cell: AskUserCell) => Effect.Effect<void>;
+  /** A system line in the transcript (ADR 0007: a sandbox refusal). */
+  readonly appendNotice: (cell: NoticeCell) => Effect.Effect<void>;
   readonly answerAskUser: (requestId: string, answer: AskUserAnswer) => Effect.Effect<void>;
   readonly closeAskUser: (
     requestId: string,
@@ -618,6 +658,9 @@ export function transcriptFromEntries(data: EntriesData): TranscriptState {
 export const readCanonicalChildTranscript = (
   sessionFile: string,
   cwd: string,
+  sandbox?: PiSandbox,
+  /** The owner's launch env (agent dir, identity), as the live path runs. */
+  env?: Record<string, string | undefined>,
 ): Effect.Effect<TranscriptState, Error, PiHost> =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -631,7 +674,9 @@ export const readCanonicalChildTranscript = (
           tools: [],
         }),
         cwd,
+        ...(env ? { env } : {}),
         requestTimeoutMs: SUBAGENT_TIMEOUT_MS,
+        ...withSandbox(sandbox),
       });
       const entries = yield* reader.getEntries;
       return transcriptFromEntries(entries);
@@ -921,7 +966,17 @@ export const makeManagedSessionRuntime = (
     // scope close settles ALL of them (no fiber or helper pi escapes).
     const sessionScope = yield* Effect.scope;
     const bus = yield* buses.make(pushBusCapacity());
-    const handle = yield* piHost.spawn(params.spawn);
+    const bridgeCall = params.bridgeCall;
+    // Captured now: the facade generated this launch's bridge just before.
+    const generation = params.bridgeGeneration?.(meta.id) ?? "";
+    const handle = yield* piHost.spawn(
+      bridgeCall
+        ? {
+            ...params.spawn,
+            bridge: (call, signal) => bridgeCall(meta.id, call, signal, generation),
+          }
+        : params.spawn,
+    );
 
     // Closure-scoped mutable state, only ever mutated inside synchronous units
     // (the `emit` helper and single `Effect.sync` ops) — same atomicity
@@ -1179,6 +1234,7 @@ export const makeManagedSessionRuntime = (
             cwd: meta.cwd,
             env: helperContext.env,
             requestTimeoutMs: TITLE_TIMEOUT_MS,
+            ...withSandbox(helperContext.sandbox?.({ cwd: meta.cwd, noSession: true })),
           });
           const prompt = [
             `Current title: ${currentTitle}`,
@@ -1247,6 +1303,7 @@ export const makeManagedSessionRuntime = (
             cwd: meta.cwd,
             env: helperContext.env,
             requestTimeoutMs: TITLE_TIMEOUT_MS,
+            ...withSandbox(helperContext.sandbox?.({ cwd: meta.cwd, noSession: true })),
           });
           yield* handleHelperPrompt(helper, source.slice(0, 2000), TITLE_TIMEOUT_MS);
           const { text } = yield* helper.request({ type: "get_last_assistant_text" });
@@ -1754,7 +1811,15 @@ export const makeManagedSessionRuntime = (
       // handling knows to await queue drain even under a saturated scheduler.
       get ingest() {
         ingestionStarted = true;
-        return ingestLoop;
+        const notices = params.notices ?? [];
+        return notices.length === 0
+          ? ingestLoop
+          : Effect.zipRight(
+              Effect.sync(() => {
+                for (const cell of notices) emit({ type: "cell_final", cell });
+              }),
+              ingestLoop,
+            );
       },
       seedFromHistory,
       seedSyntheticCells: (cells) =>
@@ -1879,6 +1944,7 @@ export const makeManagedSessionRuntime = (
           pendingSupervisor.delete(requestId);
           emit({ type: "supervisor_closed", cellId: `supervisor-${requestId}`, reason });
         }),
+      appendNotice: (cell) => Effect.sync(() => emit({ type: "cell_final", cell })),
       openAskUser: (cell) =>
         Effect.sync(() => {
           pendingAskUser.add(cell.requestId);
@@ -2123,6 +2189,7 @@ export const runOneShotHelper = (opts: RunHelperOptions): Effect.Effect<string, 
           cwd: opts.cwd,
           env: opts.env,
           requestTimeoutMs: timeoutMs,
+          ...withSandbox(opts.sandbox),
         });
         yield* handleHelperPrompt(helper, opts.userPrompt, timeoutMs);
         const { text } = yield* helper.request({ type: "get_last_assistant_text" });
@@ -2598,7 +2665,14 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
                   }),
               )
             : undefined;
-        const promptDir = mkdtempSync(join(tmpdir(), "agent-deck-subagent-"));
+        // ADR 0007: the child's files live in the parent session's launch
+        // folder, which its sandbox (the child's too) can read and not write:
+        // the parent cannot swap the read-only child's checker shell.
+        // The child bridge was just registered: this run's generation.
+        const childGeneration = params.bridgeGeneration?.(childSessionId) ?? "";
+        const promptRoot = params.launchDir ?? tmpdir();
+        mkdirSync(promptRoot, { recursive: true });
+        const promptDir = mkdtempSync(join(promptRoot, "agent-deck-subagent-"));
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {
             try {
@@ -2618,7 +2692,7 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
         // them here — never at render time, where a late settings/ownership
         // change could discard the context after it was already counted.
         if (childMemoryAdopted && childMemoryContext) childMemoryContext.commitUsage();
-        writeFileSync(promptFile, launchSystemPrompt);
+        writeFileSync(promptFile, launchSystemPrompt, { flag: "wx" });
 
         const checkerShell =
           toolPolicy === "readOnly" && overrides?.checkerShell
@@ -2699,6 +2773,23 @@ const runChildAgent = (args: RunChildArgs): Effect.Effect<ChildRunResult, Error>
                 : "__none__",
           },
           requestTimeoutMs: SUBAGENT_TIMEOUT_MS,
+          ...withSandbox(
+            helperContext.sandbox?.({
+              cwd: childCwd,
+              ...(runOptions?.resumeSessionPath
+                ? { resumeSessionPath: runOptions.resumeSessionPath }
+                : artifactSessionsDirectory
+                  ? { sessionDir: artifactSessionsDirectory }
+                  : {}),
+              tempPaths: [promptDir],
+            }),
+          ),
+          ...(params.bridgeCall
+            ? {
+                bridge: (call: BridgeWireCall, signal: AbortSignal) =>
+                  params.bridgeCall!(childSessionId, call, signal, childGeneration),
+              }
+            : {}),
         });
 
         // Capture Pi's own opaque resume handle before the first prompt. A run

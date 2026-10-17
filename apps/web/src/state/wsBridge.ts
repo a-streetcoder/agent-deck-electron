@@ -1473,6 +1473,19 @@ export function sendAskUserCancel(sessionId: string, requestId: string): Promise
   return askUserAction(sessionId, requestId, "cancel");
 }
 
+/** ADR 0007: allow a host the sandbox refused, for the session's project. */
+export async function allowSandboxHost(sessionId: string, host: string): Promise<void> {
+  const response = await fetch(`/sessions/${encodeURIComponent(sessionId)}/sandbox/allowed-hosts`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ host }),
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(payload.error ?? "Could not allow the host.");
+  }
+}
+
 /** Answer a blocking supervisor-request card raised by a child subagent. */
 export async function sendSupervisorAnswer(requestId: string, response: string): Promise<void> {
   await fetch(`/supervisor/${encodeURIComponent(requestId)}/answer`, {

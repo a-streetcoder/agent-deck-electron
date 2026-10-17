@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import nodePath from "node:path";
+import { cwdInsideProjects } from "../sandbox.ts";
 import {
   SESSION_RECORD_VERSION,
   type ProjectMeta,
@@ -130,6 +131,12 @@ const createSessionBody = z.object({
  * agent-backed launches), resume/rename/delete, merge/fork, and the live pi
  * state screens. Moved verbatim from server.ts.
  */
+const CWD_OUTSIDE_PROJECTS = {
+  code: "cwd_outside_projects",
+  error:
+    "On this server a session runs inside a registered project: add the folder as a project first.",
+};
+
 export function registerSessionRoutes(ctx: ServerContext): void {
   const {
     fastify,
@@ -243,7 +250,12 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         });
       }
       try {
-        const snapshot = await sessions.subagentTranscript(parentSessionId, runId, parent.cwd);
+        const snapshot = await sessions.subagentTranscript(
+          parentSessionId,
+          runId,
+          parent.cwd,
+          parent,
+        );
         if (!snapshot) {
           return reply.status(404).send({
             code: "SUBAGENT_TRANSCRIPT_NOT_FOUND",
@@ -1996,6 +2008,18 @@ export function registerSessionRoutes(ctx: ServerContext): void {
     }
   });
 
+  // ADR 0007: a sandbox writes its session's cwd, so on a sandboxed server a
+  // session without a project runs only inside a registered project's folder.
+  // A reserved part of the data dir is refused even inside a project.
+  const cwdOutsideProjects = (cwd: string): boolean =>
+    !!ctx.sandboxProvider &&
+    ctx.sandboxProvider.name !== "none" &&
+    (!cwdInsideProjects(
+      cwd,
+      projects.list().map((candidate) => candidate.path),
+    ) ||
+      ctx.sandboxRootProblem?.(cwd) !== undefined);
+
   async function launchSession(
     body: z.infer<typeof createSessionBody>,
     draft?: SessionMeta,
@@ -2023,6 +2047,8 @@ export function registerSessionRoutes(ctx: ServerContext): void {
       project = projects.find((p) => p.id === body.projectId);
       if (!project) return reply.status(404).send({ error: "unknown project" });
       cwd = project.path;
+    } else if (cwdOutsideProjects(cwd)) {
+      return reply.status(400).send(CWD_OUTSIDE_PROJECTS);
     }
 
     // Resolve every non-mutating launch input before allocating a worktree. Once
@@ -2377,6 +2403,9 @@ export function registerSessionRoutes(ctx: ServerContext): void {
         : undefined;
       if (body.projectId && !project) return reply.status(404).send({ error: "unknown project" });
       const cwd = project?.path ?? body.cwd ?? defaults.cwd ?? process.cwd();
+      if (!project && cwdOutsideProjects(cwd)) {
+        return reply.status(400).send(CWD_OUTSIDE_PROJECTS);
+      }
       const resolved = resolveLaunchResources(ctx, { ...body, cwd }, defaults);
       const now = new Date().toISOString();
       const draft: SessionMeta = {

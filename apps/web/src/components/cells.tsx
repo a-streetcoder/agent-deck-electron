@@ -38,6 +38,7 @@ import {
 } from "@/components/transcript/toolPresentation";
 import { OpenInPicker, type OpenInEditorController } from "@/components/diff/OpenInPicker";
 import { AskUserDecisionCard } from "./AskUserDecisionCard.tsx";
+import { SandboxAllowHost } from "./SandboxAllowHost.tsx";
 import { RunMeta } from "./RunMeta.tsx";
 import { QuestionAnswerControls } from "./QuestionAnswerControls.tsx";
 import {
@@ -192,6 +193,7 @@ function NoticeCellView({ cell }: { cell: NoticeCell }) {
           </span>
         );
       })}
+      {cell.sandbox?.allowHost ? <SandboxAllowHost host={cell.sandbox.allowHost} /> : null}
     </div>
   );
 }

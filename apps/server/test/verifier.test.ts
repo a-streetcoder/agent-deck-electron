@@ -16,6 +16,7 @@ import {
 } from "../src/verifier.ts";
 import { sessionVerifierDeps } from "../src/bridgeTools.ts";
 import type { SessionManager } from "../src/SessionManager.ts";
+import type { PiSandbox, SandboxCommand } from "@agent-deck/pi-host";
 
 const target = (extra: Partial<SubagentRunRecord> = {}): SubagentRunRecord => ({
   id: "11111111-1111-4111-8111-111111111111",
@@ -311,6 +312,7 @@ describe("validation: the session's launch env, secrets redacted", () => {
   it("runs the command with the parent session's launch env (owner credentials)", async () => {
     const sessions = {
       sessionLaunchEnv: (id: string) => (id === "s1" ? { A7_ENV_PROBE: "owner-env" } : undefined),
+      sessionSandbox: () => undefined,
     } as unknown as SessionManager;
     const deps = sessionVerifierDeps(sessions, () => {});
     const result = await deps.runValidation(
@@ -319,6 +321,38 @@ describe("validation: the session's launch env, secrets redacted", () => {
       `node -e "process.stdout.write('probe=' + process.env.A7_ENV_PROBE)"`,
     );
     expect(result.stdout).toContain("probe=owner-env");
+  });
+
+  it("ADR 0007: runs the verify validation inside the parent session's sandbox", async () => {
+    const asked: Array<[string, string]> = [];
+    const wrapped: Array<{ command: SandboxCommand; policy: unknown }> = [];
+    const policy = { allowWrite: [tmpdir()] } as unknown as PiSandbox["policy"];
+    const sandbox: PiSandbox = {
+      provider: {
+        name: "srt",
+        wrap: async (command, given) => {
+          wrapped.push({ command, policy: given });
+          return {
+            ...command,
+            command: process.execPath,
+            args: ["-e", "process.stdout.write('inside')"],
+          };
+        },
+      },
+      policy,
+    };
+    const sessions = {
+      sessionLaunchEnv: () => undefined,
+      sessionSandbox: (id: string, cwd: string) => (asked.push([id, cwd]), sandbox),
+    } as unknown as SessionManager;
+    const result = await sessionVerifierDeps(sessions, () => {}).runValidation(
+      "s1",
+      tmpdir(),
+      "pnpm test",
+    );
+    expect(asked).toEqual([["s1", tmpdir()]]);
+    expect(wrapped[0]).toMatchObject({ command: { args: ["-c", "pnpm test"] }, policy });
+    expect(result.stdout).toBe("inside");
   });
 
   it("redacts a token in the command and its output before the prompt", () => {

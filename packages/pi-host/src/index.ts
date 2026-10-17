@@ -19,6 +19,7 @@ export {
   noneProvider,
   PiSandboxError,
   SRT_PACKAGE,
+  srtProblem,
   srtProvider,
   srtSettings,
   hostFs,
@@ -29,6 +30,7 @@ export {
   type SandboxCommand,
   type SandboxedCommand,
   type SandboxProvider,
+  type SandboxViolationLine,
 } from "./sandbox.ts";
 export {
   discoverModelCatalog,
@@ -70,8 +72,14 @@ export {
   type HealthCheck,
 } from "./doctor.ts";
 export {
+  BRIDGE_UI_TITLE,
+  bridgeUiResponse,
+  parseBridgeUiRequest,
   sweepStaleBridgeExtensions,
   writeBridgeExtension,
+  type BridgeReply,
+  type BridgeUiRequest,
+  type BridgeWireCall,
   type BridgeCallRequest,
   type BridgeCallResponse,
   type BridgeExtensionOptions,

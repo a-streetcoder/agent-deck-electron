@@ -351,6 +351,22 @@ rl.on("line", (line) => {
           timeout: 50,
         });
         streamTimer = setInterval(() => {}, 1000);
+      } else if (cmd.message === "bridge-calls") {
+        // ADR 0007: two concurrent bridge calls (a dialog with the bridge's
+        // title marker), one malformed, and a genuine input dialog without it.
+        const bridge = (id, placeholder) =>
+          send({
+            type: "extension_ui_request",
+            id,
+            method: "input",
+            title: "agent-deck-bridge/1",
+            placeholder,
+          });
+        bridge("bridge-1", JSON.stringify({ tool: "slow", toolCallId: "c1", params: {} }));
+        bridge("bridge-2", JSON.stringify({ tool: "fast", toolCallId: "c2", params: { n: 2 } }));
+        bridge("bridge-3", "not json");
+        send({ type: "extension_ui_request", id: "genuine-1", method: "input", title: "Name" });
+        streamTimer = setInterval(() => {}, 1000);
       } else if (cmd.message === "request-extension-ui") {
         send({
           type: "extension_ui_request",
@@ -420,6 +436,13 @@ rl.on("line", (line) => {
       send({ id: cmd.id, type: "response", command: "abort", success: true });
       send({ type: "agent_end" });
       break;
+    case "extension_ui_response":
+      // ADR 0007: echo the answer to a bridge call so a test can read it.
+      if (String(cmd.id).startsWith("bridge-")) {
+        send({ type: "bridge_answered", id: cmd.id, value: cmd.value });
+        break;
+      }
+    // falls through
     default:
       send({
         id: cmd.id,

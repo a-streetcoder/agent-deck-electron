@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { Schema } from "effect";
 import { RpcServerFrame } from "@agent-deck/contracts";
+import type { PiSandbox } from "@agent-deck/pi-host";
 import type {
   DiscoveredServer,
   ProjectServerCommand,
@@ -259,10 +260,16 @@ function makeScriptGateway(scripts: Record<string, ProjectServerCommand[]> = {})
   };
 }
 
-function makeManager(sessions: Record<string, ManagedSession>, list: unknown[] = []) {
+function makeManager(
+  sessions: Record<string, ManagedSession>,
+  list: unknown[] = [],
+  /** ADR 0007: the sandbox the manager hands a session's terminal or script. */
+  sessionSandbox: (sessionId: string, cwd: string) => PiSandbox | undefined = () => undefined,
+) {
   return {
     get: (id: string) => sessions[id],
     list: () => list,
+    sessionSandbox,
   } as unknown as SessionManager;
 }
 
@@ -955,6 +962,34 @@ describe("createRpcConnection terminal ops (Slice 8a)", () => {
         message: { type: "terminal_output", terminalId: "term-1", data: "hi\r\n" },
       },
     ]);
+  });
+
+  it("ADR 0007: terminal_open runs in its session's sandbox and refuses when it has none", async () => {
+    const { session } = makeSession("s1");
+    const sandbox = {
+      provider: { name: "srt", wrap: async (command: unknown) => command },
+      policy: { allowWrite: ["/tmp"] },
+    } as unknown as PiSandbox;
+    const asked: Array<[string, string]> = [];
+    const opened: Array<PiSandbox | undefined> = [];
+    const { gateway } = makeTerminalGateway();
+    const manager = makeManager({ s1: session }, [], (sessionId, cwd) => {
+      asked.push([sessionId, cwd]);
+      if (asked.length > 1) throw new Error("This session is not running");
+      return sandbox;
+    });
+    const { conn, frames } = harness(manager, {
+      ...gateway,
+      open: async (options) => (opened.push(options.sandbox), gateway.open(options)),
+    });
+    await conn.handleMessage(frame(1, { type: "terminal_open", sessionId: "s1" }));
+    expect(asked).toEqual([["s1", "/tmp"]]);
+    expect(opened).toEqual([sandbox]);
+    expect(frames[0]).toMatchObject({ kind: "terminal_open_ok", id: 1 });
+    await conn.handleMessage(frame(2, { type: "terminal_open", sessionId: "s1" }));
+    expect(opened).toHaveLength(1);
+    expect(frames[1]).toMatchObject({ id: 2 });
+    expect(JSON.stringify(frames[1])).toContain("not running");
   });
 
   it("terminal_open layers the REQUESTER's GitHub env, not the owner's (SRV-06)", async () => {
@@ -1711,6 +1746,29 @@ describe("createRpcConnection script/dev-server ops (Slice 15a)", () => {
     expect(scripts.startCalls).toEqual([
       { sessionId: "s1", commandId: "cargo:run", cwd: "/tmp/project-worktree" },
     ]);
+  });
+
+  it("ADR 0007: script_start runs in its session's sandbox, derived for the session's cwd", async () => {
+    const { session } = makeSession("s1", { cwd: "/tmp/project-worktree" });
+    const sandbox = {
+      provider: { name: "srt", wrap: async (command: unknown) => command },
+      policy: { allowWrite: ["/tmp/project-worktree"] },
+    } as unknown as PiSandbox;
+    const scripts = makeScriptGateway();
+    const manager = makeManager({ s1: session }, [], (sessionId, cwd) =>
+      sessionId === "s1" && cwd === "/tmp/project-worktree" ? sandbox : undefined,
+    );
+    const { conn } = harness(manager, undefined, undefined, undefined, undefined, undefined, {
+      ...scripts.gateway,
+      start: async (options) => {
+        expect(options.sandbox).toBe(sandbox);
+        return scripts.gateway.start(options);
+      },
+    });
+    await conn.handleMessage(
+      frame(2, { type: "script_start", sessionId: "s1", commandId: "package:ZGV2" }),
+    );
+    expect(scripts.startCalls).toHaveLength(1);
   });
 
   it("script_start spawns via the gateway, streams output/server, and pushes exit", async () => {

@@ -632,9 +632,12 @@ export function createRpcConnection(deps: {
         // cwd comes from the session, server-side (worktree-aware meta.cwd).
         // The person typing, not the session owner: same rule as the Git screen.
         const userEnv = deps.terminalEnv?.(deps.user) ?? {};
+        // ADR 0007: the terminal runs inside the sandbox of its session.
+        const sandbox = sessions.sessionSandbox(session.meta.id, session.meta.cwd);
         const opened = await terminals.open({
           sessionId: session.meta.id,
           cwd: session.meta.cwd,
+          ...(sandbox ? { sandbox } : {}),
           ...(Object.keys(userEnv).length > 0 ? { env: { ...process.env, ...userEnv } } : {}),
           cols: request.cols,
           rows: request.rows,
@@ -856,10 +859,13 @@ export function createRpcConnection(deps: {
         return;
       }
       try {
+        // ADR 0007: so does a script, under the same policy.
+        const sandbox = sessions.sessionSandbox(session.meta.id, session.meta.cwd);
         const opened = await scripts.start({
           sessionId: session.meta.id,
           commandId: request.commandId,
           cwd: session.meta.cwd,
+          ...(sandbox ? { sandbox } : {}),
         });
         // The socket may have dropped DURING the spawn — close() already swept
         // scriptEntries, so inserting now would orphan the child. Reap it.

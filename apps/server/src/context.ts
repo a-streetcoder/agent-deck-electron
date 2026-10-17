@@ -1,4 +1,4 @@
-import type { CatalogModel } from "@agent-deck/pi-host";
+import type { CatalogModel, SandboxProvider } from "@agent-deck/pi-host";
 import type { Analytics } from "./analytics.ts";
 import type { ComposerDraftStore } from "./composerDrafts.ts";
 import type { SessionDraftGateway } from "./sessionDrafts.ts";
@@ -161,6 +161,11 @@ export interface ServerContext {
   githubConnections?: GitHubConnections;
   /** SRV-09: AGENT_DECK_TRUSTED_PROXY is set; host launchers (terminal, editor) refuse. */
   sharedServer?: boolean;
+  /** ADR 0007: the process sandbox provider sessions run in (absent: none). */
+  sandboxProvider?: SandboxProvider;
+  /** ADR 0007: why a folder cannot hold a sandboxed session (a reserved part
+   * of the data dir, the agent dir); undefined when it can or under none. */
+  sandboxRootProblem?: (root: string) => string | undefined;
   /** ANA-01: anonymous usage counts (analytics.ts); absent in hand-built test contexts. */
   analytics?: Analytics;
   /** SRV-12c1: the fork's model check (SRV-15a), reused by the session import. */
@@ -186,6 +191,7 @@ export interface ServerContext {
   projects: ProjectIndex;
   settings: SettingsStore;
   bridge: BridgeRegistry;
+  /** Each session's current bridge generation (never sent to Pi; see server.ts). */
   bridgeTokens: Map<string, string>;
   askUser: AskUserCoordinator;
   supervisor: SupervisorLog;

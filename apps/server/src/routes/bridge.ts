@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { SemanticRecallStatus } from "@agent-deck/contracts";
+import type { BridgeReply, BridgeWireCall } from "@agent-deck/pi-host";
 import { markMemoriesUsed, type MemoryStore, renderRecalledMemories } from "@agent-deck/memory";
 import { z } from "zod";
 import type { EventActor } from "@agent-deck/domain";
@@ -9,10 +10,8 @@ import { requestUser } from "../trustedProxy.ts";
 import type { ServerContext } from "../context.ts";
 
 /** A tool call arriving from a session's generated bridge extension. */
-const bridgeCallBody = z
+const bridgeCall = z
   .object({
-    sessionId: z.string(),
-    token: z.string(),
     tool: z.string(),
     toolCallId: z.string(),
     params: z.record(z.unknown()).default({}),
@@ -51,12 +50,21 @@ export interface BridgeRouteHandles {
     expectedParentSessionId?: string,
     actor?: EventActor,
   ): boolean;
+  /** Answer one bridge call from the Pi process of `sessionId`. */
+  handleBridgeCall(
+    sessionId: string,
+    call: BridgeWireCall,
+    signal: AbortSignal,
+    /** The generation the calling process was launched with (absent: an
+     * in-process caller such as a test). */
+    generation?: string,
+  ): Promise<BridgeReply>;
 }
 
 /**
  * The app side of the tool bridge and the child-subagent supervisor channel:
- * POST /bridge dispatch plus the blocking supervisor request/answer plumbing.
- * Moved verbatim from server.ts.
+ * bridge call dispatch (over each Pi process's stdio) plus the blocking supervisor
+ * request/answer plumbing.
  */
 export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
   const {
@@ -360,77 +368,80 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     };
   }
 
-  // The app side of the bridge: a session's generated extension POSTs each
-  // app-managed tool call here, and the registry dispatches it to the handler.
-  // Loopback-only (the pi subprocess is local); the response maps to the pi
-  // tool result, including the error flag.
-  fastify.post("/bridge", { bodyLimit: 8 * 1024 * 1024 }, async (request, reply) => {
-    const parsed = bridgeCallBody.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.message });
+  // The app side of the bridge: a session's generated extension sends each
+  // app-managed tool call over its Pi process's stdio (ADR 0007), and the
+  // registry dispatches it to the handler. `sessionId` is the session whose
+  // process sent the call, never a value from the call itself; the reply maps
+  // to the pi tool result, including the error flag.
+  async function handleBridgeCall(
+    sessionId: string,
+    wire: BridgeWireCall,
+    signal: AbortSignal,
+    generation?: string,
+  ): Promise<BridgeReply> {
+    const ok = (body: unknown): BridgeReply => ({ status: 200, body });
+    const fail = (status: number, error: string): BridgeReply => ({ status, body: { error } });
+    const parsed = bridgeCall.safeParse(wire);
+    if (!parsed.success) return fail(400, parsed.error.message);
+    const call = parsed.data;
+    // The session's current bridge generation: absent when it was launched
+    // without a bridge (or its child bridge was disposed).
+    const token = bridgeTokens.get(sessionId);
+    if (!token) return fail(403, "no bridge for this session");
+    // A process of an earlier launch (still exiting during a restart) must not
+    // act under the new generation (askUser fences per launch).
+    if (generation !== undefined && generation !== token) {
+      return fail(403, "this process belongs to an earlier launch of the session");
     }
-    const expected = bridgeTokens.get(parsed.data.sessionId);
-    if (!expected || expected !== parsed.data.token) {
-      return reply.code(403).send({ error: "invalid bridge token" });
-    }
-    const childTools = childAllowedTools?.get(parsed.data.sessionId);
-    if (childTools && !childTools.has(parsed.data.tool)) {
-      return reply.code(403).send({ error: "tool is not authorized for this child" });
+    const childTools = childAllowedTools?.get(sessionId);
+    if (childTools && !childTools.has(call.tool)) {
+      return fail(403, "tool is not authorized for this child");
     }
     // A child subagent's contact_supervisor call routes to the supervisor channel
     // (recorded + streamed into the parent's card), NOT the parent bridge registry.
     // A blocking method suspends here until answered (or the child's bridge is
     // disposed on child death, which releases the wait).
-    if (parsed.data.tool === "contact_supervisor") {
-      return await handleContactSupervisor(parsed.data.sessionId, parsed.data.params);
+    if (call.tool === "contact_supervisor") {
+      return ok(await handleContactSupervisor(sessionId, call.params));
     }
     // The before_agent_start recall hook asks for the memories most relevant to
     // the user's message (not a model-callable tool — an internal hook channel).
-    if (parsed.data.tool === "__recall__") {
-      return await handleRecall(parsed.data.sessionId, parsed.data.params);
+    if (call.tool === "__recall__") {
+      return ok(await handleRecall(sessionId, call.params));
     }
     // The native MCP policy hook (PI-03c) asks before each MCP call and again on
     // its result; not model-callable. Refusal blocks the call or withholds the result.
-    if (parsed.data.tool === "__mcp_authorize__") {
-      const call = mcpAuthorizeParams.safeParse(parsed.data.params);
-      if (!call.success) return reply.code(400).send({ error: "invalid MCP authorization" });
-      const reason = ctx.nativeMcpRefusal(parsed.data.sessionId, call.data);
-      return reason ? { allow: false, reason } : { allow: true };
+    if (call.tool === "__mcp_authorize__") {
+      const question = mcpAuthorizeParams.safeParse(call.params);
+      if (!question.success) return fail(400, "invalid MCP authorization");
+      const reason = ctx.nativeMcpRefusal(sessionId, question.data);
+      return ok(reason ? { allow: false, reason } : { allow: true });
     }
     // Latest-per-turn prompt audit. This callback is generated only for a parent
-    // session, is not model-callable, and must prove both the per-session token
-    // above and a live parent owner here. Keep the exact string (including empty
-    // and large prompts); storage is bounded to one latest value per session.
-    if (parsed.data.tool === "__prompt_audit__") {
-      const audit = promptAuditParams.safeParse(parsed.data.params);
-      if (!audit.success) return reply.code(400).send({ error: "invalid prompt audit" });
+    // session, is not model-callable, and must come from the session's own
+    // process and a live parent owner here. Keep the exact string (including
+    // empty and large prompts); storage is bounded to one latest value per session.
+    if (call.tool === "__prompt_audit__") {
+      const audit = promptAuditParams.safeParse(call.params);
+      if (!audit.success) return fail(400, "invalid prompt audit");
       const result = sessions.captureFinalSystemPromptAudit(
-        parsed.data.sessionId,
+        sessionId,
         { text: audit.data.systemPrompt, capturedAt: new Date().toISOString() },
         audit.data.sequence,
       );
-      if (!result) return reply.code(400).send({ error: "invalid prompt audit" });
+      if (!result) return fail(400, "invalid prompt audit");
       if (!result.accepted)
-        return { content: "Stale system prompt audit ignored.", accepted: false };
+        return ok({ content: "Stale system prompt audit ignored.", accepted: false });
       // Deliberately bypass SessionManager's activity callback: observing Pi's
       // prompt is audit metadata, not user activity, and must not alter updatedAt
       // or transcript/event ordering. Persist the authoritative live object,
       // never a pre-audit shallow snapshot.
       ctx.index.upsert(result.meta);
       ctx.broadcast({ type: "session_meta", session: result.meta });
-      return { content: "System prompt captured.", accepted: true };
+      return ok({ content: "System prompt captured.", accepted: true });
     }
-    const controller = new AbortController();
-    const abort = (): void => controller.abort();
-    request.raw.once("aborted", abort);
-    reply.raw.once("close", () => {
-      if (!reply.raw.writableEnded) abort();
-    });
-    return await bridge.dispatch(parsed.data, {
-      token: parsed.data.token,
-      signal: controller.signal,
-    });
-  });
+    return ok(await bridge.dispatch({ ...call, sessionId, token }, { token, signal }));
+  }
 
   const askAnswerBody = z
     .object({
@@ -515,5 +526,5 @@ export function registerBridgeRoutes(ctx: ServerContext): BridgeRouteHandles {
     },
   );
 
-  return { cancelChildSupervisorRequests, answerSupervisor };
+  return { cancelChildSupervisorRequests, answerSupervisor, handleBridgeCall };
 }

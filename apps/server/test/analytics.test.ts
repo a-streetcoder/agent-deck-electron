@@ -237,7 +237,7 @@ describe("analytics settings", () => {
   const read = async (headers: Record<string, string> = {}) =>
     (await (await fetch(`http://127.0.0.1:${server!.port}/settings`, { headers })).json()) as {
       settings: { analyticsEnabled: boolean; analyticsNoticeSeen: boolean };
-      capabilities: { analytics: boolean };
+      capabilities: { analytics: boolean; sandbox: { provider: string } };
     };
 
   it("defaults on with the notice unseen, and PATCH /settings persists both", async () => {
@@ -245,6 +245,8 @@ describe("analytics settings", () => {
     const first = await read();
     expect(first.settings).toMatchObject({ analyticsEnabled: true, analyticsNoticeSeen: false });
     expect(first.capabilities.analytics).toBe(false); // AGENT_DECK_TEST=1
+    // ADR 0007: a desktop (no trusted proxy) runs sessions without a sandbox.
+    expect(first.capabilities.sandbox).toEqual({ provider: "none" });
     const patch = (body: unknown) =>
       fetch(`http://127.0.0.1:${server!.port}/settings`, {
         method: "PATCH",

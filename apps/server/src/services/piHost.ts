@@ -1,5 +1,11 @@
 import {
+  bridgeUiResponse,
   classifyPiLine,
+  parseBridgeUiRequest,
+  type BridgeReply,
+  type BridgeUiRequest,
+  type BridgeWireCall,
+  type PiSandbox,
   COMPACT_TIMEOUT_MS,
   createRequestIdSource,
   DEFAULT_REQUEST_TIMEOUT_MS,
@@ -135,7 +141,19 @@ export interface PiSpawnOptions {
   env?: Record<string, string | undefined>;
   /** Default timeout for request/response commands (0 disables). */
   requestTimeoutMs?: number;
+  /**
+   * Answers this process's bridge calls (ADR 0007: the bridge rides on Pi's
+   * stdio). A bridge call never reaches `events`; without a handler it is
+   * answered with a 404 reply.
+   */
+  bridge?: PiBridgeHandler;
+  /** ADR 0007: the provider and policy Pi runs in (absent: none). */
+  sandbox?: PiSandbox;
 }
+
+/** Answer one bridge call; `signal` aborts when Pi can no longer use the
+ * answer (its dialog timeout, the turn's end, the process's exit). */
+export type PiBridgeHandler = (call: BridgeWireCall, signal: AbortSignal) => Promise<BridgeReply>;
 
 /** pi answered `success: false` for this command. */
 export class PiRpcFailure extends Data.TaggedError("PiRpcFailure")<{
@@ -225,7 +243,8 @@ export interface PiHostHandle {
   readonly exit: Effect.Effect<Option.Option<PiProcessExit>>;
   /** Resolves when pi exits (immediately if it already has). */
   readonly awaitExit: Effect.Effect<PiProcessExit>;
-  /** OS pid of the child (None if the spawn itself failed). */
+  /** OS pid of the child (None if the spawn itself failed); waits for a
+   * sandboxed spawn, which happens after the asynchronous wrap. */
   readonly pid: Effect.Effect<Option.Option<number>>;
   /** Capped stderr capture (diagnostics — included in typed errors too). */
   readonly stderr: Effect.Effect<string>;
@@ -289,6 +308,7 @@ export const spawnPiProcess = (
           args: options.args,
           cwd: options.cwd,
           env: options.env,
+          ...(options.sandbox ? { sandbox: options.sandbox } : {}),
         });
 
         // Closure-scoped mutable state, only ever touched inside single sync
@@ -327,6 +347,49 @@ export const spawnPiProcess = (
           );
         };
 
+        // Bridge calls in flight, by dialog id; each is answered on its own.
+        const bridgeCalls = new Map<string, AbortController>();
+        const abortBridgeCalls = (): void => {
+          for (const controller of bridgeCalls.values()) controller.abort();
+          bridgeCalls.clear();
+        };
+        const answerBridge = (id: string, reply: BridgeReply): void => {
+          if (!bridgeCalls.delete(id) || Option.isSome(exitState)) return;
+          try {
+            proc.writeLine(serializeJsonLine(bridgeUiResponse(id, reply)));
+          } catch {
+            // Exited meanwhile: nobody is waiting for the answer.
+          }
+        };
+        const startBridgeCall = (request: BridgeUiRequest): void => {
+          const controller = new AbortController();
+          bridgeCalls.set(request.id, controller);
+          // Pi resolves the dialog itself at its timeout; stop the work too.
+          if (request.timeoutMs) {
+            setTimeout(() => controller.abort(), request.timeoutMs).unref?.();
+          }
+          const call = request.call;
+          if (!call) {
+            answerBridge(request.id, { status: 400, body: { error: "invalid bridge call" } });
+            return;
+          }
+          if (!options.bridge) {
+            answerBridge(request.id, {
+              status: 404,
+              body: { error: "no bridge for this process" },
+            });
+            return;
+          }
+          options.bridge(call, controller.signal).then(
+            (reply) => answerBridge(request.id, reply),
+            (error: unknown) =>
+              answerBridge(request.id, {
+                status: 500,
+                body: { error: error instanceof Error ? error.message : String(error) },
+              }),
+          );
+        };
+
         proc.on("line", (line) => {
           // Shared wire-protocol classification (packages/pi-host
           // rpcProtocol.ts) — the same decision tree PiSession runs.
@@ -340,13 +403,26 @@ export const spawnPiProcess = (
             case "response":
               handleResponse(classified.response);
               return;
-            case "event":
+            case "event": {
+              // A bridge call is the app's own channel, never a human node.
+              const bridgeRequest = parseBridgeUiRequest(classified.event);
+              if (bridgeRequest) {
+                startBridgeCall(bridgeRequest);
+                return;
+              }
+              // A bridge call cannot outlive its turn: the extension stopped
+              // waiting once Pi aborted the dialog.
+              if ((classified.event as { type?: unknown }).type === "agent_end") {
+                abortBridgeCalls();
+              }
               offerStreamItem({ _tag: "PiEvent", event: classified.event });
+            }
           }
         });
 
         proc.on("exit", (exit) => {
           exitState = Option.some(exit);
+          abortBridgeCalls();
           // A pending RPC when the process dies must FAIL, never hang.
           for (const rpc of pending.values()) {
             Deferred.unsafeDone(
@@ -432,7 +508,13 @@ export const spawnPiProcess = (
           isRunning: Effect.sync(() => proc.isRunning),
           exit: Effect.sync(() => exitState),
           awaitExit: Deferred.await(exitDeferred),
-          pid: Effect.sync(() => Option.fromNullable(proc.pid)),
+          // A sandboxed start spawns once the wrap resolves: wait for it.
+          // (Synchronous otherwise, as callers inside runSync rely on.)
+          pid: Effect.suspend(() =>
+            proc.spawning
+              ? Effect.promise(() => proc.spawned).pipe(Effect.map(Option.fromNullable))
+              : Effect.sync(() => Option.fromNullable(proc.pid)),
+          ),
           stderr: Effect.sync(() => proc.stderr),
           prompt: (message, images, streamingBehavior) =>
             Effect.map(

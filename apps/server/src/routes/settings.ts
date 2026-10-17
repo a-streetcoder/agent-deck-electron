@@ -444,6 +444,8 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     agentMemory: ctx.memoryEnabled,
     // ANA-01: whether this backend can send usage counts at all (key, local, not a test).
     analytics: ctx.analytics?.available ?? false,
+    // ADR 0007: the process sandbox sessions run in.
+    sandbox: { provider: ctx.sandboxProvider?.name ?? "none" },
   });
 
   fastify.get("/settings", async () => ({

@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -15,7 +15,7 @@ import { startServer, type AgentDeckServer } from "../src/index.ts";
 /**
  * The bridge substrate, wired into the server (permanent CI guard): an
  * app-managed tool registered on server.bridge is generated into a real pi
- * session, the model calls it, the call reaches the server's own /bridge route,
+ * session, the model calls it, the call rides back on the session's own Pi stdio,
  * the registered handler runs, and the result flows back to the model. This is
  * the mechanism Memory / MCP / subagents plug their tools into.
  */
@@ -64,7 +64,7 @@ afterAll(async () => {
   await mock.close();
 });
 
-describe("server bridge: app-managed tool round-trip through /bridge", () => {
+describe("server bridge: app-managed tool round-trip over Pi stdio", () => {
   it("dispatches a real pi tool call to the registered handler and returns the result", async () => {
     const response = await fetch(`http://127.0.0.1:${server.port}/sessions`, {
       method: "POST",
@@ -98,25 +98,25 @@ describe("server bridge: app-managed tool round-trip through /bridge", () => {
     expect(toolMessages.length).toBeGreaterThan(0);
     expect(JSON.stringify(toolMessages)).toContain("echoed: ping");
 
-    // The handler must not have run a second time from the direct probe below.
-    expect(calls).toHaveLength(1);
+    // The call rode on Pi's stdio as a dialog, which never became a human node.
+    const cells = managed.snapshot().state.cells;
+    expect(cells.some((cell) => cell.kind === "question")).toBe(false);
+    // The extension lives in the session's launch folder (read-only to its sandbox), not /tmp.
+    expect(
+      readdirSync(path.join(dataDir, "sandbox", session.id, "launch")).some((entry) =>
+        entry.startsWith("agent-deck-bridge-ext-"),
+      ),
+    ).toBe(true);
   });
 
-  it("rejects a /bridge call whose token doesn't match the session's", async () => {
+  it("has no network route: a POST to /bridge reaches no handler", async () => {
     const before = calls.length;
     const response = await fetch(`http://127.0.0.1:${server.port}/bridge`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        sessionId: "some-other-session",
-        token: "forged-token",
-        tool: "agent_deck_echo",
-        toolCallId: "x",
-        params: { message: "steal" },
-      }),
+      body: JSON.stringify({ tool: "agent_deck_echo", toolCallId: "x", params: {} }),
     });
-    expect(response.status).toBe(403);
-    // The gate is before dispatch — the handler never ran for the forged call.
+    expect(response.status).toBe(404);
     expect(calls).toHaveLength(before);
   });
 });

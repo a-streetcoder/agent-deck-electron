@@ -27,7 +27,7 @@ export function writeCheckerShellExtension(
   const file = path.join(directory, "checker-shell.ts");
   const emptyFile = path.join(directory, "checker-shell-empty");
   const emptyHooks = path.join(directory, "checker-shell-hooks");
-  writeFileSync(emptyFile, "");
+  writeFileSync(emptyFile, "", { flag: "wx" });
   mkdirSync(emptyHooks, { recursive: true });
   writeFileSync(
     file,
@@ -269,6 +269,7 @@ export default function (pi) {
   });
 }
 `,
+    { flag: "wx" },
   );
   return file;
 }

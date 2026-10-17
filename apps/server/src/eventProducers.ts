@@ -29,6 +29,7 @@ import {
   type HumanTimeoutPolicy,
   type NodeRef,
   type PathPrefix,
+  type SandboxViolation,
   type SubagentVerdict,
 } from "@agent-deck/domain";
 import type { EventLog } from "./eventLog.ts";
@@ -141,6 +142,10 @@ export interface EventProducers {
   humanAnswered(ref: HumanNodeRef, by: EventActor, answer: string, withhold?: boolean): void;
   humanExpired(ref: HumanNodeRef, policy: Extract<HumanTimeoutPolicy, { type: "expire" }>): void;
   humanCancelled(ref: HumanNodeRef, reason: string, actor?: EventActor): void;
+  /** ADR 0007: the project's .agent-deck/sandbox.json was refused; defaults apply. */
+  sandboxConfigInvalid(sessionId: string, problems: readonly string[]): void;
+  /** ADR 0007: the sandbox refused a write, a read or a host. */
+  sandboxViolation(sessionId: string, violation: SandboxViolation): void;
   loopUserAction(
     runId: string,
     projectId: string | undefined,
@@ -263,6 +268,32 @@ export function createEventProducers(
   });
 
   return {
+    sandboxConfigInvalid(sessionId, problems) {
+      append({
+        kind: "sandbox.configInvalid",
+        sessionId,
+        subject: { type: "session", id: sessionId },
+        actor: SYSTEM,
+        payload: {
+          problems: problems.slice(0, 20).map((line) => clean(line, EVENT_LABEL_MAX_CHARS)),
+        },
+      });
+    },
+
+    sandboxViolation(sessionId, violation) {
+      append({
+        kind: "sandbox.violation",
+        sessionId,
+        subject: { type: "session", id: sessionId },
+        actor: SYSTEM,
+        payload: {
+          kind: violation.kind,
+          target: clean(violation.target, EVENT_LABEL_MAX_CHARS),
+          ...(violation.operation ? { operation: clean(violation.operation, 80) } : {}),
+        },
+      });
+    },
+
     sessionCreated(meta, actor, forkedFrom) {
       // ADR 0006: the record's provenance triple (kind, from, by), references only.
       const provenance = meta.provenance;

@@ -33,7 +33,7 @@ function harness(
   // route writes on the first turn has to still be there on the second.
   const meta: Record<string, unknown> = { cwd };
   const upsert = vi.fn();
-  registerBridgeRoutes({
+  const handles = registerBridgeRoutes({
     fastify,
     index: { upsert },
     sessions: {
@@ -64,18 +64,14 @@ function harness(
     memoryBaseDir: "/tmp/memory",
     semanticRecall: { getStatus: () => recallStatus, recall },
   } as unknown as ServerContext);
-  const invokeTool = (tool: string, params: Record<string, unknown>) =>
-    fastify.inject({
-      method: "POST",
-      url: "/bridge",
-      payload: {
-        sessionId: "session-a",
-        token: "token-a",
-        tool,
-        toolCallId: "recall-a",
-        params,
-      },
-    });
+  const invokeTool = async (tool: string, params: Record<string, unknown>) => {
+    const reply = await handles.handleBridgeCall(
+      "session-a",
+      { tool, toolCallId: "recall-a", params },
+      new AbortController().signal,
+    );
+    return { statusCode: reply.status, json: () => reply.body as Record<string, unknown> };
+  };
   const invoke = (params: Record<string, unknown>) => invokeTool("__recall__", params);
   return {
     invoke,

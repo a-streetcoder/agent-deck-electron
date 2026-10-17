@@ -14,7 +14,7 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd });
 
-function harness(sharedServer = false) {
+function harness(sharedServer = false, extra: Partial<ServerContext> = {}) {
   const fastify = Fastify({ logger: false });
   const projects = new ProjectIndex(mkdtempSync(path.join(scratch, "data-")));
   registerProjectRoutes({
@@ -29,6 +29,7 @@ function harness(sharedServer = false) {
     rootsFor: () => ({ home: scratch }),
     mcpAssignments: { projectServerNames: () => [] },
     projectImages: { assignment: () => undefined },
+    ...extra,
   } as unknown as ServerContext);
   const add = (name: string, folder: string) => {
     projects.upsert({ id: name, path: folder, name, createdAt: "now" });
@@ -150,5 +151,33 @@ describe("GET /projects/:id/origin", () => {
     });
     expect(githubRepoOfOrigin("https://gitlab.com/acme/app.git")).toBeNull();
     expect(githubRepoOfOrigin("https://github.com/acme/app is:open")).toBeNull();
+  });
+});
+
+describe("POST /projects on a sandboxed server (ADR 0007)", () => {
+  it("refuses a reserved folder with 400 and registers an ordinary one", async () => {
+    const reserved = path.join(scratch, "data", "users");
+    const ordinary = path.join(scratch, "ordinary");
+    mkdirSync(reserved, { recursive: true });
+    mkdirSync(ordinary, { recursive: true });
+    const { fastify, projects } = harness(true, {
+      sandboxRootProblem: (root: string) =>
+        root === reserved ? "overlaps the server's users folder" : undefined,
+    });
+    const refused = await fastify.inject({
+      method: "POST",
+      url: "/projects",
+      payload: { path: reserved },
+    });
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json()).toMatchObject({ code: "project_path_reserved" });
+    expect(projects.list()).toEqual([]);
+    const ok = await fastify.inject({
+      method: "POST",
+      url: "/projects",
+      payload: { path: ordinary },
+    });
+    expect(ok.statusCode).toBeLessThan(300);
+    await fastify.close();
   });
 });
