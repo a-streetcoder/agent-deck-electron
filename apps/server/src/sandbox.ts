@@ -255,6 +255,26 @@ function sandboxProjectPath(deps: SessionSandboxDeps, record: SessionMeta): stri
   return record.workspace?.path || insideProject ? project : record.cwd;
 }
 
+/**
+ * The hosts of a project's assigned HTTP MCP servers. Assigning a server to a
+ * project is the owner's or operator's own intent to reach it, the same trust
+ * as an allowed host, so its sessions may connect without a second Allow
+ * (ADR 0007 amendment 20). Stdio servers and unparsable URLs contribute nothing.
+ */
+export function mcpServerHosts(configs: readonly { url?: string }[]): string[] {
+  const hosts = new Set<string>();
+  for (const config of configs) {
+    if (!config.url) continue;
+    try {
+      const { hostname, port } = new URL(config.url);
+      if (hostname) hosts.add(port ? `${hostname}:${port}` : hostname);
+    } catch {
+      // Not a URL: nothing to grant.
+    }
+  }
+  return [...hosts];
+}
+
 export const PROJECT_SANDBOX_FILE = ".agent-deck/sandbox.json";
 
 export interface ProjectSandboxRead {

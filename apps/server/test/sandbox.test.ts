@@ -16,6 +16,7 @@ import {
   piSessionDir,
   cwdInsideProjects,
   launchDirOf,
+  mcpServerHosts,
   readProjectSandboxConfig,
   sandboxDenyAddresses,
   serverWriteRootProblem,
@@ -404,4 +405,18 @@ describe("serverWriteRootProblem (ADR 0007: reserved folders, canonical paths)",
       ).toBeDefined();
     },
   );
+});
+
+describe("mcpServerHosts (ADR 0007 am. 20)", () => {
+  it("grants the host (and explicit port) of each assigned HTTP MCP server once", () => {
+    expect(
+      mcpServerHosts([
+        { url: "https://docs.mcp.cloudflare.com/mcp" },
+        { url: "https://docs.mcp.cloudflare.com/other" },
+        { url: "http://localhost:8787/mcp" },
+        { url: "not a url" },
+        {},
+      ]),
+    ).toEqual(["docs.mcp.cloudflare.com", "localhost:8787"]);
+  });
 });

@@ -1453,6 +1453,9 @@ that folder at the end) and a `--data-dir` other than `AGENT_DECK_DATA_DIR`.
   breaks clients that ignore the exported CA, and does not substitute inside Basic auth, which
   git's token credential helper uses. Per-user model credentials are `auth.json` files, not env
   vars, so env masking would not cover them either. The evidence is in the ticket (ade-jx7e).
+- MCP servers assigned to a project are reachable from its sessions without an Allow click: the
+  server grants their hosts with the allow-list at launch (ADR 0007 amendment 20). A server
+  assigned after a session started needs that session's Pi restarted, like an Allow.
 - Pi packages declared in the shared `settings.json` (`packages: ["npm:..."]`) are not
   supported under the sandbox (SBX-09, ade-91rh): Pi resolves them at every launch and installs
   a missing one into `agent/npm`, which sessions cannot write, so the launch dies with EROFS

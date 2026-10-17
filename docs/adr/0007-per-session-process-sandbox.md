@@ -231,3 +231,12 @@ do not interfere.
     release of decision 5). Masking returns when the runtime keys placeholders per command and
     reads values from that command's environment, or with one proxy per user outside the server
     process; the evidence is on ade-jx7e and in the runbook's Known gaps.
+
+20. **Assigned MCP servers are reachable.** The hosts of a project's assigned HTTP MCP servers
+    (All Projects and per-project assignments, as the server resolves them at launch) join the
+    project's allowed hosts without an Allow click. Found 2026-10-17 in the browser: a session
+    with an assigned HTTP server showed "Sandbox refused: network to <mcp host>" and "MCP servers
+    need attention" at launch, and the agent had no tool. An assignment is the owner's or
+    operator's own intent to reach that host, the same trust as the allow-list, which stays
+    server state. Stdio servers contribute nothing; a server's URL change takes effect at the
+    next launch. `mcpServerHosts` in `apps/server/src/sandbox.ts`.

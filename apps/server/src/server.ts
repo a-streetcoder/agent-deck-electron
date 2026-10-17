@@ -168,6 +168,7 @@ import {
   sweepStaleLaunchFolders,
   type SessionLaunchSandbox,
   type SessionSandboxDeps,
+  mcpServerHosts,
 } from "./sandbox.ts";
 import { registerSandboxRoutes } from "./routes/sandbox.ts";
 import { GitHubConnections, githubEnv } from "./githubConnections.ts";
@@ -547,7 +548,15 @@ async function initServer(
         ? projects.find((project) => project.id === meta.projectId)?.path
         : undefined) ?? meta.cwd,
     ...(trustedProxy ? { ownerDir: (owner) => ensureUserDir(dataDir, owner.id) } : {}),
-    grantedHosts: (meta) => (meta.projectId ? sandboxHostGrants.hosts(meta.projectId) : []),
+    // The owner's allow-list plus the hosts of the project's assigned HTTP MCP
+    // servers (an assignment is the same intent as an Allow; ADR 0007 am. 20).
+    grantedHosts: (meta) =>
+      meta.projectId
+        ? [
+            ...sandboxHostGrants.hosts(meta.projectId),
+            ...mcpServerHosts(effectiveMcpConfigs(meta.projectId).configs as { url?: string }[]),
+          ]
+        : [],
     extraDeniedAddresses,
   };
   // App-managed tool bridge (memory/mcp/subagents register here). Calls ride on
