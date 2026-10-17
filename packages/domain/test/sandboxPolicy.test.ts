@@ -155,6 +155,8 @@ describe("sandboxPolicy (ADR 0007): one case per rule", () => {
     ).toEqual(expected);
     expect(p.allowWrite).not.toContain("/data/home");
     expect(expected.length === 0 || expected.includes("/data/home/.m2")).toBe(true);
+    // SBX-08: bundler keeps its compact-index cache under ~/.bundle.
+    expect(writable(p, "/data/home/.bundle/cache/compact_index/x")).toBe(side === "server");
   });
 
   it.each<[string, Partial<SessionMeta>]>([

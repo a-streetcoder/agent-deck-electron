@@ -29,33 +29,33 @@ with `AGENT_DECK_SANDBOX_MONITOR=1`, then without; the column shows off / on.
 
 ## Pinned run (2026-10-17)
 
-VM `dev` (Debian 13, kernel 6.12, Docker 26), image and AppArmor profile from `b2681f5` (SBX-07:
-private `/tmp`, the wider default host list, no `NODE_ENV` from the image), fresh volume (every
-toolchain and package cache cold). The matrix grants only the two sites the Playwright suites
-visit and no longer unsets `NODE_ENV`. Exit status 0: the only failures are the baselined rails
-rows. About six minutes with the image's layers cached (a cold image build adds about fifteen).
+VM `dev` (Debian 13, kernel 6.12, Docker 26), image and AppArmor profile from `c74b8c2` (SBX-08:
+`libyaml-dev` and `zlib1g-dev` in the builder layer, `cache.ruby-lang.org` on the default host
+list), fresh volume (every toolchain and package cache cold). The matrix grants only the two
+sites the Playwright suites visit and Playwright's older CDN names. Exit status 0 with an empty
+baseline: every step of every stack passes. About eight minutes with the image's layers cached,
+of which a minute and a half is Ruby's compile (a cold image build adds about fifteen).
 
-| Stack               | Repo @ commit                                         | Toolchain versions                                      | Toolchain              | Install                | Test                   | Dev server             | Commit | Warm install off / on |
-| ------------------- | ----------------------------------------------------- | ------------------------------------------------------- | ---------------------- | ---------------------- | ---------------------- | ---------------------- | ------ | --------------------- |
-| pnpm-monorepo       | jkomyno/pnpm-monorepo-template @ 44f0f92              | pnpm 11.3.0 (packageManager)                            | pass 1.2s              | pass 6.9s              | pass 4.6s              | pass 2.4s              | pass   | 1.3s / 1.5s           |
-| python-uv           | astral-sh/uv-fastapi-example @ a1e3131                | uv 0.13.1, CPython 3.12 (uv's)                          | pass 3.6s              | pass 2.1s              | pass 1.1s              | pass 2.4s              | pass   | 0.4s / 0.5s           |
-| rust-cargo          | tokio-rs/axum @ fc78d5b (`examples/`)                 | rustup 1.29.1, Rust 1.99.1                              | pass 9.0s              | pass 11.0s             | pass 9.0s              | pass 2.4s              | pass   | 8.0s / 7.9s           |
-| go                  | golang/example @ 7f05d21                              | Go 1.27.2                                               | pass 2.4s              | pass 7.6s              | pass 2.0s              | pass 2.4s              | pass   | 7.4s / 7.6s           |
-| java-gradle         | spring-guides/gs-rest-service @ 3f4cef0 (`complete/`) | Temurin 17.0.20.1+1, Gradle 9.3.1 (wrapper)             | pass 6.5s              | pass 21.3s             | pass 31.9s             | pass 6.5s              | pass   | 4.3s / 4.5s           |
-| rails               | wtnabe/example-rails7-sqlite3-solid-queue @ 5c1f2a4   | Ruby 3.2.2 (rv-ruby 20260929)                           | **fail** (SBX-08) 1.4s | **fail** (SBX-08) 0.2s | **fail** (SBX-08) 0.4s | **fail** (SBX-08) 0.4s | pass   | –                     |
-| compose-app         | dockersamples/todo-list-app @ 5a6fbf5                 | yarn 1.22.22                                            | pass 0.9s              | pass 5.2s              | pass 1.7s              | pass 2.4s              | pass   | 1.4s / 1.4s           |
-| playwright          | microsoft/playwright-examples @ 4eb82ae               | @playwright/test 1.45.0 (package-lock) and its Chromium | image                  | pass 8.5s              | pass 2.8s              | pass 2.4s              | pass   | 1.1s / 1.2s           |
-| static-site         | 11ty/eleventy-base-blog @ cf0cc1f                     | Eleventy (package-lock)                                 | image                  | pass 1.8s              | pass 2.0s              | pass 2.4s              | pass   | 1.2s / 1.3s           |
-| agent-deck-electron | this checkout (`HEAD`)                                | pnpm 10.32.1 (packageManager)                           | pass 1.3s              | pass 11.6s             | pass 1.5s              | pass 2.4s              | pass   | 4.9s / 6.0s           |
+| Stack               | Repo @ commit                                         | Toolchain versions                                              | Toolchain  | Install    | Test       | Dev server | Commit | Warm install off / on |
+| ------------------- | ----------------------------------------------------- | --------------------------------------------------------------- | ---------- | ---------- | ---------- | ---------- | ------ | --------------------- |
+| pnpm-monorepo       | jkomyno/pnpm-monorepo-template @ 44f0f92              | pnpm 11.3.0 (packageManager)                                    | pass 1.3s  | pass 6.2s  | pass 4.0s  | pass 2.3s  | pass   | 1.1s / 1.3s           |
+| python-uv           | astral-sh/uv-fastapi-example @ a1e3131                | uv 0.13.1, CPython 3.12 (uv's)                                  | pass 3.6s  | pass 1.9s  | pass 1.1s  | pass 2.4s  | pass   | 0.4s / 0.5s           |
+| rust-cargo          | tokio-rs/axum @ fc78d5b (`examples/`)                 | rustup 1.29.1, Rust 1.99.1                                      | pass 8.3s  | pass 11.4s | pass 9.1s  | pass 2.4s  | pass   | 7.9s / 8.1s           |
+| go                  | golang/example @ 7f05d21                              | Go 1.27.2                                                       | pass 2.4s  | pass 7.6s  | pass 1.9s  | pass 2.3s  | pass   | 7.5s / 7.9s           |
+| java-gradle         | spring-guides/gs-rest-service @ 3f4cef0 (`complete/`) | Temurin 17.0.20.1+1, Gradle 9.3.1 (wrapper)                     | pass 6.9s  | pass 22.0s | pass 31.6s | pass 6.5s  | pass   | 4.3s / 4.3s           |
+| rails               | wtnabe/example-rails7-sqlite3-solid-queue @ 5c1f2a4   | Ruby 3.2.2 (ruby-build 20261013), Bundler 2.4.10 (Gemfile.lock) | pass 88.3s | pass 15.7s | pass 2.1s  | pass 2.4s  | pass   | 14.5s / 15.1s         |
+| compose-app         | dockersamples/todo-list-app @ 5a6fbf5                 | yarn 1.22.22                                                    | pass 0.7s  | pass 5.0s  | pass 1.7s  | pass 2.4s  | pass   | 1.4s / 1.5s           |
+| playwright          | microsoft/playwright-examples @ 4eb82ae               | @playwright/test 1.45.0 (package-lock) and its Chromium         | image      | pass 7.5s  | pass 2.9s  | pass 2.4s  | pass   | 1.1s / 1.2s           |
+| static-site         | 11ty/eleventy-base-blog @ cf0cc1f                     | Eleventy (package-lock)                                         | image      | pass 1.9s  | pass 2.1s  | pass 2.4s  | pass   | 1.4s / 1.5s           |
+| agent-deck-electron | this checkout (`HEAD`)                                | pnpm 10.32.1 (packageManager)                                   | pass 1.2s  | pass 12.1s | pass 1.5s  | pass 2.4s  | pass   | 4.9s / 6.0s           |
 
-The run before SBX-07 (`a3656e8`) also failed pnpm-monorepo's test and java-gradle's dev server
-on a read-only `/tmp`, and needed the toolchain hosts as grants and `NODE_ENV` unset (see
-Findings).
+The run before SBX-08 (`b2681f5`) failed every rails step but the commit (no Ruby ran, see
+Findings), baselined. The run before SBX-07 (`a3656e8`) also failed pnpm-monorepo's test and
+java-gradle's dev server on a read-only `/tmp`, and needed the toolchain hosts as grants and
+`NODE_ENV` unset.
 
-The baselined failures, one cause each:
+What still does not run as the project has it:
 
-- rails, every step but the commit (SBX-08, ade-si3i): no Ruby runs. rv's relocatable Ruby needs
-  glibc 2.38 and the image (Debian 12) has 2.36 (image gap, details below).
 - compose-app's `compose.yaml` itself is out (no Docker inside, a hard limit); the app runs on
   its SQLite fallback.
 
@@ -97,19 +97,19 @@ real session launch it differs in:
 Into `/data/home` (shared by every user's sessions, kept across container replaces), from inside
 a sandbox. The commands are the pinned ones the matrix runs:
 
-| Toolchain           | Command                                                                                                                                                                                                                                                                          | Hosts it needs (default list since SBX-07, unless noted)                                                                                                                                                                                |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| pnpm, yarn          | `corepack enable --install-directory ~/.local/bin` (then `pnpm`/`yarn` on `PATH`; `corepack pnpm` alone leaves turbo unable to find pnpm); yarn classic pinned with `corepack install -g yarn@1.22.22`                                                                           | yarn: `registry.yarnpkg.com`, `repo.yarnpkg.com`                                                                                                                                                                                        |
-| uv                  | `python3 -m venv ~/.local/uv-venv && ~/.local/uv-venv/bin/pip install uv==0.13.1 && ln -s ~/.local/uv-venv/bin/uv ~/.local/bin/uv` (PyPI only; the astral.sh installer is not needed)                                                                                            | `releases.astral.sh` (uv's managed CPython)                                                                                                                                                                                             |
-| Rust                | `curl -fsSLo $TMPDIR/rustup-init https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init`, check its SHA-256 (the Dockerfile's `RUSTUP_SHA256`), then `rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.99.1`             | `static.rust-lang.org`, `static.crates.io`, `index.crates.io` (`sh.rustup.rs` serves the installer script)                                                                                                                              |
-| Go                  | `curl -fsSL https://go.dev/dl/go1.27.2.linux-amd64.tar.gz \| tar -xz -C ~/.local` (`GOROOT` `~/.local/go`, `GOPATH` `~/go`)                                                                                                                                                      | `go.dev`, `dl.google.com`                                                                                                                                                                                                               |
-| Java 17 (Temurin)   | `curl -fsSLo $TMPDIR/jdk.tgz https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.20.1%2B1/OpenJDK17U-jdk_x64_linux_hotspot_17.0.20.1_1.tar.gz && tar -xzf $TMPDIR/jdk.tgz -C ~/.local/jdk --strip-components=1` (`api.adoptium.net`'s "latest" also works) | the JDK from GitHub's release assets (`*.githubusercontent.com`); the Gradle wrapper needs `services.gradle.org`, plugins need `plugins.gradle.org`, `plugins-artifacts.gradle.org`                                                     |
-| Playwright Chromium | `npx playwright install chromium` (into `~/.cache/ms-playwright`; the version follows the lockfile's `@playwright/test`)                                                                                                                                                         | `cdn.playwright.dev`, `playwright.download.prss.microsoft.com`; older releases also `playwright.azureedge.net`, `playwright-akamai.azureedge.net`, `playwright-verizon.azureedge.net` (not on the default list: the matrix grants them) |
-| Ruby                | none worked (see below)                                                                                                                                                                                                                                                          | `rubygems.org`, `index.rubygems.org` for gems                                                                                                                                                                                           |
+| Toolchain           | Command                                                                                                                                                                                                                                                                                                                                                                    | Hosts it needs (default list since SBX-07, unless noted)                                                                                                                                                                                |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| pnpm, yarn          | `corepack enable --install-directory ~/.local/bin` (then `pnpm`/`yarn` on `PATH`; `corepack pnpm` alone leaves turbo unable to find pnpm); yarn classic pinned with `corepack install -g yarn@1.22.22`                                                                                                                                                                     | yarn: `registry.yarnpkg.com`, `repo.yarnpkg.com`                                                                                                                                                                                        |
+| uv                  | `python3 -m venv ~/.local/uv-venv && ~/.local/uv-venv/bin/pip install uv==0.13.1 && ln -s ~/.local/uv-venv/bin/uv ~/.local/bin/uv` (PyPI only; the astral.sh installer is not needed)                                                                                                                                                                                      | `releases.astral.sh` (uv's managed CPython)                                                                                                                                                                                             |
+| Rust                | `curl -fsSLo $TMPDIR/rustup-init https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init`, check its SHA-256 (the Dockerfile's `RUSTUP_SHA256`), then `rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.99.1`                                                                                                       | `static.rust-lang.org`, `static.crates.io`, `index.crates.io` (`sh.rustup.rs` serves the installer script)                                                                                                                              |
+| Go                  | `curl -fsSL https://go.dev/dl/go1.27.2.linux-amd64.tar.gz \| tar -xz -C ~/.local` (`GOROOT` `~/.local/go`, `GOPATH` `~/go`)                                                                                                                                                                                                                                                | `go.dev`, `dl.google.com`                                                                                                                                                                                                               |
+| Java 17 (Temurin)   | `curl -fsSLo $TMPDIR/jdk.tgz https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.20.1%2B1/OpenJDK17U-jdk_x64_linux_hotspot_17.0.20.1_1.tar.gz && tar -xzf $TMPDIR/jdk.tgz -C ~/.local/jdk --strip-components=1` (`api.adoptium.net`'s "latest" also works)                                                                                           | the JDK from GitHub's release assets (`*.githubusercontent.com`); the Gradle wrapper needs `services.gradle.org`, plugins need `plugins.gradle.org`, `plugins-artifacts.gradle.org`                                                     |
+| Playwright Chromium | `npx playwright install chromium` (into `~/.cache/ms-playwright`; the version follows the lockfile's `@playwright/test`)                                                                                                                                                                                                                                                   | `cdn.playwright.dev`, `playwright.download.prss.microsoft.com`; older releases also `playwright.azureedge.net`, `playwright-akamai.azureedge.net`, `playwright-verizon.azureedge.net` (not on the default list: the matrix grants them) |
+| Ruby                | `curl -fsSLo $TMPDIR/ruby-build.tgz https://github.com/rbenv/ruby-build/archive/refs/tags/v20261013.tar.gz`, check its SHA-256 (the matrix's rails stack), unpack it into `$TMPDIR`, then `RUBY_CONFIGURE_OPTS=--disable-install-doc MAKE_OPTS=-j3 $TMPDIR/ruby-build-20261013/bin/ruby-build 3.2.2 ~/.local/ruby` (about 85 s on 3 CPUs; Ruby 3.2.2 ships Bundler 2.4.10) | the ruby-build tarball from `github.com` (`codeload.github.com`); `cache.ruby-lang.org` for Ruby's sources (default list since SBX-08); `rubygems.org`, `index.rubygems.org` for gems                                                   |
 
 Put the folders on `PATH` in the session: `~/.local/bin`, `~/.cargo/bin`, `~/.local/go/bin`,
-`~/go/bin`, `~/.local/jdk/bin`. Native npm modules built from source (node-pty here) also need
-`nodejs.org` for node-gyp's headers (on the default list too). A project grants only what is
+`~/go/bin`, `~/.local/jdk/bin`, `~/.local/ruby/bin`. Native npm modules built from source
+(node-pty here) also need `nodejs.org` for node-gyp's headers (on the default list too). A project grants only what is
 specific to it: the matrix grants only the two sites the Playwright suites visit and Playwright's
 older CDN names.
 
@@ -141,11 +141,17 @@ older CDN names.
   `DEFAULT_SANDBOX_DOMAINS`, and the matrix no longer grants them; Playwright's older
   `*.azureedge.net` CDN names stay a project grant. GitHub's release downloads were already
   covered by `*.githubusercontent.com`.
-- **No Ruby** (image gap, SBX-08): rv's relocatable rubies need glibc 2.38 (the image is Debian 12
-  with 2.36); ruby/ruby-builder's Ubuntu 22.04 build starts but is not relocatable (RubyGems is
-  looked for under `/opt/hostedtoolcache`); `ruby-build` would compile, but psych and zlib need
-  `libyaml-dev` and `zlib1g-dev`, which the builder layer does not have. Either package in the
-  builder layer, or a Debian 13 base, makes Ruby per user possible.
+- **No Ruby** (image gap, fixed in SBX-08): rv's relocatable rubies need glibc 2.38 (the image
+  is Debian 12 with 2.36); ruby/ruby-builder's Ubuntu 22.04 build starts but is not relocatable
+  (RubyGems is looked for under `/opt/hostedtoolcache`); `ruby-build` compiles, but psych and
+  zlib need `libyaml-dev` and `zlib1g-dev`. Both are now in the builder layer (about 0.6 MB
+  unpacked, 0.3 MB compressed; the image stays at 345 MB compressed against the 400 MB gate),
+  and `cache.ruby-lang.org` is on the default list, so a Ruby compiles per user with
+  `ruby-build`. The base stays Debian 12: rv's rubies still do not run.
+- **Bundler's cache in the home** (fixed in SBX-08's review): `~/.bundle` joined the home's writable
+  toolchain folders (`SANDBOX_HOME_TOOLCHAIN_DIRS`), so `bundle install` keeps its compact-index
+  cache across installs; the run-1 table above predates that change (its rails install showed
+  about 190 refused writes with the monitor on, all under `~/.bundle`).
 - **Firefox and WebKit** (image choice): the builder layer ships the libraries Playwright's
   Chromium needs only; Firefox and WebKit need more system libraries, which is a change to the
   `Dockerfile`, not a limit of the sandbox. Not run here.
@@ -157,8 +163,9 @@ older CDN names.
   [runbook](remote-server-poc.md#toolchains-per-user) (SBX-07).
 - **Monitor lines that are noise**: with the monitor on, harmless refused writes show up as
   transcript lines: pnpm's link probe at `/_tmp_*`, yarn's global folders `~/.yarn` and
-  `/usr/local/bin`, cargo's jobserver `/dev/fd/5`, the JVM's `/proc/self/coredump_filter`, and
-  lefthook's hook install into the project's `.git/hooks` (refused as designed).
+  `/usr/local/bin`, cargo's jobserver `/dev/fd/5`, the JVM's `/proc/self/coredump_filter`,
+  Ruby's thread names `/proc/self/task/*/comm`, and lefthook's hook install into the project's
+  `.git/hooks` (refused as designed).
 
 Worked around in the matrix, not sandbox matters: uv picks CPython 3.15 when unpinned and
 `httptools` 0.6.1 does not compile there (pinned to 3.12); axum's examples are their own workspace

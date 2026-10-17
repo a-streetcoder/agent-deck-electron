@@ -36,7 +36,8 @@ export const DEFAULT_SANDBOX_DOMAINS: readonly string[] = [
   "repo.yarnpkg.com",
   "rubygems.org",
   "index.rubygems.org",
-  // uv's managed Python, rustup's installer, Go's releases
+  // ruby-build's Ruby sources, uv's managed Python, rustup's installer, Go's releases
+  "cache.ruby-lang.org",
   "releases.astral.sh",
   "sh.rustup.rs",
   "go.dev",
@@ -70,6 +71,7 @@ export const SANDBOX_HOME_TOOLCHAIN_DIRS: readonly string[] = [
   ".deno",
   ".m2",
   ".gradle",
+  ".bundle",
   "go",
 ];
 

@@ -77,7 +77,8 @@ FROM node:22.23.3-bookworm-slim
 # they need deploy/seccomp.json, the agent-deck-sandbox AppArmor profile and
 # systempaths=unconfined at run time (docs/archive/sbx-01-spike-2026-10-17.md). curl for sessions.
 # Builder layer (ADR 0007, Decision 3): compilers and headers for native modules, the
-# linker cargo needs, Python wheels; python3 with venv and pip (installs go to the home,
+# linker cargo needs, Python wheels, the yaml and zlib headers ruby-build needs for a Ruby
+# per user (SBX-08); python3 with venv and pip (installs go to the home,
 # PEP 668 keeps the system site-packages closed); the libraries and fonts Playwright's
 # Chromium needs on Debian 12 (Firefox and WebKit need more). Sessions cannot run apt: a
 # system package is a change here, reviewed like code.
@@ -85,7 +86,7 @@ ARG SANDBOX_RUNTIME_VERSION=0.0.80
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates git openssh-client tini ripgrep fd-find \
       bubblewrap socat curl \
-      build-essential pkg-config libssl-dev libffi-dev python3 python3-venv python3-pip \
+      build-essential pkg-config libssl-dev libffi-dev libyaml-dev zlib1g-dev python3 python3-venv python3-pip \
       libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 libdbus-1-3 \
       libdrm2 libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
       libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 \

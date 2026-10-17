@@ -179,9 +179,17 @@ const STACKS = [
     name: "rails",
     repo: "https://github.com/wtnabe/example-rails7-sqlite3-solid-queue",
     sha: "5c1f2a4807e828b98b2082f3edc8a1b6e57423ba",
-    versions: "Ruby 3.2.2 (rv-ruby 20260929)",
-    toolchain:
-      'rm -rf "$HOME/.local/ruby" && mkdir -p "$HOME/.local/ruby" && curl -fsSL https://github.com/spinel-coop/rv-ruby/releases/download/20260929/ruby-3.2.2.x86_64_linux.tar.gz | tar -xz -C "$HOME/.local/ruby" --strip-components=2 && ruby -v',
+    versions: "Ruby 3.2.2 (ruby-build 20261013), Bundler 2.4.10 (Gemfile.lock)",
+    // Compiled per user: the image has the headers ruby-build needs (SBX-08).
+    toolchain: [
+      'curl -fsSL -o "$TMPDIR/ruby-build.tgz" https://github.com/rbenv/ruby-build/archive/refs/tags/v20261013.tar.gz',
+      'echo "9e683b1d8efe337ae27c31f995641e22761af603bb0f783d22c5d2f99252758c  $TMPDIR/ruby-build.tgz" | sha256sum -c -',
+      'tar -xzf "$TMPDIR/ruby-build.tgz" -C "$TMPDIR"',
+      'rm -rf "$HOME/.local/ruby"',
+      'RUBY_CONFIGURE_OPTS=--disable-install-doc MAKE_OPTS=-j3 "$TMPDIR/ruby-build-20261013/bin/ruby-build" 3.2.2 "$HOME/.local/ruby"',
+      "gem install bundler -v 2.4.10 --conservative --no-document",
+      "ruby -v && bundle -v",
+    ].join(" && "),
     install:
       "bundle config set --local path vendor/bundle && bundle lock --add-platform x86_64-linux && bundle install --quiet",
     clean: "rm -rf vendor/bundle",

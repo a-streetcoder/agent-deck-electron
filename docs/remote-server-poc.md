@@ -1250,10 +1250,12 @@ deploying.
 Sessions install toolchains as the server user into the home, which is in the volume and
 survives a container replace: `rustup` (`~/.cargo`, `~/.rustup`), `uv` and `pipx` (`~/.local`),
 `nvm` (`~/.nvm`), `sdkman` (`~/.sdkman`), `npm i -g` with a prefix in `~/.npm-global`, Go
-tarballs in `~/go`. Those folders are writable to every session (one home for every user), and
-their installers need their hosts on the allow-list (the default list has the npm, yarn, PyPI,
-crates, Go proxy, Maven Central and RubyGems registries, and the downloads of Node headers, uv's
-Python, rustup, Go, Gradle, Temurin and Playwright's browsers; `DEFAULT_SANDBOX_DOMAINS`). The image's
+tarballs in `~/go`, a Ruby compiled with `ruby-build` into `~/.local/ruby` (about a minute and a
+half; the builder layer has the yaml and zlib headers it needs). Those folders are writable to
+every session (one home for every user), and their installers need their hosts on the
+allow-list (the default list has the npm, yarn, PyPI, crates, Go proxy, Maven Central and
+RubyGems registries, and the downloads of Node headers, uv's Python, Ruby's sources, rustup, Go,
+Gradle, Temurin and Playwright's browsers; `DEFAULT_SANDBOX_DOMAINS`). The image's
 builder layer gives them a C toolchain, headers and Python, so `cargo build`, native npm modules
 and Python wheels build without more. The install lines that worked, and the hosts each needs,
 are in [the stack matrix](stack-matrix.md#toolchains-that-installed-as-the-user).
