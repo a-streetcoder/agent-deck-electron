@@ -1,6 +1,6 @@
 ---
 id: ade-jx7e
-status: open
+status: in_progress
 deps: [ade-vyov]
 links: []
 created: 2026-10-17T01:19:54Z
