@@ -1453,6 +1453,12 @@ that folder at the end) and a `--data-dir` other than `AGENT_DECK_DATA_DIR`.
   breaks clients that ignore the exported CA, and does not substitute inside Basic auth, which
   git's token credential helper uses. Per-user model credentials are `auth.json` files, not env
   vars, so env masking would not cover them either. The evidence is in the ticket (ade-jx7e).
+- Pi packages declared in the shared `settings.json` (`packages: ["npm:..."]`) are not
+  supported under the sandbox (SBX-09, ade-91rh): Pi resolves them at every launch and installs
+  a missing one into `agent/npm`, which sessions cannot write, so the launch dies with EROFS
+  before responding. The server logs the stderr (`[sessions] session start failed: ...`).
+  Remove the entry (the Claude bridge is bundled and passed as an explicit `--extension`) until
+  the server installs declared packages itself outside the sandbox.
 - Per-user credentials: under `srt` a session reads only its own user's `auth.json`; without a
   sandbox every user's agent can read every `auth.json`. Sessions without an owner cannot read
   the operator's under `srt` (they run without model sign-ins); without a sandbox they, Doctor

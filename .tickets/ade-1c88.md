@@ -44,3 +44,51 @@ Done in 745ms using pnpm v10.32.1 now keeps devDependencies and Java/turbo build
 **2026-10-17T10:04:01Z**
 
 2026-10-18 REDEPLOYED: production rebuilt from ade290c (SBX-08: Ruby per user, ~/.bundle writable, cache.ruby-lang.org; ade-zzrp new-chat fix already live). Lane SBX now has one open ticket, SBX-05 ade-jx7e.
+
+## Browser verification 2026-10-17 (architect, deck.moretti.cc, owner's browser)
+
+Ran the end-to-end checks myself. Four defects found and fixed on the way, each
+deployed and re-checked (commits 9d649d9, d8b29a0, 8b32c4e, bdc00eb, 1fee302, 6d80a54):
+
+1. **New chat on load still refused** — `findOrCreateSession` (page activation,
+   agent switch) bypassed the ade-zzrp fallback; routed through `createChatSession`,
+   which now also reuses the project's open draft instead of creating one per load.
+2. **Every launch died: `pi exited (code=1)`** — (a) the server did not log Pi's
+   stderr on a failed start (now `[sessions] session start failed: ... (stderr: ...)`
+   with the whole capture); (b) cause 1: `packages: ["npm:pi-claude-bridge"]` in the
+   shared settings.json made Pi install into the read-only `agent/npm` (EROFS) —
+   removed by hand on the VM, backup `settings.json.bak-ade-sbx-packages`, follow-up
+   SBX-09 (ade-91rh); (c) cause 2: the injected commands under
+   `/data/injected-commands` were read-denied inside the sandbox ("Extension path
+   does not exist") — `launchReadPaths(plan)` now re-allows the extensions, skills
+   and prompt templates every spawn names (parent, helpers, children, one-shot).
+   No session had launched in production since the SBX deploy (ade290c).
+3. **"Sandbox refused: network to pi.dev" on every first launch** — Pi 1.2's model
+   catalog refresh; `pi.dev` added to DEFAULT_SANDBOX_DOMAINS.
+4. **Terminal commit failed "unable to auto-detect email"** — the terminal env had
+   the typing user's GitHub connection but not their git identity (no global
+   gitconfig on the server); same rule as the Git screen now.
+
+Checks that pass (session terminal inside the sandbox, operator session,
+CrunchyMurmur, no model available: Claude subscription out of extra usage, Codex
+models refused for a ChatGPT account):
+- denied host: `curl https://example.org/` → rc=56, transcript line "Sandbox refused:
+  network to example.org" + "Allow example.org for this project" button; allowed host
+  `registry.npmjs.org` → 200.
+- `.git/config` write → "Read-only file system"; a project file write → ok;
+  `/data/sessions.json` and other data-dir files → not visible; `/tmp` writable;
+  TMPDIR=`/data/sandbox/<id>/tmp`; NODE_ENV and PORT empty.
+- worktree session: cwd `/data/session-worktrees/<id>`, branch
+  `agent-deck/session-<id>`, `.git` file read-only, `git commit` lands as
+  `alemoretti <alemoretti@hotmail.com>` (after fix 4); deleting the session removed
+  the checkout, the branch and the sandbox folder.
+- devDependencies: npm `production=null`, `omit` empty, NODE_ENV empty; `pnpm` is not
+  on PATH but `corepack pnpm` works (docs/stack-matrix.md recipe); `~/.local/bin`
+  is not on the session PATH (follow-up, below).
+
+Still the owner's: the Allow button itself (my browser session was not allowed to
+click it) and a model-driven turn (needs a provider with quota). Test sessions
+deleted; the owner's draft of 09:43 UTC kept.
+
+Follow-ups noted, not scheduled: `$HOME/.local/bin` on the session PATH (pipx, uv,
+corepack install dir); SBX-09 (ade-91rh).
