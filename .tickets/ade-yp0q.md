@@ -1,6 +1,6 @@
 ---
 id: ade-yp0q
-status: in_progress
+status: closed
 deps: [ade-vyov]
 links: []
 created: 2026-10-17T01:19:54Z
@@ -72,3 +72,7 @@ ARCHITECT DECISION (review round 1): the matrix runs the sandbox-run CLI, not th
 **2026-10-17T08:08:42Z**
 
 review round 1 pinned run (2026-10-17, image + AppArmor from a3656e8, HEAD's profile loaded as agent-deck-sandbox-matrix, fresh volume): exit 0, failures only the baselined ones (pnpm-monorepo test and java-gradle dev -> SBX-07 ade-c3aa; rails toolchain/install/test/dev -> SBX-08 ade-si3i); all other steps pass on all ten stacks; warm install off/on within 0.2 s except agent-deck-electron 4.9/6.1 s. VM cleanup confirmed (no sbx06 container/volume/image/profile, ~/sbx-06 gone).
+
+**2026-10-17T08:23:51Z**
+
+2026-10-17 CLOSED: merged 394a0f9 (squash e1d9c43). Reviews: GPT review71 full (exit code, pins, timeouts, signals, clean-step, fail-closed tests), contrarian (CLI-not-Pi scope accepted and documented, AppArmor from HEAD, guard rails, hygiene), review72 + review73 narrow (signature baseline, transport-over-marker, teardown retries, fallback only on sudo refusal, docs). Pinned run 1: 7/10 stacks pass every step; baselined: pnpm-monorepo/test + java-gradle/dev (SBX-07 ade-c3aa, read-only /tmp), rails x4 (SBX-08 ade-si3i, no Ruby). Gates: typecheck, format, lint, sandboxRun 17, matcher 6; the architect ran the gate for static-site from the merged checkout.
