@@ -1,6 +1,6 @@
 ---
 id: ade-vyov
-status: open
+status: in_progress
 deps: [ade-pv1c, ade-3up0]
 links: []
 created: 2026-10-17T01:19:53Z
@@ -28,3 +28,7 @@ VM runs the new image with the profiles; a session on deck.moretti.cc is sandbox
 **2026-10-17T02:26:48Z**
 
 2026-10-17 additions from the SBX-02 reviews: extraDeniedAddresses gets the VM's public IP and the Docker gateway; run pi-host's real-srt test on the VM inside the image; prove on the VM that (a) a denyWrite on a symlinked agent-dir entry stops the link being replaced, (b) a no-worktree session cannot write <project>/.git/commondir, (c) a worktree session can commit (objects/refs/logs writable) but not touch config/hooks/commondir/gitdir, (d) Pi under srt loads auth.json and settings.json (lock files created in the writable agent dir).
+
+**2026-10-17T05:09:48Z**
+
+2026-10-17 BINDING from SBX-03 (merged 50dd874, NOT deployed): (1) the server's default-provider choice must prove namespaces work before defaulting to srt: at startup run a real probe (bwrap --unshare-all --ro-bind / / true, or srt's own initialize on a trivial command) and fall back to none with a loud warning when it fails; today checkDependencies only checks the binaries, so the SBX-03 build inside the pre-profile container would fail every spawn; (2) measure the cost of srt's log monitor (every write syscall observed; each violation scans live wraps on the main thread) on the VM before leaving it on by default; if measurable, gate it behind an env flag defaulting to off and note it on SBX-06; (3) verify fetch/push/merge of a session worktree still work in the container under the hardened git env (GIT_CONFIG_GLOBAL=/dev/null drops any global credential helper/safe.directory; the server pushes with its token) and that git cat-file at baseCommit works; (4) end-to-end on deck.moretti.cc: a denied write outside the worktree shows a line; a denied host shows a line with Allow; allowing it is in <dataDir>/sandbox-hosts.json and works after the session's Pi restarts; a sandbox.json host appears as a proposal line; project B gets 403 for a host granted only to project A; (5) runbook docs/remote-server-poc.md: replace the stale 'the bridge calls 127.0.0.1/bridge' text with the stdio bridge, Security model gains the per-session boundary and the allow-list-as-server-state rule, Known gaps drops 'sessions share the server's filesystem'; (6) the pi-host real-srt test (sandbox.srt.test.ts) runs on the VM inside the image and must pass before deploy; (7) ADR 0007 Consequences: mark the runbook items done, leave Status Accepted (already).

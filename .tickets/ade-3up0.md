@@ -1,6 +1,6 @@
 ---
 id: ade-3up0
-status: in_progress
+status: closed
 deps: [ade-210c]
 links: []
 created: 2026-10-17T01:19:53Z
@@ -36,3 +36,7 @@ A denied host shows in the transcript with the allow action; allowing it makes t
 **2026-10-17T04:34:49Z**
 
 2026-10-17 DECISION (architect, SBX-03 review round 1): a project's sandbox allow-list is SERVER STATE ONLY: <dataDir>/sandbox-hosts.json keyed by project id, written only through the owner/operator route (POST and DELETE /sessions/:id/sandbox/allowed-hosts). The policy's domains are DEFAULT_SANDBOX_DOMAINS + grants(projectId). .agent-deck/sandbox.json is a PROPOSAL: read at each Pi start from the server-recorded base commit (or HEAD without a worktree) with GIT_NO_REPLACE_OBJECTS=1; each valid host it lists that is not granted gives one transcript line per session ('sandbox.json proposes host X', sandbox.violation kind proposal) with the Allow button. Reason: a worktree session can write refs and objects (git replace, planted packs, moving the branch a new base is taken from) and a no-worktree session can move HEAD, so a list read from git is forgeable. The server never writes the project's working file (it dirtied the checkout, blocked merges, followed planted symlinks).
+
+**2026-10-17T05:09:00Z**
+
+2026-10-17 CLOSED: merged 50dd874 (squash 89b36ad). Reviews: GPT review65 full (FIX FIRST: verifier unsandboxed, git-read allow-list forgeable, project-file write followed symlinks, cold reader, loop git, filter, dispose, dedup cap), contrarian (write root from client cwd, bridge generation, launch files in writable scratch, helper id, scratch cleanup, bindHost text), review66 narrow (reserved data-dir subtrees, path canonicalisation, protected-folder depth), review67 narrow (plan-events reserved; fixed by the architect). Declined: two-dot-diff artifact, srt signal-handler matching, same-sandbox forgery (ADR 0007 am. 8), git hardening scoped to srt (am. 7). Gates: typecheck, format, lint, 9 single test files (190) green; real-Pi bridge suites run by the developer. NOT deployed: the server would default to srt inside the container before the SBX-04 profiles exist and every spawn would fail; SBX-04 deploys it.
