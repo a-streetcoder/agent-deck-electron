@@ -228,6 +228,28 @@ describe("new chat on a sandboxed server (ADR 0007)", () => {
     expect(useAppStore.getState().error).toBeNull();
   });
 
+  it("reuses the only project's open draft instead of creating another", async () => {
+    const draft = { ...session("draft"), projectId: "only", lifecycle: "draft" as const };
+    useAppStore.setState({
+      projects: [project("only")] as never,
+      currentProjectId: null,
+      currentAgentName: null,
+    });
+    const calls: string[] = [];
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (init?.method === "POST") calls.push(url);
+      if (url === "/sessions" && init?.method === "POST") return Promise.resolve(refusal());
+      if (url.endsWith("/resume")) return Promise.resolve(jsonResponse({ session: draft }));
+      return Promise.resolve(jsonResponse({ sessions: [draft] }));
+    });
+
+    await switchToAgent(null);
+    expect(calls).toEqual(["/sessions", "/sessions/draft/resume"]);
+    expect(useAppStore.getState().session?.id).toBe("draft");
+    expect(useAppStore.getState().currentProjectId).toBe("only");
+  });
+
   it("asks the user to pick when several projects are registered", async () => {
     useAppStore.setState({
       projects: [project("a"), project("b")] as never,

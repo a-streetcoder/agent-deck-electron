@@ -18,7 +18,9 @@ function describeError(error: unknown): string {
   let text = detail.name && detail.name !== "Error" ? `${detail.name}: ` : "";
   text += detail.message;
   if (detail.code !== undefined) text += ` [code ${String(detail.code)}]`;
-  const stderr = typeof detail.stderr === "string" ? detail.stderr.trim().split(/\r?\n/)[0] : "";
+  // Whole capture (one-lined by the caller), capped: a Pi launch failure's
+  // cause is rarely on the first stderr line.
+  const stderr = typeof detail.stderr === "string" ? detail.stderr.trim().slice(0, 4000) : "";
   if (stderr) text += ` (stderr: ${stderr})`;
   if (detail.cause !== undefined) text += ` (cause: ${messageOf(detail.cause)})`;
   return text;

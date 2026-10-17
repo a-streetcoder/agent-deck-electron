@@ -976,6 +976,13 @@ async function createChatSession(
         );
       }
       useAppStore.getState().setCurrentProject(only.id);
+      // Reuse that project's open draft: page activation lands here on every
+      // load, and a new draft per load piles up in the sidebar.
+      const { sessions } = await fetchJson<{ sessions: SessionMeta[] }>(
+        `/sessions?projectId=${encodeURIComponent(only.id)}`,
+      );
+      const draft = sessions.filter((s) => s.lifecycle === "draft").at(-1);
+      if (draft) return resumeSession(draft.id);
       response = await post(only.id);
     }
   }
