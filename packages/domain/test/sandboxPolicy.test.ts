@@ -292,6 +292,11 @@ describe("sandboxPolicy reads", () => {
     expect(AUTH.every((file) => !readable(p, file))).toBe(denied);
   });
 
+  it("a server session gets its own /tmp; a desktop keeps the host's", () => {
+    expect(policy().privateTmp).toBe(true);
+    expect(policy({}, "local").privateTmp).toBeUndefined();
+  });
+
   it("local denies only the shared sessions tree: the owner is always the operator there", () => {
     const p = policy({}, "local", { operator: undefined, agentDir: AGENT });
     expect(p.denyRead).toEqual([`${AGENT}/sessions`]);
@@ -476,6 +481,13 @@ describe("sandbox violations (srt's lines)", () => {
     expect(sandboxAllowsWrite(p, "/data/worktrees/s1/src/a.ts")).toBe(true);
     expect(sandboxAllowsWrite(p, "/data/worktrees/s1/../s2/a.ts")).toBe(false);
     expect(sandboxAllowsWrite(p, "/data/projects/app/.git/config")).toBe(false);
+  });
+
+  it("a write into a private /tmp is not a violation on Linux; elsewhere it is", () => {
+    expect(sandboxAllowsWrite(policy(), "/tmp/hsperfdata/1", "linux")).toBe(true);
+    expect(sandboxAllowsWrite(policy(), "/tmp/hsperfdata/1", "darwin")).toBe(false);
+    expect(sandboxAllowsWrite(policy({}, "local"), "/tmp/x", "linux")).toBe(false);
+    expect(sandboxAllowsWrite(policy(), "/tmpx/a", "linux")).toBe(false);
   });
 
   it("srt's own denies inside the working folder count as refused", () => {

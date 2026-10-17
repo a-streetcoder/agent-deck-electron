@@ -202,10 +202,19 @@ describe("sandboxRunSession: the policy the server would derive", () => {
         allowHosts: ["services.gradle.org"],
         command: "true",
       },
-      { HOME: home, AGENT_DECK_OPERATOR_EMAIL: "ops@example.com", PI_CODING_AGENT_DIR: "/x" },
+      {
+        HOME: home,
+        AGENT_DECK_OPERATOR_EMAIL: "ops@example.com",
+        PI_CODING_AGENT_DIR: "/x",
+        NODE_ENV: "production",
+        PORT: "4200",
+      },
       srt,
     );
     expect(run.cwd).toBe(worktree);
+    // The image's server-only variables stay with the server.
+    expect(run.env).not.toHaveProperty("NODE_ENV");
+    expect(run.env).not.toHaveProperty("PORT");
     expect(run.record).toMatchObject({ id: "s-1", workspace: { path: worktree } });
     // The operator runs on the shared agent dir, which keeps its credentials readable.
     expect(run.env.PI_CODING_AGENT_DIR).toBe(shared);

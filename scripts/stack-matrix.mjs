@@ -78,12 +78,10 @@ const baselineOf = (stack, step) =>
   BASELINE.find((entry) => entry.stack === stack && entry.step === step);
 
 // Toolchains install as the user into /data/home (ADR 0007, Decision 3).
-// NODE_ENV: the image's `production` reaches every session and makes npm, pnpm
-// and yarn skip devDependencies (docs/stack-matrix.md); an agent unsets it.
-// SBX-07 (ade-c3aa) removes this line once the server stops passing it on.
+// No `unset NODE_ENV`: since SBX-07 the server (and sandbox-run) no longer
+// passes the image's NODE_ENV=production or PORT to a session.
 const PRELUDE = [
   "set -e",
-  "unset NODE_ENV",
   'export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/.local/go/bin:$HOME/go/bin:$HOME/.local/jdk/bin:$HOME/.local/ruby/bin:$PATH"',
   "export COREPACK_ENABLE_DOWNLOAD_PROMPT=0 TURBO_TELEMETRY_DISABLED=1 GRADLE_OPTS=-Dorg.gradle.daemon=false",
   '[ -d "$HOME/.local/bin" ] || mkdir -p "$HOME/.local/bin"',
@@ -94,7 +92,8 @@ const COREPACK = 'corepack enable --install-directory "$HOME/.local/bin"';
 /**
  * The stacks, each pinned: `sha` is the repository commit, `versions` what the
  * toolchain line installs. `grants`: hosts the owner would allow for the
- * project (each is outside the default list: a policy gap to decide on).
+ * project (outside the default list, which has the stacks' registries and
+ * toolchain downloads since SBX-07).
  * `serve` runs in the background of the probe command, `port` is probed with
  * curl from inside.
  */
@@ -116,7 +115,6 @@ const STACKS = [
     repo: "https://github.com/astral-sh/uv-fastapi-example",
     sha: "a1e313147b9be055167fe500d457d7c0b2f51318",
     versions: "uv 0.13.1, CPython 3.12 (uv's)",
-    grants: ["releases.astral.sh"],
     toolchain:
       'python3 -m venv "$HOME/.local/uv-venv" && "$HOME/.local/uv-venv/bin/pip" install -q uv==0.13.1 && ln -sf "$HOME/.local/uv-venv/bin/uv" "$HOME/.local/bin/uv" && uv --version',
     install: "uv sync --frozen --python 3.12",
@@ -150,7 +148,6 @@ const STACKS = [
     repo: "https://github.com/golang/example",
     sha: "7f05d217867b2af52b0a28c6d1c91df97e1b5b39",
     versions: "Go 1.27.2",
-    grants: ["go.dev", "dl.google.com"],
     toolchain:
       'rm -rf "$HOME/.local/go" && curl -fsSL https://go.dev/dl/go1.27.2.linux-amd64.tar.gz | tar -xz -C "$HOME/.local" && go version',
     install: "(cd hello && go build ./...) && (cd helloserver && go build ./...)",
@@ -165,7 +162,6 @@ const STACKS = [
     sha: "3f4cef01152596c19bc4d37939409358812b1421",
     versions: "Temurin 17.0.20.1+1, Gradle 9.3.1 (wrapper)",
     dir: "complete",
-    grants: ["services.gradle.org", "plugins.gradle.org", "plugins-artifacts.gradle.org"],
     toolchain: [
       'curl -fsSL -o "$TMPDIR/jdk.tgz" https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.20.1%2B1/OpenJDK17U-jdk_x64_linux_hotspot_17.0.20.1_1.tar.gz',
       'rm -rf "$HOME/.local/jdk" && mkdir -p "$HOME/.local/jdk"',
@@ -184,7 +180,6 @@ const STACKS = [
     repo: "https://github.com/wtnabe/example-rails7-sqlite3-solid-queue",
     sha: "5c1f2a4807e828b98b2082f3edc8a1b6e57423ba",
     versions: "Ruby 3.2.2 (rv-ruby 20260929)",
-    grants: ["rubygems.org", "index.rubygems.org"],
     toolchain:
       'rm -rf "$HOME/.local/ruby" && mkdir -p "$HOME/.local/ruby" && curl -fsSL https://github.com/spinel-coop/rv-ruby/releases/download/20260929/ruby-3.2.2.x86_64_linux.tar.gz | tar -xz -C "$HOME/.local/ruby" --strip-components=2 && ruby -v',
     install:
@@ -200,7 +195,6 @@ const STACKS = [
     repo: "https://github.com/dockersamples/todo-list-app",
     sha: "5a6fbf5caf982f1d928fe6c1c32aa74f1e95e063",
     versions: "yarn 1.22.22",
-    grants: ["registry.yarnpkg.com", "repo.yarnpkg.com"],
     note: "compose.yaml (app + MySQL) cannot run: no Docker in a sandbox; the app runs on its SQLite fallback",
     toolchain: `${COREPACK} && corepack install -g yarn@1.22.22 && yarn --version`,
     install: "yarn install --frozen-lockfile",
@@ -214,15 +208,15 @@ const STACKS = [
     repo: "https://github.com/microsoft/playwright-examples",
     sha: "4eb82aedf58321da90332e5f7316b64d5914a6b1",
     versions: "@playwright/test 1.45.0 (package-lock) and its Chromium",
+    // What the two suites visit (boxed-steps targets a site that is gone), and
+    // the older CDN names 1.45 may download from (the current ones are on the
+    // default list).
     grants: [
-      "cdn.playwright.dev",
-      "playwright.download.prss.microsoft.com",
+      "demo.playwright.dev",
+      "playwright.dev",
       "playwright.azureedge.net",
       "playwright-akamai.azureedge.net",
       "playwright-verizon.azureedge.net",
-      // What the two suites run visit (boxed-steps targets a site that is gone).
-      "demo.playwright.dev",
-      "playwright.dev",
     ],
     install: "npm ci --no-audit --no-fund && npx playwright install chromium",
     clean: "rm -rf node_modules",
@@ -256,7 +250,6 @@ const STACKS = [
     repo: "(this checkout, HEAD)",
     local: true,
     versions: "pnpm 10.32.1 (packageManager)",
-    grants: ["nodejs.org"],
     toolchain: `${COREPACK} && pnpm --version`,
     install: "ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install --frozen-lockfile",
     clean: "rm -rf node_modules apps/*/node_modules packages/*/node_modules",

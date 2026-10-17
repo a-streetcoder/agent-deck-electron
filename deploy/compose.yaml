@@ -36,9 +36,11 @@ services:
     volumes:
       # Sessions, worktrees, per-user credentials, project clones and the home (/data/home).
       - agent-deck-data:/data
-    # srt's /tmp/claude and skill merges go to /tmp (session launch files live under
-    # /data/sandbox/<id>); exec so agent builds and test binaries placed there can run. Its
-    # contents count against mem_limit.
+    # The server's /tmp: srt's /tmp/claude and sockets and skill merges (session launch files
+    # live under /data/sandbox/<id>); exec so binaries placed there can run. Its contents count
+    # against mem_limit. The 1g does not bound a session: each sandbox gets its own /tmp, an
+    # uncapped tmpfs (srt passes no size) that also counts against mem_limit; sandboxed
+    # processes run with oom_score_adj 1000 so they, not the server, are killed first.
     tmpfs:
       - /tmp:exec,size=1g
     # The server writes only to /data and /tmp (HOME is /data/home).

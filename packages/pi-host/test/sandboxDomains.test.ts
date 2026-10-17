@@ -1,4 +1,5 @@
 import { isSandboxDomain } from "@agent-deck/contracts";
+import { DEFAULT_SANDBOX_DOMAINS } from "@agent-deck/domain";
 import { isValidAllowedDomainEntry } from "@anthropic-ai/sandbox-runtime/dist/sandbox/domain-pattern.js";
 import { describe, expect, it } from "vitest";
 
@@ -48,4 +49,15 @@ describe("allow-list entries: our parser and srt 0.0.80", () => {
       expect(isSandboxDomain(entry)).toBe(false);
     },
   );
+
+  // srt refuses a whole initialize over one bad default, so every session would fail.
+  it.each([...DEFAULT_SANDBOX_DOMAINS])("accept the default host %s", (entry) => {
+    expect(isSandboxDomain(entry)).toBe(true);
+    expect(isValidAllowedDomainEntry(entry)).toBe(true);
+  });
+
+  it("the default list has no repeats", () => {
+    const lower = DEFAULT_SANDBOX_DOMAINS.map((entry) => entry.toLowerCase());
+    expect(new Set(lower).size).toBe(lower.length);
+  });
 });

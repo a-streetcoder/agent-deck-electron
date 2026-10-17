@@ -57,6 +57,7 @@ import type { SessionLaunchSandbox, SessionSandboxLaunch } from "./sandbox.ts";
 import { SessionMutationClaims } from "./sessionMutationClaims.ts";
 import { gitIdentityEnv, type GitIdentityMap } from "./gitIdentity.ts";
 import { userAgentDirEnv, type UserAgentDirs } from "./userAgentDirs.ts";
+import { withoutServerOnlyEnv } from "./sessionEnv.ts";
 import { githubEnv, type GitHubConnections } from "./githubConnections.ts";
 import { normalizeSessionError } from "./sessionFailure.ts";
 import type { LaunchResourceConfigV1, ResolvedLaunchResources } from "./launchResources.ts";
@@ -1764,7 +1765,8 @@ export class SessionManager {
   }
 
   /** The env a launch of `meta` runs with: the .env layers under `env`, then
-   * the owner's identity, agent dir and GitHub connection. `launch`: the
+   * the owner's identity, agent dir and GitHub connection; the server's own
+   * NODE_ENV and PORT unset unless a layer sets them. `launch`: the
    * session's own (reporting) launch, the only one that checks its agent dir
    * links and reports a quarantine (a cold transcript reader does not). */
   private ownerLaunchEnv(
@@ -1772,7 +1774,7 @@ export class SessionManager {
     env?: Record<string, string | undefined>,
     launch = false,
   ): Record<string, string | undefined> {
-    const layered = { ...this.envFileLayer(meta.projectId), ...env };
+    const layered = withoutServerOnlyEnv({ ...this.envFileLayer(meta.projectId), ...env });
     return {
       ...layered,
       // SRV-04: the session OWNER's git identity, fixed at spawn so later

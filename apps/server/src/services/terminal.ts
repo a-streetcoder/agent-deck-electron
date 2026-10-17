@@ -125,12 +125,14 @@ const KILL_GRACE_MS = 1_000;
 /**
  * Env keys child processes must NOT inherit from the server process (donor's
  * TERMINAL_ENV_BLOCKLIST): dev-server/electron plumbing that would confuse
- * tools launched from the shell. Exported so the script runner (services/
- * scriptRunner.ts) blocks the EXACT same server-internal vars — a shared
- * security value, never a drifting copy.
+ * tools launched from the shell (NODE_ENV: the server image's `production`
+ * makes npm, pnpm and yarn skip devDependencies; SBX-07). Exported so the
+ * script runner (services/scriptRunner.ts) blocks the EXACT same
+ * server-internal vars — a shared security value, never a drifting copy.
  */
 export const TERMINAL_ENV_BLOCKLIST = new Set([
   "PORT",
+  "NODE_ENV",
   "ELECTRON_RENDERER_PORT",
   "ELECTRON_RUN_AS_NODE",
 ]);

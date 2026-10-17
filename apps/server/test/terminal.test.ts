@@ -436,7 +436,13 @@ describe("TerminalHost scoped PTY service (fake adapter)", () => {
       Effect.scoped(
         spawnTerminal(adapter, {
           ...spawnOpts,
-          env: { KEEP: "yes", PORT: "3000", ELECTRON_RUN_AS_NODE: "1", GONE: undefined },
+          env: {
+            KEEP: "yes",
+            PORT: "3000",
+            NODE_ENV: "production",
+            ELECTRON_RUN_AS_NODE: "1",
+            GONE: undefined,
+          },
         }),
       ),
     );

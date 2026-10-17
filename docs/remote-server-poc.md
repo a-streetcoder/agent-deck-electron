@@ -1184,7 +1184,9 @@ the host's speed, except with the log monitor (`AGENT_DECK_SANDBOX_MONITOR=1`, r
 the transcript), which doubled the cost of 10k small writes on the VM.
 
 Refused hosts always show a line in the transcript; refused writes show one only with the
-monitor on, otherwise the tool error Pi sees is the signal.
+monitor on, otherwise the tool error Pi sees is the signal. With the monitor on, the server must be
+the only srt instance initializing in the container at startup (it fails to start otherwise);
+`sandbox-run` is for test containers.
 
 A user's agent dir links its code-bearing entries (`extensions`, `skills`, `prompts`, `agents`,
 `themes`, `bin`, `settings.json`, ...) to the operator's shared dir. The sandbox protects what a
@@ -1249,11 +1251,21 @@ Sessions install toolchains as the server user into the home, which is in the vo
 survives a container replace: `rustup` (`~/.cargo`, `~/.rustup`), `uv` and `pipx` (`~/.local`),
 `nvm` (`~/.nvm`), `sdkman` (`~/.sdkman`), `npm i -g` with a prefix in `~/.npm-global`, Go
 tarballs in `~/go`. Those folders are writable to every session (one home for every user), and
-their installers need their hosts on the allow-list (the default list has the npm, PyPI, crates,
-Go proxy and Maven Central registries and `static.rust-lang.org`, not `sh.rustup.rs`). The image's
+their installers need their hosts on the allow-list (the default list has the npm, yarn, PyPI,
+crates, Go proxy, Maven Central and RubyGems registries, and the downloads of Node headers, uv's
+Python, rustup, Go, Gradle, Temurin and Playwright's browsers; `DEFAULT_SANDBOX_DOMAINS`). The image's
 builder layer gives them a C toolchain, headers and Python, so `cargo build`, native npm modules
 and Python wheels build without more. The install lines that worked, and the hosts each needs,
 are in [the stack matrix](stack-matrix.md#toolchains-that-installed-as-the-user).
+
+Browsers ignore the proxy variables: Playwright's Chromium does not read `HTTP(S)_PROXY`, and
+the only way out of a sandbox is srt's authenticated proxy, so a test that loads a page from the
+network times out (one against a local dev server is fine). Point the browser at the proxy in
+the project's Playwright config, as the matrix's Playwright stack does:
+
+```ts
+use: { proxy: ((u) => ({ server: `${u.protocol}//${u.host}`, username: decodeURIComponent(u.username), password: decodeURIComponent(u.password) }))(new URL(process.env.HTTPS_PROXY!)) },
+```
 
 ### What sessions cannot do
 
@@ -1264,6 +1276,12 @@ are in [the stack matrix](stack-matrix.md#toolchains-that-installed-as-the-user)
   transcript a line with Allow for the owner or operator).
 - Make namespaces, mount, `pivot_root`, or open `NETLINK_NETFILTER` sockets.
 - Write their project's `.git` config, hooks or worktree pointers, or the server's launch files.
+- Keep files in `/tmp`: a sandbox's `/tmp` is its own in-memory tmpfs that belongs to one wrap
+  (Pi and what it runs, each terminal, each validation command and each script get their own,
+  and Pi's is lost when it relaunches); files that must last go under `TMPDIR`, the session's
+  folder on disk. That tmpfs has no size of its own: it counts against the container's
+  `mem_limit`, not the 1 GB `/tmp` of Compose, and every sandboxed process runs with an OOM
+  score of 1000, so a session that fills it is killed before the server.
 
 ### The stack matrix (gate)
 
@@ -1328,7 +1346,8 @@ that folder at the end) and a `--data-dir` other than `AGENT_DECK_DATA_DIR`.
   project without one: never the project's `.git`), its Pi session folder, its user's agent dir
   minus the code-bearing entries, its scratch folder and the home toolchain folders; it reads
   nothing else of `/data` (other users' folders, other sessions' transcripts and launch files,
-  the operator's `auth.json`, the home's credentials); it reaches only allowed hosts, through
+  the operator's `auth.json`, the home's credentials); its `/tmp` is its own, empty and in
+  memory, except srt's shared `/tmp/claude` (SBX-07); it reaches only allowed hosts, through
   srt's proxy, never a private or loopback address and never the server's port. Inside the UI
   attribution is still a label: either person can act in the other's session, and the audit
   trail is the label plus Access logs. With `none` (asked for, or the fallback after a failed
@@ -1338,7 +1357,9 @@ that folder at the end) and a `--data-dir` other than `AGENT_DECK_DATA_DIR`.
   the owner or operator routes `POST`/`DELETE /sessions/:id/sandbox/allowed-hosts` (the Allow
   action on a refused-host line). A project's `.agent-deck/sandbox.json`, read at the recorded
   base commit, only proposes hosts: a session can write git objects and refs, so it can never
-  grant itself one (ADR 0007, amendment 6).
+  grant itself one (ADR 0007, amendment 6). The list limits accidental reach; it is not an
+  exfiltration control: `*.github.com`, `*.githubusercontent.com` and the package registries
+  on it accept uploads.
 - **Desktop shell.** The privileged control plane is always the shell's own loopback backend
   (SRV-16d removed the remote-attach mode). IPC handlers accept only main-frame calls from the
   local renderer origin: the backend's, or the Vite dev server's when `AGENT_DECK_RENDERER_URL`

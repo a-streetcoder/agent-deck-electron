@@ -577,6 +577,7 @@ describe("spawnScript scoped child service (fake adapter)", () => {
           env: {
             KEEP: "yes",
             PORT: "3000",
+            NODE_ENV: "production",
             ELECTRON_RUN_AS_NODE: "1",
             PATH: "/usr/bin",
             GONE: undefined,
@@ -587,6 +588,7 @@ describe("spawnScript scoped child service (fake adapter)", () => {
     const env = spawns[0]!.env;
     expect(env.KEEP).toBe("yes");
     expect(env.PORT).toBeUndefined();
+    expect(env.NODE_ENV).toBeUndefined();
     expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined();
     expect(env.GONE).toBeUndefined();
     // node_modules/.bin of the cwd is prepended to PATH (npm-run parity).
