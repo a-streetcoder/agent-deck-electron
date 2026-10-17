@@ -203,6 +203,31 @@ describe("new chat on a sandboxed server (ADR 0007)", () => {
     expect(useAppStore.getState().error).toBeNull();
   });
 
+  it("falls back to the only project when the page activates without a session", async () => {
+    const created = { ...session("created"), projectId: "only" };
+    useAppStore.setState({
+      projects: [project("only")] as never,
+      currentProjectId: null,
+      currentAgentName: null,
+    });
+    const bodies: string[] = [];
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      if (String(input) === "/sessions" && init?.method === "POST") {
+        bodies.push(String(init.body));
+        return Promise.resolve(
+          bodies.length === 1 ? refusal() : jsonResponse({ session: created }),
+        );
+      }
+      return Promise.resolve(jsonResponse({ sessions: [] }));
+    });
+
+    await switchToAgent(null);
+    expect(bodies).toEqual(["{}", JSON.stringify({ projectId: "only" })]);
+    expect(useAppStore.getState().session?.id).toBe("created");
+    expect(useAppStore.getState().currentProjectId).toBe("only");
+    expect(useAppStore.getState().error).toBeNull();
+  });
+
   it("asks the user to pick when several projects are registered", async () => {
     useAppStore.setState({
       projects: [project("a"), project("b")] as never,

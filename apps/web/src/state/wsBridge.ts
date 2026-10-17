@@ -1019,14 +1019,7 @@ async function findOrCreateSession(
   // RPC subscribe is live-map only. Always resume before subscribing; server
   // resume no-ops when the session is already running.
   if (existing) return resumeSession(existing.id);
-  const { session } = await fetchJson<{ session: SessionMeta }>("/sessions", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      ...(projectId ? { projectId } : {}),
-      ...(agentName ? { agentName } : {}),
-    }),
-  });
+  const session = await createChatSession(projectId, agentName);
   await restoreComposerDraft(session.id);
   return session;
 }
