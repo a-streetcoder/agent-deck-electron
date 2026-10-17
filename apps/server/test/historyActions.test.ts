@@ -27,6 +27,7 @@ function harness(
     endedNamed?: boolean;
     notifyFailure?: boolean;
     priorProvenance?: boolean;
+    branchModelDiffers?: boolean;
   } = {},
 ) {
   const sourceMeta: SessionMeta = options.endedNamed
@@ -63,11 +64,23 @@ function harness(
     getState: vi.fn(async () => {
       stateCalls += 1;
       const changed = !options.forkFailure || options.reboundOnForkFailure;
+      const first = stateCalls === 1 || !changed;
       return {
         isStreaming: false,
-        sessionFile: stateCalls === 1 || !changed ? "/tmp/source.jsonl" : "/tmp/branch.jsonl",
+        sessionFile: first ? "/tmp/source.jsonl" : "/tmp/branch.jsonl",
+        // ade-3q16: the branch restores the entry's model; the pre-fork one wins a re-run.
+        ...(options.branchModelDiffers
+          ? {
+              model: first
+                ? { provider: "openai-codex", id: "gpt-6-sol" }
+                : { provider: "claude-bridge", id: "claude-opus-4-8" },
+              thinkingLevel: first ? "high" : "medium",
+            }
+          : {}),
       };
     }),
+    setModel: vi.fn(async () => {}),
+    setThinkingLevel: vi.fn(async () => {}),
     getForkMessages: vi.fn(async () => {
       if (options.deferredMessages) await options.deferredMessages;
       return {
@@ -314,6 +327,14 @@ describe("HistoryActionCoordinator", () => {
       code: "history_entry_missing",
     } satisfies Partial<HistoryActionError>);
     expect(source.forkAtEntry).not.toHaveBeenCalled();
+  });
+
+  it("re-runs on the model and thinking level in force before the branch (ade-3q16)", async () => {
+    const { coordinator, source } = harness({ branchModelDiffers: true });
+    await coordinator.run("source", "chosen", "rerun");
+    expect(source.setModel).toHaveBeenCalledWith("openai-codex", "gpt-6-sol");
+    expect(source.setThinkingLevel).toHaveBeenCalledWith("high");
+    expect(source.prompt).toHaveBeenCalled();
   });
 
   it("serializes one history action per source", async () => {
