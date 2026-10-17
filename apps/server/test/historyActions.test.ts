@@ -330,11 +330,24 @@ describe("HistoryActionCoordinator", () => {
   });
 
   it("re-runs on the model and thinking level in force before the branch (ade-3q16)", async () => {
-    const { coordinator, source } = harness({ branchModelDiffers: true });
+    const { coordinator, source, manager } = harness({ branchModelDiffers: true });
+    source.meta.launch = {
+      plan: { kind: "parent", provider: "openai-codex", model: "gpt-6-luna" },
+    } as never;
     await coordinator.run("source", "chosen", "rerun");
     expect(source.setModel).toHaveBeenCalledWith("openai-codex", "gpt-6-sol");
     expect(source.setThinkingLevel).toHaveBeenCalledWith("high");
     expect(source.prompt).toHaveBeenCalled();
+    // The rebound session launches on the same model next time, not the plan's old one.
+    expect(manager.rebindHistoryDeferred).toHaveBeenCalledWith(
+      expect.objectContaining({
+        launch: expect.objectContaining({
+          plan: expect.objectContaining({ provider: "openai-codex", model: "gpt-6-sol" }),
+        }),
+      }),
+      "/tmp/branch.jsonl",
+      undefined,
+    );
   });
 
   it("serializes one history action per source", async () => {

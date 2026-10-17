@@ -304,6 +304,9 @@ export class HistoryActionCoordinator {
       }
       const branchState = await source.getState().catch(() => null);
       const branchFile = branchState?.sessionFile;
+      // ade-3q16: the model in force before the fork; a re-run keeps it, both for
+      // the prompt on the branch and for the rebound session's next launch.
+      const before = state.model;
       if (!branchFile) {
         throw new HistoryActionError(
           "history_failed",
@@ -315,7 +318,6 @@ export class HistoryActionCoordinator {
         // Pi's branch restores the model in force at the entry; a re-run means
         // "this message again, with my current settings" (ade-3q16): re-apply
         // the pre-fork model and thinking level when the branch changed them.
-        const before = state.model;
         if (
           before &&
           (branchState?.model?.provider !== before.provider || branchState?.model?.id !== before.id)
@@ -364,8 +366,17 @@ export class HistoryActionCoordinator {
       }
 
       try {
+        const plan = originalMeta.launch?.plan;
         const rebound = await this.sessions.rebindHistoryDeferred(
-          originalMeta,
+          before && plan
+            ? {
+                ...originalMeta,
+                launch: {
+                  ...originalMeta.launch,
+                  plan: { ...plan, provider: before.provider, model: before.id },
+                },
+              }
+            : originalMeta,
           branchFile,
           this.env(),
         );
