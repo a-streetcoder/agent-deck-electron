@@ -428,7 +428,7 @@ describe("the session's models.json", () => {
         },
         other: true,
       },
-      ["openai", "openai-codex"],
+      ["openai", "openai-codex", "custom"],
       "http://10.0.0.2:4211/s1/tok",
       "ph.x.tok",
     );
@@ -446,6 +446,35 @@ describe("the session's models.json", () => {
         "openai-codex": { baseUrl: "http://10.0.0.2:4211/s1/tok/openai-codex", apiKey: "ph.x.tok" },
       },
     });
+  });
+
+  it("strips every credential from a provider nobody in the session can sponsor", () => {
+    const models = sessionModels(
+      {
+        providers: {
+          custom: {
+            api: "openai-completions",
+            apiKey: "${CUSTOM_KEY}",
+            baseUrl: "https://custom.example/v1",
+            headers: { "x-secret": "${CUSTOM_SECRET}" },
+            models: [{ id: "m1", headers: { a: "b" } }],
+          },
+          bare: { apiKey: "sk-literal-operator-key" },
+        },
+      },
+      ["openai-codex"],
+      "http://10.0.0.2:4211/s1/tok",
+      "ph.x.tok",
+    );
+    expect(models.providers).toEqual({
+      custom: {
+        api: "openai-completions",
+        baseUrl: "https://custom.example/v1",
+        models: [{ id: "m1" }],
+      },
+      "openai-codex": { baseUrl: "http://10.0.0.2:4211/s1/tok/openai-codex", apiKey: "ph.x.tok" },
+    });
+    expect(JSON.stringify(models)).not.toContain("sk-literal");
   });
 
   it("strips every provider credential from a brokered launch env", () => {

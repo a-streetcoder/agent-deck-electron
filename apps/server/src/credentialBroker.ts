@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import type { SessionMeta, UserIdentity } from "@agent-deck/contracts";
-import { sessionOwner } from "@agent-deck/domain";
+import { redactSecrets, sessionOwner } from "@agent-deck/domain";
 import { resolveClaudeCodeExecutable } from "@agent-deck/pi-host";
 import type { ModelAuth } from "@earendil-works/pi-ai";
 import { ModelRuntime, readStoredCredential } from "@earendil-works/pi-coding-agent";
@@ -171,8 +171,27 @@ export function sessionModels(
   placeholder: string,
 ): ModelsJson {
   const providers: Record<string, Record<string, unknown>> = { ...(shared.providers ?? {}) };
+  const brokered = new Set(providerIds);
   for (const id of new Set([...providerIds, ...Object.keys(providers)])) {
-    const { models, modelOverrides, headers: _headers, ...rest } = providers[id] ?? {};
+    const {
+      models,
+      modelOverrides,
+      headers: _headers,
+      apiKey: _apiKey,
+      ...rest
+    } = providers[id] ?? {};
+    // A provider nobody in the session can sponsor keeps its shape minus every
+    // credential: Pi then lists it as not signed in and fetches nothing for it
+    // (a placeholder on all 42 built-ins made Pi probe openrouter and radius.pi.dev).
+    if (!brokered.has(id)) {
+      const stripped = {
+        ...rest,
+        ...(Array.isArray(models) ? { models: models.map(withoutRouting) } : {}),
+      };
+      if (Object.keys(stripped).length === 0) delete providers[id];
+      else providers[id] = stripped;
+      continue;
+    }
     providers[id] = {
       ...rest,
       ...(Array.isArray(models) ? { models: models.map(withoutRouting) } : {}),
@@ -213,6 +232,17 @@ function containerAddress(): string {
 
 /** A malformed auth.json error quotes text around the bad token: log the name only. */
 const errorName = (error: unknown): string => (error instanceof Error ? error.name : typeof error);
+/** Name and redacted, truncated message, cause included: a malformed auth.json
+ * error quotes text around the bad token, so the message never goes out raw. */
+function describeError(error: unknown): string {
+  if (!(error instanceof Error)) return typeof error;
+  const text = (e: Error) =>
+    `${e.name}: ${redactSecrets(e.message)
+      .replace(/[A-Za-z0-9_.-]{20,}/g, "<redacted>")
+      .slice(0, 160)}`;
+  const cause = error.cause instanceof Error ? ` <- ${text(error.cause)}` : "";
+  return `${text(error)}${cause}`;
+}
 
 /** The hop-by-hop names, plus those a `connection` header lists. */
 function hopByHop(connection: string | string[] | undefined): Set<string> {
@@ -316,7 +346,7 @@ export class CredentialBroker {
     if (!isSessionSegment(meta.id)) {
       throw new Error(`[broker] session id ${meta.id} is not a segment`);
     }
-    const providerIds = this.providerIds();
+    const providerIds = this.sponsorableProviders(meta);
     const root = path.join(this.deps.dataDir, "sandbox", meta.id);
     const agentDir = path.join(root, "agent");
     const shared = this.deps.sharedAgentDir();
@@ -367,6 +397,36 @@ export class CredentialBroker {
     } finally {
       this.catalogBuilding = false;
     }
+  }
+
+  /**
+   * The providers the session's participants (owner and sharers) can sponsor
+   * today: those with a credential in their own auth.json, plus, for the
+   * operator, keys configured in the shared models.json. Only these point at
+   * the broker; the rest stay unsigned-in in the session (sessionModels).
+   */
+  private sponsorableProviders(meta: SessionMeta): string[] {
+    const all = this.providerIds();
+    const owner = sessionOwner(meta);
+    const candidates: UserIdentity[] = [
+      ...(owner ? [owner] : []),
+      ...Object.keys(meta.shares ?? {}).map((id) => ({ id })),
+    ];
+    const ids = new Set<string>();
+    for (const user of candidates) {
+      const authPath = path.join(this.deps.agentDirOf(user), "auth.json");
+      for (const id of all) {
+        const stored = readStoredCredential(id, authPath);
+        if (stored?.type === "oauth" || (stored?.type === "api_key" && stored.key)) ids.add(id);
+      }
+      if (this.deps.isOperator(user)) {
+        for (const id of all) {
+          const source = this.catalog?.runtime.getProviderAuthStatus(id).source;
+          if (source === "models_json_key" || source === "models_json_command") ids.add(id);
+        }
+      }
+    }
+    return [...ids];
   }
 
   /** The operator catalog's provider ids; rebuilt in the background once a minute. */
@@ -462,7 +522,7 @@ export class CredentialBroker {
       } catch (error) {
         serverLog.warn(
           "broker",
-          `${providerId}: a candidate sponsor's credentials failed (${errorName(error)})`,
+          `${providerId}: a candidate sponsor's credentials failed (${describeError(error)})`,
         );
       }
     }
