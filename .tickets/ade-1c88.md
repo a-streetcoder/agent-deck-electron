@@ -31,3 +31,12 @@ SBX-01..SBX-06 closed; deck.moretti.cc sessions run sandboxed; the stack matrix 
 **2026-10-17T09:13:24Z**
 
 2026-10-17 from SBX-07 review (ade-c3aa): srt 0.0.80 mounts a sandbox's private /tmp (a read-deny tmpfs) without --size, so it is bounded only by the container's mem_limit; the provider raises oom_score_adj to 1000 as a stopgap. Ask srt upstream for a tmpfs size option (or a bind-source option, which would let /tmp be the session's folder on disk).
+
+**2026-10-17T09:32:57Z**
+
+2026-10-18 REDEPLOYED: production stack rebuilt from 6ff9d9c (SBX-06 + SBX-07 in the image: sandbox-run CLI, private per-wrap /tmp, oom_score_adj, default toolchain hosts, NODE_ENV/PORT stripped). compose.yaml and seccomp.json refreshed in ~/agent-deck; .env unchanged. Owner end-to-end checks from the previous note still apply; additionally a session's Scope: all 15 workspace projects
+ WARN  There are cyclic workspace dependencies: E:\AI Playground\a-streetcoding\agent-deck-electron\packages\contracts, E:\AI Playground\a-streetcoding\agent-deck-electron\packages\domain; E:\AI Playground\a-streetcoding\agent-deck-electron\packages\pi-host, E:\AI Playground\a-streetcoding\agent-deck-electron\packages\testkit
+Lockfile is up to date, resolution step is skipped
+Already up to date
+
+Done in 745ms using pnpm v10.32.1 now keeps devDependencies and Java/turbo builds work.
