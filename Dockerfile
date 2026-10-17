@@ -43,7 +43,7 @@ COPY . .
 RUN pnpm install --frozen-lockfile --offline \
  && pnpm build:native \
  && pnpm build:web \
- && pnpm build:backend \
+ && AGENT_DECK_BUNDLE_EXTERNAL_PI=1 pnpm build:backend \
  && pnpm build:pi-runtime
 
 # Assemble /out/app in the runtime layout (resource paths: ENV block below).
@@ -104,6 +104,16 @@ COPY --from=build /out/ /
 # NODE_PATH), so the global install is linked there. Without it the startup probe fails.
 RUN mkdir -p /app/node_modules/@anthropic-ai \
  && ln -s /usr/local/lib/node_modules/@anthropic-ai/sandbox-runtime /app/node_modules/@anthropic-ai/sandbox-runtime
+# CRB-02: the bundle keeps @earendil-works/pi-ai and pi-coding-agent external (their lazy
+# OAuth/API modules load through computed dynamic imports). Both resolve from the Pi
+# runtime shipped in the image: the same pinned version the server was typechecked against.
+RUN set -eux; \
+    mkdir -p /app/node_modules/@earendil-works; \
+    agent=/app/pi-runtime/node_modules/@earendil-works/pi-coding-agent; \
+    ln -s "$agent" /app/node_modules/@earendil-works/pi-coding-agent; \
+    ln -s "$(readlink -f "$agent")/../pi-ai" /app/node_modules/@earendil-works/pi-ai; \
+    test -f /app/node_modules/@earendil-works/pi-ai/dist/auth/oauth/load.js; \
+    cd /app && node --input-type=module -e "const m = await import('@earendil-works/pi-coding-agent'); if (!m.ModelRuntime) throw new Error('pi-coding-agent external unresolved'); const a = await import('/app/node_modules/@earendil-works/pi-ai/dist/auth/oauth/load.js'); await a.loadOpenAICodexOAuth();"
 
 ARG APP_VERSION=dev
 ENV NODE_ENV=production \

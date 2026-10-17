@@ -43,6 +43,15 @@ await build({
     "@huggingface/transformers",
     // posthog-node's optional OpenTelemetry peer (error tracking, unused here).
     "@opentelemetry/api",
+    // CRB-02 (server image only): pi-ai loads its OAuth and API modules through a
+    // computed dynamic import (`import(__rewriteRelativeImportExtension(...))`), which
+    // a single-file bundle cannot resolve ("Cannot find module .../openai-codex.js" the
+    // first time the broker derived a Codex sponsor's auth). The image keeps both Pi
+    // packages external and links them from its Pi runtime (Dockerfile); the desktop
+    // bundle stays self-contained because its Electron package has no such tree.
+    ...(process.env.AGENT_DECK_BUNDLE_EXTERNAL_PI === "1"
+      ? ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent"]
+      : []),
   ],
 });
 
