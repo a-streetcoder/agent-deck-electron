@@ -14,17 +14,20 @@ prompt, and the UI shows it.
 
 Server (`apps/server`):
 
-| Variable                           | Example                                        | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ---------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AGENT_DECK_TRUSTED_PROXY`         | `cloudflare`                                   | Turns the mode on. Every HTTP request and `/rpc` upgrade must then carry a valid Access assertion (except `GET /health` and the Pi tool bridge `/bridge`, which has its own per-session token).                                                                                                                                                                                                                                                                                                |
-| `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN` | `streetcoding-collective.cloudflareaccess.com` | Access team domain. Issuer is `https://<team-domain>`, JWKS is fetched from `https://<team-domain>/cdn-cgi/access/certs`.                                                                                                                                                                                                                                                                                                                                                                      |
-| `AGENT_DECK_CF_ACCESS_AUD`         | `<application audience tag>`                   | The Access application's AUD tag (Zero Trust dashboard, application overview).                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `AGENT_DECK_PUBLIC_ORIGIN`         | `https://deck.moretti.cc`                      | Browser origin accepted by the WebSocket origin guard in addition to loopback.                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `AGENT_DECK_PROJECT_ROOT`          | `/home/deck`                                   | Root that `GET /fs/dirs` may browse (default: the server user's home).                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `AGENT_DECK_HOST`                  | `0.0.0.0`                                      | Bind address (default `127.0.0.1`). Only loopback values (`::1` and `localhost` bind as `127.0.0.1`) or the wildcards `0.0.0.0` / `::` (dual-stack in Node) since the Pi tool bridge always calls `127.0.0.1`; a wildcard refuses to start unless `AGENT_DECK_TRUSTED_PROXY=cloudflare` or `AGENT_DECK_ALLOW_UNAUTHENTICATED_HOST=1` (local smoke tests only). A non-empty `AGENT_DECK_TRUSTED_PROXY` other than exactly `cloudflare` refuses to start (a typo would turn authentication off). |
-| `AGENT_DECK_CF_ACCESS_JWKS_URL`    | _(unset)_                                      | Override of the JWKS URL. Tests and staging only.                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `AGENT_DECK_OPERATOR_EMAIL`        | `operator@example.com`                         | The Access email whose sessions keep using the shared `~/.pi/agent` (see [Credentials](#credentials)). Unset: every user, the operator included, gets an own agent dir.                                                                                                                                                                                                                                                                                                                        |
-| `AGENT_DECK_GITHUB_CLIENT_ID`      | `Ov23li...`                                    | GitHub OAuth App client id for per-user GitHub connections (see [GitHub](#github-connection)). Unset: connecting answers 409 "GitHub app not configured".                                                                                                                                                                                                                                                                                                                                      |
+| Variable                            | Example                                        | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AGENT_DECK_TRUSTED_PROXY`          | `cloudflare`                                   | Turns the mode on. Every HTTP request and `/rpc` upgrade must then carry a valid Access assertion (except `GET /health`). The Pi tool bridge is not HTTP: it rides on each Pi process's stdio (ADR 0007).                                                                                                                                                                                                                                                                                                         |
+| `AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`  | `streetcoding-collective.cloudflareaccess.com` | Access team domain. Issuer is `https://<team-domain>`, JWKS is fetched from `https://<team-domain>/cdn-cgi/access/certs`.                                                                                                                                                                                                                                                                                                                                                                                         |
+| `AGENT_DECK_CF_ACCESS_AUD`          | `<application audience tag>`                   | The Access application's AUD tag (Zero Trust dashboard, application overview).                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `AGENT_DECK_PUBLIC_ORIGIN`          | `https://deck.moretti.cc`                      | Browser origin accepted by the WebSocket origin guard in addition to loopback.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `AGENT_DECK_PROJECT_ROOT`           | `/home/deck`                                   | Root that `GET /fs/dirs` may browse (default: the server user's home).                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `AGENT_DECK_HOST`                   | `0.0.0.0`                                      | Bind address (default `127.0.0.1`). Only loopback values (`::1` and `localhost` bind as `127.0.0.1`) or the wildcards `0.0.0.0` / `::` (dual-stack in Node) since the container `HEALTHCHECK` and local tooling call `127.0.0.1`; a wildcard refuses to start unless `AGENT_DECK_TRUSTED_PROXY=cloudflare` or `AGENT_DECK_ALLOW_UNAUTHENTICATED_HOST=1` (local smoke tests only). A non-empty `AGENT_DECK_TRUSTED_PROXY` other than exactly `cloudflare` refuses to start (a typo would turn authentication off). |
+| `AGENT_DECK_CF_ACCESS_JWKS_URL`     | _(unset)_                                      | Override of the JWKS URL. Tests and staging only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `AGENT_DECK_OPERATOR_EMAIL`         | `operator@example.com`                         | The Access email whose sessions keep using the shared `~/.pi/agent` (see [Credentials](#credentials)). Unset: every user, the operator included, gets an own agent dir.                                                                                                                                                                                                                                                                                                                                           |
+| `AGENT_DECK_GITHUB_CLIENT_ID`       | `Ov23li...`                                    | GitHub OAuth App client id for per-user GitHub connections (see [GitHub](#github-connection)). Unset: connecting answers 409 "GitHub app not configured".                                                                                                                                                                                                                                                                                                                                                         |
+| `AGENT_DECK_SANDBOX`                | _(unset)_                                      | `srt` or `none`: the process sandbox around every session (see [Sandbox](#sandbox)). Unset: `srt` on a shared server when the startup probe passes, otherwise `none` with a warning; `none` on a desktop. `srt` refuses to start when the probe fails; any other value refuses to start.                                                                                                                                                                                                                          |
+| `AGENT_DECK_SANDBOX_DENY_ADDRESSES` | `203.0.113.7`                                  | Comma-separated addresses or CIDR ranges an allowed host name must not resolve to, besides the private ranges: the server's public IP, a Docker gateway outside `172.16.0.0/12`. A malformed entry refuses to start.                                                                                                                                                                                                                                                                                              |
+| `AGENT_DECK_SANDBOX_MONITOR`        | _(unset)_                                      | `1` turns on srt's log monitor, so refused writes also appear in the transcript (refused hosts always do). Off by default: it doubled the cost of small writes on the VM.                                                                                                                                                                                                                                                                                                                                         |
 
 Desktop (`apps/desktop/main.js`):
 
@@ -107,20 +110,25 @@ Created once:
 
 ### Install
 
-1. Copy `deploy/compose.yaml` and `deploy/.env.example` into a folder on the host, for example
-   `~/agent-deck/`, and rename the template to `.env` (`chmod 600 .env`: it holds secrets).
-2. Fill `.env`. Every variable has a one-line comment there. `AGENT_DECK_TRUSTED_PROXY=cloudflare`
+1. Copy `deploy/compose.yaml`, `deploy/seccomp.json` and `deploy/.env.example` into a folder on
+   the host, for example `~/agent-deck/`, and rename the template to `.env` (`chmod 600 .env`: it
+   holds secrets).
+2. Install the AppArmor profile on the host ([The AppArmor profile](#the-apparmor-profile)).
+   Without it loaded Docker refuses to start the server container.
+3. Fill `.env`. Every variable has a one-line comment there. `AGENT_DECK_TRUSTED_PROXY=cloudflare`
    and `PORT=4200` are fixed in `compose.yaml`, so authentication cannot be switched off from
    `.env`. `cpus` in `compose.yaml` must not exceed the host's CPU count (`nproc`).
-3. Start it:
+   Set `AGENT_DECK_SANDBOX_DENY_ADDRESSES` to the host's public IP.
+4. Start it:
 
    ```sh
    docker compose pull
    docker compose up -d
    docker compose ps      # agent-deck "healthy", cloudflared "running"
+   docker compose logs agent-deck | grep sandbox   # "[sandbox] provider srt"
    ```
 
-4. One-off setup inside the container (it persists in the volume; the server creates
+5. One-off setup inside the container (it persists in the volume; the server creates
    `AGENT_DECK_PROJECT_ROOT` itself):
 
    ```sh
@@ -128,7 +136,9 @@ Created once:
    docker compose exec agent-deck git config --global user.email "agent-deck@example.com"
    ```
 
-   The git identity is for sessions without an owner; owned sessions commit as their owner. For
+   The git identity is for sessions without an owner; owned sessions commit as their owner.
+   Under `srt` the server's own git calls ignore it (ADR 0007, amendment 7) and commit as
+   `Agent Deck <agent-deck@localhost>` when a session has no owner. For
    `git@` remotes copy a key into `/data/home/.ssh` as the server user, so it is owned by
    `agentdeck` with mode 600 in a 700 folder (root in the container has no capabilities to fix
    ownership later):
@@ -140,7 +150,7 @@ Created once:
 
    Or use https with each user's GitHub connection, or `docker compose exec agent-deck gh auth login`.
 
-5. Open the public URL: Access asks for the GitHub login, then the UI loads; `/me` shows your
+6. Open the public URL: Access asks for the GitHub login, then the UI loads; `/me` shows your
    identity. Each user signs in to model providers under Settings > Providers.
 
 ### Upgrade and rollback
@@ -219,6 +229,12 @@ ssh dev 'cd ~/agent-deck-build && git pull -q && docker build -t ghcr.io/a-stree
 
 Once an image is published, set `AGENT_DECK_IMAGE_TAG` to its version and upgrade with
 `docker compose pull && docker compose up -d` as the install section says.
+
+The sandbox (SBX-04) needs `~/agent-deck/compose.yaml` and `~/agent-deck/seccomp.json` copied
+from `deploy/` of the same commit before that `up`, and `AGENT_DECK_SANDBOX_DENY_ADDRESSES` set to
+the VM's public IP in `.env`. The AppArmor profile is installed as
+`/etc/apparmor.d/agent-deck-sandbox` (2026-10-17, from SBX-04's branch); reload it when
+`deploy/apparmor-agent-deck` changes ([The AppArmor profile](#the-apparmor-profile)).
 
 `.env` holds the values the old unit carried (`AGENT_DECK_CF_ACCESS_TEAM_DOMAIN`,
 `AGENT_DECK_CF_ACCESS_AUD`, `AGENT_DECK_PUBLIC_ORIGIN=https://deck.moretti.cc`,
@@ -362,7 +378,7 @@ private GitHub email: GitHub rejects pushes whose commits expose it.
   `CF_Authorization` cookie); `apps/server/src/trustedProxy.ts` verifies RS256 against
   `https://streetcoding-collective.cloudflareaccess.com/cdn-cgi/access/certs`, checks `iss`,
   `aud` (`AGENT_DECK_CF_ACCESS_AUD`), `exp` and `iat`, requires a loopback `remoteAddress` and
-  extracts the email. `/health` and `/bridge` are exempt.
+  extracts the email. `/health` is exempt (the tool bridge rides on Pi's stdio, not HTTP).
 - **Failure signatures**: tunnel down → Cloudflare 530/502 (the server is unaffected); Access
   misconfigured → 403 from Cloudflare; server down → 502.
 - **Local test with a real identity**: copy the `CF_Authorization` cookie value from a signed-in
@@ -634,7 +650,9 @@ stored in their own Pi agent dir (`apps/server/src/userAgentDirs.ts`, ticket ade
   before identities existed, or on a loopback server), Doctor (its auth probe reads the agent
   dir it is given, and the route still gives it the shared one) and the Pi CLI over ssh also use
   the shared dir, so they run on the
-  operator's credentials: accepted. Keep provider keys out of the shared `~/.pi/agent/.env` and
+  operator's credentials: accepted. Under `srt` that no longer holds for sessions without an
+  owner: their sandbox denies the operator's `auth.json`, `mcp-auth.json` and `oauth.json`
+  (measured, SBX-04), so they run without model sign-ins. Keep provider keys out of the shared `~/.pi/agent/.env` and
   the systemd unit, because Pi falls back to environment keys for a user with no stored
   credential (`PUT /runtime/env` already refuses them on a shared server).
 - **Not isolation.** All Pi processes run as one Unix user, so any user's agent can read another
@@ -1033,7 +1051,14 @@ What is inside (`/app`, owned by root, not writable by the server user):
 - `node_modules/node-pty`, built for Linux Node 22, for the terminal panel.
 - `git` and `openssh-client` (Debian), `gh` (release tarball, version and SHA-256 pinned in the
   Dockerfile), `ripgrep` and `fd-find` (Pi uses these instead of downloading its own on first use),
-  `tini`, `ca-certificates`. No sources, pnpm or toolchains: those stay in the build stage.
+  `tini`, `ca-certificates`, `curl`. No sources or pnpm: those stay in the build stage.
+- The process sandbox ([Sandbox](#sandbox)): `bubblewrap`, `socat` and
+  `@anthropic-ai/sandbox-runtime` (srt, pinned by `SANDBOX_RUNTIME_VERSION`, installed globally and
+  linked into `/app/node_modules`, where the bundle resolves it).
+- The builder layer for sessions: `build-essential`, `pkg-config`, `libssl-dev`, `libffi-dev`,
+  `python3` with `venv` and `pip`, and the libraries and fonts Playwright's Chromium needs on
+  Debian 12 (Firefox and WebKit need more). Toolchains themselves install per user
+  ([Toolchains](#toolchains-per-user)).
 
 The server runs as `agentdeck` (uid 1000, home `/data/home`) under `tini`, on port 4200, with a
 `HEALTHCHECK` on `/health`. `PI_SKIP_VERSION_CHECK=1` stops Pi's update check, and
@@ -1072,7 +1097,8 @@ anything is published: `/health` 200, JSON from `GET /projects`, `/resources/age
 `/resources/skills`, `node $AGENT_DECK_PI_CLI --version`, `require('node-pty')`, an import of the
 `pi-mcp` module the bridge resolves, a marker in `~/.pi/agent` that must survive a container
 replace on the same volume, and a size gate: it fails if the compressed image is over 400 MB
-(unpacked it is about 550 MB, of which the Node slim base and git are about 330 MB). Only then
+(unpacked it is about 950 MB, of which the builder layer is about 350 MB; compressed about
+345 MB, measured for SBX-04). Only then
 does the publish job (the only one with `packages: write`) push from the same build cache: tags
 `X.Y.Z`, `X.Y`, `latest` (not for a prerelease tag such as `v1.2.0-rc.1`) and `sha-<short>`;
 manual dispatch pushes `sha-<short>` only.
@@ -1108,12 +1134,132 @@ What any other way of running the image must keep (`deploy/compose.yaml`, see
 - Compose must run `cloudflared` in the server's network namespace (`network_mode: service:<server>`)
   or use host networking: the server binds loopback and trusts only loopback peers, so it cannot be
   reached over a Docker network.
-- Compose must mount a tmpfs on `/tmp` (the generated Pi bridge extensions, which can hold resolved
-  MCP credentials, are written there).
-- Compose must set `cap_drop: [ALL]` and `security_opt: [no-new-privileges:true]`; a read-only root
-  filesystem (`read_only: true`, with `/data` and `/tmp` writable) is optional.
+- Compose must mount a tmpfs on `/tmp` with `exec` (srt's `/tmp/claude`, skill merges, launch
+  files of sessions whose id is not one path segment; agent builds may run binaries there).
+- Compose must set `cap_drop: [ALL]` and `security_opt` with `no-new-privileges:true`,
+  `seccomp=./seccomp.json`, `apparmor=agent-deck-sandbox` and `systempaths=unconfined`, plus a
+  `pids_limit` ([Sandbox](#sandbox)); a read-only root filesystem (`read_only: true`, with `/data`
+  and `/tmp` writable) is optional.
 - Compose must give sessions without an owner a git identity and, for `git@` remotes, an SSH key and
   `known_hosts` (in `/data/home/.gitconfig` and `/data/home/.ssh`), or document `gh auth login`.
+
+## Sandbox
+
+Every session runs inside a process sandbox (ADR 0007): Anthropic's `srt`, which builds a
+bubblewrap namespace per Pi process with its own mount tree, pid and network namespace, and a
+seccomp filter that refuses nested namespaces. What a session may read, write and reach is in
+[Security model](#security-model). Inside the server container this needs three things Docker
+does not give by default: the seccomp profile `deploy/seccomp.json` (user namespaces and the
+mounts bubblewrap makes; `NETLINK_NETFILTER` sockets refused; no 32-bit x86 ABIs, so a 32-bit
+program in the container is killed at its first system call), the AppArmor profile
+`deploy/apparmor-agent-deck` (`userns`, `mount`, `pivot_root`, plus deny rules for what Docker's
+masks covered), and `systempaths=unconfined` (bubblewrap mounts a fresh `/proc`, which the kernel
+refuses while the container's `/proc` has masks). `deploy/compose.yaml` sets all three, and a
+`pids_limit`. The measurements behind them are in
+[the SBX-01 spike](archive/sbx-01-spike-2026-10-17.md) and on ticket SBX-04.
+
+### AGENT_DECK_SANDBOX and the probe
+
+Unset, a shared server proves the sandbox works before it uses it: at startup it runs a sandboxed
+`/bin/true` through srt (about 0.1 s). Passed, the log says `[sandbox] provider srt`. Failed, it
+logs one warning with the reason and runs every session **without a sandbox**
+(`[sandbox] provider none`):
+
+| Warning contains                                   | Missing                                          |
+| -------------------------------------------------- | ------------------------------------------------ |
+| `No permissions to` (bubblewrap 0.8.0)             | `seccomp=./seccomp.json` (Docker's default runs) |
+| `Creating new namespace failed: Permission denied` | the `agent-deck-sandbox` AppArmor profile        |
+| `Can't mount proc on /newroot/proc`                | `systempaths=unconfined`                         |
+| `could not be loaded`                              | srt itself (an image without it)                 |
+
+`AGENT_DECK_SANDBOX=srt` refuses to start on the same failure (the container exits; fail closed),
+`AGENT_DECK_SANDBOX=none` turns the sandbox off. On a shared server it logs a warning: the
+container's profiles let every process in it make user namespaces, so `none` with them is
+weaker than plain Docker. When choosing `none`, also drop the `seccomp`, `apparmor` and
+`systempaths` entries from `security_opt`. A desktop defaults to `none`;
+Windows is always `none`. Each further wrap costs about 25 ms; inside the sandbox work runs at
+the host's speed, except with the log monitor (`AGENT_DECK_SANDBOX_MONITOR=1`, refused writes in
+the transcript), which doubled the cost of 10k small writes on the VM.
+
+Refused hosts always show a line in the transcript; refused writes show one only with the
+monitor on, otherwise the tool error Pi sees is the signal.
+
+A user's agent dir links its code-bearing entries (`extensions`, `skills`, `prompts`, `agents`,
+`themes`, `bin`, `settings.json`, ...) to the operator's shared dir. The sandbox protects what a
+link points at, not the link, so when a session launches a sandboxed server checks them: a real
+folder or file in place of the expected link is moved to `<name>.quarantined-<timestamp>` beside
+it and linked again, with a warning in the server log and a "Sandbox refused: write to ..." line
+in that session; a link that points elsewhere is linked again silently. Private copies of these
+entries are not supported under a sandbox; with `none` they are left alone as before.
+
+Folders a session may read that hold a folder it may write (its project around the worktree, the
+project's `.git`, the user's folder around the agent dir) are bound entry by entry, so a
+symbolic link among those entries appears as what it points at (or not at all when that lies
+outside). The folders around them, and `/data` itself, are a temporary filesystem inside the
+sandbox: a new file created there seems to succeed and is gone when the session's Pi exits (the
+host never sees it). Check a refused write on an existing file (for example
+`<project>/.git/config`), not by creating a new file at the project root.
+
+### The AppArmor profile
+
+Install it once per host, as a file, so it is loaded again after a reboot:
+
+```sh
+sudo install -m 0644 deploy/apparmor-agent-deck /etc/apparmor.d/agent-deck-sandbox
+sudo apparmor_parser -r -W /etc/apparmor.d/agent-deck-sandbox
+sudo aa-status | grep agent-deck-sandbox
+```
+
+Run the same two commands again whenever `deploy/apparmor-agent-deck` changes (before the
+`docker compose up -d` that brings the new image). After every reboot, check `aa-status` lists
+it. `apparmor_parser -r` alone does not survive a reboot, and without the profile loaded Docker
+refuses to start the container (`unable to apply apparmor profile: apparmor failed to apply
+profile: write /proc/self/attr/apparmor/exec: no such file or directory`):
+with `restart: unless-stopped` that is a restart loop with a stopped server and a 502 at the
+public URL. Load the profile and `docker compose up -d`.
+
+Never `docker exec -u 0` into the server container. With `systempaths=unconfined` the kernel
+settings under `/proc/sys` are not read-only any more, and root in the container, even without
+capabilities, can write host-wide ones: with AppArmor unconfined it changed `kernel.sysrq` and
+`kernel.sched_rr_timeslice_ms` on the VM (measured, SBX-04). The profile denies every write under
+`/proc/sys/kernel` but `shm*` and, with docker-default's rules, the rest of `/proc/sys` but
+`user/` (whose limits need a capability), and it is the only thing standing there.
+
+### Drift check at Docker upgrades
+
+`systempaths=unconfined` removes every path Docker masks or makes read-only in `/proc` and
+`/sys`; the AppArmor profile's deny rules stand in for the ones Docker 26 sets. A newer Docker
+may mask more. At each `docker.io` upgrade, compare the two mount tables:
+
+```bash
+m() { docker run --rm --entrypoint sh "$@" ghcr.io/<owner>/agent-deck-server:<tag> -c "awk '\$5 ~ \"^/(proc|sys)\" {print \$5, \$6}' /proc/self/mountinfo | sort"; }
+diff <(m) <(m --security-opt systempaths=unconfined)
+```
+
+Docker 26.1.5 lists `/proc/acpi`, `asound`, `bus`, `fs`, `irq`, `kcore`, `keys`, `sys`,
+`sysrq-trigger`, `timer_list` and `/sys/firmware` (measured 2026-10-17). Every line the diff shows
+must be covered by a deny rule in `deploy/apparmor-agent-deck`; add one for a new path before
+deploying.
+
+### Toolchains per user
+
+Sessions install toolchains as the server user into the home, which is in the volume and
+survives a container replace: `rustup` (`~/.cargo`, `~/.rustup`), `uv` and `pipx` (`~/.local`),
+`nvm` (`~/.nvm`), `sdkman` (`~/.sdkman`), `npm i -g` with a prefix in `~/.npm-global`, Go
+tarballs in `~/go`. Those folders are writable to every session (one home for every user), and
+their installers need their hosts on the allow-list (the default list has the package
+registries and `sh.rustup.rs`). The image's builder layer gives them a C toolchain, headers and
+Python, so `cargo build`, native npm modules and Python wheels build without more.
+
+### What sessions cannot do
+
+- Install system packages: there is no `apt` for sessions (no root, read-only root filesystem).
+  A stack that needs one is a change to the `Dockerfile`, reviewed like code.
+- Reach the server, `cloudflared`'s metrics (`127.0.0.1:20241`), any loopback or private
+  address, or a host that is not allowed (the request gets a 403 from srt's proxy and the
+  transcript a line with Allow for the owner or operator).
+- Make namespaces, mount, `pivot_root`, or open `NETLINK_NETFILTER` sockets.
+- Write their project's `.git` config, hooks or worktree pointers, or the server's launch files.
 
 ## Security model
 
@@ -1125,10 +1271,24 @@ What any other way of running the image must keep (`deploy/compose.yaml`, see
   expiry. A forged header on a loopback request fails verification.
 - **Authentication, not authorization.** Both users see and can act on every session, project
   and resource. `createdBy`/`author` are labels for attribution and display; they gate nothing.
-- **Shared OS user executes agents.** Every Pi process, worktree, shell and file write on the
-  VM runs as the service's Unix user with that user's keys and tokens. Attribution is a label,
-  not isolation: either person can act in the other's session, and the audit trail is the
-  label plus Access logs.
+- **One OS user, a sandbox per session.** Every Pi process, worktree, shell and file write on
+  the VM runs as the service's Unix user. Under `srt` (the shared server's default, ADR 0007)
+  each session's Pi, and every Loop validation command, script and terminal it starts, runs in
+  its own process sandbox derived from the session record: it writes only its worktree (or its
+  project without one: never the project's `.git`), its Pi session folder, its user's agent dir
+  minus the code-bearing entries, its scratch folder and the home toolchain folders; it reads
+  nothing else of `/data` (other users' folders, other sessions' transcripts and launch files,
+  the operator's `auth.json`, the home's credentials); it reaches only allowed hosts, through
+  srt's proxy, never a private or loopback address and never the server's port. Inside the UI
+  attribution is still a label: either person can act in the other's session, and the audit
+  trail is the label plus Access logs. With `none` (asked for, or the fallback after a failed
+  probe) the fence is gone and the bullets below marked "without a sandbox" apply.
+- **The allow-list is server state.** The hosts a project's sessions may reach beyond the
+  default list are kept in `<dataDir>/sandbox-hosts.json` (by project id), changed only through
+  the owner or operator routes `POST`/`DELETE /sessions/:id/sandbox/allowed-hosts` (the Allow
+  action on a refused-host line). A project's `.agent-deck/sandbox.json`, read at the recorded
+  base commit, only proposes hosts: a session can write git objects and refs, so it can never
+  grant itself one (ADR 0007, amendment 6).
 - **Desktop shell.** The privileged control plane is always the shell's own loopback backend
   (SRV-16d removed the remote-attach mode). IPC handlers accept only main-frame calls from the
   local renderer origin: the backend's, or the Vite dev server's when `AGENT_DECK_RENDERER_URL`
@@ -1205,7 +1365,16 @@ What any other way of running the image must keep (`deploy/compose.yaml`, see
   loopback, which the user's browser cannot reach. On a shared server the sign-in sheet shows
   the paste field at once; for Anthropic choose "Copy code login (headless)" and paste the code
   Anthropic shows (the browser login also works by pasting the final redirect URL).
-- GitHub tokens are per user (ade-gfs4, see [GitHub connection](#github-connection)) and, like
-  provider credentials, readable by every agent: attribution, not an authorization boundary.
-- Per-user credentials are storage, not isolation: every user's agent can read every
-  `auth.json`. Sessions without an owner, Doctor and the Pi CLI use the operator's.
+- GitHub tokens are per user (ade-gfs4, see [GitHub connection](#github-connection)) and sit in
+  the owner's Pi environment, readable by everything that session runs. Without a sandbox, every
+  agent can read every user's tokens.
+- Per-user credentials: under `srt` a session reads only its own user's `auth.json`; without a
+  sandbox every user's agent can read every `auth.json`. Sessions without an owner cannot read
+  the operator's under `srt` (they run without model sign-ins); without a sandbox they, Doctor
+  and the Pi CLI use the operator's.
+- A user's sessions can plant code for that same user's other sessions: a live session can swap
+  a link of its user's agent dir after the launch check, and another live session of that user
+  sees it at once (lazy skill reads, `/reload`). Cross-user is prevented: a session writes only
+  its own user's agent dir.
+- Refused writes appear in the transcript only with `AGENT_DECK_SANDBOX_MONITOR=1`; refused hosts
+  always do.

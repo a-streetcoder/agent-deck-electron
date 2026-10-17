@@ -146,3 +146,62 @@ describe.skipIf(!canSymlink)("UserAgentDirs", () => {
     expect(userRoots({ home: dir }, undefined, dirs)).toEqual({ home: dir });
   });
 });
+
+describe.skipIf(!canSymlink)("ensureUserAgentDir under a sandbox (ADR 0007, SBX-04)", () => {
+  it("quarantines a real folder in place of a link, relinks a re-pointed link silently", () => {
+    const user = path.join(dir, "users", "u1", "agent");
+    ensureUserAgentDir(shared, user, true);
+    const skills = path.join(user, "skills");
+    const extensions = path.join(user, "extensions");
+    // A session pointed one link at its own folder and replaced another with a real one.
+    const planted = path.join(dir, "planted");
+    mkdirSync(planted);
+    unlinkSync(skills);
+    symlinkSync(planted, skills, "dir");
+    unlinkSync(extensions);
+    mkdirSync(extensions);
+    writeFileSync(path.join(extensions, "evil.ts"), "x");
+
+    const moved = ensureUserAgentDir(shared, user, true);
+
+    expect(moved.map((entry) => entry.path)).toEqual([extensions]);
+    expect(readlinkSync(skills)).toBe(path.join(shared, "skills"));
+    expect(readlinkSync(extensions)).toBe(path.join(shared, "extensions"));
+    const aside = moved[0]!.movedTo;
+    expect(path.basename(aside)).toMatch(/^extensions\.quarantined-\d{4}-\d\d-\d\dT/);
+    expect(readFileSync(path.join(aside, "evil.ts"), "utf8")).toBe("x");
+    // Correct links are untouched the next time.
+    expect(ensureUserAgentDir(shared, user, true)).toEqual([]);
+  });
+
+  it("changes nothing for a private copy without a sandbox (none)", () => {
+    const user = path.join(dir, "users", "u2", "agent");
+    ensureUserAgentDir(shared, user);
+    const extensions = path.join(user, "extensions");
+    unlinkSync(extensions);
+    mkdirSync(extensions);
+    expect(ensureUserAgentDir(shared, user, false)).toEqual([]);
+    expect(lstatSync(extensions).isSymbolicLink()).toBe(false);
+    expect(readdirSync(user).some((name) => name.includes("quarantined"))).toBe(false);
+  });
+
+  it("UserAgentDirs quarantines only for a launch, and reports it with its session", () => {
+    const reports: Array<[string, string]> = [];
+    const dirs = new UserAgentDirs(dir, () => shared, undefined, {
+      on: () => true,
+      quarantined: (_user, entry, sessionId) =>
+        reports.push([path.basename(entry.path), sessionId]),
+    });
+    const user = dirs.resolve({ id: "ale@example.com" });
+    unlinkSync(path.join(user, "skills"));
+    mkdirSync(path.join(user, "skills"));
+    // No launch (an HTTP route, userRoots): nothing moves, nothing is reported.
+    dirs.resolve({ id: "ale@example.com" });
+    expect(lstatSync(path.join(user, "skills")).isSymbolicLink()).toBe(false);
+    expect(reports).toEqual([]);
+    expect(userAgentDirEnv({ id: "ale@example.com" }, dirs, "s1")).toEqual({
+      PI_CODING_AGENT_DIR: user,
+    });
+    expect(reports).toEqual([["skills", "s1"]]);
+  });
+});

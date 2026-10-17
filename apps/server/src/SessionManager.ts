@@ -1438,7 +1438,7 @@ export class SessionManager {
       const params = this.buildSpawnParams(
         meta,
         plan,
-        this.ownerLaunchEnv(meta, env),
+        this.ownerLaunchEnv(meta, env, true),
         tempDirs,
         publishMeta,
         resumedIdle,
@@ -1764,10 +1764,13 @@ export class SessionManager {
   }
 
   /** The env a launch of `meta` runs with: the .env layers under `env`, then
-   * the owner's identity, agent dir and GitHub connection. */
+   * the owner's identity, agent dir and GitHub connection. `launch`: the
+   * session's own (reporting) launch, the only one that checks its agent dir
+   * links and reports a quarantine (a cold transcript reader does not). */
   private ownerLaunchEnv(
     meta: SessionMeta,
     env?: Record<string, string | undefined>,
+    launch = false,
   ): Record<string, string | undefined> {
     const layered = { ...this.envFileLayer(meta.projectId), ...env };
     return {
@@ -1778,7 +1781,7 @@ export class SessionManager {
       ...gitIdentityEnv(sessionOwner(meta), this.gitIdentities),
       // SRV-11: the OWNER's credentials (own agent dir), re-derived on every
       // resume. Storage separation, not isolation (userAgentDirs.ts).
-      ...userAgentDirEnv(sessionOwner(meta), this.userAgentDirs),
+      ...userAgentDirEnv(sessionOwner(meta), this.userAgentDirs, launch ? meta.id : undefined),
       // SRV-06: pushes and PRs as the OWNER (GH_TOKEN + a github.com git
       // credential helper); no connection leaves the server default.
       // Pi spawns with process.env under this, so both count for GIT_CONFIG_*.

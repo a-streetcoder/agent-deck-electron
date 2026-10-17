@@ -1,6 +1,7 @@
 # Agent Deck shared server (SRV-17b). Runbook: docs/remote-server-poc.md, "Install on a server".
-# Copy this file and .env.example (as .env) into one folder, fill .env, then
-# `docker compose pull && docker compose up -d`.
+# Copy this file, seccomp.json and .env.example (as .env) into one folder, install
+# apparmor-agent-deck on the host (runbook, "Sandbox"), fill .env, then
+# `docker compose pull && docker compose up -d` from that folder.
 #
 # The server binds 127.0.0.1 and trusts Cloudflare Access assertions only from a loopback
 # peer, so cloudflared shares its network namespace and reaches it on 127.0.0.1:4200. The
@@ -35,14 +36,26 @@ services:
     volumes:
       # Sessions, worktrees, per-user credentials, project clones and the home (/data/home).
       - agent-deck-data:/data
-    # Pi bridge extensions, prompt files and skill merges go to /tmp; exec so agent builds
-    # and test binaries placed there can run. Its contents count against mem_limit.
+    # srt's /tmp/claude and skill merges go to /tmp (session launch files live under
+    # /data/sandbox/<id>); exec so agent builds and test binaries placed there can run. Its
+    # contents count against mem_limit.
     tmpfs:
       - /tmp:exec,size=1g
     # The server writes only to /data and /tmp (HOME is /data/home).
     read_only: true
     cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
+    # The per-session process sandbox (ADR 0007): user namespaces and the mounts bubblewrap
+    # makes need seccomp.json (next to this file) and the agent-deck-sandbox AppArmor profile
+    # installed on the host; bubblewrap mounts a fresh /proc, which needs systempaths=unconfined
+    # (the profile's deny rules stand in for Docker's masks). Runbook: docs/remote-server-poc.md,
+    # "Sandbox". Without them the server's startup probe fails and sessions run unsandboxed.
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./seccomp.json
+      - apparmor=agent-deck-sandbox
+      - systempaths=unconfined
+    # Every session's processes and their threads count here (builds fan out).
+    pids_limit: 4096
     restart: unless-stopped
     # Sized for a small VM; raise both on a bigger host. cpus must not exceed the host's
     # CPU count, or `up` fails.

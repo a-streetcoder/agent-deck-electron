@@ -3,14 +3,21 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { SessionMeta } from "@agent-deck/contracts";
-import { noneProvider, type SandboxProvider } from "@agent-deck/pi-host";
-import { afterEach, describe, expect, it } from "vitest";
+import {
+  createSrtProvider,
+  noneProvider,
+  sandboxProbeProblem,
+  type SandboxProvider,
+} from "@agent-deck/pi-host";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   chooseSandboxProvider,
+  createLaunchNoticeQueue,
   piSessionDir,
   cwdInsideProjects,
   launchDirOf,
   readProjectSandboxConfig,
+  sandboxDenyAddresses,
   serverWriteRootProblem,
   sessionSandbox,
   sessionSandboxPolicy,
@@ -37,12 +44,55 @@ describe("chooseSandboxProvider (ADR 0007)", () => {
     expect(choice.warning).toContain("bubblewrap (bwrap) not installed");
   });
 
-  it("honours an explicit choice, keeps an explicit srt that cannot run, refuses others", async () => {
-    expect((await choose({ AGENT_DECK_SANDBOX: "none" }, true)).provider.name).toBe("none");
+  it("falls back to none when srt's initialize never settles: probe and dispose are bounded", async () => {
+    const hung = createSrtProvider(
+      async () =>
+        ({
+          initialize: () => new Promise<void>(() => {}),
+          reset: async () => {},
+          getSandboxViolationStore: () => ({}),
+        }) as never,
+      "linux",
+      { exists: () => true, mkdir: () => {}, createFile: () => {}, children: () => [] },
+      false,
+      100,
+    );
+    const started = Date.now();
+    const choice = await chooseSandboxProvider({
+      env: {},
+      sharedServer: true,
+      platform: "linux",
+      srt: hung,
+      problem: () => sandboxProbeProblem(hung, 100),
+    });
+    expect(choice.provider.name).toBe("none");
+    expect(choice.warning).toContain("did not finish within 100 ms");
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("disposes srt when the probe fails (its proxies may have started)", async () => {
+    const dispose = vi.fn(async () => {});
+    const choice = await chooseSandboxProvider({
+      env: {},
+      sharedServer: true,
+      platform: "linux",
+      srt: { ...srt, dispose },
+      problem: async () => "a sandboxed /bin/true exited 1: bwrap: Can't mount proc",
+    });
+    expect(choice.provider.name).toBe("none");
+    expect(choice.warning).toContain("WITHOUT a process sandbox");
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("honours an explicit choice, refuses to start an explicit srt that cannot run, refuses others", async () => {
+    const none = await choose({ AGENT_DECK_SANDBOX: "none" }, true);
+    expect(none.provider.name).toBe("none");
+    expect(none.warning).toContain("drop those security_opt entries");
+    expect(await choose({ AGENT_DECK_SANDBOX: "none" }, false)).toEqual({ provider: noneProvider });
     expect((await choose({ AGENT_DECK_SANDBOX: "srt" }, false)).provider.name).toBe("srt");
-    const broken = await choose({ AGENT_DECK_SANDBOX: "srt" }, true, "socat not installed");
-    expect(broken.provider.name).toBe("srt");
-    expect(broken.warning).toContain("socat not installed");
+    await expect(
+      choose({ AGENT_DECK_SANDBOX: "srt" }, true, "socat not installed"),
+    ).rejects.toThrow("socat not installed");
     await expect(choose({ AGENT_DECK_SANDBOX: "docker" }, true)).rejects.toThrow(
       'use "srt" or "none"',
     );
@@ -53,6 +103,54 @@ describe("chooseSandboxProvider (ADR 0007)", () => {
     const asked = await choose({ AGENT_DECK_SANDBOX: "srt" }, true, undefined, "win32");
     expect(asked.provider.name).toBe("none");
     expect(asked.warning).toContain("Windows");
+  });
+});
+
+describe("sandboxDenyAddresses (AGENT_DECK_SANDBOX_DENY_ADDRESSES)", () => {
+  it("reads comma-separated addresses and ranges, empty when unset", async () => {
+    expect(await sandboxDenyAddresses({}, srt)).toEqual([]);
+    expect(
+      await sandboxDenyAddresses(
+        { AGENT_DECK_SANDBOX_DENY_ADDRESSES: " 203.0.113.7, 172.17.0.1/32,,2001:db8::/32 " },
+        srt,
+      ),
+    ).toEqual(["203.0.113.7", "172.17.0.1/32", "2001:db8::/32"]);
+  });
+
+  it("refuses to start on an entry srt's schema refuses", async () => {
+    for (const bad of ["example.com", "10.0.0.0/33", "::ffff:192.0.2.1/64", "1.2.3.4/x"]) {
+      await expect(
+        sandboxDenyAddresses({ AGENT_DECK_SANDBOX_DENY_ADDRESSES: bad }, srt),
+      ).rejects.toThrow(bad);
+    }
+  });
+
+  it("is not read without a sandbox (a desktop with a stray value still starts)", async () => {
+    expect(
+      await sandboxDenyAddresses(
+        { AGENT_DECK_SANDBOX_DENY_ADDRESSES: "example.com" },
+        noneProvider,
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("createLaunchNoticeQueue (lines raised before a launch registers)", () => {
+  it("hands a session's queued lines to its next launch once, and forgets them", () => {
+    const queue = createLaunchNoticeQueue();
+    const line = (id: string) => ({
+      kind: "notice" as const,
+      id,
+      level: "warning" as const,
+      message: id,
+    });
+    queue.add("s1", line("a"));
+    queue.add("s1", line("b"));
+    queue.add("s2", line("c"));
+    expect(queue.take("s1").map((notice) => notice.id)).toEqual(["a", "b"]);
+    expect(queue.take("s1")).toEqual([]);
+    queue.forget("s2");
+    expect(queue.take("s2")).toEqual([]);
   });
 });
 

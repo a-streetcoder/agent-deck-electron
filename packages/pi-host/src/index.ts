@@ -18,6 +18,8 @@ export {
   createSrtProvider,
   noneProvider,
   PiSandboxError,
+  sandboxProbeProblem,
+  srtDeniedAddressesProblem,
   SRT_PACKAGE,
   srtProblem,
   srtProvider,

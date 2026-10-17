@@ -85,4 +85,79 @@ describe.skipIf(!bwrap)("srt provider (real srt, Linux with bubblewrap)", () => 
       rmSync(dataDir, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it("a worktree session commits, but cannot touch the repository's config, hooks or pointers", async () => {
+    const dataDir = realpathSync(mkdtempSync(path.join(tmpdir(), "sbx-data-")));
+    const repo = path.join(dataDir, "projects", "app");
+    const worktree = path.join(dataDir, "session-worktrees", "s2");
+    const agentDir = path.join(dataDir, "home", ".pi", "agent");
+    mkdirSync(agentDir, { recursive: true });
+    const env = {
+      PATH: process.env.PATH,
+      HOME: path.join(dataDir, "home"),
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_AUTHOR_NAME: "T",
+      GIT_AUTHOR_EMAIL: "t@example.com",
+      GIT_COMMITTER_NAME: "T",
+      GIT_COMMITTER_EMAIL: "t@example.com",
+    };
+    const git = (cwd: string, ...args: string[]) =>
+      spawnSync("git", args, { cwd, env, encoding: "utf8" });
+    mkdirSync(repo, { recursive: true });
+    git(repo, "init", "-q", "-b", "main");
+    writeFileSync(path.join(repo, "a.txt"), "a\n");
+    git(repo, "add", "a.txt");
+    git(repo, "commit", "-qm", "init");
+    git(repo, "worktree", "add", "-q", "-b", "s2", worktree);
+    const baseCommit = git(repo, "rev-parse", "HEAD").stdout.trim();
+    const gitDir = path.join(repo, ".git");
+    const policy = sandboxPolicy(
+      { id: "s2", location: { kind: "server" }, workspace: { path: worktree, baseCommit } },
+      "server",
+      {
+        dataDir,
+        projectPath: repo,
+        piAgentDir: agentDir,
+        agentDir,
+        sessionDir: path.join(agentDir, "sessions", "--s2--"),
+      },
+    );
+    const provider = createSrtProvider();
+    try {
+      const protectedPaths = [
+        path.join(gitDir, "config"),
+        path.join(gitDir, "hooks", "pre-commit"),
+        path.join(gitDir, "worktrees", "s2", "commondir"),
+        path.join(gitDir, "worktrees", "s2", "gitdir"),
+      ];
+      const wrapped = await provider.wrap(
+        {
+          command: "/bin/sh",
+          args: [
+            "-c",
+            'echo b > b.txt && git add b.txt && git commit -qm second || exit 9; shift; for f; do echo x >> "$f" && echo "WROTE $f"; done; exit 0',
+            "sh",
+            "--",
+            ...protectedPaths,
+          ],
+          env,
+          cwd: worktree,
+        },
+        policy,
+      );
+      const run = spawnSync(wrapped.command, wrapped.args, {
+        cwd: wrapped.cwd,
+        env: wrapped.env,
+        encoding: "utf8",
+      });
+      wrapped.release?.();
+      expect(run.status, run.stderr).toBe(0);
+      expect(git(worktree, "log", "--format=%s", "-1").stdout.trim()).toBe("second");
+      expect(run.stdout).not.toContain("WROTE");
+      expect(existsSync(path.join(gitDir, "hooks", "pre-commit"))).toBe(false);
+    } finally {
+      await provider.dispose?.();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

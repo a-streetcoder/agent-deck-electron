@@ -9,11 +9,15 @@ import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { PiProcess } from "../src/PiProcess.ts";
 import {
+  carveReadAroundWrites,
   createSrtProvider,
+  MAX_CARVED_ENTRIES,
   noneProvider,
   PiSandboxError,
   prepareDenyWrite,
+  sandboxProbeProblem,
   SRT_PACKAGE,
+  srtDeniedAddressesProblem,
   srtProblem,
   type SandboxCommand,
   type SandboxFs,
@@ -34,6 +38,12 @@ function fakeFs(existing: readonly string[] = []) {
     createFile: (path, content) => {
       paths.add(path);
       made.push({ path, kind: "file", content });
+    },
+    children: (dir) => {
+      if (!paths.has(dir)) return undefined;
+      return [...paths]
+        .filter((path) => path.startsWith(`${dir}/`) && !path.slice(dir.length + 1).includes("/"))
+        .map((path) => path.slice(dir.length + 1));
     },
   };
   return { fs, made };
@@ -146,7 +156,63 @@ describe("noneProvider", () => {
   });
 });
 
+describe("sandboxProbeProblem (startup probe)", () => {
+  /** A provider whose wrap runs node with `script` instead of /bin/true. */
+  const running = (script: string, release = vi.fn()): SandboxProvider => ({
+    name: "srt",
+    wrap: async (cmd) => ({ ...cmd, command: process.execPath, args: ["-e", script], release }),
+  });
+
+  it("passes when the wrapped command succeeds, and releases the wrap", async () => {
+    const release = vi.fn();
+    expect(await sandboxProbeProblem(running("process.exit(0)", release))).toBeUndefined();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("reports the exit and stderr of a failing sandbox", async () => {
+    const why = await sandboxProbeProblem(
+      running(`console.error("bwrap: Can't mount proc"); process.exit(1)`),
+    );
+    expect(why).toContain("exited 1");
+    expect(why).toContain("Can't mount proc");
+  });
+
+  it("reports a wrap that throws and a sandbox that hangs", async () => {
+    const throwing: SandboxProvider = {
+      name: "srt",
+      wrap: async () => {
+        throw new PiSandboxError("srt could not start");
+      },
+    };
+    expect(await sandboxProbeProblem(throwing)).toBe("srt could not start");
+    expect(await sandboxProbeProblem(running("setInterval(() => {}, 1000)"), 300)).toContain(
+      "did not finish within 300 ms",
+    );
+  });
+
+  it("fails when the wrap itself never settles (srt's initialize hangs)", async () => {
+    const hung: SandboxProvider = { name: "srt", wrap: () => new Promise(() => {}) };
+    expect(await sandboxProbeProblem(hung, 200)).toContain("did not finish within 200 ms");
+  });
+
+  it("srt's own schema checks the denied addresses", async () => {
+    expect(await srtDeniedAddressesProblem([])).toBeUndefined();
+    expect(await srtDeniedAddressesProblem(["203.0.113.7", "10.1.0.0/16"])).toBeUndefined();
+    const why = await srtDeniedAddressesProblem(["203.0.113.7", "example.com"]);
+    expect(why).toContain('"example.com"');
+    expect(await srtDeniedAddressesProblem(["::ffff:192.0.2.1/64"])).toContain("Invalid IP");
+  });
+});
+
 describe("srt provider (fake SandboxManager)", () => {
+  it("starts srt's log monitor only when asked (AGENT_DECK_SANDBOX_MONITOR=1)", async () => {
+    const srt = fakeSrt();
+    const provider = createSrtProvider(async () => srt, "linux", fakeFs().fs, true);
+    await provider.wrap(plan(), POLICY);
+    expect((srt.initialize.mock.calls[0] as unknown[])[2]).toBe(true);
+    await provider.dispose?.();
+  });
+
   it("initialises once, prepares the folders, maps the policy and spawns srt's argv", async () => {
     const srt = fakeSrt();
     const host = fakeFs();
@@ -159,7 +225,7 @@ describe("srt provider (fake SandboxManager)", () => {
     );
     expect(POLICY.createDirs).toContain("/home/u/.pi/agent/sessions/--app--");
     expect(srt.initialize).toHaveBeenCalledTimes(1);
-    // No ask callback, the log monitor on; the defaults are the global list, no strictAllowlist.
+    // No ask callback, the log monitor off by default; the defaults are the global list, no strictAllowlist.
     expect(srt.initialize.mock.calls[0]).toEqual([
       {
         network: {
@@ -170,7 +236,7 @@ describe("srt provider (fake SandboxManager)", () => {
         filesystem: { denyRead: [], allowWrite: [], denyWrite: [] },
       },
       undefined,
-      true,
+      false,
     ]);
     expect(srt.updateConfig).not.toHaveBeenCalled();
     const [command, binShell, settings, , cwd, options] = srt.wrapWithSandboxArgv.mock
@@ -189,7 +255,8 @@ describe("srt provider (fake SandboxManager)", () => {
         // the server's launch folder (created read-only, never by the session).
         denyWrite: ["/srv/deck/sandbox/s1/launch"],
         denyRead: [],
-        allowRead: ["/home/u/.pi/agent/sessions/--app--"],
+        // The session folder is a write root: its write bind makes it readable.
+        allowRead: [],
       },
       network: {
         allowedDomains: POLICY.allowedDomains,
@@ -272,6 +339,12 @@ describe("srt provider (fake SandboxManager)", () => {
         kind: "file",
         content: "{}",
       });
+      // Pi's models.json schema requires `providers` (it warns on every launch otherwise).
+      expect(host.made).toContainEqual({
+        path: "/data/home/.pi/agent/models.json",
+        kind: "file",
+        content: '{"providers":{}}',
+      });
       expect(host.made).toContainEqual({ path: "/data/home/.pi/agent/extensions", kind: "dir" });
       expect(denies).toContain("/data/home/.pi/agent/settings.json");
     });
@@ -290,6 +363,100 @@ describe("srt provider (fake SandboxManager)", () => {
       const denies = prepareDenyWrite(policy, host.fs);
       expect(denies).toEqual(expect.arrayContaining([`${G}/config`, "/data/wt/s1/.git"]));
       expect(host.made.map((entry) => entry.path)).not.toContain(`${G}/worktrees/s1/commondir`);
+    });
+  });
+
+  describe("carveReadAroundWrites (srt binds allowRead entries over the write roots inside)", () => {
+    const G = "/data/projects/app/.git";
+    const A = "/data/home/.pi/agent";
+
+    it("emits the other .git entries only, never a write root", () => {
+      const host = fakeFs([
+        "/data/projects/app",
+        "/data/projects/app/src",
+        G,
+        `${G}/HEAD`,
+        `${G}/config`,
+        `${G}/objects`,
+        `${G}/refs`,
+        `${G}/logs`,
+        `${G}/worktrees`,
+        `${G}/worktrees/s1`,
+        `${G}/worktrees/other`,
+      ]);
+      const writes = ["/data/wt/s1", `${G}/objects`, `${G}/refs`, `${G}/logs`, `${G}/worktrees/s1`];
+      expect(
+        carveReadAroundWrites(
+          ["/data/wt/s1", "/data/projects/app"],
+          writes,
+          ["/data"],
+          host.fs,
+        ).sort(),
+      ).toEqual(
+        ["/data/projects/app/src", `${G}/HEAD`, `${G}/config`, `${G}/worktrees/other`].sort(),
+      );
+    });
+
+    it("an agent dir with denied sessions emits no other session and no auth file", () => {
+      const sessionDir = `${A}/sessions/--app--`;
+      const host = fakeFs([
+        A,
+        `${A}/auth.json`,
+        `${A}/mcp-auth.json`,
+        `${A}/settings.json`,
+        `${A}/sessions`,
+        sessionDir,
+        `${A}/sessions/--other--`,
+        "/data/home",
+        "/data/home/.pi",
+      ]);
+      const denyRead = ["/data", `${A}/sessions`, `${A}/auth.json`, `${A}/mcp-auth.json`];
+      // The agent dir is not writable here (a user session reading the shared entries).
+      const carved = carveReadAroundWrites(["/data/home/.pi"], [sessionDir], denyRead, host.fs);
+      expect(carved).toEqual([`${A}/settings.json`]);
+      // Writable agent dir: every entry at or under a write root is dropped.
+      expect(carveReadAroundWrites([A, sessionDir], [A, sessionDir], denyRead, host.fs)).toEqual(
+        [],
+      );
+    });
+
+    it("reads deny globs as srt does: ** crosses folders (an exact entry would cancel srt's mask)", () => {
+      const host = fakeFs([
+        "/tree",
+        "/tree/a",
+        "/tree/a/b",
+        "/tree/a/b/w",
+        "/tree/a/b/auth.json",
+        "/tree/a/b/keep.txt",
+        "/tree/a/secret",
+        "/tree/a/other",
+      ]);
+      expect(
+        carveReadAroundWrites(
+          ["/tree"],
+          ["/tree/a/b/w"],
+          ["/tree/**/auth.json", "/tree/*/secret"],
+          host.fs,
+        ).sort(),
+      ).toEqual(["/tree/a/b/keep.txt", "/tree/a/other"]);
+    });
+
+    it("leaves globbed denials out, keeps an unlistable entry, refuses an overlong level", () => {
+      const host = fakeFs(["/tmp/x", "/tmp/x/w", "/tmp/x/agent-deck-bridge-ext-1", "/tmp/x/keep"]);
+      expect(
+        carveReadAroundWrites(["/tmp/x"], ["/tmp/x/w"], ["/tmp/x/agent-deck-*"], host.fs),
+      ).toEqual(["/tmp/x/keep"]);
+      expect(carveReadAroundWrites(["/data/nope"], ["/data/nope/w"], [], host.fs)).toEqual([
+        "/data/nope",
+      ]);
+      const many = fakeFs([
+        "/big",
+        "/big/w",
+        ...Array.from({ length: MAX_CARVED_ENTRIES }, (_, n) => `/big/f${n}`),
+      ]);
+      expect(() => carveReadAroundWrites(["/big"], ["/big/w"], [], many.fs)).toThrow(
+        PiSandboxError,
+      );
     });
   });
 
@@ -329,7 +496,7 @@ describe("srt provider (fake SandboxManager)", () => {
     expect(seen).toHaveLength(2);
   });
 
-  it("dispose() lets a wrap in flight finish before reset, and refuses wraps after it", async () => {
+  it("dispose() lets a wrap in flight settle before reset, rejects it, and refuses wraps after it", async () => {
     const srt = fakeSrt();
     let finishWrap: () => void = () => {};
     srt.wrapWithSandboxArgv.mockImplementationOnce(
@@ -345,11 +512,67 @@ describe("srt provider (fake SandboxManager)", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(srt.reset).not.toHaveBeenCalled();
     finishWrap();
-    await wrapping;
+    // Its argv would run after srt's reset: never handed out.
+    await expect(wrapping).rejects.toThrow(PiSandboxError);
     await disposing;
     expect(srt.reset).toHaveBeenCalledTimes(1);
     await expect(provider.wrap(plan(), POLICY)).rejects.toThrow(/disposed/);
     expect(srt.initialize).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispose() past its deadline still resets a loaded manager whose initialize hangs, without waiting on it", async () => {
+    const srt = fakeSrt();
+    srt.initialize.mockImplementation(() => new Promise<void>(() => {}));
+    // reset itself never settles either: dispose must not wait past its bound.
+    srt.reset.mockImplementation(() => new Promise<void>(() => {}));
+    const provider = createSrtProvider(async () => srt, "linux", fakeFs().fs, false, 50);
+    const wrapping = provider.wrap(plan(), POLICY);
+    await vi.waitFor(() => expect(srt.initialize).toHaveBeenCalled());
+    const started = Date.now();
+    await provider.dispose!();
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(srt.reset).toHaveBeenCalledTimes(1);
+    expect(srt.wrapWithSandboxArgv).not.toHaveBeenCalled();
+    void wrapping.catch(() => {});
+  });
+
+  it("an initialize that finishes after dispose() rejects its wrap and resets that manager once", async () => {
+    const srt = fakeSrt();
+    let finishInit: () => void = () => {};
+    srt.initialize.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishInit = resolve;
+        }),
+    );
+    const provider = createSrtProvider(async () => srt, "linux", fakeFs().fs, false, 50);
+    const wrapping = provider.wrap(plan(), POLICY);
+    await vi.waitFor(() => expect(srt.initialize).toHaveBeenCalled());
+    await provider.dispose!(); // past the deadline: reset before the proxies exist
+    finishInit();
+    await expect(wrapping).rejects.toThrow(PiSandboxError);
+    expect(srt.wrapWithSandboxArgv).not.toHaveBeenCalled();
+    // The late initialize created proxies after that reset: cleaned up once more.
+    expect(srt.reset).toHaveBeenCalledTimes(2);
+
+    // Finishing within dispose()'s wait: one reset in all, no argv either.
+    const srt2 = fakeSrt();
+    let finishInit2: () => void = () => {};
+    srt2.initialize.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishInit2 = resolve;
+        }),
+    );
+    const provider2 = createSrtProvider(async () => srt2, "linux", fakeFs().fs, false, 5_000);
+    const wrapping2 = provider2.wrap(plan(), POLICY);
+    await vi.waitFor(() => expect(srt2.initialize).toHaveBeenCalled());
+    const disposing2 = provider2.dispose!();
+    finishInit2();
+    await expect(wrapping2).rejects.toThrow(PiSandboxError);
+    await disposing2;
+    expect(srt2.wrapWithSandboxArgv).not.toHaveBeenCalled();
+    expect(srt2.reset).toHaveBeenCalledTimes(1);
   });
 
   it("drops the SIGINT/SIGTERM resets srt registers, so the host disposes it last", async () => {
