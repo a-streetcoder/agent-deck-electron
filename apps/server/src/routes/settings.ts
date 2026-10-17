@@ -7,6 +7,7 @@ import {
   rmSync,
   statSync,
   writeFileSync,
+  statfsSync,
 } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import nodePath from "node:path";
@@ -18,6 +19,7 @@ import {
   resolvePiBinary,
   runDoctor,
   webAccessChecks,
+  type HealthCheck,
 } from "@agent-deck/pi-host";
 import {
   listProviders,
@@ -34,6 +36,7 @@ import {
   isValidChord,
   MAX_KEYBINDINGS_COUNT,
   type KeybindingBinding,
+  type UserIdentity,
 } from "@agent-deck/contracts";
 import { z } from "zod";
 import {
@@ -47,6 +50,7 @@ import {
   type DiagnosticWarning,
 } from "../configurationWarnings.ts";
 import { envDefaults, type ServerContext } from "../context.ts";
+import { bridgeAvailable } from "../claudeTransport.ts";
 import { requestUser, SHARED_SERVER_REFUSAL, trustedProxyConfigFromEnv } from "../trustedProxy.ts";
 import { userRoots } from "../userAgentDirs.ts";
 import {
@@ -231,6 +235,70 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
     return { ok: true };
   });
 
+  /**
+   * Shared-server checks (DOC on the VM, 2026-10-17): the facts a person cannot
+   * see from a browser and that broke real sessions during the first runs: the
+   * process sandbox, Claude Code for the bridge, their own GitHub connection and
+   * git identity, and the data volume's free space. Never values, never paths
+   * outside the data dir.
+   */
+  const serverChecks = async (user: UserIdentity | undefined): Promise<HealthCheck[]> => {
+    if (!ctx.sharedServer) return [];
+    const checks: HealthCheck[] = [];
+    const sandbox = ctx.sandboxProvider?.name ?? "none";
+    checks.push({
+      id: "server-sandbox",
+      label: "Process sandbox",
+      status: sandbox === "none" ? "warn" : "ok",
+      detail:
+        sandbox === "none"
+          ? "Sessions run without a sandbox on this server (AGENT_DECK_SANDBOX=none)"
+          : `Every session runs under ${sandbox} (probe passed at startup)`,
+    });
+    const bridge = await bridgeAvailable(ctx);
+    checks.push({
+      id: "server-claude-code",
+      label: "Claude Code (claude-bridge)",
+      status: bridge ? "ok" : "warn",
+      detail: bridge
+        ? "Installed and signed in: Claude subscription models run through the bridge"
+        : "Not installed or not signed in on this server: Claude subscription models are unavailable, Anthropic needs an API key",
+    });
+    if (user) {
+      const github = ctx.githubConnections?.status(user) ?? null;
+      checks.push({
+        id: "server-github",
+        label: "Your GitHub connection",
+        status: github ? "ok" : "warn",
+        detail: github
+          ? `Connected as ${github.login}: pushes, pull requests and Issues run as you`
+          : "Not connected: pushes use the server default and the Issues screen is unavailable (Providers > GitHub)",
+      });
+      const identity = ctx.gitIdentities?.resolve(user);
+      checks.push({
+        id: "server-git-identity",
+        label: "Your git identity",
+        status: identity ? "ok" : "warn",
+        detail: identity
+          ? `Commits are attributed to ${identity.name} <${identity.email}>`
+          : "No identity: commits would fail to auto-detect an author",
+      });
+    }
+    try {
+      const stat = statfsSync(rootsFor().home);
+      const freeGb = (Number(stat.bavail) * Number(stat.bsize)) / 1e9;
+      checks.push({
+        id: "server-disk",
+        label: "Data volume free space",
+        status: freeGb < 2 ? "error" : freeGb < 10 ? "warn" : "ok",
+        detail: `${freeGb.toFixed(1)} GB free for projects, sessions and toolchains`,
+      });
+    } catch {
+      // statfs unavailable (not Linux): no check rather than a false alarm.
+    }
+    return checks;
+  };
+
   const buildDoctorReport = async (projectId: string | undefined) => {
     const roots = rootsFor(projectId);
     const defaults = envDefaults();
@@ -259,6 +327,17 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
   fastify.get("/runtime/doctor", async (request) => {
     const { projectId } = request.query as { projectId?: string };
     const report = await buildDoctorReport(projectId);
+    if (ctx.sharedServer) {
+      // The host's gh login is not how a shared server authenticates GitHub:
+      // each person connects under Providers (SRV-06); the server check below says so.
+      const gh = report.checks.find((check) => check.id === "github");
+      if (gh && gh.status === "warn") {
+        gh.status = "ok";
+        gh.detail = `${gh.detail.split(" — ")[0]} — installed; each person connects GitHub under Providers`;
+        delete gh.fixCommand;
+      }
+    }
+    report.checks.push(...(await serverChecks(requestUser(request.raw))));
     // DOC-01: the UI shows Run-fix ONLY where the server would launch it —
     // the same findDoctorFixCommand boundary decides both.
     const checks = report.checks.map((check) => ({
