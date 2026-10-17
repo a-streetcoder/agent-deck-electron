@@ -1,9 +1,10 @@
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { projectMemoryDir } from "@agent-deck/memory";
 import { describe, expect, it } from "vitest";
 import {
+  canonicalResourcePaths,
   fingerprintLaunchResources,
   LaunchResourceResolutionError,
   resolveLaunchResources,
@@ -439,6 +440,27 @@ describe("launch resource fingerprint", () => {
     expect(fingerprintLaunchResources({ kind: "parent" }, [linked])).toBe(
       fingerprintLaunchResources({ kind: "parent" }, [linked]),
     );
+  });
+
+  it("resolves a store fan-out link to the real skill folder (the fingerprint still refuses links)", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deck-launch-fanout-"));
+    const canonical = path.join(root, ".agents", "skills", "qa-greet");
+    mkdirSync(canonical, { recursive: true });
+    writeFileSync(path.join(canonical, "SKILL.md"), "# qa-greet");
+    const linked = path.join(root, ".pi-skills", "qa-greet");
+    mkdirSync(path.dirname(linked), { recursive: true });
+    symlinkSync(canonical, linked, "dir");
+    const [resolved] = canonicalResourcePaths([linked]);
+    expect(resolved).toBe(realpathSync.native(canonical));
+    expect(() => fingerprintLaunchResources({ kind: "parent", skills: [linked] }, [])).toThrow(
+      "required launch resource",
+    );
+    expect(() =>
+      fingerprintLaunchResources({ kind: "parent", skills: [resolved!] }, []),
+    ).not.toThrow();
+    expect(canonicalResourcePaths([path.join(root, "missing")])).toEqual([
+      path.join(root, "missing"),
+    ]);
   });
 
   it("bounds aggregate selected resource traversal", () => {

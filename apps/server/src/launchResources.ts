@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, readdirSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import nodePath from "node:path";
 import type { ProjectMeta } from "@agent-deck/contracts";
@@ -69,6 +69,22 @@ type ResolverContext = Pick<
   effectiveMcpConfigs?: ServerContext["effectiveMcpConfigs"];
   mcpPolicy?: Pick<ServerContext["mcpPolicy"], "enabled">;
 };
+
+/**
+ * Fan-out links (`~/.pi/agent/skills/<name>` -> `~/.agents/skills/<name>`, the
+ * skill-store contract) resolve to the real folder before they enter a plan: Pi
+ * reads through the link anyway, the fingerprint refuses links (below) and the
+ * sandbox binds real paths. A path that does not resolve stays as it is.
+ */
+export function canonicalResourcePaths(paths: readonly string[]): string[] {
+  return paths.map((path) => {
+    try {
+      return realpathSync.native(path);
+    } catch {
+      return path;
+    }
+  });
+}
 
 const MAX_FINGERPRINT_DEPTH = 16;
 const MAX_FINGERPRINT_FILES = 2_000;
@@ -249,7 +265,7 @@ export function resolveLaunchResources(
       // Normalised below against the session's effective MCP server set.
       tools: agent.tools,
       extensions: finalizeExtensions([...base, ...agent.extensions]),
-      skills: agent.skillDirs,
+      skills: agent.skillDirs ? canonicalResourcePaths(agent.skillDirs) : undefined,
       promptTemplates: promptTemplates.length ? promptTemplates : undefined,
       provider,
       model: agent.model ?? model,
@@ -272,6 +288,7 @@ export function resolveLaunchResources(
       if (resolved.status === "error") throw new Error(resolved.message);
       skills = resolved.skillDirs.length ? resolved.skillDirs : undefined;
     }
+    if (skills) skills = canonicalResourcePaths(skills);
     plan = {
       kind: "parent",
       provider,
