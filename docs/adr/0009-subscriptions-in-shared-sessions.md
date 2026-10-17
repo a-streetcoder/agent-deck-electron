@@ -80,7 +80,16 @@ Facts the design rests on (verified 2026-10-17/18):
    amendment); the provider hosts themselves leave the default allow-list once every provider the
    session uses goes through the broker, so a session has no path to a provider except with the
    broker's consent. Subagents and helpers of a turn inherit its sponsor.
-7. **Claude Code is part of the package.** The image installs a pinned Claude Code; each member
+7. **Environment secrets go through the same broker.** A variable in the Environment screen
+   (global or project) can be marked _secret_ with an injection rule: the hosts it may reach and
+   how it is sent (bearer, header name, query parameter). A secret variable reaches the session as
+   a placeholder and the broker expands it only on requests to those hosts; an unmarked variable
+   keeps today's behaviour, injected raw, which stays right for values that are not credentials.
+   On the shared server a project's secrets are the project's, shared by its members as the
+   variables are today; the broker changes what a session can read, not who may use them. A
+   secret used outside HTTP to its hosts (a CLI sending it elsewhere, Basic auth) cannot be
+   expanded; the rule says so when it is set, and the owner may still choose raw injection.
+8. **Claude Code is part of the package.** The image installs a pinned Claude Code; each member
    signs in once from their own session terminal with their config folder, which stays in the
    member's dir in the data volume and is read only by the server. ADR 0003's "the host's login,
    the same for every owner" is superseded.
@@ -125,14 +134,16 @@ Facts the design rests on (verified 2026-10-17/18):
   completes real turns on Anthropic (key) and Codex (sign-in, account header) through placeholders;
   Claude Code completes a turn through `ANTHROPIC_BASE_URL`; SSE streams; the sandbox allows only
   the broker; overhead measured against SBX-05's numbers. Evidence on the ticket; go/no-go.
-- CRB-02 broker service: per-session placeholders, sponsor selection per request, OAuth refresh
-  in the server, revocation, per-turn spend log, no credential in any session file or env.
+- CRB-02 broker service: per-session placeholders for subscriptions and secret Environment
+  variables, sponsor selection per request, OAuth refresh in the server, revocation, per-turn
+  spend log, no credential in any session file or env; the Environment store gains the secret
+  flag and injection rule.
 - CRB-03 sandbox: the broker allow and the provider hosts' removal from brokered sessions (ADR 0007
   amendment), stack matrix row.
 - SUB-02 record and rules: `shares` on the session record (ADR 0006 amendment), sponsor on each turn
   event, the refusal and its message, `allowedOperations` for share and withdraw.
 - SUB-04 web: the two-level picker, the composer chip, the session header share controls, the
-  refusal message, Providers and Doctor per user.
+  refusal message, Providers and Doctor per user, the Environment screen's secret flag and rule.
 - SUB-05 package: Claude Code pinned in the image, per-user config folder, sign-in from the
   session terminal, runbook first-run step (absorbs ade-81m8).
 - Docs: `remote-server-poc.md` "Credentials" rewritten to this ADR; ADR 0003 and ADR 0007 amended.
