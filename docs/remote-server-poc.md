@@ -1040,7 +1040,8 @@ The shared server ships as a Linux x64 image, `ghcr.io/<owner>/agent-deck-server
 
 What is inside (`/app`, owned by root, not writable by the server user):
 
-- `dist/server/index.mjs`, the esbuild backend bundle (`pnpm build:backend`, no source map). The
+- `dist/server/index.mjs`, the esbuild backend bundle (`pnpm build:backend`, no source map), and
+  `dist/server/sandbox-run.mjs`, one command in a session's sandbox ([the stack matrix](#the-stack-matrix-gate)). The
   PostHog key is not baked: the image builds without `AGENT_DECK_POSTHOG_KEY`, so analytics is off.
 - `web/`, the built UI (`pnpm build:web`), served by the backend.
 - `resources/loop-catalog-native/` and `resources/skill-engine-native/`, the two `.linux-x64.node`
@@ -1156,7 +1157,8 @@ program in the container is killed at its first system call), the AppArmor profi
 masks covered), and `systempaths=unconfined` (bubblewrap mounts a fresh `/proc`, which the kernel
 refuses while the container's `/proc` has masks). `deploy/compose.yaml` sets all three, and a
 `pids_limit`. The measurements behind them are in
-[the SBX-01 spike](archive/sbx-01-spike-2026-10-17.md) and on ticket SBX-04.
+[the SBX-01 spike](archive/sbx-01-spike-2026-10-17.md) and on ticket SBX-04. Which stacks build
+inside, and the hard limits, are in [the stack matrix](stack-matrix.md).
 
 ### AGENT_DECK_SANDBOX and the probe
 
@@ -1247,9 +1249,11 @@ Sessions install toolchains as the server user into the home, which is in the vo
 survives a container replace: `rustup` (`~/.cargo`, `~/.rustup`), `uv` and `pipx` (`~/.local`),
 `nvm` (`~/.nvm`), `sdkman` (`~/.sdkman`), `npm i -g` with a prefix in `~/.npm-global`, Go
 tarballs in `~/go`. Those folders are writable to every session (one home for every user), and
-their installers need their hosts on the allow-list (the default list has the package
-registries and `sh.rustup.rs`). The image's builder layer gives them a C toolchain, headers and
-Python, so `cargo build`, native npm modules and Python wheels build without more.
+their installers need their hosts on the allow-list (the default list has the npm, PyPI, crates,
+Go proxy and Maven Central registries and `static.rust-lang.org`, not `sh.rustup.rs`). The image's
+builder layer gives them a C toolchain, headers and Python, so `cargo build`, native npm modules
+and Python wheels build without more. The install lines that worked, and the hosts each needs,
+are in [the stack matrix](stack-matrix.md#toolchains-that-installed-as-the-user).
 
 ### What sessions cannot do
 
@@ -1260,6 +1264,52 @@ Python, so `cargo build`, native npm modules and Python wheels build without mor
   transcript a line with Allow for the owner or operator).
 - Make namespaces, mount, `pivot_root`, or open `NETLINK_NETFILTER` sockets.
 - Write their project's `.git` config, hooks or worktree pointers, or the server's launch files.
+
+### The stack matrix (gate)
+
+After any change to the sandbox (`packages/pi-host/src/sandbox.ts`, `sandboxPolicy`, the
+`deploy/` profiles) or to the image, run from a checkout on the operator's machine:
+
+```sh
+node scripts/stack-matrix.mjs --host dev
+node --test scripts/stack-matrix-baseline.test.mjs   # its baseline matcher; nothing runs it automatically
+```
+
+It ships `HEAD` to `~/sbx-06` on the host (a dirty working tree is warned about: only `HEAD`
+goes), builds `agent-deck-server:sbx06`, starts one container with the production security
+options on a scratch volume (never the production stack), and runs ten public stacks, each
+pinned to a commit and its toolchain versions, through the image's `sandbox-run` CLI: per-user
+toolchain, install, test, dev server, commit. It needs no model or credentials, takes about
+six minutes once the image's layers are cached (a cold image build adds about fifteen), and
+refuses to start with less than 15 GB of disk or 2 GB of memory free on the host.
+
+AppArmor: the container runs under `HEAD`'s `deploy/apparmor-agent-deck`, loaded with
+`sudo -n apparmor_parser -r` under the name `agent-deck-sandbox-matrix` and removed again at the
+end; the installed `agent-deck-sandbox` is never touched. Only when `sudo -n` itself refuses
+(a password is required, or the user may not run it) does the run fall back to the installed
+profile, printing that changes to the profile are not covered: load them on the host by hand
+(see [The AppArmor profile](#the-apparmor-profile)) before trusting that run for a profile
+change. Any other load error (the parser rejecting `HEAD`'s profile, a broken ssh) fails the run.
+
+It exits non-zero when any step fails that `scripts/stack-matrix.baseline.json` does not list
+(each listed failure names its follow-up ticket and the error text it must show; a timeout or a transport error on a listed step still fails), when a step is skipped for budget, or when it
+is interrupted; a listed failure that now passes is reported as "fixed, remove from baseline".
+At the end, and on Ctrl-C or SIGTERM, it removes its container, volume, image, profile, folder
+and local logs (`--keep` leaves them; a later run without `--keep` removes a stale container or
+volume first; `--only <stack,...>` and `--skip-build` narrow a rerun). A teardown that leaves
+any of them behind prints what is left, keeps the local logs and exits non-zero (an interrupted
+run keeps 130 or 143). Compare its table with
+[the stack matrix](stack-matrix.md). One command in a session's sandbox, by hand, in such a test
+container only, never in the production container:
+
+```sh
+docker exec <container> node /app/dist/server/sandbox-run.mjs --project <path> \
+  [--worktree <path>] [--user <email>] [--allow-host <host>] -- <command>
+docker exec <container> node /app/dist/server/sandbox-run.mjs --probe
+```
+
+`sandbox-run` refuses a `--session` whose folder under `<dataDir>/sandbox/` exists (it removes
+that folder at the end) and a `--data-dir` other than `AGENT_DECK_DATA_DIR`.
 
 ## Security model
 
