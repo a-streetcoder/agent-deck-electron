@@ -1,6 +1,6 @@
 ---
 id: ade-0mj8
-status: in_progress
+status: closed
 deps: [ade-w2zc, ade-nobk]
 links: []
 created: 2026-10-17T22:05:04Z
@@ -51,3 +51,7 @@ One should-fix, applied by the developer at the root rather than where the revie
 - `credential-spend.jsonl` has no `helper-` lines yet: no commit-message or skill-summary helper ran during the check. Covered by the unit tests; a live check happens the first time someone uses Git > Describe changes on the shared server.
 - Stack matrix `brokered-turn` row: `node scripts/stack-matrix.mjs --host dev --only brokered-turn` refused to start: "only 1 GB memory available on dev; need 2". The host's `dockerd` holds 3.9 GB RSS after the day's image builds (the server container itself is at 190 MB). Running the matrix (the full one is due after this policy change) needs a Docker daemon restart on the VM, which restarts the production stack: owner's call. Ticket stays open until the matrix has run.
 - Load measurements taken the same evening on the broker build are in `docs/capacity-measurements.md`.
+
+## Stack matrix (2026-10-18, after the owner approved a Docker daemon restart on the VM)
+
+`node scripts/stack-matrix.mjs --host dev` on HEAD 8552ca8: all ten stacks pass (pnpm-monorepo, python-uv, rust-cargo, go, java-gradle, rails, compose-app, playwright, static-site, agent-deck-electron; baseline failures only), and the new `brokered-turn` row passes: setup 0.6 s, providers-refused 0.4 s (two sandbox refusals, api.openai.com and api.anthropic.com), broker-404 0.4 s (the stand-in on the container address answered through srt's proxy without `--noproxy`, so the policy's `NO_PROXY` in front of the wrapped command does win over srt's `--setenv`). Correction to the VM note above: autoTitle runs at the idle edge through the session's broker URL, not inside the turn (found while implementing SUB-02). Closed.
