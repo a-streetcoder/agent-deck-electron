@@ -333,6 +333,28 @@ describe("the credential broker", () => {
     expect((await fetch(url)).status).toBe(404);
   });
 
+  it("brokers a one-shot helper with its requester as sponsor until forgotten (CRB-03)", async () => {
+    // No session record: the helper is known to the broker only.
+    const helper: SessionMeta = {
+      id: "helper-test-1",
+      cwd: "/tmp",
+      createdAt: new Date().toISOString(),
+      createdBy: { id: ALICE },
+    };
+    broker.registerTransient(helper);
+    const { key } = placeholderOf(helper.id);
+    const url = brokerUrl(helper.id, "openai", "/chat");
+    const response = await fetch(url, { headers: { authorization: `Bearer ${key}` } });
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { authorization: string }).authorization).toBe("real:alice");
+    expect(spendLines().at(-1)).toMatchObject({ sessionId: helper.id, sponsor: ALICE });
+    broker.forget(helper.id);
+    const gone = await fetch(url, { headers: { authorization: `Bearer ${key}` } });
+    expect(gone.status).toBe(404);
+    // Its record went with the token: a fresh token finds no session either.
+    expect((await fetch(brokerUrl(helper.id, "openai", "/chat"))).status).toBe(404);
+  });
+
   it("brokers Claude Code with the sponsor's sign-in", async () => {
     session("s-claude", ALICE);
     const { key } = placeholderOf("s-claude");
@@ -556,5 +578,19 @@ describe.skipIf(!canSymlink)("the session's agent dir", () => {
     // A second launch keeps the token and rewrites the file in place.
     expect(broker.launchEnv(meta).CLAUDE_CODE_OAUTH_TOKEN).toBe(key);
     expect(lstatSync(modelsFile).isFile()).toBe(true);
+  });
+
+  it("gives a one-shot helper its own brokered agent dir (CRB-03)", () => {
+    const helper: SessionMeta = {
+      id: "helper-test-2",
+      cwd: "/tmp",
+      createdAt: new Date().toISOString(),
+      createdBy: { id: ALICE },
+    };
+    broker.registerTransient(helper);
+    const env = broker.launchEnv(helper);
+    expect(env.PI_CODING_AGENT_DIR).toBe(path.join(dataDir, "sandbox", helper.id, "agent"));
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe(placeholderOf(helper.id).key);
+    broker.forget(helper.id);
   });
 });

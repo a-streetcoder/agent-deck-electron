@@ -17,7 +17,10 @@
 // server (started and probed from the same sandbox: a second sandbox is
 // another network namespace), and a commit, checked from outside. No model and
 // no credentials are involved. The install is timed again with
-// AGENT_DECK_SANDBOX_MONITOR=1 and without (both warm). At the end, or on
+// AGENT_DECK_SANDBOX_MONITOR=1 and without (both warm). A last row,
+// brokered-turn (CRB-03), runs in a brokered session's sandbox: the provider
+// hosts are refused, and a stand-in on the broker's port is reached through
+// the allowed address literal. At the end, or on
 // SIGINT/SIGTERM, the container, volume, image, profile, ~/sbx-06 and the
 // local logs are removed unless --keep.
 //
@@ -265,7 +268,22 @@ const STACKS = [
     serve: "pnpm --filter @agent-deck/web exec vite --host 127.0.0.1 --port 5199 --strictPort",
     port: 5199,
   },
+  {
+    // CRB-03: not a stack; runBrokered's steps instead of the stack steps.
+    name: "brokered-turn",
+    repo: "(an empty project)",
+    brokered: true,
+    versions: "-",
+  },
 ];
+
+/** The broker's default port (credentialBroker.ts). */
+const BROKER_PORT = 4211;
+/** No server runs in the matrix container: this answers 404 on the broker's
+ * port, as the broker does for an unknown session or token. An old one (a
+ * --keep run) keeps the port. */
+const BROKER_STANDIN = `require("http").createServer((q, s) => s.writeHead(404).end()).on("error", () => process.exit(0)).listen(${BROKER_PORT}, "0.0.0.0")`;
+const BROKER_UP = `require("net").connect(${BROKER_PORT}, "127.0.0.1").on("connect", () => process.exit(0)).on("error", () => process.exit(1))`;
 
 const shq = (value) => `'${String(value).replaceAll("'", `'\\''`)}'`;
 const b64 = (script) => Buffer.from(script).toString("base64");
@@ -340,7 +358,7 @@ async function must(label, command, options) {
  * One timed command in the container; `sandbox` runs it through sandbox-run.
  * Runs only while both the stack's and the global budget last.
  */
-async function step(stack, label, script, { sandbox = true, monitor = false, timeout }) {
+async function step(stack, label, script, { sandbox = true, monitor = false, broker, timeout }) {
   const allowed = Math.min(timeout, budgetLeft());
   if (stopping || allowed <= 10) {
     const why = stopping
@@ -362,6 +380,7 @@ async function step(stack, label, script, { sandbox = true, monitor = false, tim
         `--project ${project} --worktree ${worktree} --user ${USER}`,
         `--session matrix-${stack.name}-${label}`,
         ...(stack.grants ?? []).map((host) => `--allow-host ${host}`),
+        ...(broker ? [`--broker ${broker}`] : []),
         `-- ${evalWord(`${PRELUDE}\n${cwd}${script}`)}`,
       ].join(" ")
     : `sh -c ${evalWord(script)}`;
@@ -500,6 +519,68 @@ async function runStack(stack) {
   return results;
 }
 
+/**
+ * CRB-03: a brokered session's network, in its sandbox. `providers-refused`:
+ * api.openai.com and api.anthropic.com are refused while a registry answers
+ * (the network works); `broker-404`: the broker's `<ip>:<port>` is reached
+ * through srt's proxy (the allow literal) and answers 404 for a bad token.
+ * The owner's real brokered turn stays the browser check (runbook).
+ */
+async function runBrokered(stack) {
+  const started = Date.now();
+  const left = () => STACK_TIMEOUT - (Date.now() - started) / 1000;
+  const project = `/data/projects/${stack.name}`;
+  const worktree = `/data/session-worktrees/matrix-${stack.name}`;
+  const format = shq("{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}");
+  const ip = (await ssh(`docker inspect -f ${format} ${CONTAINER}`)).output.trim();
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
+    return [
+      { step: "setup", pass: false, code: 1, tail: [`no container address (${ip || "none"})`] },
+    ];
+  }
+  const broker = `${ip}:${BROKER_PORT}`;
+  const layout = [
+    "set -e",
+    `rm -rf ${project} ${worktree}`,
+    `git init -q ${project}`,
+    `git -C ${project} -c user.name=matrix -c user.email=matrix@localhost commit -q --allow-empty -m init`,
+    `git -C ${project} worktree add -q -b agent-deck/session-matrix-${stack.name} ${worktree}`,
+    `nohup node -e ${shq(BROKER_STANDIN)} >/tmp/broker-standin.log 2>&1 </dev/null &`,
+    "i=0",
+    `until node -e ${shq(BROKER_UP)}; do`,
+    '  i=$((i+1)); [ $i -lt 20 ] || { cat /tmp/broker-standin.log; echo "no stand-in on the broker port"; exit 1; }',
+    "  sleep 0.5",
+    "done",
+  ].join("\n");
+  const results = [];
+  const setup = await step(stack, "setup", layout, {
+    sandbox: false,
+    timeout: Math.min(120, left()),
+  });
+  results.push(setup);
+  if (!setup.pass) return results;
+  const refused = [
+    "for u in https://api.openai.com/ https://api.anthropic.com/; do",
+    '  if curl -s -o /dev/null --max-time 20 "$u"; then echo "$u answered: a provider host is reachable"; exit 1; fi',
+    '  echo "$u refused"',
+    "done",
+    "curl -fsS -o /dev/null --max-time 20 https://registry.npmjs.org/",
+    'echo "registry.npmjs.org answered: the network works"',
+  ].join("\n");
+  results.push(
+    await step(stack, "providers-refused", refused, { broker, timeout: Math.min(120, left()) }),
+  );
+  // No --noproxy: the sandbox's own NO_PROXY must send the private address
+  // through srt's proxy, as it does for Pi (CRB-03, policy.noProxy).
+  const reach = [
+    `code=$(curl -s -o /dev/null --max-time 20 -w '%{http_code}' http://${broker}/matrix-session/bad-token/openai/v1/models || true)`,
+    'echo "the broker address answered HTTP ${code:-nothing}"',
+    '[ "$code" = 404 ]',
+  ].join("\n");
+  results.push(await step(stack, "broker-404", reach, { broker, timeout: Math.min(120, left()) }));
+  return results;
+}
+
 /** Each failure outside the baseline, and each baseline entry that passed. */
 function verdict(all) {
   const failures = [];
@@ -543,6 +624,7 @@ function table(all) {
     "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
   ];
   for (const { stack, results, skipped } of all) {
+    if (stack.brokered) continue; // no stack columns: brokeredLine
     const get = (label) => results.find((entry) => entry.step === label);
     const repo = stack.local
       ? stack.repo
@@ -558,6 +640,20 @@ function table(all) {
   }
   return rows.join("\n");
 }
+
+/** The brokered-turn row, one line under the table. */
+const brokeredLine = (all) =>
+  all
+    .filter(({ stack }) => stack.brokered)
+    .map(
+      ({ stack, results, skipped }) =>
+        `${stack.name}: ${
+          skipped
+            ? `not run (${skipped})`
+            : results.map((entry) => `${entry.step} ${cell(stack, entry)}`).join(", ")
+        }`,
+    )
+    .join("\n");
 
 /** sudo's own words for "you may not run this without a password". */
 const SUDO_REFUSED = /password is required|not allowed to|not in the sudoers|may not run sudo/i;
@@ -684,7 +780,7 @@ async function main() {
       continue;
     }
     console.log(`${stack.name} (${stack.repo}${stack.sha ? ` @ ${stack.sha.slice(0, 7)}` : ""})`);
-    all.push({ stack, results: await runStack(stack) });
+    all.push({ stack, results: await (stack.brokered ? runBrokered : runStack)(stack) });
   }
   if (stopping) return;
   const report = all.map(({ stack, results, skipped }) => ({
@@ -699,6 +795,8 @@ async function main() {
   }));
   if (opts.out) writeFileSync(opts.out, `${JSON.stringify(report, null, 2)}\n`);
   console.log(`\n${table(all)}\n`);
+  const brokered = brokeredLine(all);
+  if (brokered) console.log(`${brokered}\n`);
   for (const { stack, results } of all) {
     for (const entry of results.filter((result) => !result.pass)) {
       const known = baselineOf(stack.name, entry.step);

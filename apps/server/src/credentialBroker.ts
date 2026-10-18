@@ -273,10 +273,17 @@ export class CredentialBroker {
   private catalog?: { at: number; runtime: ModelRuntime };
   private catalogBuilding = false;
   private readonly tokens = new Map<string, string>();
+  /** CRB-03: one-shot helpers, which have no session record, by id. */
+  private readonly transients = new Map<string, SessionMeta>();
   private readonly runtimes = new Map<string, { at: number; runtime: Promise<ModelRuntime> }>();
   private readonly claudeRefreshes = new Map<string, { at: number; done: Promise<void> }>();
 
   constructor(private readonly deps: CredentialBrokerDeps) {}
+
+  /** Doctor (CRB-03): the HTTP server is up. */
+  get listening(): boolean {
+    return this.server?.listening ?? false;
+  }
 
   /** Builds the provider catalog (a failure is logged, launches then refuse)
    * and listens; throws only when it cannot listen. */
@@ -329,17 +336,25 @@ export class CredentialBroker {
     return token;
   }
 
-  /** The session is gone: its token stops working. */
+  /** CRB-03: a one-shot helper's record (`helper-<uuid>`, its requester as
+   * owner and so as sponsor) until `forget(meta.id)`. */
+  registerTransient(meta: SessionMeta): void {
+    this.transients.set(meta.id, meta);
+  }
+
+  /** The session (or helper) is gone: its token stops working. */
   forget(sessionId: string): void {
     this.tokens.delete(sessionId);
+    this.transients.delete(sessionId);
   }
 
   /**
    * The env of a brokered launch of `meta`: its own agent dir
    * `<dataDir>/sandbox/<sessionId>/agent` (an `{}` auth.json, the shared
    * links, a generated models.json), Claude Code at the broker with the
-   * placeholder and its own config dir, and an empty NO_PROXY so clients in
-   * srt reach the container address through srt's proxy (CRB-01 finding 2).
+   * placeholder and its own config dir, and an empty NO_PROXY (CRB-01 finding
+   * 2). Under srt the policy's `noProxy`, set in front of the command, is the
+   * one that counts: srt's own NO_PROXY would override this one (CRB-03).
    */
   launchEnv(meta: SessionMeta, sandboxed = false): Record<string, string> {
     if (!this.address) throw new Error("credential broker not listening");
@@ -467,7 +482,7 @@ export class CredentialBroker {
     const given = Buffer.from(token);
     const wanted = Buffer.from(expected);
     if (given.length !== wanted.length || !timingSafeEqual(given, wanted)) return undefined;
-    const meta = this.deps.session(sessionId);
+    const meta = this.transients.get(sessionId) ?? this.deps.session(sessionId);
     if (!meta) return undefined;
     // From the raw URL: URL.search would re-encode a `+` in the placeholder.
     const raw = url ?? "/";

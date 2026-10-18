@@ -4,13 +4,10 @@ import type { ProjectSandboxConfig, SessionMeta, UserIdentity } from "@agent-dec
 import type { SandboxViolation } from "./transcript.ts";
 import { sessionOwner } from "./sessionRecord.ts";
 
-/** Hosts every sandboxed session may reach: the model providers (and their
- * OAuth endpoints), GitHub (its release downloads are `*.githubusercontent.com`),
- * and the package registries and toolchain downloads of the common stacks.
- * A project adds its own. */
-export const DEFAULT_SANDBOX_DOMAINS: readonly string[] = [
-  // Pi's own host: the remote model catalog refresh and the version check.
-  "pi.dev",
+/** The model providers' hosts (and their OAuth endpoints). CRB-03: a brokered
+ * session reaches its providers through the broker only, so these leave its
+ * allow-list; every other session keeps them. */
+export const PROVIDER_SANDBOX_DOMAINS: readonly string[] = [
   "api.anthropic.com",
   "platform.claude.com",
   "claude.ai",
@@ -19,6 +16,14 @@ export const DEFAULT_SANDBOX_DOMAINS: readonly string[] = [
   "chatgpt.com",
   "generativelanguage.googleapis.com",
   "openrouter.ai",
+];
+
+/** Hosts every sandboxed session may reach whether brokered or not: Pi's own
+ * host, GitHub (its release downloads are `*.githubusercontent.com`), and the
+ * package registries and toolchain downloads of the common stacks. */
+export const INFRA_SANDBOX_DOMAINS: readonly string[] = [
+  // Pi's own host: the remote model catalog refresh and the version check.
+  "pi.dev",
   "github.com",
   "*.github.com",
   "*.githubusercontent.com",
@@ -53,6 +58,13 @@ export const DEFAULT_SANDBOX_DOMAINS: readonly string[] = [
   // mirrors, which a project grants)
   "cdn.playwright.dev",
   "playwright.download.prss.microsoft.com",
+];
+
+/** Hosts every non-brokered sandboxed session may reach: the infrastructure
+ * hosts and the model providers. A project adds its own. */
+export const DEFAULT_SANDBOX_DOMAINS: readonly string[] = [
+  ...INFRA_SANDBOX_DOMAINS,
+  ...PROVIDER_SANDBOX_DOMAINS,
 ];
 
 /** Folders under the server's `<dataDir>/home` that per-user toolchain
@@ -217,7 +229,16 @@ export interface SandboxPolicy {
   allowedDomains: string[];
   /** Addresses an allowed hostname must not resolve to. */
   deniedResolvedAddresses: string[];
+  /** CRB-03: the `NO_PROXY` the sandboxed command sees, set in front of the
+   * command because srt's own (`--setenv`, with the private ranges) would
+   * otherwise win over the launch env. Brokered: loopback only, so a client
+   * that matches CIDR ranges (curl) still reaches the broker's private
+   * address through srt's proxy. Absent: srt's. */
+  noProxy?: string;
 }
+
+/** CRB-03: a brokered sandbox proxies everything but loopback. */
+export const BROKERED_NO_PROXY = "localhost,127.0.0.1,::1";
 
 /** A record or input the policy refuses to derive paths from. */
 export class SandboxPolicyError extends Error {
@@ -361,7 +382,8 @@ const ownedByOperator = (
  * credentials and other sessions' `/tmp/agent-deck-*`; the operator's auth
  * files are denied unless the owner is the operator; `/tmp` is the sandbox's
  * own (`privateTmp`). Network: the default
- * hosts plus the project's, and never a private address.
+ * hosts (without the providers' when brokered) plus the project's, and never
+ * a private address.
  *
  * Throws SandboxPolicyError for a session id that is not one path segment
  * or a derived path that would leave `<dataDir>`.
@@ -487,7 +509,9 @@ export function sandboxPolicy(
 
   const seen = new Set<string>();
   const allowedDomains = [
-    ...DEFAULT_SANDBOX_DOMAINS,
+    // CRB-03: a brokered session's providers are the broker's address; the
+    // project's own hosts and the owner's grants below still apply.
+    ...(input.broker ? INFRA_SANDBOX_DOMAINS : DEFAULT_SANDBOX_DOMAINS),
     ...(input.project?.allowedDomains ?? []),
     ...(input.broker ? [input.broker.address] : []),
   ].filter((domain) => {
@@ -512,6 +536,7 @@ export function sandboxPolicy(
       ...DEFAULT_SANDBOX_DENIED_ADDRESSES,
       ...(input.extraDeniedAddresses ?? []),
     ]),
+    ...(input.broker ? { noProxy: BROKERED_NO_PROXY } : {}),
   };
 }
 

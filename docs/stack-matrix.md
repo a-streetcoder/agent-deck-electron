@@ -75,6 +75,21 @@ at most 5% on the Rust, Go and Gradle builds, and 22% on agent-deck-electron (4.
 about 1,000 packages linked; 24% in the run before, 49% in the first, unpinned run). It is still
 off by default; turn it on only if refused-write lines are worth that on the team's own stacks.
 
+## The brokered turn (CRB-03)
+
+The last row, `brokered-turn`, is not a stack: it checks a brokered session's network (ADR 0007
+amendment 21). `sandbox-run --broker <ip>:<port>` derives the policy a shared-server session
+gets with the credential broker: that literal allowed, no provider host, and a loopback-only
+`NO_PROXY` set in front of the command (srt's own, with the private ranges, would win otherwise).
+No server runs in the matrix container, so the setup starts a stand-in on the broker's port
+4211 that answers 404, as the broker does for an unknown session or token; the address is the
+container's (`docker inspect`). Steps, in one session's sandbox: `providers-refused` (`curl` to
+`https://api.openai.com/` and `https://api.anthropic.com/` fails, `registry.npmjs.org` answers)
+and `broker-404` (plain `curl` to `http://<ip>:4211/<session>/<bad token>/openai/...`
+answers 404 through srt's proxy). It prints one line under the table. The owner's real brokered
+turn (a Codex reply, `[broker] openai-codex POST 200` in the server log, the spend line) stays
+the browser check on the deployed server; the row does not run the broker itself.
+
 ## What the matrix does not cover
 
 The matrix runs the `sandbox-run` CLI, not the server or Pi (accepted as its scope). Against a

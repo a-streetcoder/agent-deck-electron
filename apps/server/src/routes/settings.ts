@@ -211,6 +211,18 @@ export function registerSettingsRoutes(ctx: ServerContext): void {
           ? "Sessions run without a sandbox on this server (AGENT_DECK_SANDBOX=none)"
           : `Every session runs under ${sandbox} (probe passed at startup)`,
     });
+    // CRB-03: brokered sessions reach their providers through the broker only.
+    const broker = ctx.credentialBroker;
+    if (broker) {
+      checks.push({
+        id: "server-broker",
+        label: "Credential broker",
+        status: broker.listening ? "ok" : "error",
+        detail: broker.listening
+          ? `Listening on ${broker.address}: sessions reach their model providers only through it`
+          : "Not listening: sessions cannot launch until the server restarts (see the server log)",
+      });
+    }
     const packages = declaredPiPackages(nodePath.join(rootsFor().home, ".pi", "agent"));
     if (sandbox !== "none" && packages.length > 0) {
       checks.push({

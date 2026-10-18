@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SANDBOX_DENIED_ADDRESSES,
   DEFAULT_SANDBOX_DOMAINS,
+  INFRA_SANDBOX_DOMAINS,
+  PROVIDER_SANDBOX_DOMAINS,
   SANDBOX_AGENT_PROTECTED_ENTRIES,
   SANDBOX_HOME_TOOLCHAIN_DIRS,
   sandboxAllowsWrite,
@@ -338,10 +340,34 @@ describe("sandboxPolicy network", () => {
     expect(policy().allowedDomains).toEqual(DEFAULT_SANDBOX_DOMAINS);
   });
 
-  it("allows the credential broker's address literal when given (CRB-02)", () => {
+  it("a brokered policy allows the broker literal and no provider host (CRB-02, CRB-03)", () => {
     expect(policy({}, "server", { broker: { address: "172.18.0.5:4211" } }).allowedDomains).toEqual(
-      [...DEFAULT_SANDBOX_DOMAINS, "172.18.0.5:4211"],
+      [...INFRA_SANDBOX_DOMAINS, "172.18.0.5:4211"],
     );
+    expect(INFRA_SANDBOX_DOMAINS).toContain("pi.dev");
+    // Loopback only: the broker's private address goes through srt's proxy.
+    expect(policy({}, "server", { broker: { address: "172.18.0.5:4211" } }).noProxy).toBe(
+      "localhost,127.0.0.1,::1",
+    );
+    expect(policy().noProxy).toBeUndefined();
+    expect(DEFAULT_SANDBOX_DOMAINS).toEqual([
+      ...INFRA_SANDBOX_DOMAINS,
+      ...PROVIDER_SANDBOX_DOMAINS,
+    ]);
+    for (const host of PROVIDER_SANDBOX_DOMAINS) {
+      expect(INFRA_SANDBOX_DOMAINS).not.toContain(host);
+    }
+  });
+
+  it("a brokered policy keeps a provider host the project allows (CRB-03)", () => {
+    const parsed = parseProjectSandboxConfig({ allowedDomains: ["api.openai.com"] });
+    if (!parsed.ok) throw new Error(parsed.problems.join("; "));
+    const domains = policy({}, "server", {
+      broker: { address: "172.18.0.5:4211" },
+      project: parsed.config,
+    }).allowedDomains;
+    expect(domains).toContain("api.openai.com");
+    expect(domains).not.toContain("api.anthropic.com");
   });
 
   it("a brokered session reads neither the owner's dir nor any operator credential (CRB-02)", () => {

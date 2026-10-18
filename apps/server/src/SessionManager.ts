@@ -2307,30 +2307,45 @@ export class SessionManager {
    * isolated `--no-session --no-tools` launch that answers a single prompt and
    * exits. Returns the final assistant text; throws on timeout / early exit.
    * SRV-11: `requester` is whoever asked; the helper runs on their own agent
-   * dir (credentials), never on the operator's for another user.
+   * dir (credentials), never on the operator's for another user. CRB-03: with
+   * a broker it runs on the broker instead, the requester as its sponsor.
    */
   async runHelper(opts: RunHelperOptions, requester?: UserIdentity): Promise<string> {
-    const env = { ...opts.env, ...userAgentDirEnv(requester, this.userAgentDirs) };
     // ADR 0007: a helper has no session; it runs under a policy of its own
     // (its own scratch folder, removed after the run; the requester as owner;
     // no tools, no session file, no violation lines).
     const id = `helper-${randomUUID()}`;
-    const sandbox = this.spawnHooks?.sandbox?.(
-      {
-        id,
-        cwd: opts.cwd,
-        createdAt: new Date().toISOString(),
-        ...(requester ? { createdBy: requester } : {}),
-      },
-      { cwd: opts.cwd, env, noSession: true, helper: true, tempPaths: opts.extensions ?? [] },
-    )?.sandbox;
+    const record: SessionMeta = {
+      id,
+      cwd: opts.cwd,
+      createdAt: new Date().toISOString(),
+      ...(requester ? { createdBy: requester } : {}),
+    };
+    // A helper without a requester (no user on the connection) keeps the old path.
+    const broker = requester ? this.credentialBroker : undefined;
+    broker?.registerTransient(record);
     try {
+      const env = broker
+        ? {
+            ...withoutProviderCredentialEnv(opts.env ?? {}),
+            ...broker.launchEnv(record, !!this.spawnHooks?.sandboxed),
+          }
+        : { ...opts.env, ...userAgentDirEnv(requester, this.userAgentDirs) };
+      const sandbox = this.spawnHooks?.sandbox?.(record, {
+        cwd: opts.cwd,
+        env,
+        noSession: true,
+        helper: true,
+        tempPaths: opts.extensions ?? [],
+      })?.sandbox;
       return await runPromiseUnwrapped(
         this.runtime,
         runOneShotHelper({ ...opts, env, ...(sandbox ? { sandbox } : {}) }),
       );
     } finally {
-      if (sandbox) this.spawnHooks?.forget?.(id);
+      // Drops the scratch folder (the brokered agent dir) and the broker's token.
+      if (broker || this.spawnHooks?.sandboxed) this.spawnHooks?.forget?.(id);
+      broker?.forget(id);
     }
   }
 

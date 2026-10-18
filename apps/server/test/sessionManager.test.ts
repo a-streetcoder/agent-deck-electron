@@ -3028,6 +3028,56 @@ describe("SessionManager facade cleanup on create/resume/fork failures", () => {
     }
   });
 
+  it("runs a requester's helper through the credential broker (CRB-03)", async () => {
+    const envs: Array<Record<string, string | undefined> | undefined> = [];
+    const piHost: PiHostShape = {
+      spawn: (options) => (envs.push(options.env), Effect.die(new Error("stop at spawn"))),
+    };
+    const runtime = ManagedRuntime.make(Layer.succeed(PiHost, piHost)) as unknown as ServerRuntime;
+    const registered: SessionMeta[] = [];
+    const forgotten: string[] = [];
+    const broker = {
+      registerTransient: (meta: SessionMeta) => registered.push(meta),
+      launchEnv: (meta: SessionMeta) => ({ PI_CODING_AGENT_DIR: `/data/sandbox/${meta.id}/agent` }),
+      forget: (id: string) => forgotten.push(id),
+    };
+    const hookForgets: string[] = [];
+    const args: unknown[] = [runtime, new ReceiptBus(false)];
+    args[24] = {
+      resolve: (user: { id: string }) => `/data/users/${user.id}/agent`,
+    } as unknown as UserAgentDirs;
+    args[27] = { launchDir: () => undefined, forget: (id: string) => hookForgets.push(id) };
+    args[28] = broker;
+    const manager = new SessionManager(...(args as ConstructorParameters<typeof SessionManager>));
+    const opts = {
+      systemPrompt: "s",
+      userPrompt: "u",
+      cwd: process.cwd(),
+      env: { A: "1", OPENAI_API_KEY: "sk-test-not-real" },
+    };
+    try {
+      await manager.runHelper(opts, { id: "b@example.com" }).catch(() => {});
+      expect(registered).toHaveLength(1);
+      const id = registered[0]!.id;
+      expect(id).toMatch(/^helper-/);
+      expect(registered[0]!.createdBy).toEqual({ id: "b@example.com" });
+      expect(envs[0]).toEqual({
+        A: "1",
+        OPENAI_API_KEY: undefined,
+        PI_CODING_AGENT_DIR: `/data/sandbox/${id}/agent`,
+      });
+      // After the run: the token and the scratch folder are gone.
+      expect(forgotten).toEqual([id]);
+      expect(hookForgets).toEqual([id]);
+      // No requester: the old path, nothing registered.
+      await manager.runHelper(opts).catch(() => {});
+      expect(registered).toHaveLength(1);
+      expect(envs[1]).toEqual(opts.env);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("exposes cleanup completion after a post-spawn create failure", async () => {
     let released = false;
     let exitHandled = 0;

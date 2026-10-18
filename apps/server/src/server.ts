@@ -1978,6 +1978,7 @@ async function initServer(
     githubConnections,
     profile,
     sandboxProvider,
+    ...(credentialBroker ? { credentialBroker } : {}),
     sandboxRootProblem: (root) =>
       sandboxProvider.name === "none"
         ? undefined

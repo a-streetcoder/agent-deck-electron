@@ -455,7 +455,7 @@ export interface RunHelperOptions {
   provider?: string;
   model?: string;
   extensions?: string[];
-  env?: Record<string, string>;
+  env?: Record<string, string | undefined>;
   timeoutMs?: number;
   /** ADR 0007: the sandbox the helper runs in (absent: none). */
   sandbox?: PiSandbox;

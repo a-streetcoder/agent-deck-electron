@@ -165,6 +165,8 @@ export interface ServerContext {
   profile: DeploymentProfile;
   /** ADR 0007: the process sandbox provider sessions run in (absent: none). */
   sandboxProvider?: SandboxProvider;
+  /** CRB-03 (shared server): the credential broker, for Doctor. */
+  credentialBroker?: { readonly address: string; readonly listening: boolean };
   /** ADR 0007: why a folder cannot hold a sandboxed session (a reserved part
    * of the data dir, the agent dir); undefined when it can or under none. */
   sandboxRootProblem?: (root: string) => string | undefined;

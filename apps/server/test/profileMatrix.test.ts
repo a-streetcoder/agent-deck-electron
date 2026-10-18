@@ -117,6 +117,7 @@ describe.each<Profile>(["desktop", "shared-server"])("ADR 0008 matrix under %s",
     const ids = body.report.checks.map((check) => check.id);
     expect(ids.includes("server-sandbox")).toBe(shared);
     expect(ids.includes("server-git-identity")).toBe(shared);
+    expect(ids.includes("server-broker")).toBe(shared);
   });
 
   it("records new sessions on its own side", async () => {

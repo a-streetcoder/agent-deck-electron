@@ -240,3 +240,21 @@ do not interfere.
     operator's own intent to reach that host, the same trust as the allow-list, which stays
     server state. Stdio servers contribute nothing; a server's URL change takes effect at the
     next launch. `mcpServerHosts` in `apps/server/src/sandbox.ts`.
+
+## Amendments (2026-10-18, from CRB-03)
+
+21. **Brokered sessions reach their providers through the broker only.** On the shared server
+    (ADR 0009) a session's policy allows the credential broker's `<ip>:<port>` literal (srt
+    refuses a name or address of its own host unless that literal is listed, CRB-01) and none of
+    the model providers' hosts (`PROVIDER_SANDBOX_DOMAINS`: their APIs and OAuth endpoints);
+    a project's allowed hosts and the owner's grants still apply as written, a provider host
+    among them included. srt's global list is therefore the infrastructure hosts only
+    (`INFRA_SANDBOX_DOMAINS`) and every other session carries the provider hosts on its own
+    per-command list, as it carries its project's. A brokered command gets
+    `NO_PROXY=localhost,127.0.0.1,::1` in front of it: srt's own, set by bubblewrap with the
+    private ranges, would send the broker's private address direct, where nothing routes.
+    One-shot helpers (commit messages, skill summaries) run on the broker too, the requester as sponsor, with their own agent dir under
+    the scratch folder. The owner's folder, the operator's auth files, the shared `models.json`
+    and the operator's Claude Code credential file are read-denied to brokered sessions (CRB-02).
+    Environment secrets through the broker are CRB-04; until then a secret variable is still a
+    plain environment value of the session.

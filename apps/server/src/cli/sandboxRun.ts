@@ -7,7 +7,7 @@
 //
 //   node dist/server/sandbox-run.mjs [--data-dir <dir>] --project <path>
 //     [--worktree <path>] [--user <id>] [--session <id>] [--allow-host <h>]...
-//     -- <command...>
+//     [--broker <ip>:<port>] -- <command...>
 //   node dist/server/sandbox-run.mjs --probe
 //
 // The command runs as `/bin/sh -c <words after -- joined by spaces>` in the
@@ -15,7 +15,10 @@
 // command's (128 + the signal number when it was killed). Refused hosts, and
 // refused writes when AGENT_DECK_SANDBOX_MONITOR=1, print to stderr as
 // `[sandbox] refused <kind> <target>`. --allow-host stands for a host the
-// owner or operator granted the project. The command never gets this
+// owner or operator granted the project. --broker gives the policy a
+// brokered session's network (CRB-03): that literal allowed, no provider
+// host, and the policy's loopback-only NO_PROXY in front of the command, as a
+// session's Pi gets it; no broker runs here. The command never gets this
 // process's NODE_ENV or PORT (always removed: there is no .env layer here).
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -47,6 +50,8 @@ export interface SandboxRunArgs {
   user?: string;
   session: string;
   allowHosts: string[];
+  /** CRB-03: a brokered session's policy with this `<ip>:<port>` as its broker. */
+  broker?: string;
   /** The shell command (the words after `--`, joined by spaces). */
   command: string;
 }
@@ -66,6 +71,7 @@ const parse = (argv: readonly string[]) =>
       user: { type: "string" },
       session: { type: "string" },
       "allow-host": { type: "string", multiple: true },
+      broker: { type: "string" },
     },
   });
 
@@ -99,6 +105,10 @@ export function parseSandboxRunArgs(
     const problem = sandboxDomainProblem(host);
     if (problem) throw new SandboxRunUsageError(`--allow-host: ${problem}`);
   }
+  const broker = values.broker;
+  if (broker !== undefined && !/^\d{1,3}(\.\d{1,3}){3}:\d{1,5}$/.test(broker)) {
+    throw new SandboxRunUsageError(`--broker ${JSON.stringify(broker)} is not <ipv4>:<port>`);
+  }
   const probe = values.probe ?? false;
   const command = positionals.join(" ");
   if (!probe) {
@@ -113,6 +123,7 @@ export function parseSandboxRunArgs(
     ...(values.user ? { user: values.user } : {}),
     session,
     allowHosts,
+    ...(broker ? { broker } : {}),
     command,
   };
 }
@@ -157,6 +168,7 @@ export function sandboxRunSession(
     ownerDir: (user) => ensureUserDir(args.dataDir, user.id),
     grantedHosts: () => args.allowHosts,
     extraDeniedAddresses,
+    ...(args.broker ? { broker: { address: args.broker } } : {}),
   };
   const launched = sessionSandbox(deps, record, { cwd, env: launchEnv });
   return { record, cwd, env: launchEnv, ...(launched ? { sandbox: launched.sandbox } : {}) };

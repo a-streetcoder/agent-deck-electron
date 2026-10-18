@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   DEFAULT_SANDBOX_DENIED_ADDRESSES,
-  DEFAULT_SANDBOX_DOMAINS,
+  INFRA_SANDBOX_DOMAINS,
   type SandboxPolicy,
 } from "@agent-deck/domain";
 import type {
@@ -50,10 +50,12 @@ import { containsGlobChars } from "@anthropic-ai/sandbox-runtime/dist/sandbox/sa
  * Node's own `fetch` goes through srt's proxy.
  *
  * srt's SandboxManager is one per process and its proxy decides from the
- * global configuration. It is initialised once with the default host list
- * (`DEFAULT_SANDBOX_DOMAINS`) and the private address ranges; each wrap
- * registers the project's extra hosts under a random 256-bit command id
- * (`registerCommandNetworkLists`). No `strictAllowlist`, no ask callback.
+ * global configuration. It is initialised once with the hosts every session
+ * may reach (`INFRA_SANDBOX_DOMAINS`) and the private address ranges; each
+ * wrap registers the rest of its policy's hosts (the model providers unless
+ * brokered, CRB-03; the project's) under a random 256-bit command id
+ * (`registerCommandNetworkLists`): a global entry would let every session,
+ * brokered ones included, reach it. No `strictAllowlist`, no ask callback.
  * Filesystem rules go in the per-wrap configuration. `deniedResolvedAddresses`
  * is global-only in srt, so the addresses sessions bring are unioned into the
  * global configuration (`updateConfig`, live); the union only widens a deny.
@@ -192,7 +194,7 @@ type SrtManager = Pick<
 
 const baseConfig = (): SandboxRuntimeConfig => ({
   network: {
-    allowedDomains: [...DEFAULT_SANDBOX_DOMAINS],
+    allowedDomains: [...INFRA_SANDBOX_DOMAINS],
     deniedDomains: [],
     deniedResolvedAddresses: [...DEFAULT_SANDBOX_DENIED_ADDRESSES],
   },
@@ -200,7 +202,7 @@ const baseConfig = (): SandboxRuntimeConfig => ({
 });
 
 const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
-const DEFAULT_HOSTS = new Set(DEFAULT_SANDBOX_DOMAINS.map((domain) => domain.toLowerCase()));
+const DEFAULT_HOSTS = new Set(INFRA_SANDBOX_DOMAINS.map((domain) => domain.toLowerCase()));
 
 /** The host file operations the provider needs (tests inject fakes). */
 export interface SandboxFs {
@@ -358,7 +360,7 @@ export function srtSettings(
   };
 }
 
-/** The hosts a session adds to the global defaults: its per-command list. */
+/** The hosts a session adds to the global ones: its per-command list. */
 export const projectHosts = (policy: SandboxPolicy): string[] =>
   policy.allowedDomains.filter((domain) => !DEFAULT_HOSTS.has(domain.toLowerCase()));
 
@@ -719,7 +721,12 @@ export function createSrtProvider(
       srt.registerCommandNetworkLists(commandId, { allowedDomains: projectHosts(policy) });
       registered = true;
       active.set(commandId, policy);
-      const command = `TMPDIR=${shellQuote(policy.tmpDir)} ${[cmd.command, ...cmd.args]
+      // In front of the command: srt's own NO_PROXY (bwrap --setenv) beats the env.
+      const noProxy =
+        policy.noProxy === undefined
+          ? ""
+          : `NO_PROXY=${shellQuote(policy.noProxy)} no_proxy=${shellQuote(policy.noProxy)} `;
+      const command = `${noProxy}TMPDIR=${shellQuote(policy.tmpDir)} ${[cmd.command, ...cmd.args]
         .map(shellQuote)
         .join(" ")}`;
       const { argv } = await srt.wrapWithSandboxArgv(

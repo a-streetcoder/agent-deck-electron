@@ -1,6 +1,7 @@
 import {
   DEFAULT_SANDBOX_DENIED_ADDRESSES,
-  DEFAULT_SANDBOX_DOMAINS,
+  INFRA_SANDBOX_DOMAINS,
+  PROVIDER_SANDBOX_DOMAINS,
   sandboxPolicy,
   type SandboxPolicy,
   type SandboxPolicyInput,
@@ -329,11 +330,11 @@ describe("srt provider (fake SandboxManager)", () => {
     );
     expect(POLICY.createDirs).toContain("/home/u/.pi/agent/sessions/--app--");
     expect(srt.initialize).toHaveBeenCalledTimes(1);
-    // No ask callback, the log monitor off by default; the defaults are the global list, no strictAllowlist.
+    // No ask callback, the log monitor off by default; the infrastructure hosts are the global list, no strictAllowlist.
     expect(srt.initialize.mock.calls[0]).toEqual([
       {
         network: {
-          allowedDomains: [...DEFAULT_SANDBOX_DOMAINS],
+          allowedDomains: [...INFRA_SANDBOX_DOMAINS],
           deniedDomains: [],
           deniedResolvedAddresses: [...DEFAULT_SANDBOX_DENIED_ADDRESSES],
         },
@@ -378,9 +379,9 @@ describe("srt provider (fake SandboxManager)", () => {
     ]);
 
     expect(options.commandId).toMatch(/^[0-9a-f]{64}$/);
-    // No project hosts: the per-command list is empty, the defaults are global.
+    // No project hosts: the per-command list is the providers' (CRB-03: never global).
     expect(srt.registerCommandNetworkLists).toHaveBeenCalledWith(options.commandId, {
-      allowedDomains: [],
+      allowedDomains: [...PROVIDER_SANDBOX_DOMAINS],
     });
     expect(wrapped).toEqual({
       command: "/bin/sh",
@@ -750,6 +751,26 @@ describe("srt provider (fake SandboxManager)", () => {
     expect(srt.unregisterCommandNetworkLists).not.toHaveBeenCalled();
   });
 
+  it("a brokered session's list carries the broker literal and no provider host (CRB-03)", async () => {
+    const srt = fakeSrt();
+    const provider = createSrtProvider(async () => srt, "linux", fakeFs().fs);
+    await provider.wrap(plan(), serverPolicy("a", { broker: { address: "172.18.0.5:4211" } }));
+    const [[, list]] = srt.registerCommandNetworkLists.mock.calls as unknown as [
+      [string, { allowedDomains: string[] }],
+    ];
+    expect(list.allowedDomains).toEqual(["172.18.0.5:4211"]);
+    // srt sets its own NO_PROXY (the private ranges) with bwrap --setenv; the
+    // assignment in front of the command is the one the command sees.
+    const [command] = srt.wrapWithSandboxArgv.mock.calls[0] as unknown as WrapCall;
+    expect(
+      command.startsWith(
+        "NO_PROXY='localhost,127.0.0.1,::1' no_proxy='localhost,127.0.0.1,::1' TMPDIR=",
+      ),
+    ).toBe(true);
+    const global = (srt.initialize.mock.calls[0] as unknown as [SandboxRuntimeConfig])[0].network;
+    for (const host of PROVIDER_SANDBOX_DOMAINS) expect(global.allowedDomains).not.toContain(host);
+  });
+
   it("two sessions with different project hosts get two lists under two ids", async () => {
     const srt = fakeSrt();
     const provider = createSrtProvider(async () => srt, "linux", fakeFs().fs);
@@ -763,8 +784,8 @@ describe("srt provider (fake SandboxManager)", () => {
       [string, { allowedDomains: string[] }],
     ];
     expect(idA).not.toBe(idB);
-    expect(listA.allowedDomains).toEqual(["one.example"]);
-    expect(listB.allowedDomains).toEqual(["two.example"]);
+    expect(listA.allowedDomains).toEqual([...PROVIDER_SANDBOX_DOMAINS, "one.example"]);
+    expect(listB.allowedDomains).toEqual([...PROVIDER_SANDBOX_DOMAINS, "two.example"]);
     expect(listB.allowedDomains).not.toContain("one.example");
     const ids = (srt.wrapWithSandboxArgv.mock.calls as unknown as WrapCall[]).map(
       (call) => call[5].commandId,
@@ -792,7 +813,7 @@ describe("srt provider (fake SandboxManager)", () => {
       ...DEFAULT_SANDBOX_DENIED_ADDRESSES,
       "172.17.0.1",
     ]);
-    expect(network.allowedDomains).toEqual([...DEFAULT_SANDBOX_DOMAINS]);
+    expect(network.allowedDomains).toEqual([...INFRA_SANDBOX_DOMAINS]);
     await provider.wrap(plan(), extra);
     expect(srt.updateConfig).toHaveBeenCalledTimes(2);
   });

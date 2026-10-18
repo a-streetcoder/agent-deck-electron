@@ -708,8 +708,10 @@ upstream request or refusal goes to `<dataDir>/credential-spend.jsonl` (`at`, `s
 `[broker] <provider> <method> <status>` log line. The operator's Claude Code login is the
 host's `~/.claude` (or `CLAUDE_CONFIG_DIR`); other users' is `<dataDir>/users/<hash>/claude`.
 Limitation: a per-model `baseUrl` in the operator's `models.json` is dropped for brokered
-sessions (the provider's base URL is used), and one-shot helpers (titles, commit messages)
-still run on the requester's own agent dir.
+sessions (the provider's base URL is used). Since CRB-03 a brokered session's sandbox refuses
+the provider hosts themselves (a project's allowed hosts still apply), one-shot helpers (commit
+messages, skill summaries) go through the broker with the requester as sponsor, and Doctor's
+"Credential broker" row shows the address and whether it is listening.
 
 ### GitHub connection
 

@@ -165,6 +165,11 @@ describe("parseSandboxRunArgs (SBX-06)", () => {
     ],
     [["--data-dir", "/d", "--project", "/p", "--nope", "--", "true"], {}, "nope"],
     [
+      ["--data-dir", "/d", "--project", "/p", "--broker", "broker.internal:4211", "--", "true"],
+      {},
+      "--broker",
+    ],
+    [
       ["--data-dir", "/other", "--project", "/p", "--", "true"],
       { AGENT_DECK_DATA_DIR: "/data" },
       "is not AGENT_DECK_DATA_DIR",
@@ -254,6 +259,27 @@ describe("sandboxRunSession: the policy the server would derive", () => {
       expect(policy.denyWrite.map((entry) => entry.path)).toContain(`${project}/.git`);
     },
   );
+
+  it("gives --broker a brokered session's network: the literal, no provider host (CRB-03)", () => {
+    const { dataDir, home, project } = layout();
+    const args = parseSandboxRunArgs(
+      ["--data-dir", dataDir, "--project", project, "--broker", "172.18.0.5:4211", "--", "true"],
+      {},
+    );
+    expect(args.broker).toBe("172.18.0.5:4211");
+    const run = sandboxRunSession(
+      { ...args, project, user: "ops@example.com", session: "s-4" },
+      { HOME: home, AGENT_DECK_OPERATOR_EMAIL: "ops@example.com", NO_PROXY: "localhost" },
+      srt,
+    );
+    // The wrap sets this in front of the command, after srt's own --setenv.
+    expect(run.sandbox!.policy.noProxy).toBe("localhost,127.0.0.1,::1");
+    const domains = run.sandbox!.policy.allowedDomains;
+    expect(domains).toContain("172.18.0.5:4211");
+    expect(domains).toContain("registry.npmjs.org");
+    expect(domains).not.toContain("api.openai.com");
+    expect(domains).not.toContain("api.anthropic.com");
+  });
 
   it("derives no policy under none (the command runs as is)", () => {
     const { dataDir, home, project } = layout();
